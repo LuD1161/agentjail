@@ -1,0 +1,13 @@
+#!/bin/sh
+# Auto-append a DCO Signed-off-by trailer to every commit, so contributors
+# don't have to remember `git commit -s`. Idempotent: interpret-trailers with
+# `--if-exists doNothing` won't add a duplicate if one is already present.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+#
+# Your git user.name / user.email must be set and real — the DCO CI check
+# verifies the trailer matches a "Name <local@domain>" shape.
+git interpret-trailers --if-exists doNothing \
+  --trailer "Signed-off-by: $(git config user.name) <$(git config user.email)>" \
+  --in-place "$1"
