@@ -1,0 +1,40 @@
+# Build outputs
+/bin/
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/
+
+# Claude harness state (worktrees, transient agent IO)
+/.claude/
+
+# Local Claude Code config (personal prefs; @-imports AGENTS.md)
+/CLAUDE.md
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Python bytecode (mitmproxy addon side-effect)
+__pycache__/
+*.pyc
+
+# Build artifacts (root-level binaries from `go build .`)
+/agentjail
+/agentjail-shield
+/agentjail-hook
+/agentjail-daemon
+/agentjail-netproxy
+
+# Firecracker spike rootfs (89MB binary — never commit)
+/.rootfs-work/
+/assets/rootfs.img
+/agentjail/research/firecracker-spike/assets/
+
+# Local, per-developer tooling and scratch space — never committed.
+.dev-local/
+
+# Manus-style planning scratch (internal task plans / acceptance notes) — local only.
+.planning/
