@@ -1,0 +1,78 @@
+# agentjail default policy configuration
+# Place at ~/.agentjail/policy.yaml and customize.
+#
+# The daemon loads this file at startup and on SIGHUP.
+# Unknown keys cause a startup error (strict YAML parsing).
+
+mcp:
+  # Allowlist of MCP server name patterns (glob). Empty = deny all.
+  # Examples: "filesystem", "fetch", "github*"
+  allowed: []
+
+  # Blocklist patterns take precedence over allowed.
+  # Agents should never be permitted to call payment or comms services
+  # without explicit review — keep these blocked by default.
+  blocked:
+    - "*stripe*"
+    - "*payment*"
+    - "*billing*"
+    - "*twilio*"
+    - "*sendgrid*"
+
+  # Per-server tool allowlists (Level 1 MCP gating — ADR 0003).
+  # When a server's allowed_tools list is non-empty, only those tools may be
+  # called; all others are denied with rule_id mcp_policy/tool_not_allowed.
+  # When allowed_tools is empty or absent, all tools of an allowed server are
+  # permitted (backwards-compatible default).
+  #
+  # Example: allow filesystem reads but not writes; allow fetch only via fetch.
+  #
+  # servers:
+  #   filesystem:
+  #     allowed_tools: ["read_file", "list_directory"]  # write_file implicitly denied
+  #   fetch:
+  #     allowed_tools: ["fetch"]
+  servers: {}
+
+file:
+  # Additional paths to deny (beyond the built-in macOS sensitive path list).
+  # The built-in list covers: ~/.ssh, ~/.aws, ~/.gnupg, ~/.config, ~/Downloads,
+  # ~/Desktop, ~/.env, **/credentials*, **/secrets*, **/*.pem, **/*.key,
+  # ~/.agentjail/, /etc/, /var/
+  extra_deny: []
+
+  # Additional paths to always allow (beyond the agent's CWD).
+  extra_allow: []
+
+commands:
+  # Additional shell command patterns to block (Go regex syntax).
+  # The built-in list covers: rm -rf outside project, curl|bash, sudo, dd,
+  # chmod -R 777, git push --force, ssh-keygen, gpg --export-secret-keys,
+  # env|curl exfil pattern.
+  extra_block: []
+
+network:
+  # Hosts whose resolved IP addresses are permitted for outbound TCP
+  # connections when agentjail-shield is active (macOS only).
+  #
+  # Filtering is IP-based: hostnames are resolved once at shield startup.
+  # CDN-backed hosts (npm, pypi, github) rotate IPs frequently; if a
+  # connection is refused after a long session, restarting the shield
+  # re-resolves the latest IPs.  This is a documented Tier 1.5 trade-off.
+  #
+  # DNS (UDP port 53) and loopback (127.0.0.1 / ::1) are always allowed
+  # regardless of this list.
+  #
+  # Linux: Landlock has no network ABI; this list is parsed but ignored on
+  # Linux — a warning is printed at startup.  eBPF enforcement is Tier 3.
+  allowed_hosts:
+    - api.github.com
+    - raw.githubusercontent.com
+    - codeload.github.com
+    - registry.npmjs.org
+    - pypi.org
+    - files.pythonhosted.org
+    - crates.io
+    - proxy.golang.org
+    - sum.golang.org
+    - deno.land
