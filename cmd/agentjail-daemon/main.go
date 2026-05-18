@@ -1,0 +1,826 @@
+// Package main is the agentjail policy evaluation daemon. It listens on a
+// Unix socket, accepts newline-delimited JSON requests, evaluates each request
+// against the OPA policy engine, and writes back a JSON response. The daemon
+// is designed to run as a persistent background process (launchd on macOS)
+// so OPA warm-start cost (~50 ms) is paid once; per-decision latency target
+// is p95 < 5 ms.
+//
+// Protocol: one JSON object per line, request and response each terminated by '\n'.
+//
+// Request:
+//
+//	{"id":"req-123","hook_event":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"session_id":"s1","cwd":"/tmp"}
+//
+// Response:
+//
+//	{"id":"req-123","action":"allow","reason":"default allow","rule_id":"default"}
+//
+// Signals:
+//   - SIGTERM / SIGINT: drain in-flight requests, close socket, exit 0.
+//   - SIGHUP: reload policy.yaml AND Rego modules, rebuild engine atomically
+//     under RWMutex; in-flight Eval calls complete against the old engine.
+//     On reload failure, old config is kept — daemon never goes open.
+//
+// Architecture note: pattern copied from Firecracker's JSON-over-socket
+// control plane — tiny, no framework, no external deps beyond stdlib.
+package main
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
+	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+)
+
+// Request is the newline-delimited JSON record sent by callers (agentjail-hook
+// or any tool that can write to the socket).
+type Request struct {
+	ID        string                 `json:"id"`
+	HookEvent string                 `json:"hook_event"`
+	ToolName  string                 `json:"tool_name"`
+	ToolInput map[string]interface{} `json:"tool_input"`
+	SessionID string                 `json:"session_id"`
+	CWD       string                 `json:"cwd"`
+	Agent     string                 `json:"agent,omitempty"`
+}
+
+// Response is the newline-delimited JSON record written back to the caller.
+type Response struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Reason string `json:"reason,omitempty"`
+	RuleID string `json:"rule_id,omitempty"`
+	Impact string `json:"impact,omitempty"` // consequence-of-allowing text; forwarded from Decision.Impact
+}
+
+// server holds all daemon state. The engine and cache fields are guarded by
+// engineMu; readers (per-connection goroutines) take RLock and writers (SIGHUP
+// reload) take Lock. This is the zero-downtime hot-reload pattern from
+// HashiCorp Vault's provider reloading design.
+type server struct {
+	engineMu sync.RWMutex
+	engine   policy.HookEngine
+	cache    policy.Cache
+
+	// wg tracks in-flight connections so graceful shutdown can drain them.
+	wg sync.WaitGroup
+}
+
+// eval evaluates a single request and returns the decision. The cache check
+// happens before calling the engine so warm decisions are returned in < 1 ms.
+func (s *server) eval(ctx context.Context, req Request) (Response, error) {
+	// Normalize cwd and path fields BEFORE eval so all policies see canonical
+	// absolute paths.  cwd is canonicalized unconditionally.  file_path / path /
+	// old_path in ToolInput are canonicalized when present.
+	canonCWD := canonicalizeCWD(req.CWD)
+	normalizedInput := normalizeToolInput(req.ToolInput, canonCWD)
+
+	input := policy.HookInput{
+		HookEvent: req.HookEvent,
+		ToolName:  req.ToolName,
+		ToolInput: normalizedInput,
+		SessionID: req.SessionID,
+		CWD:       canonCWD,
+	}
+
+	// Cache key includes the canonical cwd so a file decision that varies by
+	// cwd (ask-in-project vs deny-outside) is never served from the wrong entry.
+	// R1/R7: cwd is now part of the static key.
+	cacheKey := hookCacheKey(input)
+
+	s.engineMu.RLock()
+	eng := s.engine
+	cache := s.cache
+	s.engineMu.RUnlock()
+
+	if d, ok := cache.Get(cacheKey); ok {
+		return Response{
+			ID:     req.ID,
+			Action: d.Action,
+			Reason: d.Reason,
+			RuleID: d.RuleID,
+			Impact: d.Impact,
+		}, nil
+	}
+
+	d, err := eng.Eval(ctx, input)
+	if err != nil {
+		// Fail-safe: on evaluation error, return "ask" rather than silently
+		// allowing or denying. The caller should treat "ask" as "escalate to
+		// the human." Error is also returned for caller logging.
+		return Response{
+			ID:     req.ID,
+			Action: "ask",
+			Reason: "policy evaluation error: " + err.Error(),
+		}, err
+	}
+
+	cache.Set(cacheKey, d)
+
+	return Response{
+		ID:     req.ID,
+		Action: d.Action,
+		Reason: d.Reason,
+		RuleID: d.RuleID,
+		Impact: d.Impact,
+	}, nil
+}
+
+// canonicalizeCWD resolves a working directory to its canonical absolute form:
+//  1. If empty, returns "".
+//  2. filepath.Clean + makes absolute if not already (using os.Getwd() fallback).
+//  3. filepath.EvalSymlinks to resolve symlinks; on error returns cleaned path.
+func canonicalizeCWD(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	// Make absolute if relative (unusual for cwd, but handle it).
+	if !filepath.IsAbs(cwd) {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = filepath.Join(wd, cwd)
+		}
+	}
+	cwd = filepath.Clean(cwd)
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		return resolved
+	}
+	return cwd
+}
+
+// canonicalizePath resolves a file path to its canonical absolute form.
+// If the path is relative it is resolved against cwd.  Symlinks are resolved
+// on the nearest existing parent; any non-existing suffix is re-appended so
+// write targets (files that don't exist yet) still get a canonical prefix.
+//
+// On ANY resolution error for a path that looks sensitive (contains "..", is
+// outside cwd after normalization), the function returns ("", true) signalling
+// to the caller to fail closed.
+func canonicalizePath(p, cwd string) (canonical string, failClose bool) {
+	if p == "" {
+		return "", false
+	}
+
+	// 1. Make absolute against cwd.
+	if !filepath.IsAbs(p) {
+		if cwd == "" {
+			if wd, err := os.Getwd(); err == nil {
+				cwd = wd
+			}
+		}
+		p = filepath.Join(cwd, p)
+	}
+	// 2. Clean (resolves . and .. lexically).
+	p = filepath.Clean(p)
+
+	// 3. EvalSymlinks on the path or nearest existing parent.
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved, false
+	}
+
+	// Path doesn't exist — walk up to find the nearest existing parent.
+	parent := p
+	suffix := ""
+	for {
+		newParent := filepath.Dir(parent)
+		if newParent == parent {
+			// Reached root without finding an existing directory — give up.
+			break
+		}
+		suffix = filepath.Join(filepath.Base(parent), suffix)
+		parent = newParent
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			// Re-append the non-existing suffix.
+			return filepath.Join(resolved, suffix), false
+		}
+	}
+
+	// Could not resolve any ancestor.  For paths with ".." this is suspicious.
+	if strings.Contains(p, "..") {
+		return "", true // fail closed
+	}
+	return p, false
+}
+
+// normalizeToolInput returns a copy of toolInput with file_path, path, and
+// old_path values canonicalized against cwd.  If a path fails to canonicalize
+// and signals fail-close, the field is replaced with a sentinel that will
+// match no allow rule so the engine defaults to ask/deny.
+func normalizeToolInput(toolInput map[string]interface{}, cwd string) map[string]interface{} {
+	if toolInput == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(toolInput))
+	for k, v := range toolInput {
+		out[k] = v
+	}
+	for _, field := range []string{"file_path", "path", "old_path"} {
+		if raw, ok := out[field].(string); ok && raw != "" {
+			if canonical, failClose := canonicalizePath(raw, cwd); failClose {
+				// Replace with a path guaranteed to match no allow rule.
+				// The daemon logs this at Warn level; the policy will see
+				// an unrecognised path and fail to its default (ask/deny).
+				slog.Warn("path normalization fail-closed",
+					"field", field,
+					"raw", raw,
+					"cwd", cwd,
+				)
+				out[field] = "/__agentjail_failclosed__"
+			} else if canonical != "" {
+				out[field] = canonical
+			}
+		}
+	}
+	return out
+}
+
+// hookCacheKey derives a CacheKey from a HookInput using only the fields that
+// affect the policy decision.  SessionID is excluded (per-invocation noise);
+// CWD IS included because decisions are cwd-dependent (a file that is
+// ask-in-project vs deny-outside must not share a cache entry across cwds).
+// R1/R7 fix: CWD was previously excluded; it is now part of the key.
+func hookCacheKey(in policy.HookInput) policy.CacheKey {
+	type staticFields struct {
+		ToolName  string                 `json:"tool_name"`
+		ToolInput map[string]interface{} `json:"tool_input"`
+		CWD       string                 `json:"cwd"`
+	}
+	b, _ := json.Marshal(staticFields{
+		ToolName:  in.ToolName,
+		ToolInput: in.ToolInput,
+		CWD:       in.CWD,
+	})
+	sum := sha256.Sum256(b)
+	return policy.CacheKey{
+		ToolName:  in.ToolName,
+		InputHash: hex.EncodeToString(sum[:]),
+	}
+}
+
+// summarizeToolInput returns a short, log-safe identifier for a tool call.
+// Bash → the command (truncated). File tools → the file_path. MCP/others →
+// fall back to the most informative single string field. Empty if nothing
+// useful is available. Truncated to 200 bytes; multi-line collapsed to one.
+func summarizeToolInput(tool string, in map[string]interface{}) string {
+	if in == nil {
+		return ""
+	}
+	pick := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := in[k].(string); ok && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	var s string
+	switch tool {
+	case "Bash":
+		s = pick("command")
+	case "Write", "Edit", "Read", "NotebookEdit":
+		s = pick("file_path", "path", "notebook_path")
+	default:
+		// MCP and anything else: try common single-string fields.
+		s = pick("file_path", "path", "command", "query", "url", "pattern")
+	}
+	if s == "" {
+		return ""
+	}
+	// One line, bounded length — log readability beats fidelity here.
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	const maxLen = 200
+	if len(s) > maxLen {
+		s = s[:maxLen-1] + "…"
+	}
+	return s
+}
+
+// handleConn serves one client connection. Each connection runs in its own
+// goroutine. The function reads newline-delimited JSON requests until the
+// connection closes or ctx is cancelled, calling s.eval for each and writing
+// the response back.
+func (s *server) handleConn(ctx context.Context, conn net.Conn) {
+	defer s.wg.Done()
+	defer conn.Close()
+
+	scanner := bufio.NewScanner(conn)
+	// 1 MB line buffer — large enough for realistic tool_input payloads.
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	enc := json.NewEncoder(conn)
+
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var req Request
+		if err := json.Unmarshal(line, &req); err != nil {
+			// Write a synthetic error response so the caller doesn't hang.
+			_ = enc.Encode(Response{
+				ID:     "",
+				Action: "ask",
+				Reason: "malformed request: " + err.Error(),
+			})
+			slog.Warn("malformed request", "err", err)
+			continue
+		}
+
+		start := time.Now()
+		resp, err := s.eval(ctx, req)
+		elapsed := time.Since(start)
+
+		// Extract a short identifying summary from tool_input — the command
+		// string for Bash, the file_path for file tools, MCP server name for
+		// MCP calls. Truncated to keep the log line bounded. This is what the
+		// `agentjail logs -v` formatter shows on the same row as the verdict.
+		summary := summarizeToolInput(req.ToolName, req.ToolInput)
+
+		// NOTE on `elapsed_us` (see docs/adr/0002-latency-as-engineering-metric.md):
+		// This measures cache lookup + (on miss) OPA Rego eval + cache set —
+		// internal to s.eval. It is NOT the user-perceived latency. End-to-end
+		// wall time = elapsed_us + ~10 ms plumbing (hook fork/exec, socket I/O,
+		// JSON marshal). When citing performance externally, use the smoke test's
+		// end-to-end wall time, not this field. The field is kept for forensics
+		// user-facing `agentjail logs` rich view hides it.
+
+		if err != nil {
+			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
+		} else {
+			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
+		}
+
+		if encErr := enc.Encode(resp); encErr != nil {
+			if isClientGone(encErr) {
+				// The caller (e.g. agentjail-hook) closed the connection before we
+				// finished writing — expected whenever eval exceeds the hook's
+				// fail-open deadline (~45 ms). The hook has already fallen open;
+				// this is a benign race, not a daemon fault, so keep it out of the
+				// Info-level log that `agentjail logs` surfaces.
+				slog.Debug("response not delivered: client disconnected", "req_id", req.ID, "err", encErr)
+			} else {
+				slog.Warn("write response", "req_id", req.ID, "err", encErr)
+			}
+			return
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("scanner error", "err", err)
+	}
+}
+
+// isClientGone reports whether err indicates the peer closed the connection
+// before the daemon could write its response (broken pipe, connection reset, or
+// an already-closed socket). Under the hook's fail-open deadline this is an
+// expected race rather than a daemon error, so the caller logs it at Debug.
+func isClientGone(err error) bool {
+	return errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, net.ErrClosed)
+}
+
+// buildTempRoots returns the set of temp-dir roots that the Rego policy should
+// treat as scratch space.  os.TempDir() is the primary source; the structural
+// fallbacks cover the macOS variant paths that show up when $TMPDIR differs.
+func buildTempRoots() []string {
+	roots := make([]string, 0, 4)
+
+	tmpDir := os.TempDir()
+	if resolved, err := filepath.EvalSymlinks(tmpDir); err == nil {
+		tmpDir = resolved
+	}
+	roots = append(roots, tmpDir)
+
+	// Structural fallbacks always present on macOS regardless of $TMPDIR.
+	for _, structural := range []string{"/tmp", "/private/tmp"} {
+		if resolved, err := filepath.EvalSymlinks(structural); err == nil {
+			structural = resolved
+		}
+		roots = dedupAppend(roots, structural)
+	}
+
+	return roots
+}
+
+// dedupAppend appends s to slice only if not already present.
+func dedupAppend(slice []string, s string) []string {
+	for _, existing := range slice {
+		if existing == s {
+			return slice
+		}
+	}
+	return append(slice, s)
+}
+
+// loadConfig loads ~/.agentjail/policy.yaml, merges it over Default(), and
+// injects the resolved temp roots.  Returns the merged config.  If the file
+// does not exist, Default() is returned with temp roots injected.
+func loadConfig(policyPath string) (*agentconfig.PolicyConfig, error) {
+	cfg, err := agentconfig.LoadOrDefault(policyPath)
+	if err != nil {
+		return nil, err
+	}
+	// Always inject temp roots so Rego never needs env access.
+	cfg.File.TempRoots = buildTempRoots()
+	return cfg, nil
+}
+
+// reload rebuilds the OPA engine from the given Rego modules and atomically
+// swaps it in under the write lock. The cache is invalidated so stale
+// verdicts from the old rule set cannot leak.
+func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconfig.PolicyConfig) error {
+	// Build the OPA agentjail data document.  Rego rules read
+	// data.agentjail.config.mcp.allowed etc, so we wrap ToOPAData() under
+	// the "config" key to produce:
+	//   { "agentjail": { "config": { "mcp": {...}, "file": {...}, ... } } }
+	opaData := map[string]interface{}{
+		"config": cfg.ToOPAData(),
+	}
+
+	eng, err := policy.NewHookOPAEngineWithData(ctx, modules, opaData)
+	if err != nil {
+		return fmt.Errorf("compile rego: %w", err)
+	}
+	s.engineMu.Lock()
+	s.engine = eng
+	// Invalidate the cache on reload so decisions from the old rule set
+	// cannot leak into the new one. Borrowed from Linux page cache
+	// flush-on-policy-change semantics.
+	s.cache.Invalidate()
+	s.engineMu.Unlock()
+	return nil
+}
+
+// coreFileNames is the set of rego file stems that are always-on core rules
+// (shipped with the binary, managed by agentjail install, never custom).
+// Custom rules are any *.rego in rulesDir whose stem is NOT in this set and
+// NOT in the library set.  We use file-stem matching (the same convention as
+// installCoreRules in the CLI) rather than package inspection.
+//
+// NOTE: this list must stay in sync with coreRuleNames() in
+// cmd/agentjail/library_embed.go.  If a new core file is added there, add the
+// stem here too so the daemon correctly classifies it as non-custom and doesn't
+// subject it to staged quarantine.
+var coreFileStems = map[string]bool{
+	"command_policy":      true,
+	"file_policy":         true,
+	"mcp_policy":          true,
+	"no_daemon_kill":      true,
+	"no_hook_self_disable": true,
+	"resolver":            true,
+}
+
+// libraryFileStems is the set of rego file stems that are opt-in library rules.
+// Any file in rulesDir with one of these stems is treated as a library rule
+// (not custom) and loaded unconditionally as part of the baseline.
+//
+// NOTE: must match libraryRuleNames() in cmd/agentjail/library_embed.go.
+var libraryFileStems = map[string]bool{
+	"no_app_binary_write": true,
+	"no_destructive_git":  true,
+	"no_history_read":     true,
+	"no_launchctl":        true,
+	"no_shell_eval":       true,
+	"no_shell_init_write": true,
+}
+
+// loadModules reads all *.rego files from rulesDir (non-recursive, top-level
+// only) and returns them as a slice of (filename, source) pairs suitable for
+// passing to NewHookOPAEngineWithData.
+//
+// Staged quarantine (ADR 0014 §5): the function compiles the core+library
+// baseline first, then adds custom rule files ONE AT A TIME in sorted
+// (deterministic) filename order.  A custom file that breaks the accumulated
+// bundle is logged at WARN and skipped — it never prevents the baseline from
+// loading.  The daemon therefore NEVER fails startup and NEVER goes open because
+// of a bad custom rule.
+//
+// A file is "custom" if its stem is not in coreFileStems or libraryFileStems.
+func loadModules(rulesDir string) ([][2]string, error) {
+	entries, err := os.ReadDir(rulesDir)
+	if err != nil {
+		return nil, fmt.Errorf("read rules dir %s: %w", rulesDir, err)
+	}
+
+	type regoFile struct {
+		name string // filename (with .rego)
+		src  string
+	}
+
+	var baselineFiles []regoFile
+	var customFiles []regoFile
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".rego") {
+			continue
+		}
+		// Skip OPA test files — only for `opa test`.
+		if strings.HasSuffix(name, "_test.rego") {
+			continue
+		}
+		full := filepath.Join(rulesDir, name)
+		b, rerr := os.ReadFile(full)
+		if rerr != nil {
+			return nil, fmt.Errorf("read %s: %w", full, rerr)
+		}
+		stem := strings.TrimSuffix(name, ".rego")
+		rf := regoFile{name: full, src: string(b)}
+		if coreFileStems[stem] || libraryFileStems[stem] {
+			baselineFiles = append(baselineFiles, rf)
+		} else {
+			customFiles = append(customFiles, rf)
+		}
+	}
+
+	// Assemble the baseline module list.
+	baseline := make([][2]string, 0, len(baselineFiles))
+	for _, f := range baselineFiles {
+		baseline = append(baseline, [2]string{f.name, f.src})
+	}
+
+	// If there are no custom files, return the baseline unchanged (happy path —
+	// identical behaviour to before this change).
+	if len(customFiles) == 0 {
+		return baseline, nil
+	}
+
+	// Sort custom files for deterministic quarantine order.
+	sort.Slice(customFiles, func(i, j int) bool {
+		return customFiles[i].name < customFiles[j].name
+	})
+
+	// Staged accumulation: try to add each custom file to the growing bundle.
+	// We probe by compiling; the ctx is background (compile is fast).
+	ctx := context.Background()
+	accumulated := make([][2]string, len(baseline))
+	copy(accumulated, baseline)
+
+	for _, cf := range customFiles {
+		candidate := append(accumulated, [2]string{cf.name, cf.src}) //nolint:gocritic
+		_, compileErr := policy.NewHookOPAEngine(ctx, candidate)
+		if compileErr != nil {
+			// Bad custom file — log WARN and skip; do not update accumulated.
+			slog.Warn("skipping custom rule: bundle compile error",
+				"file", cf.name,
+				"err", compileErr,
+			)
+			continue
+		}
+		// File is good — keep it in the accumulation.
+		accumulated = candidate
+	}
+
+	return accumulated, nil
+}
+
+// defaultSocketPath returns ~/.agentjail/daemon.sock.
+func defaultSocketPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/agentjail-daemon.sock"
+	}
+	return filepath.Join(home, ".agentjail", "daemon.sock")
+}
+
+// defaultPolicyPath returns ~/.agentjail/policy.yaml.
+func defaultPolicyPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/agentjail-policy.yaml"
+	}
+	return filepath.Join(home, ".agentjail", "policy.yaml")
+}
+
+func main() {
+	socketPath := flag.String("socket", defaultSocketPath(), "path to Unix domain socket")
+	policyPath := flag.String("policy", defaultPolicyPath(), "path to policy.yaml (data overlay for OPA)")
+	rulesDir := flag.String("rules", "", "path to Rego rules directory (default: uses inline default policy)")
+	flag.Parse()
+
+	// Structured JSON logging to stderr — stdout is reserved for future
+	// query interfaces. slog default level = Info.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
+	slog.Info("agentjail-daemon starting",
+		"socket", *socketPath,
+		"policy", *policyPath,
+		"rules_dir", *rulesDir,
+	)
+
+	// Ensure the socket directory exists with 0700 so other users cannot
+	// enumerate or connect to the daemon socket.
+	socketDir := filepath.Dir(*socketPath)
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		slog.Error("create socket dir", "dir", socketDir, "err", err)
+		os.Exit(1)
+	}
+
+	// Remove a stale socket file from a previous crash. os.Remove is
+	// best-effort; if it fails for any reason other than ENOENT the
+	// subsequent Listen will fail with a clear error.
+	if err := os.Remove(*socketPath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("remove stale socket", "path", *socketPath, "err", err)
+	}
+
+	// Load initial policy config — merge policy.yaml over Default(), inject temp roots.
+	cfg, err := loadConfig(*policyPath)
+	if err != nil {
+		slog.Error("load policy config", "path", *policyPath, "err", err)
+		os.Exit(1)
+	}
+	if warns := agentconfig.Validate(cfg); len(warns) > 0 {
+		for _, w := range warns {
+			slog.Warn("policy config warning", "warning", w)
+		}
+	}
+	slog.Info("policy config loaded",
+		"mcp_allowed", cfg.MCP.Allowed,
+		"mcp_blocked_count", len(cfg.MCP.Blocked),
+		"temp_roots", cfg.File.TempRoots,
+	)
+
+	// Load initial Rego modules.
+	var initModules [][2]string
+	if *rulesDir != "" {
+		mods, err := loadModules(*rulesDir)
+		if err != nil {
+			slog.Error("load rego modules", "rules_dir", *rulesDir, "err", err)
+			os.Exit(1)
+		}
+		initModules = mods
+		slog.Info("loaded rego modules", "count", len(mods), "rules_dir", *rulesDir)
+	} else {
+		// No --rules flag: use the inline default policy so the daemon can
+		// start and evaluate requests in dev/test. In production, --rules
+		// points to the agentpolicy/policies/ directory.
+		slog.Info("no --rules dir specified; using inline default policy (deny rm -rf, allow everything else)")
+		initModules = [][2]string{
+			{"default.rego", defaultInlinePolicy},
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Build the initial engine with config data injected.
+	// Rego reads data.agentjail.config.mcp.allowed etc, so wrap under "config".
+	initOPAData := map[string]interface{}{
+		"config": cfg.ToOPAData(),
+	}
+	eng, err := policy.NewHookOPAEngineWithData(ctx, initModules, initOPAData)
+	if err != nil {
+		slog.Error("compile rego", "err", err)
+		os.Exit(1)
+	}
+
+	srv := &server{
+		engine: eng,
+		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+	}
+
+	// Start listening before installing signal handlers so the socket is
+	// ready as soon as we log "listening".
+	ln, err := net.Listen("unix", *socketPath)
+	if err != nil {
+		slog.Error("listen", "socket", *socketPath, "err", err)
+		os.Exit(1)
+	}
+	// Restrict socket permissions to the current user — no group or world
+	// access. 0600 = read+write for owner only.
+	if err := os.Chmod(*socketPath, 0o600); err != nil {
+		slog.Warn("chmod socket", "err", err)
+	}
+
+	slog.Info("listening", "socket", *socketPath)
+
+	// Signal handling.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+
+	// Accept loop in a separate goroutine so signals can be processed on
+	// the main goroutine without blocking.
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				// When ctx is cancelled we close ln; Accept returns an error.
+				if ctx.Err() != nil {
+					return
+				}
+				slog.Warn("accept", "err", err)
+				continue
+			}
+			srv.wg.Add(1)
+			go srv.handleConn(ctx, conn)
+		}
+	}()
+
+	// Block waiting for signals.
+	for sig := range sigCh {
+		switch sig {
+		case syscall.SIGHUP:
+			slog.Info("SIGHUP received — reloading policy")
+
+			// Reload Rego modules.
+			var mods [][2]string
+			if *rulesDir != "" {
+				var loadErr error
+				mods, loadErr = loadModules(*rulesDir)
+				if loadErr != nil {
+					// Keep old config — do not go open.
+					slog.Error("reload: load modules failed — keeping old policy", "err", loadErr)
+					continue
+				}
+			} else {
+				mods = [][2]string{{"default.rego", defaultInlinePolicy}}
+			}
+
+			// Reload policy.yaml — merge over Default(), inject temp roots.
+			newCfg, cfgErr := loadConfig(*policyPath)
+			if cfgErr != nil {
+				// Keep old config — do not go open.
+				slog.Error("reload: load policy config failed — keeping old policy", "path", *policyPath, "err", cfgErr)
+				continue
+			}
+
+			if reloadErr := srv.reload(ctx, mods, newCfg); reloadErr != nil {
+				// Keep old engine — do not go open.
+				slog.Error("reload: compile failed — keeping old policy", "err", reloadErr)
+				continue
+			}
+			slog.Info("policy reloaded",
+				"rules_dir", *rulesDir,
+				"mcp_allowed", newCfg.MCP.Allowed,
+				"mcp_blocked_count", len(newCfg.MCP.Blocked),
+			)
+
+		case syscall.SIGTERM, syscall.SIGINT:
+			slog.Info("shutdown signal received", "signal", sig)
+			// Stop accepting new connections.
+			cancel()
+			_ = ln.Close()
+			// Drain in-flight connections with a 5-second deadline.
+			done := make(chan struct{})
+			go func() {
+				srv.wg.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+				slog.Info("all connections drained; exiting")
+			case <-time.After(5 * time.Second):
+				slog.Warn("drain timeout; forcing exit")
+			}
+			// Remove the socket file so a fresh start won't see a stale one.
+			_ = os.Remove(*socketPath)
+			return
+		}
+	}
+}
+
+// defaultInlinePolicy is a minimal Rego policy used when --rules is not
+// specified. It denies rm -rf commands and allows everything else.
+// Production deployments pass --rules pointing to agentpolicy/policies/.
+//
+// Package name is "agentjail" — the namespace queried by NewHookOPAEngine
+// (data.agentjail.decision).
+const defaultInlinePolicy = `
+package agentjail
+
+import future.keywords.if
+
+default decision = {"action": "allow", "reason": "default allow", "rule_id": "default"}
+
+decision = {"action": "deny", "reason": "rm -rf is blocked by default policy", "rule_id": "command_policy/rm_rf"} if {
+    input.tool_name == "Bash"
+    contains(input.tool_input.command, "rm -rf")
+}
+`
