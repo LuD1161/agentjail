@@ -1,0 +1,3 @@
+{"time_unix_nano":1779554401200000000,"body":"exec/shim","attributes":{"process.pid":50001,"process.parent_pid":50000,"argv":["/bin/ls","-la"],"real_program":"/bin/ls"}}
+{"time_unix_nano":1779554403300000000,"body":"exec/shim","attributes":{"process.pid":50010,"process.parent_pid":50000,"argv":["psql","-h","localhost"],"real_program":"/opt/homebrew/bin/psql"}}
+{"time_unix_nano":1779554410000000000,"body":"policy.decision","attributes":{"rule_id":"some-rule","action":"allow"}}

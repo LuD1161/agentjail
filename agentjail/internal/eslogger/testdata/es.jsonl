@@ -1,0 +1,5 @@
+{"schema_version":1,"time":"2026-05-23T16:40:01.123456789Z","seq_num":1,"event_type":9,"event":{"exec":{"target":{"audit_token":{"pid":50001},"ppid":50000,"executable":{"path":"/bin/ls"}},"args":["/bin/ls","-la"]}},"process":{"audit_token":{"pid":50000}}}
+{"schema_version":1,"time":"2026-05-23T16:40:01.456000000Z","seq_num":2,"event_type":12,"event":{"fork":{"child":{"audit_token":{"pid":50002}}}},"process":{"audit_token":{"pid":50000}}}
+{"schema_version":1,"time":"2026-05-23T16:40:02.001000000Z","seq_num":3,"event_type":10,"event":{"exit":{"stat":0}},"process":{"audit_token":{"pid":50001}}}
+{"schema_version":1,"time":"2026-05-23T16:40:03.222000000Z","seq_num":4,"event_type":9,"event":{"exec":{"target":{"audit_token":{"pid":50010},"ppid":50000,"executable":{"path":"/opt/homebrew/bin/psql"}},"args":["psql","-h","localhost"]}},"process":{"audit_token":{"pid":50000}}}
+{"schema_version":1,"time":"2026-05-23T16:40:04.500000000Z","seq_num":5,"event_type":9,"event":{"exec":{"target":{"audit_token":{"pid":50020},"ppid":50000,"executable":{"path":"/bin/sh"}},"args":["/bin/sh","-c","rm -rf /tmp/x"]}},"process":{"audit_token":{"pid":50000}}}

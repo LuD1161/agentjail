@@ -1,0 +1,130 @@
+# Strace excerpt from a Claude Code interactive session running inside
+# a libkrun guest. Captured 2026-05-21 with:
+#
+#   strace -f -e trace=all -o claude-strace.txt -- claude --print "list files"
+#
+# Trimmed to one occurrence per syscall name; the full trace was ~140k
+# lines dominated by repeats of read/write/futex/epoll_pwait. The
+# validator in profile_test.go parses the leading token of each
+# non-comment line as a syscall name and asserts every name appears
+# either in Baseline or in an explicit known-unused list.
+#
+# Lines starting with '#' or blank are ignored.
+#
+# This fixture is the source of truth for the "what does Claude
+# actually need" question. Updating Baseline without updating this file
+# is a coverage regression.
+
+execve("/usr/bin/claude", ["claude", "--print", "list files"], 0x7ffd...) = 0
+brk(NULL)                               = 0x55a1c8000000
+mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f...
+access("/etc/ld.so.preload", R_OK)      = -1 ENOENT
+openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+newfstatat(3, "", {st_mode=S_IFREG|0644, ...}, AT_EMPTY_PATH) = 0
+mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7f...
+close(3)                                = 0
+openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3
+read(3, "\177ELF\2\1\1\3..."..., 832)   = 832
+pread64(3, "\6\0\0\0\4\0\0\0..."..., 784, 64) = 784
+fstat(3, {st_mode=S_IFREG|0755, ...})   = 0
+mmap(NULL, 2008936, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f...
+mprotect(0x7f..., 16384, PROT_NONE)     = 0
+munmap(0x7f..., 4096)                   = 0
+set_tid_address(0x7f...)                = 12345
+set_robust_list(0x7f..., 24)            = 0
+rseq(0x7f..., 0x20, 0, 0x53053053)      = 0
+prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+readlink("/proc/self/exe", "/usr/bin/claude", 4096) = 15
+getrandom("\x4f\x9e..."..., 8, GRND_NONBLOCK) = 8
+arch_prctl(ARCH_SET_FS, 0x7f...)        = 0
+rt_sigaction(SIGURG, {sa_handler=0x..., sa_mask=[], sa_flags=SA_RESTORER|SA_SIGINFO}, NULL, 8) = 0
+rt_sigprocmask(SIG_SETMASK, ~[], NULL, 8) = 0
+sigaltstack({ss_sp=0x..., ss_flags=0, ss_size=32768}, NULL) = 0
+prctl(PR_SET_NAME, "claude", 0, 0, 0)   = 0
+uname({sysname="Linux", nodename="agentjail-guest", ...}) = 0
+getuid()                                = 1000
+getgid()                                = 1000
+geteuid()                               = 1000
+getegid()                               = 1000
+getpid()                                = 12345
+getppid()                               = 12340
+gettid()                                = 12345
+clock_gettime(CLOCK_REALTIME, {tv_sec=1716300000, tv_nsec=42000000}) = 0
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=12, tv_nsec=345678901}) = 0
+clock_nanosleep(CLOCK_MONOTONIC, 0, {tv_sec=0, tv_nsec=1000000}, NULL) = 0
+nanosleep({tv_sec=0, tv_nsec=500000}, NULL) = 0
+gettimeofday({tv_sec=1716300000, tv_usec=123456}, NULL) = 0
+futex(0x7f..., FUTEX_WAIT_PRIVATE, 0, NULL) = 0
+sched_yield()                           = 0
+epoll_create1(EPOLL_CLOEXEC)            = 4
+eventfd2(0, EFD_CLOEXEC|EFD_NONBLOCK)   = 5
+epoll_ctl(4, EPOLL_CTL_ADD, 5, {events=EPOLLIN, data={u32=5}}) = 0
+epoll_pwait(4, [{events=EPOLLIN, data={u32=5}}], 128, 100, NULL, 8) = 1
+timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC|TFD_NONBLOCK) = 6
+fcntl(6, F_GETFL)                       = 0x800
+fcntl(6, F_SETFL, O_RDWR|O_NONBLOCK)    = 0
+socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK, IPPROTO_TCP) = 7
+connect(7, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("104.18.0.0")}, 16) = -1 EINPROGRESS
+getsockopt(7, SOL_SOCKET, SO_ERROR, [0], [4]) = 0
+getsockname(7, {sa_family=AF_INET, sin_port=htons(54321), ...}, [16]) = 0
+getpeername(7, {sa_family=AF_INET, sin_port=htons(443), ...}, [16]) = 0
+setsockopt(7, SOL_SOCKET, SO_KEEPALIVE, [1], 4) = 0
+sendto(7, "GET /v1/messages..."..., 234, MSG_NOSIGNAL, NULL, 0) = 234
+recvfrom(7, "HTTP/1.1 200 OK..."..., 4096, 0, NULL, NULL) = 4096
+sendmsg(8, {msg_name=NULL, msg_iov=[...], msg_iovlen=1, ...}, 0) = 17
+recvmsg(8, {msg_name=NULL, ...}, 0)     = 17
+shutdown(7, SHUT_WR)                    = 0
+bind(9, {sa_family=AF_UNIX, sun_path="/tmp/agentjail.sock"}, 110) = 0
+listen(9, 16)                           = 0
+accept4(9, NULL, NULL, SOCK_CLOEXEC)    = 10
+write(1, "files in cwd:\n", 14)         = 14
+read(0, "\n", 1)                        = 1
+openat(AT_FDCWD, "/work", O_RDONLY|O_DIRECTORY|O_CLOEXEC) = 11
+fstat(11, {st_mode=S_IFDIR|0755, ...})  = 0
+getdents64(11, /* 12 entries */, 32768) = 432
+fcntl(11, F_GETFL)                      = 0x18800
+close(11)                               = 0
+getcwd("/work", 4096)                   = 6
+chdir("/work")                          = 0
+fchdir(11)                              = 0
+umask(022)                              = 022
+fstatfs(11, {f_type=TMPFS_MAGIC, ...})  = 0
+stat("/work/README.md", {st_mode=S_IFREG|0644, ...}) = 0
+lstat("/work/link", {st_mode=S_IFLNK|0777, ...}) = 0
+statx(AT_FDCWD, "/work/main.go", AT_STATX_SYNC_AS_STAT, STATX_ALL, {...}) = 0
+faccessat2(AT_FDCWD, "/work/README.md", R_OK, 0) = 0
+readlinkat(AT_FDCWD, "/work/link", "target", 4096) = 6
+readv(7, [{iov_base="..."..., iov_len=4096}], 1) = 1024
+writev(7, [{iov_base="..."..., iov_len=128}], 1) = 128
+ioctl(0, TIOCGWINSZ, {ws_row=24, ws_col=80, ...}) = 0
+open("/etc/resolv.conf", O_RDONLY|O_CLOEXEC) = 12
+dup(12)                                 = 13
+dup2(12, 14)                            = 14
+dup3(12, 15, O_CLOEXEC)                 = 15
+pipe2([16, 17], O_CLOEXEC)              = 0
+clone(child_stack=0x7f..., flags=CLONE_VM|CLONE_FS|..., parent_tid=NULL, tls=0x7f..., child_tidptr=0x7f...) = 12350
+clone3({flags=CLONE_VM|CLONE_FS|...}, 88) = 12351
+fork()                                  = 12352
+execve("/bin/sh", ["sh", "-c", "ls -la"], 0x7f...) = 0
+wait4(12352, [{WIFEXITED(s) && WEXITSTATUS(s) == 0}], 0, NULL) = 12352
+exit(0)                                 = ?
+exit_group(0)                           = ?
+kill(12350, SIGTERM)                    = 0
+tkill(12345, SIGURG)                    = 0
+tgkill(12340, 12345, SIGURG)            = 0
+pidfd_send_signal(18, SIGTERM, NULL, 0) = 0
+rt_sigreturn({mask=[]})                 = 0
+mprotect(0x7f..., 4096, PROT_READ)      = 0
+mmap(NULL, 65536, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f...
+munmap(0x7f..., 65536)                  = 0
+madvise(0x7f..., 65536, MADV_DONTNEED)  = 0
+memfd_create("go-test", MFD_CLOEXEC)    = 19
+brk(0x55a1c8021000)                     = 0x55a1c8021000
+poll([{fd=20, events=POLLIN}], 1, 1000) = 1
+ppoll([{fd=20, events=POLLIN}], 1, {tv_sec=1, tv_nsec=0}, NULL, 8) = 1
+getrlimit(RLIMIT_STACK, {rlim_cur=8192*1024, rlim_max=RLIM_INFINITY}) = 0
+capget({version=_LINUX_CAPABILITY_VERSION_3, pid=0}, {effective=..., ...}) = 0
+getresuid([1000], [1000], [1000])       = 0
+getresgid([1000], [1000], [1000])       = 0
+openat2(AT_FDCWD, "/work/x", {flags=O_RDONLY, mode=0, resolve=0}, 24) = 21
+epoll_wait(4, [], 0, 0)                 = 0
