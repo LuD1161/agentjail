@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "/home/user/.agentjail/bin/agentjail-hook --agent=cursor"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "/home/user/.agentjail/bin/agentjail-hook --agent=cursor"
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "/home/user/.agentjail/bin/agentjail-hook --agent=cursor"
+      }
+    ]
+  }
+}

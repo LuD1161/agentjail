@@ -1,0 +1,13 @@
+{
+  "command": "rm -rf /tmp/foo",
+  "cwd": "/Users/dev/project",
+  "sandbox": false,
+  "conversation_id": "668320d2-2fd8-4888-b33c-2a466fec86e7",
+  "generation_id": "490b90b7-a2ce-4c2c-bb76-cb77b125df2f",
+  "model": "claude-sonnet-4-20250514",
+  "hook_event_name": "beforeShellExecution",
+  "cursor_version": "2.4.7",
+  "workspace_roots": ["/Users/dev/project"],
+  "user_email": null,
+  "transcript_path": null
+}
