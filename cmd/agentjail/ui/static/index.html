@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>agentjail ui — dev tool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'Cascadia Code', 'ui-monospace', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0d1117; color: #e6edf3; }
+    .action-allow  { color: #3fb950; }
+    .action-deny   { color: #f85149; font-weight: 700; }
+    .action-ask    { color: #d29922; }
+    .action-other  { color: #8b949e; }
+    .rule-dot-on   { color: #3fb950; }
+    .rule-dot-off  { color: #484f58; }
+    .session-row   { cursor: pointer; }
+    .session-row:hover { background: #161b22; }
+    .session-active { background: #161b22; border-left: 2px solid #388bfd; }
+    .event-row     { cursor: pointer; }
+    .event-row:hover { background: #161b22; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-allow { background: #0d2316; color: #3fb950; border: 1px solid #1a4127; }
+    .badge-deny  { background: #2d0f0e; color: #f85149; border: 1px solid #5a1d1d; }
+    .badge-ask   { background: #2a1d00; color: #d29922; border: 1px solid #3d2b00; }
+    .badge-core  { background: #0d1b2e; color: #388bfd; border: 1px solid #1a3859; }
+    .badge-lib   { background: #1a1225; color: #a371f7; border: 1px solid #2d1f45; }
+    .btn-sm { padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+    .btn-sm:hover { opacity: .85; }
+    .btn-enable  { background: #0d2316; color: #3fb950; border: 1px solid #1a4127; }
+    .btn-disable { background: #2d0f0e; color: #f85149; border: 1px solid #5a1d1d; }
+    .expand-details { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; margin-top: 4px; padding: 8px 12px; font-size: 11px; color: #8b949e; }
+    .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3fb950; animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:.3; } }
+  </style>
+</head>
+<body class="font-mono text-sm h-screen flex flex-col overflow-hidden">
+
+<!-- Top bar -->
+<header class="border-b border-gray-800 px-4 py-2 flex-none">
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="font-bold text-white text-base">agentjail ui</span>
+      <span class="live-dot" id="live-dot" title="connected"></span>
+      <span class="text-xs text-gray-500" id="conn-status">connecting…</span>
+      <span class="text-xs text-gray-600">|</span>
+      <span class="text-xs" id="count-allow"><span class="text-green-400 font-bold" id="n-allow">0</span> <span class="text-gray-500">allow</span></span>
+      <span class="text-xs" id="count-deny"><span class="text-red-400 font-bold" id="n-deny">0</span> <span class="text-gray-500">deny</span></span>
+      <span class="text-xs" id="count-ask"><span class="text-yellow-400 font-bold" id="n-ask">0</span> <span class="text-gray-500">ask</span></span>
+    </div>
+    <div class="text-xs text-yellow-600 font-semibold">&#9888; local dev tool — NOT in v0.1.0-alpha release</div>
+  </div>
+</header>
+
+<!-- Main layout: sessions | timeline -->
+<div class="flex flex-1 overflow-hidden">
+
+  <!-- Sidebar: sessions -->
+  <aside class="w-52 flex-none border-r border-gray-800 flex flex-col overflow-hidden">
+    <div class="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800">Sessions</div>
+    <div class="overflow-y-auto flex-1" id="sessions-list">
+      <!-- sessions injected by JS -->
+    </div>
+    <div class="border-t border-gray-800 session-row px-3 py-2 text-xs text-gray-400"
+         id="session-all-row" onclick="selectSession(null)">
+      &#9654; all sessions
+    </div>
+  </aside>
+
+  <!-- Timeline -->
+  <main class="flex-1 flex flex-col overflow-hidden">
+    <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 flex items-center gap-2">
+      <span>Timeline</span>
+      <span class="text-gray-600 text-xs font-normal" id="timeline-filter-label"></span>
+      <span class="flex-1"></span>
+      <span class="text-gray-600 text-xs">(live via SSE · click row to expand)</span>
+    </div>
+    <div class="overflow-y-auto flex-1" id="timeline">
+      <!-- events injected by JS -->
+    </div>
+  </main>
+</div>
+
+<!-- Rules section -->
+<section class="border-t border-gray-800 flex-none" style="max-height: 220px; overflow-y: auto;">
+  <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 sticky top-0 z-10" style="background:#0d1117;">Rules</div>
+  <div id="rules-table" class="px-2 py-1">
+    <!-- rules injected by JS -->
+  </div>
+</section>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let sessions = {};        // id -> {id, total, allow, deny, ask, first_seen, last_seen}
+let events = [];          // ring buffer of last 500 EvalLine objects
+let selectedSession = null; // null = all
+let expandedEventIdx = null;
+let rulesData = [];
+
+const MAX_EVENTS = 500;
+
+// ---------------------------------------------------------------------------
+// Bootstrap: load initial state + rules
+// ---------------------------------------------------------------------------
+async function loadState() {
+  try {
+    const r = await fetch('/api/state');
+    if (!r.ok) return;
+    const data = await r.json();
+    // Populate sessions
+    for (const s of (data.sessions || [])) {
+      sessions[s.id] = s;
+    }
+    // Populate events
+    events = (data.recent_events || []);
+    renderAll();
+  } catch(e) { console.error('loadState', e); }
+}
+
+async function loadRules() {
+  try {
+    const r = await fetch('/api/rules');
+    if (!r.ok) return;
+    rulesData = await r.json();
+    renderRules();
+  } catch(e) { console.error('loadRules', e); }
+}
+
+// ---------------------------------------------------------------------------
+// SSE
+// ---------------------------------------------------------------------------
+function connectSSE() {
+  const es = new EventSource('/events');
+  es.onopen = () => {
+    document.getElementById('conn-status').textContent = 'daemon connected';
+    document.getElementById('live-dot').style.background = '#3fb950';
+  };
+  es.onerror = () => {
+    document.getElementById('conn-status').textContent = 'reconnecting…';
+    document.getElementById('live-dot').style.background = '#d29922';
+  };
+  es.onmessage = (e) => {
+    try {
+      const line = JSON.parse(e.data);
+      ingestEvent(line);
+    } catch(err) { console.error('sse parse', err); }
+  };
+}
+
+function ingestEvent(line) {
+  // Update session
+  if (line.session_id) {
+    if (!sessions[line.session_id]) {
+      sessions[line.session_id] = {
+        id: line.session_id,
+        first_seen: line.time,
+        last_seen: line.time,
+        total: 0, allow: 0, deny: 0, ask: 0
+      };
+    }
+    const s = sessions[line.session_id];
+    s.last_seen = line.time;
+    s.total++;
+    if (line.action === 'allow') s.allow++;
+    else if (line.action === 'deny') s.deny++;
+    else if (line.action === 'ask') s.ask++;
+  }
+
+  // Ring buffer
+  if (events.length >= MAX_EVENTS) events.shift();
+  events.push(line);
+
+  renderSessions();
+  renderTimeline();
+  updateCounters();
+}
+
+// ---------------------------------------------------------------------------
+// Counters
+// ---------------------------------------------------------------------------
+function updateCounters() {
+  let allow = 0, deny = 0, ask = 0;
+  for (const s of Object.values(sessions)) {
+    allow += s.allow; deny += s.deny; ask += s.ask;
+  }
+  document.getElementById('n-allow').textContent = allow;
+  document.getElementById('n-deny').textContent = deny;
+  document.getElementById('n-ask').textContent = ask;
+}
+
+// ---------------------------------------------------------------------------
+// Render sessions sidebar
+// ---------------------------------------------------------------------------
+function renderSessions() {
+  const list = document.getElementById('sessions-list');
+  const sorted = Object.values(sessions).sort((a,b) =>
+    new Date(b.last_seen) - new Date(a.last_seen));
+
+  list.innerHTML = sorted.map(s => {
+    const short = s.id.substring(0, 12);
+    const active = selectedSession === s.id;
+    return `<div class="session-row px-3 py-2 ${active ? 'session-active' : ''}" onclick="selectSession('${s.id}')">
+      <div class="text-xs text-gray-300 font-semibold truncate" title="${s.id}">&#9654; ${short}…</div>
+      <div class="text-xs text-gray-500">${s.total} events
+        ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Highlight "all sessions" row
+  const allRow = document.getElementById('session-all-row');
+  allRow.className = 'border-t border-gray-800 session-row px-3 py-2 text-xs text-gray-400' +
+    (selectedSession === null ? ' session-active' : '');
+}
+
+function selectSession(id) {
+  selectedSession = id;
+  expandedEventIdx = null;
+  renderSessions();
+  renderTimeline();
+
+  const lbl = document.getElementById('timeline-filter-label');
+  lbl.textContent = id ? `· ${id.substring(0,12)}…` : '';
+}
+
+// ---------------------------------------------------------------------------
+// Render timeline
+// ---------------------------------------------------------------------------
+function renderTimeline() {
+  const container = document.getElementById('timeline');
+  const visible = selectedSession
+    ? events.filter(e => e.session_id === selectedSession)
+    : events;
+
+  if (visible.length === 0) {
+    container.innerHTML = '<div class="px-4 py-6 text-xs text-gray-600">No events yet. Start an agent session and tool calls will stream here.</div>';
+    return;
+  }
+
+  container.innerHTML = visible.map((ev, i) => {
+    const t = ev.time ? new Date(ev.time).toLocaleTimeString('en-US', {hour12:false}) : '—';
+    const action = (ev.action || '').toLowerCase();
+    const actionClass = action === 'allow' ? 'action-allow' : action === 'deny' ? 'action-deny' : action === 'ask' ? 'action-ask' : 'action-other';
+    const actionBadgeClass = action === 'allow' ? 'badge-allow' : action === 'deny' ? 'badge-deny' : action === 'ask' ? 'badge-ask' : '';
+    const tool = ev.tool || '—';
+    const summary = ev.summary || '';
+    const sessionShort = ev.session_id ? ev.session_id.substring(0,8) : '';
+    const expanded = expandedEventIdx === i;
+
+    let details = '';
+    if (expanded) {
+      details = `<div class="expand-details ml-8">
+        ${ev.session_id ? `<div><span class="text-gray-600">session:</span> ${ev.session_id}</div>` : ''}
+        ${ev.rule_id ? `<div><span class="text-gray-600">rule:</span> ${ev.rule_id}</div>` : ''}
+        ${ev.reason ? `<div><span class="text-gray-600">reason:</span> ${ev.reason}</div>` : ''}
+        ${ev.impact ? `<div><span class="text-gray-600">impact:</span> <span class="text-red-400">${ev.impact}</span></div>` : ''}
+        ${ev.summary ? `<div><span class="text-gray-600">command:</span> ${escHtml(ev.summary)}</div>` : ''}
+        ${ev.elapsed_us ? `<div><span class="text-gray-600">latency:</span> ${ev.elapsed_us}µs</div>` : ''}
+      </div>`;
+    }
+
+    return `<div class="event-row px-4 py-1" onclick="toggleExpand(${i})">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="text-gray-500 flex-none" style="width:56px">${t}</span>
+        <span class="badge ${actionBadgeClass} flex-none" style="width:46px;text-align:center">${(ev.action||'').toUpperCase()}</span>
+        <span class="text-gray-300 flex-none" style="width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${tool}">${tool}</span>
+        <span class="text-gray-500 flex-1 truncate">${escHtml(summary)}</span>
+        ${sessionShort ? `<span class="text-gray-700 flex-none text-xs">${sessionShort}</span>` : ''}
+      </div>
+      ${details}
+    </div>`;
+  }).join('');
+
+  // Auto-scroll to bottom if near bottom already.
+  const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 40;
+  if (atBottom) container.scrollTop = container.scrollHeight;
+}
+
+function toggleExpand(idx) {
+  expandedEventIdx = expandedEventIdx === idx ? null : idx;
+  renderTimeline();
+}
+
+// ---------------------------------------------------------------------------
+// Render rules table
+// ---------------------------------------------------------------------------
+function renderRules() {
+  const container = document.getElementById('rules-table');
+  if (!rulesData || rulesData.length === 0) {
+    container.innerHTML = '<div class="text-xs text-gray-600 px-2 py-2">No rules loaded.</div>';
+    return;
+  }
+
+  container.innerHTML = rulesData.map(rule => {
+    const dot = rule.enabled ? '<span class="rule-dot-on">&#9679;</span>' : '<span class="rule-dot-off">&#9675;</span>';
+    const srcBadge = rule.source === 'core' ? '<span class="badge badge-core">core</span>' : '<span class="badge badge-lib">library</span>';
+    const status = rule.enabled ? '<span class="text-green-400 text-xs">enabled</span>' : '<span class="text-gray-600 text-xs">disabled</span>';
+
+    let btn = '';
+    if (rule.source === 'library') {
+      if (rule.enabled) {
+        btn = `<button class="btn-sm btn-disable ml-2" onclick="policyDisable('${rule.name}', this)">disable</button>`;
+      } else {
+        btn = `<button class="btn-sm btn-enable ml-2" onclick="policyEnable('${rule.name}', this)">enable</button>`;
+      }
+    }
+
+    return `<div class="flex items-center gap-2 py-1 px-2 hover:bg-gray-900 rounded">
+      <span class="flex-none">${dot}</span>
+      <span class="flex-none text-gray-300" style="width:220px;overflow:hidden;text-overflow:ellipsis">${rule.name}</span>
+      <span class="flex-none">${srcBadge}</span>
+      <span class="flex-none">${status}</span>
+      <span>${btn}</span>
+    </div>`;
+  }).join('');
+}
+
+async function policyEnable(name, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/policy/enable?name=${encodeURIComponent(name)}`, {method:'POST'});
+    const data = await r.json();
+    if (data.error) { alert('Error: ' + data.error); btn.disabled = false; btn.textContent = 'enable'; return; }
+    // Optimistic update
+    const rule = rulesData.find(x => x.name === name);
+    if (rule) rule.enabled = true;
+    renderRules();
+  } catch(e) { btn.disabled = false; btn.textContent = 'enable'; }
+}
+
+async function policyDisable(name, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/policy/disable?name=${encodeURIComponent(name)}`, {method:'POST'});
+    const data = await r.json();
+    if (data.error) { alert('Error: ' + data.error); btn.disabled = false; btn.textContent = 'disable'; return; }
+    const rule = rulesData.find(x => x.name === name);
+    if (rule) rule.enabled = false;
+    renderRules();
+  } catch(e) { btn.disabled = false; btn.textContent = 'disable'; }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function escHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderAll() {
+  renderSessions();
+  renderTimeline();
+  updateCounters();
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+loadState();
+loadRules();
+connectSSE();
+</script>
+
+</body>
+</html>

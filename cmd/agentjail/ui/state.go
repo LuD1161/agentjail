@@ -1,0 +1,138 @@
+// ui/state.go — in-memory session + event ring buffer for the local web UI.
+//
+// This package is a LOCAL DEV TOOL only. It is NOT part of the v0.1.0-alpha
+// release. It is intended for demo recordings and internal debugging.
+package ui
+
+import (
+	"encoding/json"
+	"sync"
+	"time"
+)
+
+// maxEvents is the ring-buffer capacity. Oldest events are dropped when full.
+const maxEvents = 500
+
+// EvalLine mirrors cmd/agentjail/logs.go evalLine — duplicated here to keep
+// the ui package self-contained (no cross-package import needed for a dev tool).
+type EvalLine struct {
+	Time      time.Time `json:"time"`
+	Level     string    `json:"level"`
+	Msg       string    `json:"msg"`
+	ReqID     string    `json:"req_id,omitempty"`
+	Tool      string    `json:"tool,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	CWD       string    `json:"cwd,omitempty"`
+	Summary   string    `json:"summary,omitempty"`
+	Action    string    `json:"action,omitempty"`
+	RuleID    string    `json:"rule_id,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	Impact    string    `json:"impact,omitempty"`
+	ElapsedUs int64     `json:"elapsed_us,omitempty"`
+	Err       string    `json:"err,omitempty"`
+}
+
+// SessionState tracks per-session aggregated stats.
+type SessionState struct {
+	ID        string    `json:"id"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+	Total     int       `json:"total"`
+	Allow     int       `json:"allow"`
+	Deny      int       `json:"deny"`
+	Ask       int       `json:"ask"`
+}
+
+// StateSnapshot is the JSON shape returned by GET /api/state.
+type StateSnapshot struct {
+	Sessions     []*SessionState `json:"sessions"`
+	RecentEvents []EvalLine      `json:"recent_events"`
+	TotalAllow   int             `json:"total_allow"`
+	TotalDeny    int             `json:"total_deny"`
+	TotalAsk     int             `json:"total_ask"`
+}
+
+// Store is the thread-safe in-memory state for the UI server.
+type Store struct {
+	mu       sync.RWMutex
+	sessions map[string]*SessionState
+	events   []EvalLine // ring buffer, capped at maxEvents
+}
+
+// NewStore creates an empty Store.
+func NewStore() *Store {
+	return &Store{
+		sessions: make(map[string]*SessionState),
+		events:   make([]EvalLine, 0, maxEvents),
+	}
+}
+
+// Ingest parses one log line and updates state. Returns the parsed EvalLine
+// and true if the line was an eval event worth broadcasting; false otherwise.
+func (s *Store) Ingest(raw []byte) (EvalLine, bool) {
+	var line EvalLine
+	if err := json.Unmarshal(raw, &line); err != nil {
+		return EvalLine{}, false
+	}
+	if line.Msg != "eval" {
+		return EvalLine{}, false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Update session state.
+	if line.SessionID != "" {
+		sess, ok := s.sessions[line.SessionID]
+		if !ok {
+			sess = &SessionState{
+				ID:        line.SessionID,
+				FirstSeen: line.Time,
+			}
+			s.sessions[line.SessionID] = sess
+		}
+		sess.LastSeen = line.Time
+		sess.Total++
+		switch line.Action {
+		case "allow":
+			sess.Allow++
+		case "deny":
+			sess.Deny++
+		case "ask":
+			sess.Ask++
+		}
+	}
+
+	// Append to ring buffer — drop oldest when full.
+	if len(s.events) >= maxEvents {
+		copy(s.events, s.events[1:])
+		s.events[maxEvents-1] = line
+	} else {
+		s.events = append(s.events, line)
+	}
+
+	return line, true
+}
+
+// Snapshot returns a point-in-time copy of all state.
+func (s *Store) Snapshot() StateSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snap := StateSnapshot{
+		Sessions:     make([]*SessionState, 0, len(s.sessions)),
+		RecentEvents: make([]EvalLine, len(s.events)),
+	}
+	copy(snap.RecentEvents, s.events)
+
+	for _, sess := range s.sessions {
+		cp := *sess
+		snap.Sessions = append(snap.Sessions, &cp)
+		snap.TotalAllow += sess.Allow
+		snap.TotalDeny += sess.Deny
+		snap.TotalAsk += sess.Ask
+	}
+
+	return snap
+}
