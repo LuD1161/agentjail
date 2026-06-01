@@ -1,0 +1,35 @@
+# policy-strict.yaml — lock everything down. Recommended for CI/CD or any
+# environment where you want maximum default-deny posture.
+#
+# Install:
+#   cp samples/configs/policy-strict.yaml ~/.agentjail/policy.yaml
+#   kill -HUP $(pgrep -f agentjail-daemon)
+
+# MCP: ZERO servers allowed by default. Add explicit entries below to permit.
+mcp:
+  allowed: []
+  blocked:
+    - "*stripe*"
+    - "*payment*"
+    - "*billing*"
+    - "*twilio*"
+    - "*sendgrid*"
+  servers: {}
+
+# Network: ZERO outbound hosts allowed. Add explicitly per project.
+network:
+  allowed_hosts: []
+
+# File: extend the sensitive-path deny-list with your own private dirs.
+file:
+  extra_deny:
+    - "/Users/me/Documents/passwords/**"
+    - "/Users/me/keys/**"
+  extra_allow: []
+
+# Commands: extra patterns to block beyond the default 13.
+commands:
+  extra_block:
+    - "scp"           # outbound file transfer to a remote host
+    - "rsync"         # ditto
+    - "ssh.*-o\\s*ProxyJump"   # SSH tunneling

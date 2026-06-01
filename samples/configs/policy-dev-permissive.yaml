@@ -1,0 +1,49 @@
+# policy-dev-permissive.yaml — loosened defaults for daily local development.
+# The core dangerous-command blocks (rm -rf, curl|bash, sudo, etc.) still
+# fire; this config opens up the network allowlist and adds common dev
+# MCP servers without per-tool restrictions.
+#
+# DO NOT use this in CI/CD or shared environments.
+#
+# Install:
+#   cp samples/configs/policy-dev-permissive.yaml ~/.agentjail/policy.yaml
+#   kill -HUP $(pgrep -f agentjail-daemon)
+
+mcp:
+  allowed:
+    - "filesystem"
+    - "fetch"
+    - "git"
+    - "memory"
+    - "sequentialthinking"
+  blocked:
+    - "*stripe*"
+    - "*payment*"
+    - "*billing*"
+  servers: {}     # no per-tool restrictions; all tools of allowed servers permitted
+
+network:
+  allowed_hosts:
+    - "api.github.com"
+    - "raw.githubusercontent.com"
+    - "objects.githubusercontent.com"
+    - "codeload.github.com"
+    - "registry.npmjs.org"
+    - "pypi.org"
+    - "files.pythonhosted.org"
+    - "crates.io"
+    - "static.crates.io"
+    - "proxy.golang.org"
+    - "sum.golang.org"
+    - "repo1.maven.org"
+    - "deno.land"
+    - "*.huggingface.co"
+    - "api.anthropic.com"     # opt in if you have agents that call Claude API
+    - "api.openai.com"        # opt in if you have agents that call OpenAI
+
+file:
+  extra_deny: []
+  extra_allow: []
+
+commands:
+  extra_block: []
