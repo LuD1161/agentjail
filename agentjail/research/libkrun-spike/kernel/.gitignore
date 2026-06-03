@@ -1,0 +1,4 @@
+# Build outputs. Source + config + Makefile + docs stay tracked.
+Image
+extract-libkrunfw-kernel
+hello-custom-kernel

@@ -1,0 +1,16 @@
+# Firecracker egress allowlist
+#
+# This spike keeps the allowlist deliberately small and deterministic: the
+# `net-test` harness creates two upstream network namespaces on the host and
+# only the "allowed" namespace IP appears here. The host-side iptables chain
+# installed by `net.sh` turns each CIDR below into an ACCEPT rule; all other
+# destinations from the guest bridge are rejected.
+#
+# Format:
+#   allow:
+#     - cidr: 10.200.0.2/32
+#       comment: human note
+
+allow:
+  - cidr: 10.200.0.2/32
+    comment: "Self-test HTTP service namespace"
