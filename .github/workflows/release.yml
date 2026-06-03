@@ -1,0 +1,263 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+            goos: darwin
+            goarch: arm64
+          - platform: darwin-amd64
+            runner: macos-14
+            goos: darwin
+            goarch: amd64
+          - platform: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - platform: linux-arm64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: verify THIRD_PARTY_LICENSES is current
+        run: ./scripts/gen-third-party-licenses.sh --check
+
+      - name: build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          LDFLAGS="-X main.version=${VERSION} -s -w"
+          mkdir -p dist
+          for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
+            echo "building ${bin}..."
+            go build -ldflags "${LDFLAGS}" -o "dist/${bin}" "./cmd/${bin}"
+          done
+
+      - name: package tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          TARBALL="agentjail-${VERSION}-${{ matrix.platform }}.tar.gz"
+          # Ship the project license + third-party attributions alongside the binaries.
+          cp LICENSE THIRD_PARTY_LICENSES dist/
+          cd dist
+          tar -czf "../${TARBALL}" \
+            agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy \
+            LICENSE THIRD_PARTY_LICENSES
+          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentjail-${{ matrix.platform }}
+          path: agentjail-*-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+
+  # Source-of-truth gate for the "no notarization needed at launch" decision
+  # (docs/adr/0005-macos-gatekeeper-distribution.md). Each darwin artifact is
+  # extracted exactly as the curl|sh / brew transport does (curl + tar — neither
+  # sets com.apple.quarantine) and verify.sh asserts the binary is quarantine-free
+  # AND actually executes. Each arch runs on its NATIVE runner so the execution
+  # check is real: macos-14 = arm64 (AMFI-strict), macos-13 = x86_64.
+  gatekeeper-verify:
+    name: verify Gatekeeper-clean (${{ matrix.platform }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: darwin-amd64
+            runner: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: agentjail-${{ matrix.platform }}
+          path: dist/
+
+      - name: extract + verify Gatekeeper-clean
+        run: |
+          set -eu
+          TARBALL=$(ls dist/agentjail-*-${{ matrix.platform }}.tar.gz)
+          echo "extracting ${TARBALL}"
+          mkdir -p extracted
+          tar -xzf "${TARBALL}" -C extracted
+          chmod +x test/macos-gatekeeper/verify.sh
+          test/macos-gatekeeper/verify.sh "extracted/agentjail"
+
+  release:
+    name: create GitHub release
+    needs: [build, gatekeeper-verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: compute SHA256SUMS
+        run: |
+          cd dist
+          # shasum is available on ubuntu via perl-Digest-SHA; sha256sum is also present.
+          # We use sha256sum here (GNU coreutils on ubuntu-latest) and emit the same format
+          # as install.sh expects: "<hash>  <filename>" with two spaces.
+          sha256sum *.tar.gz > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+
+      - name: extract CHANGELOG section for this release
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          # Extract everything from the ## $VERSION line to the next ## line (exclusive).
+          BODY=$(awk "/^## ${VERSION}[ $]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          if [ -z "$BODY" ]; then
+            BODY="Release ${VERSION}. See CHANGELOG.md for details."
+          fi
+          # Write to a file to handle multi-line body safely.
+          printf '%s\n' "$BODY" > /tmp/release-body.md
+          echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
+
+      - name: create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.changelog.outputs.body_path }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            LICENSE
+            THIRD_PARTY_LICENSES
+
+  # Push a generated binary formula to the Homebrew tap so `brew install
+  # LuD1161/tap/agentjail` tracks releases.
+  # Stable releases only — never prereleases. No-ops until the HOMEBREW_TAP_TOKEN
+  # secret exists (fine-grained PAT or GitHub App token owned by LuD1161, with
+  # contents:write on LuD1161/homebrew-tap; the default GITHUB_TOKEN cannot push
+  # to another repository).
+  homebrew:
+    name: update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: recompute SHA256SUMS
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - name: render Formula/agentjail.rb
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          REPO="LuD1161/agentjail"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+          sha() { grep "  agentjail-${TAG}-$1.tar.gz$" dist/SHA256SUMS | awk '{print $1}'; }
+          DARWIN_ARM=$(sha darwin-arm64)
+          DARWIN_AMD=$(sha darwin-amd64)
+          LINUX_ARM=$(sha linux-arm64)
+          LINUX_AMD=$(sha linux-amd64)
+
+          mkdir -p Formula
+          cat > Formula/agentjail.rb <<RUBY
+          # Generated by .github/workflows/release.yml — do not edit by hand.
+          class Agentjail < Formula
+            desc "Policy guardrail for coding agents (Claude Code, Codex, Cursor)"
+            homepage "https://agentjail.io"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "${BASE}/agentjail-${TAG}-darwin-arm64.tar.gz"
+                sha256 "${DARWIN_ARM}"
+              end
+              on_intel do
+                url "${BASE}/agentjail-${TAG}-darwin-amd64.tar.gz"
+                sha256 "${DARWIN_AMD}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "${BASE}/agentjail-${TAG}-linux-arm64.tar.gz"
+                sha256 "${LINUX_ARM}"
+              end
+              on_intel do
+                url "${BASE}/agentjail-${TAG}-linux-amd64.tar.gz"
+                sha256 "${LINUX_AMD}"
+              end
+            end
+
+            def install
+              bin.install "agentjail", "agentjail-hook", "agentjail-daemon",
+                          "agentjail-shield", "agentjail-netproxy"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/agentjail version")
+            end
+          end
+          RUBY
+          echo "--- Formula/agentjail.rb ---"
+          cat Formula/agentjail.rb
+
+      - name: push formula to tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skipping tap push."
+            echo "Create the LuD1161/homebrew-tap repo and add the secret to enable."
+            exit 0
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/LuD1161/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp Formula/agentjail.rb tap/Formula/agentjail.rb
+          cd tap
+          git config user.name "agentjail-release"
+          git config user.email "release@agentjail.io"
+          git add Formula/agentjail.rb
+          git commit -m "agentjail ${TAG}" || { echo "no change"; exit 0; }
+          git push

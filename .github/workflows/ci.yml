@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./... -race
+
+  smoke:
+    name: smoke (hook e2e)
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Only the deterministic hook E2E smoke is run here.
+      # The shield/netproxy smoke (cmd/agentjail-shield/test/smoke.sh) is
+      # deliberately excluded from CI because it exercises live-network/netproxy
+      # fixtures (DNS, api.github.com) that are non-deterministic in CI; it
+      # remains a local-dev target under `make smoke`.
+      - name: hook smoke
+        run: bash cmd/agentjail-hook/test/smoke.sh
