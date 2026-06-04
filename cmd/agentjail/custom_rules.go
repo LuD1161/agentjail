@@ -128,7 +128,7 @@ func runPolicyAdd(path string) int {
 
 	fmt.Printf("added: %s (installed to %s)\n", stem, dst)
 	fmt.Println("  Run 'agentjail policy list' to see it under Custom.")
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
@@ -167,7 +167,7 @@ func runPolicyRemove(name string) int {
 	}
 
 	fmt.Printf("removed: %s\n", name)
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 

@@ -245,7 +245,7 @@ func (s *Server) handlePolicyEnable(
 		return
 	}
 
-	sighupDaemon()
+	sighupDaemonFn()
 	writeJSON(w, map[string]string{"status": "enabled", "name": name})
 }
 
@@ -287,7 +287,7 @@ func (s *Server) handlePolicyDisable(
 		return
 	}
 
-	sighupDaemon()
+	sighupDaemonFn()
 	writeJSON(w, map[string]string{"status": "disabled", "name": name})
 }
 
@@ -296,7 +296,7 @@ func (s *Server) handlePolicyReload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	sighupDaemon()
+	sighupDaemonFn()
 	writeJSON(w, map[string]string{"status": "sighup_sent"})
 }
 
@@ -400,6 +400,13 @@ func getRulesDir() (string, error) {
 	}
 	return filepath.Join(home, ".agentjail", "rules"), nil
 }
+
+// sighupDaemonFn is the function called whenever a policy mutation handler
+// wants to trigger a daemon reload.  It is a package-level variable so that
+// tests can replace it with a no-op and avoid accidentally signalling
+// unrelated processes (e.g. agentjail-daemon.test binaries running
+// concurrently under go test ./...).
+var sighupDaemonFn = sighupDaemon
 
 // sighupDaemon sends SIGHUP to the agentjail-daemon process if found.
 func sighupDaemon() {

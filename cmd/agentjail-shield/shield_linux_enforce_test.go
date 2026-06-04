@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -19,6 +21,10 @@ import (
 // then continue running other tests.  Instead, we re-exec a child process
 // that applies Landlock, performs the enforcement probes, and exits.
 func TestMain(m *testing.M) {
+	// Ignore SIGHUP so a concurrent pgrep-based daemon-reload helper in
+	// another test package cannot terminate this test runner.
+	signal.Ignore(syscall.SIGHUP)
+
 	if os.Getenv("AGENTJAIL_LANDLOCK_CHILD") == "1" {
 		runLandlockChild()
 		// runLandlockChild always calls os.Exit; this is unreachable.

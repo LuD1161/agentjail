@@ -402,7 +402,7 @@ func runPolicyEnableRuleID(ruleID string) int {
 	}
 
 	fmt.Printf("enabled: %s (removed from disabled_rules)\n", ruleID)
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
@@ -432,7 +432,7 @@ func runPolicyEnableLibraryFile(name string) int {
 	}
 
 	fmt.Printf("enabled: %s\n", name)
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
@@ -561,7 +561,7 @@ func runPolicyDisableRuleID(ruleID string, force bool) int {
 	}
 
 	fmt.Printf("disabled: %s (added to disabled_rules)\n", ruleID)
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
@@ -628,7 +628,7 @@ func runPolicyDisableLibraryFile(name string) int {
 	} else {
 		fmt.Printf("disabled: %s\n", name)
 	}
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
@@ -651,6 +651,13 @@ func isCoreRule(name string) bool {
 	}
 	return false
 }
+
+// sighupDaemonFn is the function called by policy mutation operations to
+// trigger a live daemon reload.  It is a package-level variable so that tests
+// can replace it with a no-op and avoid accidentally signalling unrelated
+// processes (e.g. agentjail-daemon.test binaries running concurrently under
+// go test ./...).
+var sighupDaemonFn = sighupDaemon
 
 // sighupDaemon finds the agentjail-daemon process and sends SIGHUP.
 // Warns (but does not fail) if the daemon is not running.

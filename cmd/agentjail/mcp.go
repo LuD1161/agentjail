@@ -104,7 +104,7 @@ func runMCPAllow(server string) int {
 	}
 
 	fmt.Printf("allowed: %s\n", server)
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
@@ -155,7 +155,7 @@ func runMCPBlock(server string) int {
 	}
 
 	fmt.Printf("blocked: %s\n", server)
-	sighupDaemon()
+	sighupDaemonFn()
 	return 0
 }
 
