@@ -24,13 +24,28 @@ func buildHook(t *testing.T, dir string) string {
 	return bin
 }
 
+// shortSockDir returns a fresh directory with a short absolute path, suitable
+// for a Unix-domain socket. macOS caps a socket path (sun_path) at 104 bytes,
+// and the default $TMPDIR (/var/folders/...) used by t.TempDir() is long enough
+// to overflow it ("bind: invalid argument"), so socket files must live here
+// rather than under t.TempDir(). Removed when the test finishes.
+func shortSockDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "ajsock")
+	if err != nil {
+		t.Fatalf("short sock dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	return d
+}
+
 // stubDaemon starts a minimal fake daemon that serves a single connection.
 // It reads one JSON request, applies actionFn to produce an action string and
 // reason, writes the response, then closes the connection.
 // It returns the socket path and a cleanup function.
 func stubDaemon(t *testing.T, dir string, actionFn func(req daemonRequest) (string, string, string)) string {
 	t.Helper()
-	sockPath := filepath.Join(dir, "test-daemon.sock")
+	sockPath := filepath.Join(shortSockDir(t), "test-daemon.sock")
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {

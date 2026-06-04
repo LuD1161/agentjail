@@ -230,7 +230,7 @@ func TestCursorHook_ShellRequestMapping(t *testing.T) {
 
 	var capturedReq daemonRequest
 
-	ln, err := net.Listen("unix", filepath.Join(dir, "map-test.sock"))
+	ln, err := net.Listen("unix", filepath.Join(shortSockDir(t), "map-test.sock"))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

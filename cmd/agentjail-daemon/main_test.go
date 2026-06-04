@@ -33,14 +33,28 @@ decision = {"action": "deny", "reason": "rm -rf is blocked by default policy", "
 }
 `
 
+// shortSockDir returns a fresh directory with a short absolute path, suitable
+// for a Unix-domain socket. macOS caps a socket path (sun_path) at 104 bytes,
+// and the default $TMPDIR (/var/folders/...) used by t.TempDir() is long enough
+// to overflow it ("bind: invalid argument"), so socket files must live here
+// rather than under t.TempDir(). Removed when the test finishes.
+func shortSockDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "ajsock")
+	if err != nil {
+		t.Fatalf("short sock dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	return d
+}
+
 // newTestServer builds a server with the test policy and a temporary socket.
 // It returns the server and the socket path. The caller is responsible for
 // closing the listener and stopping the server.
 func newTestServer(t *testing.T) (*server, string) {
 	t.Helper()
 
-	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "test.sock")
+	sockPath := filepath.Join(shortSockDir(t), "test.sock")
 
 	eng, err := policy.NewHookOPAEngine(context.Background(), [][2]string{
 		{"test.rego", testRegoPolicy},
@@ -236,7 +250,7 @@ func TestDaemon_SIGHUP(t *testing.T) {
 		t.Fatalf("build daemon: %v\n%s", err, out)
 	}
 
-	sockPath := filepath.Join(dir, "daemon.sock")
+	sockPath := filepath.Join(shortSockDir(t), "daemon.sock")
 
 	// Start the daemon in its own process group so SIGHUP sent to the daemon
 	// subprocess does not leak to the test binary's process group.
@@ -562,7 +576,7 @@ func TestDaemon_SIGHUP_MCPDecisionChanges(t *testing.T) {
 	}
 
 	policyPath := filepath.Join(dir, "policy.yaml")
-	sockPath := filepath.Join(dir, "daemon.sock")
+	sockPath := filepath.Join(shortSockDir(t), "daemon.sock")
 
 	// Phase 1: empty allowlist → deny all MCP.
 	phase1Cfg := agentconfig.Default()
@@ -649,7 +663,7 @@ func TestDaemon_SIGHUP_FailureKeepsOldPolicy(t *testing.T) {
 	}
 
 	policyPath := filepath.Join(dir, "policy.yaml")
-	sockPath := filepath.Join(dir, "daemon.sock")
+	sockPath := filepath.Join(shortSockDir(t), "daemon.sock")
 
 	// Write valid initial policy.
 	if err := agentconfig.Save(agentconfig.Default(), policyPath); err != nil {
@@ -715,7 +729,7 @@ func TestDaemon_UnknownYAMLKeyFailsStartup(t *testing.T) {
 	if err := os.WriteFile(policyPath, []byte("unknown_top_level_key: true\n"), 0o600); err != nil {
 		t.Fatalf("write bad policy: %v", err)
 	}
-	sockPath := filepath.Join(dir, "daemon.sock")
+	sockPath := filepath.Join(shortSockDir(t), "daemon.sock")
 
 	cmd := exec.Command(daemonBin, "--socket", sockPath, "--policy", policyPath)
 	cmd.Stderr = os.Stderr
