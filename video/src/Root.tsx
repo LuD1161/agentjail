@@ -1,15 +1,12 @@
 import React from 'react';
 import {Composition} from 'remotion';
-
-const Placeholder: React.FC = () => (
-  <div style={{flex: 1, background: '#1a1714'}} />
-);
+import {Stage} from './Stage';
 
 export const Root: React.FC = () => {
   return (
     <Composition
       id="Hero"
-      component={Placeholder}
+      component={Stage}
       durationInFrames={600}
       fps={30}
       width={1920}
