@@ -46,8 +46,8 @@ export const InstallCard: React.FC<{
       </div>
       <LogoMontage slugs={slugs} startFrame={startFrame + 26} />
       <div style={{
-        opacity: ctaOpacity, fontSize: 28, color: theme.text, background: theme.panel,
-        border: `1px solid ${theme.border}`, borderRadius: 6, padding: '12px 20px',
+        opacity: ctaOpacity, fontSize: 28, color: theme.text, background: '#2a231e',
+        border: `1.5px solid #57493d`, borderRadius: 8, padding: '16px 26px',
       }}>
         {installCmd}
       </div>

@@ -1,8 +1,14 @@
 import React from 'react';
-import {useCurrentFrame, useVideoConfig, spring, interpolate} from 'remotion';
+import {useCurrentFrame, useVideoConfig, spring, interpolate, Img, staticFile} from 'remotion';
 import {theme} from '../theme';
 
-// Opening title: AGENTJAIL in caps with the product subtitle, centered.
+// Remotion's <Img> has a strict prop type that mismatches the installed React
+// types; alias it to the props we actually pass. Runtime behavior (waiting for
+// the image to load before capturing the frame) is unchanged.
+const Logo = Img as unknown as React.FC<{src: string; style?: React.CSSProperties}>;
+
+// Opening title: the agentjail wordmark (same pixel logo as the README) with
+// the product subtitle, centered.
 export const IntroCard: React.FC<{startFrame: number}> = ({startFrame}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
@@ -20,14 +26,12 @@ export const IntroCard: React.FC<{startFrame: number}> = ({startFrame}) => {
     <div style={{
       flex: 1, background: theme.bg, fontFamily: theme.mono,
       display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center', gap: 32,
+      alignItems: 'center', justifyContent: 'center', gap: 40,
     }}>
-      <div style={{
-        fontSize: 132, fontWeight: 700, letterSpacing: 14, color: theme.text,
-        transform: `translateY(${titleY}px)`, opacity: titleOpacity,
-      }}>
-        AGENTJAIL
-      </div>
+      <Logo
+        src={staticFile('agentjail-logo.svg')}
+        style={{width: 760, transform: `translateY(${titleY}px)`, opacity: titleOpacity}}
+      />
       <div style={{fontSize: 40, color: theme.dim, opacity: subOpacity}}>
         Policy guardrails for coding agents
       </div>

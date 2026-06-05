@@ -44,12 +44,15 @@ const Row: React.FC<{row: LogRow; appearFrame: number}> = ({row, appearFrame}) =
 
 export const LogsPane: React.FC<{
   rows: {row: LogRow; appearFrame: number}[];
-  allow: number; ask: number;
-}> = ({rows, allow, ask}) => {
+}> = ({rows}) => {
   const frame = useCurrentFrame();
-  // The DENY counter reflects only the deny rows that have actually landed,
-  // so it ticks up in lockstep with each row sliding in — never ahead of it.
-  const deny = rows.filter((r) => r.row.action === 'DENY' && frame >= r.appearFrame).length;
+  // Every counter reflects only the rows that have actually landed, so the
+  // tallies match what's on screen and tick up in lockstep with each row.
+  const countOf = (action: LogRow['action']) =>
+    rows.filter((r) => r.row.action === action && frame >= r.appearFrame).length;
+  const allow = countOf('ALLOW');
+  const deny = countOf('DENY');
+  const ask = countOf('ASK');
   return (
     <div style={{
       flex: 1, background: theme.panel, borderLeft: `1px solid ${theme.border}`,
@@ -62,10 +65,13 @@ export const LogsPane: React.FC<{
       <div style={{flex: 1}}>
         {rows.map((r, i) => <Row key={i} row={r.row} appearFrame={r.appearFrame} />)}
       </div>
-      <div style={{color: theme.dim, marginTop: 12}}>
-        <span style={{color: theme.green}}>{'🟢 ' + allow}</span>{'   '}
-        <span style={{color: theme.red}}>{'🔴 ' + deny}</span>{'   '}
-        <span style={{color: theme.yellow}}>{'🟡 ' + ask}</span>
+      <div style={{color: theme.dim, marginTop: 12, fontSize: 21, whiteSpace: 'nowrap'}}>
+        <span style={{color: theme.green}}>{'🟢 ' + allow + ' allow'}</span>
+        <span> · </span>
+        <span style={{color: theme.red}}>{'🔴 ' + deny + ' deny'}</span>
+        <span> · </span>
+        <span style={{color: theme.yellow}}>{'🟡 ' + ask + ' ask'}</span>
+        <span>{' · median 7ms'}</span>
       </div>
     </div>
   );
