@@ -49,7 +49,7 @@ export const denyRow2: LogRow = {
 
 export const montageIcons = [
   'amazonwebservices', 'kubernetes', 'docker', 'github',
-  'stripe', 'twilio', 'npm', 'slack', 'googlecloud',
+  'stripe', 'npm', 'slack', 'googlecloud',
 ];
 
 export const installCmd = 'curl -fsSL https://agentjail.io/install.sh | sh';

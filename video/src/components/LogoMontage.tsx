@@ -16,8 +16,8 @@ const Logo: React.FC<{slug: string; index: number; startFrame: number}> = ({slug
   const icon = (icons as any)[slugToKey(slug)];
   if (!icon) return null;
   return (
-    <svg viewBox="0 0 24 24" width={92} height={92}
-      style={{transform: `translateY(${y}px)`, opacity, margin: 18}}>
+    <svg viewBox="0 0 24 24" width={70} height={70}
+      style={{transform: `translateY(${y}px)`, opacity, margin: '0 14px'}}>
       <path d={icon.path} fill={theme.text} />
     </svg>
   );
@@ -26,8 +26,8 @@ const Logo: React.FC<{slug: string; index: number; startFrame: number}> = ({slug
 export const LogoMontage: React.FC<{slugs: string[]; startFrame: number}> = ({slugs, startFrame}) => {
   return (
     <div style={{
-      display: 'flex', flexWrap: 'wrap', justifyContent: 'center',
-      alignItems: 'center', maxWidth: 980,
+      display: 'flex', flexWrap: 'nowrap', justifyContent: 'center',
+      alignItems: 'center',
     }}>
       {slugs.map((slug, i) => (
         <Logo key={slug} slug={slug} index={i} startFrame={startFrame} />

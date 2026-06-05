@@ -40,7 +40,7 @@ const Beat: React.FC<{
   return (
     <AbsoluteFill style={{flexDirection: 'row'}}>
       <ClaudeCodePane cwd="~/acme-api" lines={lines} startFrames={LINE_STARTS} />
-      <LogsPane rows={rows} allow={4} ask={0} />
+      <LogsPane rows={rows} />
     </AbsoluteFill>
   );
 };
