@@ -52,5 +52,5 @@ export const montageIcons = [
   'stripe', 'twilio', 'npm', 'slack', 'googlecloud',
 ];
 
-export const installCmd = 'curl -fsSL https://…/install.sh | sh';
+export const installCmd = 'curl -fsSL https://agentjail.io/install.sh | sh';
 export const tagline = 'your agent literally can’t do that';
