@@ -8,7 +8,7 @@ const slugToKey = (slug: string) => 'si' + slug.charAt(0).toUpperCase() + slug.s
 const Logo: React.FC<{slug: string; index: number; startFrame: number}> = ({slug, index, startFrame}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
-  const appear = startFrame + index * 4;
+  const appear = startFrame + index * 6;
   const s = spring({frame: frame - appear, fps, config: {damping: 14}});
   const y = interpolate(s, [0, 1], [30, 0]);
   const opacity = interpolate(s, [0, 1], [0, 1]);

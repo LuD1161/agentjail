@@ -3,22 +3,26 @@ import {AbsoluteFill, Sequence, useCurrentFrame, interpolate} from 'remotion';
 import {theme} from './theme';
 import {ClaudeCodePane} from './components/ClaudeCodePane';
 import {LogsPane} from './components/LogsPane';
+import {IntroCard} from './components/IntroCard';
 import {InstallCard} from './components/InstallCard';
 import type {TranscriptLine, LogRow} from './script';
 import {
-  beat1, beat2, seedRows, denyRow1, denyRow2, montageIcons, installCmd, tagline,
+  beat1, beat2, seedRows, denyRow1, denyRow2, montageIcons, installCmd,
 } from './script';
 
-// Per-line local start frames within a beat sequence (frame 0 = sequence start).
-// Order matches the transcript: user, assistant, tool, blocked, recover.
-const LINE_STARTS = [0, 35, 70, 110, 140];
+// Per-line local start frames within a beat (frame 0 = beat start). Spaced so
+// each line finishes typing — at the Typewriter's slow default speed — before
+// the next begins, and so the final line lingers before the beat ends.
+// Order: user, assistant, tool, blocked, recover.
+const LINE_STARTS = [0, 78, 132, 188, 232];
 const DENY_LOCAL = LINE_STARTS[3]; // the blocked line — deny stamp + log row land here
 
-const BEAT1_FROM = 30;
-const BEAT_LEN = 180;
-const BEAT2_FROM = BEAT1_FROM + BEAT_LEN; // 210
-const MONTAGE_FROM = BEAT2_FROM + BEAT_LEN; // 390
-const TOTAL = 600;
+// Timeline (30fps). Each section holds well past its last animation so nothing
+// reads as rushed; transitions are gentle crossfades.
+const BEAT1_FROM = 120;                 // intro: 0..120 (~4s)
+const BEAT2_FROM = 470;                 // beat 1: 120..470 (~11.7s, incl. hold)
+const OUTRO_FROM = 850;                 // beat 2: 470..850 (~12.7s, incl. ~2s hold)
+const TOTAL = 1080;                     // outro: 850..1080 (~7.7s)
 
 // One beat: Claude Code pane on the left, synced logs pane on the right.
 // `priorDeny` rows are already-present (static) DENY rows from earlier beats;
@@ -44,20 +48,24 @@ const Beat: React.FC<{
 export const Stage: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Loop seam: fade up over the first 12 frames, fade down over the last 18,
-  // so frame 0 and frame TOTAL-1 are both near-black and the loop is invisible.
+  // Loop seam: fade up over the first 14 frames, fade down over the last 20, so
+  // frame 0 and frame TOTAL-1 are both theme.bg and the loop is invisible.
   const seam = interpolate(
-    frame, [0, 12, TOTAL - 18, TOTAL - 1], [0, 1, 1, 0],
+    frame, [0, 14, TOTAL - 20, TOTAL - 1], [0, 1, 1, 0],
     {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
 
-  // Crossfade the two-pane beats out and the montage in around MONTAGE_FROM.
-  const panesOpacity = interpolate(
-    frame, [MONTAGE_FROM - 15, MONTAGE_FROM], [1, 0],
+  // Intro fades out into beat 1; beats hold full, then fade out into the outro.
+  const introOpacity = interpolate(
+    frame, [BEAT1_FROM - 16, BEAT1_FROM], [1, 0],
     {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
-  const montageOpacity = interpolate(
-    frame, [MONTAGE_FROM - 8, MONTAGE_FROM + 6], [0, 1],
+  const panesOpacity = interpolate(
+    frame, [BEAT1_FROM - 12, BEAT1_FROM, OUTRO_FROM - 18, OUTRO_FROM], [0, 1, 1, 0],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+  );
+  const outroOpacity = interpolate(
+    frame, [OUTRO_FROM - 10, OUTRO_FROM + 8], [0, 1],
     {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
 
@@ -67,22 +75,22 @@ export const Stage: React.FC = () => {
   return (
     <AbsoluteFill style={{background: theme.bg}}>
       <AbsoluteFill style={{opacity: seam}}>
+        <AbsoluteFill style={{opacity: introOpacity}}>
+          <Sequence from={0} durationInFrames={BEAT1_FROM}>
+            <IntroCard startFrame={0} />
+          </Sequence>
+        </AbsoluteFill>
         <AbsoluteFill style={{opacity: panesOpacity}}>
-          <Sequence from={BEAT1_FROM} durationInFrames={BEAT_LEN}>
+          <Sequence from={BEAT1_FROM} durationInFrames={BEAT2_FROM - BEAT1_FROM}>
             <Beat lines={beat1} priorDeny={[]} newDeny={denyRow1} />
           </Sequence>
-          <Sequence from={BEAT2_FROM} durationInFrames={BEAT_LEN}>
+          <Sequence from={BEAT2_FROM} durationInFrames={OUTRO_FROM - BEAT2_FROM}>
             <Beat lines={beat2} priorDeny={[denyRow1]} newDeny={denyRow2} />
           </Sequence>
         </AbsoluteFill>
-        <AbsoluteFill style={{opacity: montageOpacity}}>
-          <Sequence from={MONTAGE_FROM}>
-            <InstallCard
-              slugs={montageIcons}
-              tagline={tagline}
-              installCmd={installCmd}
-              startFrame={0}
-            />
+        <AbsoluteFill style={{opacity: outroOpacity}}>
+          <Sequence from={OUTRO_FROM}>
+            <InstallCard slugs={montageIcons} installCmd={installCmd} startFrame={0} />
           </Sequence>
         </AbsoluteFill>
       </AbsoluteFill>
