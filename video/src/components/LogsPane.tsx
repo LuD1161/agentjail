@@ -44,8 +44,12 @@ const Row: React.FC<{row: LogRow; appearFrame: number}> = ({row, appearFrame}) =
 
 export const LogsPane: React.FC<{
   rows: {row: LogRow; appearFrame: number}[];
-  allow: number; deny: number; ask: number;
-}> = ({rows, allow, deny, ask}) => {
+  allow: number; ask: number;
+}> = ({rows, allow, ask}) => {
+  const frame = useCurrentFrame();
+  // The DENY counter reflects only the deny rows that have actually landed,
+  // so it ticks up in lockstep with each row sliding in — never ahead of it.
+  const deny = rows.filter((r) => r.row.action === 'DENY' && frame >= r.appearFrame).length;
   return (
     <div style={{
       flex: 1, background: theme.panel, borderLeft: `1px solid ${theme.border}`,

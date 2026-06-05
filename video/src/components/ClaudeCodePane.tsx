@@ -1,4 +1,5 @@
 import React from 'react';
+import {useCurrentFrame} from 'remotion';
 import {theme} from '../theme';
 import {Typewriter} from './Typewriter';
 import {DenyStamp} from './DenyStamp';
@@ -9,6 +10,7 @@ export const ClaudeCodePane: React.FC<{
   lines: TranscriptLine[];
   startFrames: number[];
 }> = ({cwd, lines, startFrames}) => {
+  const frame = useCurrentFrame();
   return (
     <div style={{
       flex: 1.62, background: theme.bg, fontFamily: theme.mono, fontSize: 30,
@@ -19,6 +21,10 @@ export const ClaudeCodePane: React.FC<{
       </div>
       {lines.map((line, i) => {
         const start = startFrames[i] ?? 0;
+        // A line — its bullet and wrapper included — does not exist on screen
+        // until its turn. This makes the transcript appear one line at a time
+        // (no premature `Bash()` shell or empty bullet rendered ahead of time).
+        if (frame < start) return null;
         if (line.kind === 'user') {
           return (
             <div key={i} style={{color: theme.accent}}>
