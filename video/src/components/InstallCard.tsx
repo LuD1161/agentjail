@@ -1,41 +1,55 @@
 import React from 'react';
-import {useCurrentFrame, interpolate} from 'remotion';
+import {useCurrentFrame, useVideoConfig, spring, interpolate, Img, staticFile} from 'remotion';
 import {theme} from '../theme';
 import {LogoMontage} from './LogoMontage';
 
+// Remotion's <Img> has a strict prop type that mismatches the installed React
+// types; alias it to the props we actually pass. Runtime behavior (waiting for
+// the image to load before capturing the frame) is unchanged.
+const Logo = Img as unknown as React.FC<{src: string; style?: React.CSSProperties}>;
+
+// Closing card: the big agentjail wordmark (same pixel logo as the README),
+// "Write a policy for anything." below it, then the governable-tool logos and
+// the install one-liner.
 export const InstallCard: React.FC<{
   slugs: string[];
-  tagline: string;
   installCmd: string;
   startFrame: number;
-}> = ({slugs, tagline, installCmd, startFrame}) => {
+}> = ({slugs, installCmd, startFrame}) => {
   const frame = useCurrentFrame();
-  const headlineOpacity = interpolate(frame, [startFrame, startFrame + 12], [0, 1], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-  });
-  const ctaOpacity = interpolate(frame, [startFrame + 50, startFrame + 65], [0, 1], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-  });
+  const {fps} = useVideoConfig();
+  const wordmark = spring({frame: frame - startFrame, fps, config: {damping: 20}});
+  const wordmarkY = interpolate(wordmark, [0, 1], [26, 0]);
+  const wordmarkOpacity = interpolate(
+    frame, [startFrame, startFrame + 16], [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+  );
+  const subOpacity = interpolate(
+    frame, [startFrame + 18, startFrame + 36], [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+  );
+  const ctaOpacity = interpolate(
+    frame, [startFrame + 78, startFrame + 96], [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+  );
   return (
     <div style={{
       flex: 1, background: theme.bg, fontFamily: theme.mono, color: theme.text,
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 36,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 40,
     }}>
-      <div style={{fontSize: 52, fontWeight: 700, opacity: headlineOpacity}}>
+      <Logo
+        src={staticFile('agentjail-logo.svg')}
+        style={{width: 680, transform: `translateY(${wordmarkY}px)`, opacity: wordmarkOpacity}}
+      />
+      <div style={{fontSize: 46, fontWeight: 700, opacity: subOpacity}}>
         Write a policy for anything.
       </div>
-      <LogoMontage slugs={slugs} startFrame={startFrame + 10} />
-      <div style={{opacity: ctaOpacity, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 14}}>
-        <div style={{fontSize: 34}}>
-          <span style={{color: theme.accent, fontWeight: 700}}>agentjail</span>
-          <span style={{color: theme.dim}}>{' — ' + tagline}</span>
-        </div>
-        <div style={{
-          fontSize: 28, color: theme.text, background: theme.panel,
-          border: `1px solid ${theme.border}`, borderRadius: 6, padding: '12px 20px',
-        }}>
-          {installCmd}
-        </div>
+      <LogoMontage slugs={slugs} startFrame={startFrame + 26} />
+      <div style={{
+        opacity: ctaOpacity, fontSize: 28, color: theme.text, background: theme.panel,
+        border: `1px solid ${theme.border}`, borderRadius: 6, padding: '12px 20px',
+      }}>
+        {installCmd}
       </div>
     </div>
   );

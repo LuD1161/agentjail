@@ -1,9 +1,10 @@
 # agentjail hero video
 
-A ~20s autoplay-muted, looping [Remotion](https://www.remotion.dev/) video for
-the landing page / README: a coding agent's dangerous action is blocked by
-agentjail in real time, with a synced live-log pane, then an "endless
-possibilities" logo montage.
+A ~36s autoplay-muted, looping [Remotion](https://www.remotion.dev/) video for
+the landing page / README: an AGENTJAIL title card, two beats where a coding
+agent's dangerous action is blocked in real time (with a synced live-log pane),
+then a closing card — the agentjail wordmark, "Write a policy for anything.",
+governable-tool logos, and the install one-liner.
 
 ## Develop
 

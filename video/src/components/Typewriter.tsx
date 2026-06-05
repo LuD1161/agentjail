@@ -15,7 +15,7 @@ export const Typewriter: React.FC<{
   cps?: number;
   cursor?: boolean;
   style?: React.CSSProperties;
-}> = ({text, startFrame, cps = 38, cursor = true, style}) => {
+}> = ({text, startFrame, cps = 24, cursor = true, style}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const n = revealedChars(frame, startFrame, cps, fps, text.length);
