@@ -42,7 +42,7 @@ export const InstallCard: React.FC<{
         style={{width: 680, transform: `translateY(${wordmarkY}px)`, opacity: wordmarkOpacity}}
       />
       <div style={{fontSize: 46, fontWeight: 700, opacity: subOpacity}}>
-        Write a policy for anything.
+        Guardrails for your whole stack.
       </div>
       <LogoMontage slugs={slugs} startFrame={startFrame + 26} />
       <div style={{
