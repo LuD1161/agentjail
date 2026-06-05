@@ -27,8 +27,7 @@ const Beat: React.FC<{
   lines: TranscriptLine[];
   priorDeny: LogRow[];
   newDeny: LogRow;
-  denyCount: number;
-}> = ({lines, priorDeny, newDeny, denyCount}) => {
+}> = ({lines, priorDeny, newDeny}) => {
   const rows = [
     ...seedRows.map((row) => ({row, appearFrame: -100})),
     ...priorDeny.map((row) => ({row, appearFrame: -100})),
@@ -37,7 +36,7 @@ const Beat: React.FC<{
   return (
     <AbsoluteFill style={{flexDirection: 'row'}}>
       <ClaudeCodePane cwd="~/acme-api" lines={lines} startFrames={LINE_STARTS} />
-      <LogsPane rows={rows} allow={4} deny={denyCount} ask={0} />
+      <LogsPane rows={rows} allow={4} ask={0} />
     </AbsoluteFill>
   );
 };
@@ -70,10 +69,10 @@ export const Stage: React.FC = () => {
       <AbsoluteFill style={{opacity: seam}}>
         <AbsoluteFill style={{opacity: panesOpacity}}>
           <Sequence from={BEAT1_FROM} durationInFrames={BEAT_LEN}>
-            <Beat lines={beat1} priorDeny={[]} newDeny={denyRow1} denyCount={1} />
+            <Beat lines={beat1} priorDeny={[]} newDeny={denyRow1} />
           </Sequence>
           <Sequence from={BEAT2_FROM} durationInFrames={BEAT_LEN}>
-            <Beat lines={beat2} priorDeny={[denyRow1]} newDeny={denyRow2} denyCount={2} />
+            <Beat lines={beat2} priorDeny={[denyRow1]} newDeny={denyRow2} />
           </Sequence>
         </AbsoluteFill>
         <AbsoluteFill style={{opacity: montageOpacity}}>
