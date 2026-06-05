@@ -1,0 +1,27 @@
+{
+  "name": "agentjail-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remotion hero video for agentjail",
+  "scripts": {
+    "preview": "remotion studio",
+    "render:mp4": "remotion render Hero out/agentjail-hero.mp4 --codec=h264",
+    "render:webm": "remotion render Hero out/agentjail-hero.webm --codec=vp9",
+    "render:gif": "remotion render Hero out/agentjail-hero.gif --codec=gif --every-nth-frame=2",
+    "render": "npm run render:mp4 && npm run render:webm && npm run render:gif",
+    "still": "remotion still Hero out/still.png",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.0",
+    "@remotion/google-fonts": "4.0.0",
+    "remotion": "4.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "simple-icons": "13.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.1",
+    "typescript": "5.5.4"
+  }
+}
