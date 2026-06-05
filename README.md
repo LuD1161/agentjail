@@ -22,6 +22,12 @@ foot-gun **before it fires** — no changes to how you use your agent.
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
+<br>
+
+<img src="assets/agentjail-hero.gif" alt="agentjail blocking a coding agent in real time" width="900">
+
+<sub><i>A coding agent gets blocked before it fires — source in <a href="video/">video/</a> (mp4/webm renders land in <code>video/out/</code>).</i></sub>
+
 <!-- Re-add when the repo goes public (they 404 while private):
 [![GitHub Stars](https://img.shields.io/github/stars/LuD1161/agentjail?style=flat)](https://github.com/LuD1161/agentjail/stargazers)
 [![GitHub downloads](https://img.shields.io/github/downloads/LuD1161/agentjail/total.svg?style=flat)](https://github.com/LuD1161/agentjail/releases)
