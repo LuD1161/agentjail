@@ -7,7 +7,7 @@
   </picture>
 </p>
 
-### Agent guardrails for your full stack — _your agent literally can't do that_
+### Policy guardrails for coding agents — _your agent literally can't do that_
 
 A safety rail for Claude Code, Codex, and Cursor. It catches the accidental
 foot-gun **before it fires** — no changes to how you use your agent.
