@@ -3,8 +3,8 @@
 A ~36s autoplay-muted, looping [Remotion](https://www.remotion.dev/) video for
 the landing page / README: an AGENTJAIL title card, two beats where a coding
 agent's dangerous action is blocked in real time (with a synced live-log pane),
-then a closing card — the agentjail wordmark, "Write a policy for anything.",
-governable-tool logos, and the install one-liner.
+then a closing card — the agentjail wordmark, "Agent guardrails for your full
+stack.", governable-tool logos, and the install one-liner.
 
 ## Develop
 
@@ -42,7 +42,7 @@ use the documented default rule `file_policy/sensitive_credential`.
 
 ## Structure
 
-- `src/Root.tsx` — composition registration (1920×1080, 30fps, 600 frames)
+- `src/Root.tsx` — composition registration (1920×1080, 30fps, 1080 frames = 36s)
 - `src/Stage.tsx` — sequences the two beats + montage + loop-seam fades
 - `src/components/` — Typewriter, ClaudeCodePane, LogsPane, DenyStamp,
   LogoMontage, InstallCard
