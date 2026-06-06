@@ -42,3 +42,9 @@ __pycache__/
 # Remotion video workspace
 video/node_modules/
 video/out/
+
+# HyperFrames experiment ports (local-only, large render/asset trees)
+video-hf-glass/
+video-hf-kinetic/
+video-hf-shield/
+video-hyperframes/
