@@ -7,7 +7,7 @@
   </picture>
 </p>
 
-### Policy guardrails for coding agents — _your agent literally can't do that_
+### Agent guardrails for your full stack — _your agent literally can't do that_
 
 A safety rail for Claude Code, Codex, and Cursor. It catches the accidental
 foot-gun **before it fires** — no changes to how you use your agent.
@@ -24,9 +24,11 @@ curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh |
 
 <br>
 
-<img src="assets/agentjail-hero.gif" alt="agentjail blocking a coding agent in real time" width="900">
+<a href="assets/agentjail-demo.mp4" title="Watch the 36-second demo with sound">
+  <img src="assets/agentjail-hero.gif" alt="agentjail blocking a coding agent in real time" width="900">
+</a>
 
-<sub><i>A coding agent gets blocked before it fires — source in <a href="video/">video/</a> (mp4/webm renders land in <code>video/out/</code>).</i></sub>
+<sub><i>A coding agent gets blocked before it fires. <a href="assets/agentjail-demo.mp4">▶ Watch the 36-second demo with sound</a> &middot; source in <a href="video/">video/</a>.</i></sub>
 
 <!-- Re-add when the repo goes public (they 404 while private):
 [![GitHub Stars](https://img.shields.io/github/stars/LuD1161/agentjail?style=flat)](https://github.com/LuD1161/agentjail/stargazers)
