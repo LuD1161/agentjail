@@ -42,6 +42,7 @@ import (
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
 	"github.com/LuD1161/agentjail/internal/picker"
+	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -135,6 +136,9 @@ func runInstallCmd(args []string) {
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: install complete for %s. Restart the agent to activate the hook.", ag.DisplayName())))
+		if tp, err := telemetry.DefaultPaths(); err == nil {
+			telemetry.MaybePrintNotice(tp, os.Getenv, os.Stdout)
+		}
 		return
 	}
 
@@ -241,6 +245,10 @@ func runInstallCmd(args []string) {
 
 	if anyFailed {
 		os.Exit(1)
+	}
+
+	if tp, err := telemetry.DefaultPaths(); err == nil {
+		telemetry.MaybePrintNotice(tp, os.Getenv, os.Stdout)
 	}
 }
 
