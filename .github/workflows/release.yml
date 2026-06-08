@@ -46,9 +46,10 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
+          POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          LDFLAGS="-X main.version=${VERSION} -s -w"
+          LDFLAGS="-X main.version=${VERSION} -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=${POSTHOG_KEY} -s -w"
           mkdir -p dist
           for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
             echo "building ${bin}..."
