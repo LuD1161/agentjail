@@ -213,6 +213,8 @@ func Default() *PolicyConfig {
 				"proxy.golang.org",
 				"sum.golang.org",
 				"deno.land",
+				// agentjail anonymous telemetry backend (see docs/TELEMETRY.md); users may remove this.
+				"us.i.posthog.com",
 			},
 		},
 	}

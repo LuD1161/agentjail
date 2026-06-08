@@ -228,6 +228,18 @@ func TestDefaultValues(t *testing.T) {
 	}
 }
 
+func TestDefaultNetworkAllowedHostsIncludesTelemetry(t *testing.T) {
+	cfg := Default()
+	const telemetryHost = "us.i.posthog.com"
+	for _, h := range cfg.Network.AllowedHosts {
+		if h == telemetryHost {
+			return
+		}
+	}
+	t.Errorf("Default().Network.AllowedHosts does not contain %q (agentjail anonymous telemetry backend); got %v",
+		telemetryHost, cfg.Network.AllowedHosts)
+}
+
 // ---------------------------------------------------------------------------
 // Validate()
 // ---------------------------------------------------------------------------
