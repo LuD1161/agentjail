@@ -60,6 +60,12 @@ local OPA/Rego policy daemon, an OS-native sandbox, and a styled terminal UI.
   `command`, and `network` sections; validated on startup; SIGHUP hot-reload
 - **Samples + harness** — 5 example policies and 3 example configs (all
   dogfood-tested), and a hook → daemon → policy e2e smoke harness with latency in CI
+- **Anonymous telemetry** — opt-out usage statistics (OS/arch, version, CLI command
+  counts, aggregated decision/perf rollups with enum rule IDs) to guide what we
+  improve. No paths, commands, repo names, or policy contents are ever sent; data is
+  tied to a random ID. Off in CI; disable with `agentjail telemetry disable` or
+  `AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS=false`. `agentjail telemetry view` shows
+  exactly what's queued. Full data contract in `docs/TELEMETRY.md`
 
 ### Security
 
