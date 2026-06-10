@@ -39,6 +39,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -47,7 +48,11 @@ import (
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/telemetry"
 )
+
+// version is set via -ldflags at build time (mirrors cmd/agentjail).
+var version = ""
 
 // Request is the newline-delimited JSON record sent by callers (agentjail-hook
 // or any tool that can write to the socket).
@@ -81,6 +86,53 @@ type server struct {
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
+
+	// telemetry is nil-safe: a nil recorder records nothing.
+	telemetry *telemetry.Recorder
+}
+
+// recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
+// toolName and agentID are enum values from the daemon Request struct; they are
+// safe to forward to telemetry (not user-controlled argv).
+func (s *server) recordTelemetry(action, ruleID, toolName, agentID string, elapsed time.Duration) {
+	if s.telemetry != nil {
+		s.telemetry.RecordDecisionFull(action, ruleID, toolName, agentID, elapsed)
+	}
+}
+
+// recordPolicyConfig snapshots the policy configuration into telemetry (nil-safe).
+func (s *server) recordPolicyConfig(cfg *agentconfig.PolicyConfig, rulesDir string) {
+	if s.telemetry != nil {
+		s.telemetry.RecordPolicyConfig(countCustomRuleFiles(rulesDir), cfg.DisabledRules)
+	}
+}
+
+// countCustomRuleFiles returns how many *.rego files in rulesDir are custom rules
+// (stem not in coreFileStems/libraryFileStems). Returns 0 if the dir is empty or
+// unreadable. Used only for the telemetry policy_config snapshot.
+func countCustomRuleFiles(rulesDir string) int {
+	if rulesDir == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(rulesDir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".rego") || strings.HasSuffix(name, "_test.rego") {
+			continue
+		}
+		stem := strings.TrimSuffix(name, ".rego")
+		if !coreFileStems[stem] && !libraryFileStems[stem] {
+			n++
+		}
+	}
+	return n
 }
 
 // eval evaluates a single request and returns the decision. The cache check
@@ -351,6 +403,10 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		resp, err := s.eval(ctx, req)
 		elapsed := time.Since(start)
 
+		if err == nil {
+			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
+		}
+
 		// Extract a short identifying summary from tool_input — the command
 		// string for Bash, the file_path for file tools, MCP server name for
 		// MCP calls. Truncated to keep the log line bounded. This is what the
@@ -485,6 +541,7 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 var coreFileStems = map[string]bool{
 	"command_policy":      true,
 	"file_policy":         true,
+	"internal_tools":      true,
 	"mcp_policy":          true,
 	"no_daemon_kill":      true,
 	"no_hook_self_disable": true,
@@ -706,6 +763,19 @@ func main() {
 		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
 	}
 
+	// Wire telemetry recorder: nil-safe, failure-tolerant — if init fails, the
+	// daemon continues without telemetry. The same ctx is cancelled on
+	// SIGTERM/SIGINT, which triggers Recorder.Run's final flush on shutdown.
+	if tp, perr := telemetry.DefaultPaths(); perr == nil {
+		if rec, rerr := telemetry.New(tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH, telemetry.DefaultClient()); rerr == nil {
+			srv.telemetry = rec
+			go rec.Run(ctx) // ctx is cancelled on SIGTERM/SIGINT → triggers final flush
+			srv.recordPolicyConfig(cfg, *rulesDir)
+		} else {
+			slog.Warn("telemetry init failed; continuing without telemetry", "err", rerr)
+		}
+	}
+
 	// Start listening before installing signal handlers so the socket is
 	// ready as soon as we log "listening".
 	ln, err := net.Listen("unix", *socketPath)
@@ -781,6 +851,7 @@ func main() {
 				"mcp_allowed", newCfg.MCP.Allowed,
 				"mcp_blocked_count", len(newCfg.MCP.Blocked),
 			)
+			srv.recordPolicyConfig(newCfg, *rulesDir)
 
 		case syscall.SIGTERM, syscall.SIGINT:
 			slog.Info("shutdown signal received", "signal", sig)

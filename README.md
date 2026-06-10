@@ -75,6 +75,7 @@ quietly never happens.
 - [How it works](#how-it-works) — the hook → daemon → OPA flow
 - [What's protected by default](#whats-protected-by-default) — core, self-protection, opt-in, and how to disable/tune rules
 - [Adding custom policies](#adding-custom-policies) — author your own with `agentjail policy add`
+- [Telemetry](#telemetry) — anonymous, opt-out, and exactly what's collected
 - [Roadmap](#roadmap)
 - [Docs](#docs) · [Contributing](#contributing) · [License](#license)
 
@@ -450,6 +451,23 @@ See **[`samples/README.md`](./samples/README.md)** for the rule-authoring guide.
 
 ---
 
+## Telemetry
+
+agentjail collects anonymous usage statistics (counts, OS/arch, version, and which
+rule IDs fired) to help decide what to improve. It **never** sends file paths,
+commands, repo names, environment contents, MCP server names, or policy contents.
+Data is tied to a random ID, not to you or your machine.
+
+```sh
+agentjail telemetry view      # see exactly what's queued to send
+agentjail telemetry disable   # opt out (or: AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS=false)
+```
+
+It's off automatically in CI. Full details — every field, a real example payload,
+and the "never sent" list — in [`docs/TELEMETRY.md`](./docs/TELEMETRY.md).
+
+---
+
 ## Roadmap
 
 | Tier | What | Status |
@@ -474,6 +492,7 @@ script" class of bypasses.
 - [`docs/adr/`](./docs/adr/) — architecture decision records
 - [`agentpolicy/README.md`](./agentpolicy/README.md) — rule-authoring reference
 - [`samples/README.md`](./samples/README.md) — example policies + configs
+- [`docs/TELEMETRY.md`](./docs/TELEMETRY.md) — what anonymous usage data is collected, and how to opt out
 - [`CHANGELOG.md`](./CHANGELOG.md) — release notes
 
 ## Contributing
