@@ -229,16 +229,32 @@ candidate contains r if {
 # suppressed via disabled_rules.
 # ---------------------------------------------------------------------------
 
+# _mentions_agentjail is true when the command references the agentjail binary in
+# ANY form: bare `agentjail`, an absolute/relative path ending in /agentjail, a
+# quoted path ("…/agentjail"), or `$(which agentjail)`. Matching the binary token
+# SEPARATELY from the subcommand verb is deliberate: a single
+# `agentjail\s+<verb>` pattern is trivially evaded by a closing quote or path
+# prefix right after the word (e.g. `"$HOME/.agentjail/bin/agentjail" mcp allow`,
+# which has a `"` where the old regex required whitespace). The regex layer is a
+# best-effort second line — the authoritative guard is the interactive-TTY
+# confirmation enforced inside the agentjail binary itself.
+_mentions_agentjail if {
+	regex.match(`agentjail\b`, cmd)
+}
+
 # _is_policy_mutation returns true when the command invokes a config-mutating
-# agentjail CLI subcommand (policy disable/enable/add/remove or mcp allow/block).
+# agentjail CLI subcommand (policy disable/enable/add/remove or mcp allow/block),
+# regardless of how the binary is referenced.
 _is_policy_mutation if {
-	# agentjail policy {disable,enable,add,remove} — mutation verbs only
-	regex.match(`\bagentjail\s+policy\s+(disable|enable|add|remove)\b`, cmd)
+	# agentjail … policy {disable,enable,add,remove} — mutation verbs only
+	_mentions_agentjail
+	regex.match(`\bpolicy\s+(disable|enable|add|remove)\b`, cmd)
 }
 
 _is_policy_mutation if {
-	# agentjail mcp {allow,block}
-	regex.match(`\bagentjail\s+mcp\s+(allow|block)\b`, cmd)
+	# agentjail … mcp {allow,block}
+	_mentions_agentjail
+	regex.match(`\bmcp\s+(allow|block)\b`, cmd)
 }
 
 _is_policy_mutation if {
