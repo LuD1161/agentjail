@@ -25,6 +25,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -86,17 +87,15 @@ func defaultUpdateInstallDir() (string, error) {
 // runUpdate is the entry point for `agentjail update`.
 // Returns an exit code (0 = success, 1 = error).
 func runUpdate(_ []string) int {
-	// ── SECURITY GATE: interactive TTY required ──────────────────────────────
+	// ── SECURITY GATE: interactive human confirmation required ───────────────
 	// This operation replaces agentjail's own binaries and restarts its daemon.
-	// An agent MUST NOT be able to trigger it. We open /dev/tty directly — the
-	// same pattern as confirmDisableInteractive in policy.go — so piped stdin,
-	// agent tool calls, and sub-shells cannot bypass the guard.
-	if !isInteractiveTTY() {
-		fmt.Fprintf(os.Stderr,
-			"agentjail update: REFUSED — no interactive terminal detected.\n"+
-				"  Self-update replaces agentjail's own binaries and restarts the daemon.\n"+
-				"  It must be run in a terminal by a human.\n"+
-				"  This restriction prevents agents from self-modifying the security tool.\n")
+	// An agent MUST NOT be able to trigger it. We not only open /dev/tty but also
+	// READ a typed 'y' from it (the same full pattern as confirmDisableInteractive
+	// in policy.go). Merely opening /dev/tty is insufficient — an agent running
+	// under a terminal-backed session inherits a controlling terminal, so the
+	// openability check alone would pass. Requiring a typed confirmation that the
+	// agent cannot produce is the robust guard.
+	if !confirmUpdateInteractive() {
 		return 1
 	}
 
@@ -119,6 +118,45 @@ func isInteractiveTTY() bool {
 		return false
 	}
 	_ = tty.Close()
+	return true
+}
+
+// confirmUpdateInteractive opens /dev/tty, prints a warning, and requires the
+// user to type 'y' to proceed. It refuses (returns false) when no terminal is
+// attached OR when the typed answer is not 'y'. This mirrors
+// confirmDisableInteractive in policy.go: opening /dev/tty is necessary but not
+// sufficient — we also READ a typed confirmation, so an agent that merely
+// inherits a controlling terminal still cannot proceed, because it cannot type
+// the confirmation into the human's terminal.
+func confirmUpdateInteractive() bool {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"agentjail update: REFUSED — no interactive terminal detected.\n"+
+				"  Self-update replaces agentjail's own binaries and restarts the daemon.\n"+
+				"  It must be run in a terminal by a human.\n"+
+				"  This restriction prevents agents from self-modifying the security tool.\n")
+		return false
+	}
+	defer tty.Close()
+
+	fmt.Fprintf(tty,
+		"\n"+
+			"  ⚠  You are about to self-update agentjail.\n"+
+			"\n"+
+			"  Effect:   downloads the latest release, replaces agentjail's binaries\n"+
+			"            in place, and restarts the daemon.\n"+
+			"  Source:   https://github.com/LuD1161/agentjail/releases (official only).\n"+
+			"  Verify:   the release tarball is SHA256-checked before anything is swapped.\n"+
+			"\n"+
+			"  Type 'y' to confirm, anything else to cancel: ")
+
+	reader := bufio.NewReader(tty)
+	line, _ := reader.ReadString('\n')
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		fmt.Fprintln(tty, "Cancelled.")
+		return false
+	}
 	return true
 }
 
