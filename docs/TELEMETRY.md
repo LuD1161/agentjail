@@ -52,7 +52,35 @@ Every event carries three common properties:
 | `$insert_id` | `"a1b2…"` | A per-event UUID used only to de-duplicate retried sends |
 | `agentjail_version` | `"0.1.0"` | The agentjail version |
 
-There are four event types:
+The event types are grouped below. **Lifecycle events** (`install`, `uninstall`,
+`update`) are sent **immediately and synchronously** the moment they happen — they
+do not wait for the daemon's batched flush — so they're captured even if the daemon
+never runs or you uninstall moments later. Everything else is spooled locally and
+delivered by the daemon (see [How it's delivered](#how-its-delivered)).
+
+### `install` — emitted once, immediately after a successful install
+| Property | Example | Notes |
+|---|---|---|
+| `os` | `"darwin"` / `"linux"` | |
+| `arch` | `"arm64"` / `"amd64"` | |
+| `install_method` | `"curl"` / `"brew"` | Optional; how agentjail was installed; omitted if unknown |
+| `agents` | `["claude-code","cursor"]` | Optional; the agent enums whose hooks were wired |
+| `agents_detected` | `3` | How many supported agents were found on the machine (a count) |
+
+### `uninstall` — emitted immediately before a full teardown
+Sent **before** `~/.agentjail` is removed, so we can see churn.
+| Property | Example | Notes |
+|---|---|---|
+| `os` | `"darwin"` / `"linux"` | |
+| `arch` | `"arm64"` / `"amd64"` | |
+
+### `update` — emitted when you run `agentjail update`
+| Property | Example | Notes |
+|---|---|---|
+| `from_version` | `"0.1.0"` | The version you updated from |
+| `to_version` | `"0.2.0"` | The version you updated to |
+| `os` | `"darwin"` / `"linux"` | |
+| `arch` | `"arm64"` / `"amd64"` | |
 
 ### `session_start` — emitted when the daemon starts
 | Property | Example | Notes |
@@ -72,6 +100,9 @@ There are four event types:
 |---|---|---|
 | `action_counts` | `{"allow":120,"deny":3,"ask":1}` | Counts only |
 | `rule_counts` | `{"command_policy/rm_rf":3}` | Keys are **rule IDs** — never the matched path/command/repo, but they include your **custom rules' IDs verbatim** (e.g. `custom/<your-name>/<rule>`), so we can see what custom rules people write. See [Custom rule names](#a-note-on-custom-rule-names) below |
+| `rule_action_counts` | `{"deny\|command_policy/rm_rf":3}` | Optional; the same counts keyed by `"action\|rule_id"`, so we can see which rules deny vs ask vs allow |
+| `tool_counts` | `{"Bash":80,"Edit":40}` | Optional; decisions per tool name (the agent tool enum — never tool arguments) |
+| `agent_counts` | `{"cursor":12}` | Optional; decisions per agent identity, when the agent reports one |
 | `spool_dropped` | `2` | Optional; how many queued events were dropped if the local queue overflowed |
 
 ### `perf_rollup` — aggregated daemon performance for a window
@@ -87,6 +118,24 @@ Shows what you've configured (intent), as opposed to what fired (`decision_rollu
 |---|---|---|
 | `custom_rule_count` | `2` | How many custom rules you've added (a count; rule *contents* are never sent) |
 | `disabled_rules` | `["command_policy/confirm-publish"]` | Which rules you've turned off — your disabled-rules list verbatim, which may include custom rule IDs |
+
+### `fail_open` — emitted when the hook fails open
+Security-relevant: if the hook can't reach or parse a daemon decision, it **allows**
+the action (fails open) rather than blocking your work — and reports that it did so.
+| Property | Example | Notes |
+|---|---|---|
+| `os` | `"darwin"` | |
+| `reason` | `"dial-daemon"` | A fixed enum for *why* it failed open (`dial-daemon`, `read-response`, `parse-response`, `read-stdin`, `parse-input`, `other`) — never the tool input |
+
+### `heartbeat` — best-effort, at most once per ~24h on a CLI run
+Emitted by the throttled update-check when you run a CLI command. Best-effort (it may
+not send on very short-lived invocations); version currency is also derivable from the
+`agentjail_version` on every other event.
+| Property | Example | Notes |
+|---|---|---|
+| `os` | `"darwin"` | |
+| `latest_version` | `"0.2.0"` | The latest release seen by the update check; `""` if the check didn't complete |
+| `update_available` | `true` | Whether a newer version is available |
 
 ### `feedback` — only when you run `agentjail feedback`
 Emitted **solely** when you explicitly run the command (see below). Never automatic.
@@ -151,12 +200,18 @@ backend configured, it prints a GitHub issue link instead.
 
 ## How it's delivered
 
-Decisions are aggregated **in memory** in the daemon and flushed in a single
-batched HTTPS request roughly every 6 hours (and on graceful shutdown). CLI
-commands only write a local event to `~/.agentjail/telemetry-spool.jsonl`; the
-**daemon is the only process that ever talks to the network** for telemetry. If
-you're offline or the send fails, events stay queued and are retried later; the
-local queue is capped so it can't grow without bound.
+Most events are aggregated/queued locally and delivered by the daemon in a single
+batched HTTPS request. The daemon flushes shortly after it starts (a couple of
+minutes, so short-lived daemons still report) and then roughly every 6 hours, plus
+on graceful shutdown. CLI commands only write a local event to
+`~/.agentjail/telemetry-spool.jsonl`, which the daemon picks up on its next flush.
+
+The exception is the **lifecycle events** (`install`, `uninstall`, `update`) and
+`feedback`: because they describe one-off moments that may happen when no daemon is
+running (or right before teardown), the CLI sends them **immediately and
+synchronously** over a single HTTPS request, rather than waiting for the daemon
+flush. If you're offline or a send fails, spooled events stay queued and are retried
+later; the local queue is capped so it can't grow without bound.
 
 ## Backend
 
