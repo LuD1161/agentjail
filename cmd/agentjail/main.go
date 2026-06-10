@@ -23,6 +23,9 @@ func main() {
 
 	if args[0] != "telemetry" {
 		recordFeatureUsed(args[0])
+		// Fire the throttled update check + heartbeat asynchronously. Never
+		// adds latency; all network/file errors are silently discarded.
+		maybeRunUpdateCheck()
 	}
 
 	switch args[0] {

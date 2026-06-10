@@ -9,9 +9,14 @@ import (
 
 // DecisionWindow is one window's aggregated decision counts. It is the unit the
 // v2 SQLite-backed source will also produce — keep this struct stable.
+// RuleActionCounts is keyed as "action|ruleID" (e.g. "deny|command_policy/rm_rf").
+// ToolCounts and AgentCounts track per-tool and per-agent decision volumes.
 type DecisionWindow struct {
-	ActionCounts map[string]int `json:"action_counts"`
-	RuleCounts   map[string]int `json:"rule_counts"`
+	ActionCounts     map[string]int `json:"action_counts"`
+	RuleCounts       map[string]int `json:"rule_counts"`
+	RuleActionCounts map[string]int `json:"rule_action_counts,omitempty"` // combined action×rule
+	ToolCounts       map[string]int `json:"tool_counts,omitempty"`        // per-tool name counts
+	AgentCounts      map[string]int `json:"agent_counts,omitempty"`       // per-agent id counts
 }
 
 // DecisionSource is the seam for the future SQLite-derived implementation.
@@ -27,17 +32,36 @@ const maxLatencySamples = 10000
 // Decision counts are checkpointed; latency samples are NOT (perf is least
 // critical and lossy-on-crash is acceptable).
 type Stats struct {
-	mu        sync.Mutex
-	action    map[string]int
-	rule      map[string]int
-	latencies []float64 // milliseconds, capped
+	mu         sync.Mutex
+	action     map[string]int
+	rule       map[string]int
+	ruleAction map[string]int // key: "action|ruleID"
+	tool       map[string]int // per-tool decision counts
+	agent      map[string]int // per-agent decision counts
+	latencies  []float64      // milliseconds, capped
 }
 
 func NewStats() *Stats {
-	return &Stats{action: map[string]int{}, rule: map[string]int{}}
+	return &Stats{
+		action:     map[string]int{},
+		rule:       map[string]int{},
+		ruleAction: map[string]int{},
+		tool:       map[string]int{},
+		agent:      map[string]int{},
+	}
 }
 
+// RecordDecision records a single decision. toolName and agentID are optional
+// (empty string → omitted from per-tool / per-agent counts). action and ruleID
+// must be enum values (not raw user input).
 func (s *Stats) RecordDecision(action, ruleID string, elapsed time.Duration) {
+	s.RecordDecisionFull(action, ruleID, "", "", elapsed)
+}
+
+// RecordDecisionFull is the extended form that also captures toolName and agentID.
+// Both toolName and agentID are treated as safe enum values — they come from the
+// daemon's Request struct which is populated by the hook binary, not user argv.
+func (s *Stats) RecordDecisionFull(action, ruleID, toolName, agentID string, elapsed time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if action != "" {
@@ -45,6 +69,15 @@ func (s *Stats) RecordDecision(action, ruleID string, elapsed time.Duration) {
 	}
 	if ruleID != "" {
 		s.rule[ruleID]++
+	}
+	if action != "" && ruleID != "" {
+		s.ruleAction[action+"|"+ruleID]++
+	}
+	if toolName != "" {
+		s.tool[toolName]++
+	}
+	if agentID != "" {
+		s.agent[agentID]++
 	}
 	if len(s.latencies) < maxLatencySamples {
 		s.latencies = append(s.latencies, float64(elapsed.Microseconds())/1000.0)
@@ -54,7 +87,13 @@ func (s *Stats) RecordDecision(action, ruleID string, elapsed time.Duration) {
 func (s *Stats) Snapshot() DecisionWindow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return DecisionWindow{ActionCounts: copyMap(s.action), RuleCounts: copyMap(s.rule)}
+	return DecisionWindow{
+		ActionCounts:     copyMap(s.action),
+		RuleCounts:       copyMap(s.rule),
+		RuleActionCounts: copyMap(s.ruleAction),
+		ToolCounts:       copyMap(s.tool),
+		AgentCounts:      copyMap(s.agent),
+	}
 }
 
 func (s *Stats) Reset() {
@@ -62,6 +101,9 @@ func (s *Stats) Reset() {
 	defer s.mu.Unlock()
 	s.action = map[string]int{}
 	s.rule = map[string]int{}
+	s.ruleAction = map[string]int{}
+	s.tool = map[string]int{}
+	s.agent = map[string]int{}
 	s.latencies = nil
 }
 
@@ -101,6 +143,15 @@ func LoadCheckpoint(b []byte) (DecisionWindow, error) {
 	}
 	if w.RuleCounts == nil {
 		w.RuleCounts = map[string]int{}
+	}
+	if w.RuleActionCounts == nil {
+		w.RuleActionCounts = map[string]int{}
+	}
+	if w.ToolCounts == nil {
+		w.ToolCounts = map[string]int{}
+	}
+	if w.AgentCounts == nil {
+		w.AgentCounts = map[string]int{}
 	}
 	return w, nil
 }
