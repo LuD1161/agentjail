@@ -37,6 +37,117 @@ func TestNewFeedbackEvent_OmitsEmptyContact(t *testing.T) {
 	}
 }
 
+// TestNewInstallEvent_FieldsAndOptionals verifies that NewInstallEvent populates
+// required fields and omits install_method when empty.
+func TestNewInstallEvent_FieldsAndOptionals(t *testing.T) {
+	e := NewInstallEvent("anon", "0.1.0", "darwin", "arm64", "curl", []string{"claude-code"}, 2)
+	if e.Event != "install" {
+		t.Fatalf("event name=%q", e.Event)
+	}
+	if e.Properties["os"] != "darwin" || e.Properties["arch"] != "arm64" {
+		t.Fatalf("os/arch missing: %+v", e.Properties)
+	}
+	if e.Properties["install_method"] != "curl" {
+		t.Fatalf("install_method=%v", e.Properties["install_method"])
+	}
+	if e.Properties["agents_detected"] != 2 {
+		t.Fatalf("agents_detected=%v", e.Properties["agents_detected"])
+	}
+
+	// Empty install_method must be omitted.
+	e2 := NewInstallEvent("anon", "0.1.0", "linux", "amd64", "", nil, 0)
+	if _, ok := e2.Properties["install_method"]; ok {
+		t.Fatal("empty install_method must be omitted")
+	}
+}
+
+// TestNewUninstallEvent_Fields verifies basic field presence.
+func TestNewUninstallEvent_Fields(t *testing.T) {
+	e := NewUninstallEvent("anon", "0.1.0", "darwin", "arm64")
+	if e.Event != "uninstall" {
+		t.Fatalf("event name=%q", e.Event)
+	}
+	if e.Properties["os"] != "darwin" || e.Properties["arch"] != "arm64" {
+		t.Fatalf("os/arch: %+v", e.Properties)
+	}
+}
+
+// TestNewFailOpenEvent_Fields verifies reason and os fields.
+func TestNewFailOpenEvent_Fields(t *testing.T) {
+	e := NewFailOpenEvent("anon", "0.1.0", "darwin", "dial-daemon")
+	if e.Event != "fail_open" {
+		t.Fatalf("event name=%q", e.Event)
+	}
+	if e.Properties["reason"] != "dial-daemon" {
+		t.Fatalf("reason=%v", e.Properties["reason"])
+	}
+	if e.Properties["os"] != "darwin" {
+		t.Fatalf("os=%v", e.Properties["os"])
+	}
+}
+
+// TestNewHeartbeatEvent_Fields verifies update_available and version fields.
+func TestNewHeartbeatEvent_Fields(t *testing.T) {
+	e := NewHeartbeatEvent("anon", "v1.0.0", "v1.1.0", "linux", true)
+	if e.Event != "heartbeat" {
+		t.Fatalf("event name=%q", e.Event)
+	}
+	if e.Properties["update_available"] != true {
+		t.Fatalf("update_available=%v", e.Properties["update_available"])
+	}
+	if e.Properties["latest_version"] != "v1.1.0" {
+		t.Fatalf("latest_version=%v", e.Properties["latest_version"])
+	}
+}
+
+// TestNewDecisionRollupWithDetails_RuleActionCounts verifies that the combined
+// rule×action and per-tool/per-agent fields are included in the event.
+func TestNewDecisionRollupWithDetails_RuleActionCounts(t *testing.T) {
+	w := DecisionWindow{
+		ActionCounts:     map[string]int{"deny": 3},
+		RuleCounts:       map[string]int{"command_policy/rm_rf": 3},
+		RuleActionCounts: map[string]int{"deny|command_policy/rm_rf": 3},
+		ToolCounts:       map[string]int{"Bash": 3},
+		AgentCounts:      map[string]int{"claude-code": 3},
+	}
+	e := NewDecisionRollupWithDetails("anon", "0.1.0", w, 0)
+	if e.Event != "decision_rollup" {
+		t.Fatalf("event name=%q", e.Event)
+	}
+	if _, ok := e.Properties["rule_action_counts"]; !ok {
+		t.Fatal("rule_action_counts missing")
+	}
+	if _, ok := e.Properties["tool_counts"]; !ok {
+		t.Fatal("tool_counts missing")
+	}
+	if _, ok := e.Properties["agent_counts"]; !ok {
+		t.Fatal("agent_counts missing")
+	}
+	// action_counts and rule_counts must still be present (backward compat).
+	if _, ok := e.Properties["action_counts"]; !ok {
+		t.Fatal("action_counts missing (backward compat)")
+	}
+}
+
+// TestNewDecisionRollupWithDetails_EmptyOptionals verifies optional fields are
+// omitted when the maps are empty.
+func TestNewDecisionRollupWithDetails_EmptyOptionals(t *testing.T) {
+	w := DecisionWindow{
+		ActionCounts: map[string]int{"allow": 1},
+		RuleCounts:   map[string]int{"default": 1},
+	}
+	e := NewDecisionRollupWithDetails("anon", "0.1.0", w, 0)
+	if _, ok := e.Properties["rule_action_counts"]; ok {
+		t.Fatal("rule_action_counts should be omitted when empty")
+	}
+	if _, ok := e.Properties["tool_counts"]; ok {
+		t.Fatal("tool_counts should be omitted when empty")
+	}
+	if _, ok := e.Properties["agent_counts"]; ok {
+		t.Fatal("agent_counts should be omitted when empty")
+	}
+}
+
 // TestEvents_NoPayloadLeak feeds sensitive-looking values into the rollup
 // constructors and asserts NONE of them survive serialization. The allowlist is
 // enforced structurally: constructors copy only known keys.

@@ -92,9 +92,11 @@ type server struct {
 }
 
 // recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
-func (s *server) recordTelemetry(action, ruleID string, elapsed time.Duration) {
+// toolName and agentID are enum values from the daemon Request struct; they are
+// safe to forward to telemetry (not user-controlled argv).
+func (s *server) recordTelemetry(action, ruleID, toolName, agentID string, elapsed time.Duration) {
 	if s.telemetry != nil {
-		s.telemetry.RecordDecision(action, ruleID, elapsed)
+		s.telemetry.RecordDecisionFull(action, ruleID, toolName, agentID, elapsed)
 	}
 }
 
@@ -402,7 +404,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		elapsed := time.Since(start)
 
 		if err == nil {
-			s.recordTelemetry(resp.Action, resp.RuleID, elapsed)
+			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
 
 		// Extract a short identifying summary from tool_input — the command
