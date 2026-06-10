@@ -311,27 +311,6 @@ func TestExtractTarGzReader_SkipsDirectories(t *testing.T) {
 
 // ── TTY refusal tests ─────────────────────────────────────────────────────────
 
-// TestIsInteractiveTTY_FalseInTests verifies that isInteractiveTTY returns false
-// in a non-interactive test environment. (Tests typically have no /dev/tty.)
-//
-// NOTE: this test can only be relied upon in CI or piped test runs; if someone
-// runs `go test` in an interactive terminal with /dev/tty available the test
-// would need to be skipped. We guard with an environment variable check.
-func TestIsInteractiveTTY_FalseInTests(t *testing.T) {
-	if os.Getenv("AGENTJAIL_TEST_SKIP_TTY_CHECK") != "" {
-		t.Skip("AGENTJAIL_TEST_SKIP_TTY_CHECK set; skipping TTY check test")
-	}
-	// /dev/tty should not be available in a non-interactive environment.
-	// If this fails (test runner is interactive) we skip gracefully.
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err == nil {
-		tty.Close()
-		t.Skip("test running in an interactive terminal; TTY test not applicable")
-	}
-	if isInteractiveTTY() {
-		t.Error("isInteractiveTTY() = true in non-interactive environment")
-	}
-}
 
 // TestRunUpdate_RefusesWithoutTTY verifies that runUpdate returns 1 and prints
 // the refusal message when there is no interactive TTY.

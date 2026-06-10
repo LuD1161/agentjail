@@ -16,7 +16,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -37,34 +36,22 @@ import (
 // command_policy/no-policy-mutation regex in the hook. Mirrors
 // confirmDisableInteractive (policy.go) and confirmUpdateInteractive (update.go).
 func confirmMCPMutation(verb, server string) bool {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
+	return requireInteractiveConfirm(
+		fmt.Sprintf(
 			"agentjail mcp %s: REFUSED — no interactive terminal detected.\n"+
 				"  Changing the MCP allow/block list mutates agentjail's own policy.\n"+
 				"  It must be run in a terminal by a human.\n"+
-				"  This restriction prevents an agent from self-approving an MCP server.\n", verb)
-		return false
-	}
-	defer tty.Close()
-
-	fmt.Fprintf(tty,
-		"\n"+
-			"  ⚠  You are about to %s the MCP server %q in agentjail policy.\n"+
+				"  This restriction prevents an agent from self-approving an MCP server.\n", verb),
+		fmt.Sprintf(
 			"\n"+
-			"  Effect:   agents %s this server through the PreToolUse hook.\n"+
-			"  Audit:    this change is applied to ~/.agentjail/policy.yaml.\n"+
-			"\n"+
-			"  Type 'y' to confirm, anything else to cancel: ",
-		verb, server, map[string]string{"allow": "may then reach", "block": "will be denied"}[verb])
-
-	reader := bufio.NewReader(tty)
-	line, _ := reader.ReadString('\n')
-	if strings.ToLower(strings.TrimSpace(line)) != "y" {
-		fmt.Fprintln(tty, "Cancelled.")
-		return false
-	}
-	return true
+				"  ⚠  You are about to %s the MCP server %q in agentjail policy.\n"+
+				"\n"+
+				"  Effect:   agents %s this server through the PreToolUse hook.\n"+
+				"  Audit:    this change is applied to ~/.agentjail/policy.yaml.\n"+
+				"\n"+
+				"  Type 'y' to confirm, anything else to cancel: ",
+			verb, server, map[string]string{"allow": "may then reach", "block": "will be denied"}[verb]),
+	)
 }
 
 // policyConfigPath returns ~/.agentjail/policy.yaml.
