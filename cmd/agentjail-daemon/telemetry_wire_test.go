@@ -17,7 +17,7 @@ func TestServer_RecordsDecision(t *testing.T) {
 		t.Fatalf("recorder: %v", err)
 	}
 	srv := &server{telemetry: rec}
-	srv.recordTelemetry("deny", "command_policy/rm_rf", 2*time.Millisecond)
+	srv.recordTelemetry("deny", "command_policy/rm_rf", "Bash", "claude-code", 2*time.Millisecond)
 	if err := rec.FlushForTest(context.Background()); err != nil {
 		t.Fatalf("flush: %v", err)
 	}

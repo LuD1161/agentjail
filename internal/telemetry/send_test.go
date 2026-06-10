@@ -63,3 +63,70 @@ func TestSend_ServerErrorReturnsErr(t *testing.T) {
 		t.Fatal("expected error on 500")
 	}
 }
+
+// TestSendInstall_NoBackendReturnsSentinel verifies the no-backend path.
+func TestSendInstall_NoBackendReturnsSentinel(t *testing.T) {
+	err := SendInstall(context.Background(), Paths{Base: t.TempDir()},
+		func(string) string { return "" }, "0.1.0", "darwin", "arm64", "curl", []string{"claude-code"}, 1)
+	if err != ErrNoBackend {
+		t.Fatalf("got %v want ErrNoBackend", err)
+	}
+}
+
+// TestSendInstall_OptOutSkipsSend verifies that telemetry disable prevents the send.
+func TestSendInstall_OptOutSkipsSend(t *testing.T) {
+	sent := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = true
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	// Override apiKey and endpoint for the duration of this test.
+	orig := apiKey
+	origEP := endpoint
+	apiKey = "phc_test"
+	endpoint = srv.URL
+	defer func() { apiKey = orig; endpoint = origEP }()
+
+	p := Paths{Base: t.TempDir()}
+	getenv := func(k string) string {
+		if k == EnvVar {
+			return "false" // opt-out
+		}
+		return ""
+	}
+	if err := SendInstall(context.Background(), p, getenv, "0.1.0", "darwin", "arm64", "", nil, 0); err != nil {
+		t.Fatalf("expected nil (opt-out), got %v", err)
+	}
+	if sent {
+		t.Fatal("should not have sent when telemetry is disabled")
+	}
+}
+
+// TestSendUninstall_NoBackendReturnsSentinel verifies the no-backend path.
+func TestSendUninstall_NoBackendReturnsSentinel(t *testing.T) {
+	err := SendUninstall(context.Background(), Paths{Base: t.TempDir()},
+		func(string) string { return "" }, "0.1.0", "linux", "amd64")
+	if err != ErrNoBackend {
+		t.Fatalf("got %v want ErrNoBackend", err)
+	}
+}
+
+// TestSendFailOpen_NoBackendReturnsSentinel verifies the no-backend path.
+func TestSendFailOpen_NoBackendReturnsSentinel(t *testing.T) {
+	err := SendFailOpen(context.Background(), Paths{Base: t.TempDir()},
+		func(string) string { return "" }, "0.1.0", "darwin", "dial-daemon")
+	if err != ErrNoBackend {
+		t.Fatalf("got %v want ErrNoBackend", err)
+	}
+}
+
+// TestSendHeartbeat_NoBackendReturnsSentinel verifies the no-backend path.
+func TestSendHeartbeat_NoBackendReturnsSentinel(t *testing.T) {
+	err := SendHeartbeat(context.Background(), Paths{Base: t.TempDir()},
+		func(string) string { return "" }, "v1.0.0", "v1.1.0", "darwin", true)
+	if err != ErrNoBackend {
+		t.Fatalf("got %v want ErrNoBackend", err)
+	}
+}

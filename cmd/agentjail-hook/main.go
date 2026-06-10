@@ -26,15 +26,21 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
+
+// hookVersion is set via -ldflags at build time (mirrors cmd/agentjail version).
+var hookVersion = ""
 
 // hookInput is the JSON Claude Code/Codex writes to the hook binary's stdin.
 // The field name uses "hook_event_name" (with the _name suffix) which is
@@ -113,11 +119,21 @@ func defaultSocketPath() string {
 	return wire.DefaultSocketPath()
 }
 
-// failOpenMarker writes the structured fail-open marker to stderr.
+// failOpenMarker writes the structured fail-open marker to stderr and emits a
+// fail_open telemetry event immediately (synchronous, short timeout — we are
+// about to os.Exit(0) so blocking briefly is acceptable).
 // Format: "agentjail-hook: fail-open agent=<agent> reason=<category>"
 // Categories: read-stdin | parse-input | dial-daemon | read-response | parse-response
 func failOpenMarker(agent, category string) {
 	fmt.Fprintf(os.Stderr, "agentjail-hook: fail-open agent=%s reason=%s\n", agent, category)
+	// Emit telemetry best-effort: short timeout, all errors silently discarded.
+	go func() {
+		if tp, err := telemetry.DefaultPaths(); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = telemetry.SendFailOpen(ctx, tp, os.Getenv, hookVersion, runtime.GOOS, category)
+		}
+	}()
 }
 
 // failOpenClaude writes a structured fail-open marker to stderr and emits a

@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	flushInterval      = 6 * time.Hour
-	checkpointInterval = 60 * time.Second
-	spoolMaxEvents     = 1000
-	spoolMaxBytes      = 512 * 1024
+	flushInterval        = 6 * time.Hour
+	initialFlushInterval = 2 * time.Minute // first flush catches short-lived daemons
+	checkpointInterval   = 60 * time.Second
+	spoolMaxEvents       = 1000
+	spoolMaxBytes        = 512 * 1024
 )
 
 // Recorder is the daemon-side telemetry orchestrator: it records decisions into
@@ -61,7 +62,7 @@ func (r *Recorder) recoverCheckpoint() {
 	}
 	w, err := LoadCheckpoint(b)
 	if err == nil && (len(w.ActionCounts) > 0 || len(w.RuleCounts) > 0) {
-		_ = r.spool.Append(NewDecisionRollup(r.consent.AnonymousID, r.version, w.ActionCounts, w.RuleCounts, 0))
+		_ = r.spool.Append(NewDecisionRollupWithDetails(r.consent.AnonymousID, r.version, w, 0))
 	}
 	_ = os.Remove(r.p.Checkpoint())
 }
@@ -75,6 +76,16 @@ func (r *Recorder) RecordDecision(action, ruleID string, elapsed time.Duration) 
 	// (custom/<name>/<rule>) — this is a deliberate product decision to learn what
 	// custom rules people write. It is disclosed in docs/TELEMETRY.md.
 	r.stats.RecordDecision(action, ruleID, elapsed)
+}
+
+// RecordDecisionFull is the extended form of RecordDecision that also captures
+// the tool name and agent ID for per-tool / per-agent rollup metrics.
+// toolName and agentID must be safe enum values (not raw user input).
+func (r *Recorder) RecordDecisionFull(action, ruleID, toolName, agentID string, elapsed time.Duration) {
+	if !r.enabled {
+		return
+	}
+	r.stats.RecordDecisionFull(action, ruleID, toolName, agentID, elapsed)
 }
 
 // RecordPolicyConfig spools a policy_config snapshot (nil-safe via the daemon's
@@ -111,7 +122,7 @@ func (r *Recorder) flush(ctx context.Context) error {
 	w := r.stats.Snapshot()
 	dropped, _ := r.spool.DrainDropped()
 	if len(w.ActionCounts) > 0 || len(w.RuleCounts) > 0 || dropped > 0 {
-		_ = r.spool.Append(NewDecisionRollup(r.consent.AnonymousID, r.version, w.ActionCounts, w.RuleCounts, dropped))
+		_ = r.spool.Append(NewDecisionRollupWithDetails(r.consent.AnonymousID, r.version, w, dropped))
 		p50, p95 := r.stats.LatencyPercentiles()
 		_ = r.spool.Append(NewPerfRollup(r.consent.AnonymousID, r.version, p50, p95, 0))
 	}
@@ -136,14 +147,33 @@ func (r *Recorder) FlushForTest(ctx context.Context) error { return r.flush(ctx)
 
 // Run drives the checkpoint and flush tickers until ctx is cancelled, then
 // performs one final flush (graceful shutdown).
+//
+// Flush cadence: a short initial flush fires after initialFlushInterval (~2 min)
+// so that session_start and early rollups are captured for short-lived daemons
+// (reboots, uninstall, kill -9). After the initial flush, the steady-state
+// flushInterval (6 h) takes over. The initial timer is injectable via
+// initialFlushOverride for tests.
 func (r *Recorder) Run(ctx context.Context) {
+	r.RunWithIntervals(ctx, initialFlushInterval, flushInterval)
+}
+
+// RunWithIntervals is the testable core of Run. It accepts the initial and
+// steady-state flush intervals so tests can inject small values without
+// waiting real wall-clock time.
+func (r *Recorder) RunWithIntervals(ctx context.Context, initInterval, steadyInterval time.Duration) {
 	if !r.enabled {
 		return
 	}
 	cpTick := time.NewTicker(checkpointInterval)
-	flTick := time.NewTicker(flushInterval)
 	defer cpTick.Stop()
+
+	// Fire an initial short flush, then settle into the steady-state cadence.
+	initTimer := time.NewTimer(initInterval)
+	defer initTimer.Stop()
+	flTick := time.NewTicker(steadyInterval)
 	defer flTick.Stop()
+
+	initialFlushed := false // guard: don't double-flush if initTimer and flTick race
 	for {
 		select {
 		case <-ctx.Done():
@@ -153,7 +183,13 @@ func (r *Recorder) Run(ctx context.Context) {
 			return
 		case <-cpTick.C:
 			r.checkpoint()
+		case <-initTimer.C:
+			if !initialFlushed {
+				initialFlushed = true
+				_ = r.flush(ctx)
+			}
 		case <-flTick.C:
+			initialFlushed = true // steady-state tick also counts as the initial flush
 			_ = r.flush(ctx)
 		}
 	}

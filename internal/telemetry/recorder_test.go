@@ -8,6 +8,52 @@ import (
 	"time"
 )
 
+// TestRecorder_InitialFlushHappensEarly verifies that RunWithIntervals fires an
+// early flush using the injected initInterval — without waiting for the full 6h
+// steady-state period. The test drives the recorder with a 10 ms initial
+// interval and a 1h steady interval, confirming that the spool is flushed
+// (rolled up) well before the steady-state period would elapse.
+func TestRecorder_InitialFlushHappensEarly(t *testing.T) {
+	r := newTestRecorder(t)
+	r.RecordDecision("deny", "command_policy/rm_rf", 2*time.Millisecond)
+
+	// Before any flush the decision is only in the in-memory stats.
+	if w := r.stats.Snapshot(); len(w.ActionCounts) == 0 {
+		t.Fatal("expected at least one recorded decision before flush")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		// Use a very short initInterval (10 ms) and a long steady interval (1 h)
+		// so only the initial flush fires within the test window.
+		r.RunWithIntervals(ctx, 10*time.Millisecond, time.Hour)
+		close(done)
+	}()
+
+	// Wait for the context to be cancelled (2s timeout is plenty for a 10 ms initTimer).
+	<-done
+
+	// After Run exits (ctx cancelled → final graceful flush), the spool must
+	// contain at least a decision_rollup from the early flush.
+	evs, err := r.spool.ReadAll()
+	if err != nil {
+		t.Fatalf("spool.ReadAll: %v", err)
+	}
+	var sawRollup bool
+	for _, e := range evs {
+		if e.Event == "decision_rollup" {
+			sawRollup = true
+			break
+		}
+	}
+	if !sawRollup {
+		t.Fatalf("expected decision_rollup in spool after early flush; got events: %+v", evs)
+	}
+}
+
 func newTestRecorder(t *testing.T) *Recorder {
 	t.Helper()
 	p := Paths{Base: t.TempDir()}

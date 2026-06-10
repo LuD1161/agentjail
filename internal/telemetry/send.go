@@ -31,6 +31,84 @@ func SendFeedback(ctx context.Context, p Paths, getenv func(string) string, vers
 	return client.Send(ctx, []Event{ev})
 }
 
+// SendInstall sends an install event immediately and synchronously, bypassing
+// the spool. This ensures the event is captured even if the daemon never runs
+// long enough to flush its spool (uninstall minutes later, reboot, etc.).
+// Respects opt-out: returns nil (no-op) when telemetry is disabled. Returns
+// ErrNoBackend when no API key is baked into the binary.
+func SendInstall(ctx context.Context, p Paths, getenv func(string) string, version, goos, goarch, installMethod string, agents []string, agentsDetected int) error {
+	client := DefaultClient()
+	if !client.HasBackend() {
+		return ErrNoBackend
+	}
+	c, err := LoadConsent(p)
+	if err != nil {
+		return err
+	}
+	if enabled, _ := Resolve(c, getenv); !enabled {
+		return nil // opt-out respected
+	}
+	ev := NewInstallEvent(c.AnonymousID, version, goos, goarch, installMethod, agents, agentsDetected)
+	return client.Send(ctx, []Event{ev})
+}
+
+// SendUninstall sends an uninstall event immediately and synchronously. Must be
+// called BEFORE ~/.agentjail state is removed so telemetry.json (and its
+// anonymous ID) is still readable. Respects opt-out. Returns ErrNoBackend when
+// no key is configured.
+func SendUninstall(ctx context.Context, p Paths, getenv func(string) string, version, goos, goarch string) error {
+	client := DefaultClient()
+	if !client.HasBackend() {
+		return ErrNoBackend
+	}
+	c, err := LoadConsent(p)
+	if err != nil {
+		return err
+	}
+	if enabled, _ := Resolve(c, getenv); !enabled {
+		return nil // opt-out respected
+	}
+	ev := NewUninstallEvent(c.AnonymousID, version, goos, goarch)
+	return client.Send(ctx, []Event{ev})
+}
+
+// SendFailOpen sends a fail_open event immediately and synchronously.
+// Intended for use by the hook binary when it falls open due to a daemon fault.
+// Respects opt-out; returns ErrNoBackend when no key is configured.
+func SendFailOpen(ctx context.Context, p Paths, getenv func(string) string, version, goos, reason string) error {
+	client := DefaultClient()
+	if !client.HasBackend() {
+		return ErrNoBackend
+	}
+	c, err := LoadConsent(p)
+	if err != nil {
+		return err
+	}
+	if enabled, _ := Resolve(c, getenv); !enabled {
+		return nil
+	}
+	ev := NewFailOpenEvent(c.AnonymousID, version, goos, reason)
+	return client.Send(ctx, []Event{ev})
+}
+
+// SendHeartbeat sends a heartbeat/update_check event immediately and
+// synchronously. Respects opt-out; returns ErrNoBackend when no key is baked.
+func SendHeartbeat(ctx context.Context, p Paths, getenv func(string) string, currentVersion, latestVersion, goos string, updateAvailable bool) error {
+	client := DefaultClient()
+	if !client.HasBackend() {
+		return ErrNoBackend
+	}
+	c, err := LoadConsent(p)
+	if err != nil {
+		return err
+	}
+	if enabled, _ := Resolve(c, getenv); !enabled {
+		return nil
+	}
+	ev := NewHeartbeatEvent(c.AnonymousID, currentVersion, latestVersion, goos, updateAvailable)
+	return client.Send(ctx, []Event{ev})
+}
+
 // apiKey is injected at release build time via:
 //
 //	-ldflags "-X github.com/LuD1161/agentjail/internal/telemetry.apiKey=phc_xxx"
