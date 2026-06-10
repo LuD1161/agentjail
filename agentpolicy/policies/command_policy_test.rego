@@ -565,6 +565,35 @@ test_mutation_guard_mcp_block_deny if {
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
+# POSITIVE (evasion): quoted binary path — a `"` sits where the old regex
+# required whitespace. This is the demonstrated real-world bypass.
+test_mutation_guard_mcp_allow_quoted_path_deny if {
+	d := agentjail.decision with input as bash_input("\"$HOME/.agentjail/bin/agentjail\" mcp allow filesystem")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE (evasion): absolute path prefix to the binary.
+test_mutation_guard_mcp_allow_abs_path_deny if {
+	d := agentjail.decision with input as bash_input("/usr/local/bin/agentjail mcp allow filesystem")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE (evasion): command substitution to resolve the binary.
+test_mutation_guard_mcp_allow_cmdsubst_deny if {
+	d := agentjail.decision with input as bash_input("$(which agentjail) mcp allow evil-server")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE (evasion): quoted path for a policy mutation, too.
+test_mutation_guard_policy_disable_quoted_path_deny if {
+	d := agentjail.decision with input as bash_input("\"$HOME/.agentjail/bin/agentjail\" policy disable command_policy/no-sudo")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
 # POSITIVE: redirect into ~/.agentjail/ → deny
 test_mutation_guard_redirect_to_agentjail_deny if {
 	d := agentjail.decision with input as bash_input("echo disabled > ~/.agentjail/policy.yaml")

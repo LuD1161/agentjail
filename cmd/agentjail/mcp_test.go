@@ -34,6 +34,32 @@ func setupPolicyDir(t *testing.T) (home, policyPath string) {
 // by policyConfigPath. Since we cannot easily mock os.UserHomeDir, we instead
 // call the internal functions directly with the temp path.
 
+// ---- security gate (interactive-TTY required) ------------------------------
+
+// TestRunMCPAllow_RefusesWithoutTTY verifies the allowlist mutation is refused
+// when no interactive terminal is attached (the agent case). The gate runs
+// before any policy is touched, so this is safe to call against the real path.
+func TestRunMCPAllow_RefusesWithoutTTY(t *testing.T) {
+	if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+		_ = tty.Close()
+		t.Skip("interactive terminal present; TTY-refusal test not applicable")
+	}
+	if code := runMCPAllow("some-server"); code != 1 {
+		t.Fatalf("runMCPAllow without TTY = %d, want 1 (refused)", code)
+	}
+}
+
+// TestRunMCPBlock_RefusesWithoutTTY is the same guard on the block path.
+func TestRunMCPBlock_RefusesWithoutTTY(t *testing.T) {
+	if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+		_ = tty.Close()
+		t.Skip("interactive terminal present; TTY-refusal test not applicable")
+	}
+	if code := runMCPBlock("some-server"); code != 1 {
+		t.Fatalf("runMCPBlock without TTY = %d, want 1 (refused)", code)
+	}
+}
+
 // ---- allow ------------------------------------------------------------------
 
 // TestRunMCPAllow_AddsToAllowed verifies AC2.5: allow foo adds foo to MCP.Allowed.
