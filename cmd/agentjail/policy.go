@@ -35,7 +35,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -572,39 +571,25 @@ func runPolicyDisableRuleID(ruleID string, force bool) int {
 // the function prints a clear refusal and returns false — so even with
 // --force, a non-interactive invocation cannot bypass the TTY guard.
 func confirmDisableInteractive(ruleID string) bool {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
+	return requireInteractiveConfirm(
+		fmt.Sprintf(
 			"agentjail policy disable: REFUSED — no interactive terminal detected.\n"+
 				"  Disabling core rule %q requires interactive confirmation.\n"+
 				"  Even with --force, this command must be run in a terminal by a human.\n"+
 				"  This restriction prevents agents from bypassing safety guardrails.\n",
-			ruleID)
-		return false
-	}
-	defer tty.Close()
-
-	fmt.Fprintf(tty,
-		"\n"+
-			"  ⚠  WARNING: You are about to disable a core policy rule.\n"+
+			ruleID),
+		fmt.Sprintf(
 			"\n"+
-			"  Rule:        %s\n"+
-			"  Effect:      The protection enforced by this rule will be DROPPED.\n"+
-			"  Reversible:  Yes — run 'agentjail policy enable %s' to re-enable.\n"+
-			"  Audit:       This action is logged to ~/.agentjail/audit.log.\n"+
-			"\n"+
-			"  Type 'y' to confirm, anything else to cancel: ",
-		ruleID, ruleID)
-
-	reader := bufio.NewReader(tty)
-	line, _ := reader.ReadString('\n')
-	line = strings.TrimSpace(line)
-
-	if strings.ToLower(line) != "y" {
-		fmt.Fprintln(tty, "Cancelled.")
-		return false
-	}
-	return true
+				"  ⚠  WARNING: You are about to disable a core policy rule.\n"+
+				"\n"+
+				"  Rule:        %s\n"+
+				"  Effect:      The protection enforced by this rule will be DROPPED.\n"+
+				"  Reversible:  Yes — run 'agentjail policy enable %s' to re-enable.\n"+
+				"  Audit:       This action is logged to ~/.agentjail/audit.log.\n"+
+				"\n"+
+				"  Type 'y' to confirm, anything else to cancel: ",
+			ruleID, ruleID),
+	)
 }
 
 // runPolicyDisableLibraryFile removes the .rego file for a library rule

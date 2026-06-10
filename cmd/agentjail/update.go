@@ -25,7 +25,6 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -108,19 +107,6 @@ func runUpdate(_ []string) int {
 	return performUpdate(installDir, currentGOOS, runtime.GOARCH)
 }
 
-// isInteractiveTTY returns true when /dev/tty can be opened for read-write,
-// meaning a real human terminal is attached. This is the same guard used by
-// confirmDisableInteractive in policy.go and cannot be defeated by redirecting
-// stdin or stdout.
-func isInteractiveTTY() bool {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	_ = tty.Close()
-	return true
-}
-
 // confirmUpdateInteractive opens /dev/tty, prints a warning, and requires the
 // user to type 'y' to proceed. It refuses (returns false) when no terminal is
 // attached OR when the typed answer is not 'y'. This mirrors
@@ -129,18 +115,11 @@ func isInteractiveTTY() bool {
 // inherits a controlling terminal still cannot proceed, because it cannot type
 // the confirmation into the human's terminal.
 func confirmUpdateInteractive() bool {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"agentjail update: REFUSED — no interactive terminal detected.\n"+
-				"  Self-update replaces agentjail's own binaries and restarts the daemon.\n"+
-				"  It must be run in a terminal by a human.\n"+
-				"  This restriction prevents agents from self-modifying the security tool.\n")
-		return false
-	}
-	defer tty.Close()
-
-	fmt.Fprintf(tty,
+	return requireInteractiveConfirm(
+		"agentjail update: REFUSED — no interactive terminal detected.\n"+
+			"  Self-update replaces agentjail's own binaries and restarts the daemon.\n"+
+			"  It must be run in a terminal by a human.\n"+
+			"  This restriction prevents agents from self-modifying the security tool.\n",
 		"\n"+
 			"  ⚠  You are about to self-update agentjail.\n"+
 			"\n"+
@@ -149,15 +128,8 @@ func confirmUpdateInteractive() bool {
 			"  Source:   https://github.com/LuD1161/agentjail/releases (official only).\n"+
 			"  Verify:   the release tarball is SHA256-checked before anything is swapped.\n"+
 			"\n"+
-			"  Type 'y' to confirm, anything else to cancel: ")
-
-	reader := bufio.NewReader(tty)
-	line, _ := reader.ReadString('\n')
-	if strings.ToLower(strings.TrimSpace(line)) != "y" {
-		fmt.Fprintln(tty, "Cancelled.")
-		return false
-	}
-	return true
+			"  Type 'y' to confirm, anything else to cancel: ",
+	)
 }
 
 // performUpdate is the testable core of runUpdate. It accepts an explicit
