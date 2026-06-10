@@ -203,6 +203,11 @@ echo "✅  installed $# binaries  →  ${INSTALL_DIR}"
 # The Go installer prints its own setup / discovery / summary sections below;
 # a terminal shows the agent picker, piped installs wire all detected agents.
 
+# Stamp the install method so the install telemetry event records how agentjail
+# was installed ("curl" via this one-liner). Overridable, so a future brew
+# formula can export AGENTJAIL_INSTALL_METHOD=brew before invoking the installer.
+export AGENTJAIL_INSTALL_METHOD="${AGENTJAIL_INSTALL_METHOD:-curl}"
+
 "$INSTALL_DIR/agentjail" install
 
 # --- Add ~/.agentjail/bin to PATH (default on; opt out: AGENTJAIL_NO_MODIFY_PATH=1) ---
