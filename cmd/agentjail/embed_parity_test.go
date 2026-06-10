@@ -56,6 +56,7 @@ func TestCoreFileParity(t *testing.T) {
 		"command_policy",
 		"file_policy",
 		"mcp_policy",
+		"internal_tools",
 		"no_daemon_kill",
 		"no_hook_self_disable",
 		"resolver",
