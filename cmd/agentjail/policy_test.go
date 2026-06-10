@@ -47,6 +47,7 @@ func TestCoreRuleNames(t *testing.T) {
 	want := []string{
 		"command_policy",
 		"file_policy",
+		"internal_tools",
 		"mcp_policy",
 		"no_daemon_kill",
 		"no_hook_self_disable",
