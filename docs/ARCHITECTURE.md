@@ -108,7 +108,9 @@ locked `file_policy/agentjail_self` deny (self-protection).
 Allowlist by server name (glob). At install, agentjail **seeds the allowlist from
 the MCP servers already configured** in Claude/Codex/Cursor (trust-on-install),
 so existing setups keep working; the default blocklist (`*stripe*`, `*payment*`,
-…) always takes precedence. Manage with `agentjail mcp allow/block/list`.
+…) always takes precedence. Manage with `agentjail mcp allow/block/list` —
+`allow`/`block` mutate policy, so they require an interactive-terminal
+confirmation (an agent can't self-approve a server).
 
 ```yaml
 # ~/.agentjail/policy.yaml
