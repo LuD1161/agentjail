@@ -157,3 +157,15 @@ func NewHeartbeatEvent(distinctID, currentVersion, latestVersion, goos string, u
 	p["update_available"] = updateAvailable
 	return Event{Event: "heartbeat", Properties: p}
 }
+
+// NewUpdateEvent: fired immediately after a successful `agentjail update`.
+// from_version and to_version are semver enum strings (e.g. "v1.2.3").
+// os and arch are runtime.GOOS / runtime.GOARCH enums.
+func NewUpdateEvent(distinctID, fromVersion, toVersion, goos, goarch string) Event {
+	p := base(distinctID, fromVersion)
+	p["from_version"] = fromVersion
+	p["to_version"] = toVersion
+	p["os"] = goos
+	p["arch"] = goarch
+	return Event{Event: "update", Properties: p}
+}
