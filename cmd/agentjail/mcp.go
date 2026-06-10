@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,45 @@ import (
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
+
+// confirmMCPMutation gates `mcp allow` / `mcp block` behind a human at the
+// keyboard. It opens /dev/tty AND reads a typed 'y' — opening alone is not
+// enough, because an agent running under a terminal-backed session inherits a
+// controlling terminal and would pass an openability-only check. Requiring a
+// typed confirmation the agent cannot supply is the robust guard, and it is the
+// authoritative defense even if an obfuscated invocation evades the
+// command_policy/no-policy-mutation regex in the hook. Mirrors
+// confirmDisableInteractive (policy.go) and confirmUpdateInteractive (update.go).
+func confirmMCPMutation(verb, server string) bool {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"agentjail mcp %s: REFUSED — no interactive terminal detected.\n"+
+				"  Changing the MCP allow/block list mutates agentjail's own policy.\n"+
+				"  It must be run in a terminal by a human.\n"+
+				"  This restriction prevents an agent from self-approving an MCP server.\n", verb)
+		return false
+	}
+	defer tty.Close()
+
+	fmt.Fprintf(tty,
+		"\n"+
+			"  ⚠  You are about to %s the MCP server %q in agentjail policy.\n"+
+			"\n"+
+			"  Effect:   agents %s this server through the PreToolUse hook.\n"+
+			"  Audit:    this change is applied to ~/.agentjail/policy.yaml.\n"+
+			"\n"+
+			"  Type 'y' to confirm, anything else to cancel: ",
+		verb, server, map[string]string{"allow": "may then reach", "block": "will be denied"}[verb])
+
+	reader := bufio.NewReader(tty)
+	line, _ := reader.ReadString('\n')
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		fmt.Fprintln(tty, "Cancelled.")
+		return false
+	}
+	return true
+}
 
 // policyConfigPath returns ~/.agentjail/policy.yaml.
 func policyConfigPath() (string, error) {
@@ -71,6 +111,10 @@ func runMCP(args []string) int {
 // runMCPAllow adds server to MCP.Allowed in policy.yaml (idempotent).
 // Rejects names with glob metacharacters. Sends SIGHUP to daemon on success.
 func runMCPAllow(server string) int {
+	// Security gate: mutating the MCP allowlist requires an interactive human.
+	if !confirmMCPMutation("allow", server) {
+		return 1
+	}
 	if containsGlobMeta(server) {
 		fmt.Fprintf(os.Stderr, "error: server name %q contains glob metacharacters (%s) — rejected to prevent broad allow patterns\n", server, globMetaChars)
 		fmt.Fprintln(os.Stderr, "hint: use an exact server name without wildcards")
@@ -112,6 +156,10 @@ func runMCPAllow(server string) int {
 // runMCPBlock adds server to MCP.Blocked in policy.yaml and removes it from
 // MCP.Allowed (Q-D: no contradictory intent). Sends SIGHUP to daemon on success.
 func runMCPBlock(server string) int {
+	// Security gate: mutating the MCP block list requires an interactive human.
+	if !confirmMCPMutation("block", server) {
+		return 1
+	}
 	if containsGlobMeta(server) {
 		fmt.Fprintf(os.Stderr, "error: server name %q contains glob metacharacters (%s) — rejected\n", server, globMetaChars)
 		return 1
