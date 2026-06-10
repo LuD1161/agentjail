@@ -71,6 +71,7 @@ quietly never happens.
 
 - [What it stops](#what-it-stops) — 8 real scenarios
 - [Install](#install) — one-liner for macOS & Linux
+- [Updating](#updating) — `agentjail update`, SHA-verified, in place
 - [Try it](#try-it) — 60-second smoke test
 - [How it works](#how-it-works) — the hook → daemon → OPA flow
 - [What's protected by default](#whats-protected-by-default) — core, self-protection, opt-in, and how to disable/tune rules
@@ -253,6 +254,23 @@ signing + notarization is planned — see `docs/adr/0005-macos-gatekeeper-distri
 
 ---
 
+## Updating
+
+Update an existing install in place — agentjail downloads the latest signed
+release, **verifies its SHA-256** against the published manifest, atomically swaps
+the binaries, and restarts the daemon:
+
+```sh
+agentjail update
+```
+
+Like the other self-protective commands, `update` requires an **interactive
+terminal**, so an agent can't trigger a self-update of the security tool. It's a
+no-op (`already up to date`) when you're on the latest release or running a dev
+build — re-running `curl | sh` works too.
+
+---
+
 ## Try it
 
 No agent session required — `agentjail try` runs any action through the live
@@ -380,6 +398,12 @@ agentjail mcp list                # current allowed + blocked
 agentjail mcp allow claude-mem    # trust a server
 agentjail mcp block my-payment-bot
 ```
+
+`mcp allow` and `mcp block` change the policy, so — like `policy disable` — they
+require an **interactive terminal confirmation**. An agent cannot self-approve an
+MCP server even if it manages to issue the command: the binary refuses without a
+human typing `y` (and the locked mutation guard blocks the command in the hook
+first).
 
 ---
 
