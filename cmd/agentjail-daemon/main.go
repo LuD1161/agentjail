@@ -541,6 +541,7 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 var coreFileStems = map[string]bool{
 	"command_policy":      true,
 	"file_policy":         true,
+	"internal_tools":      true,
 	"mcp_policy":          true,
 	"no_daemon_kill":      true,
 	"no_hook_self_disable": true,
