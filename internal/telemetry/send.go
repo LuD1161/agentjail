@@ -91,6 +91,25 @@ func SendFailOpen(ctx context.Context, p Paths, getenv func(string) string, vers
 	return client.Send(ctx, []Event{ev})
 }
 
+// SendUpdate sends an update event immediately and synchronously after a
+// successful `agentjail update`. Respects opt-out; returns ErrNoBackend when
+// no API key is configured.
+func SendUpdate(ctx context.Context, p Paths, getenv func(string) string, fromVersion, toVersion, goos, goarch string) error {
+	client := DefaultClient()
+	if !client.HasBackend() {
+		return ErrNoBackend
+	}
+	c, err := LoadConsent(p)
+	if err != nil {
+		return err
+	}
+	if enabled, _ := Resolve(c, getenv); !enabled {
+		return nil // opt-out respected
+	}
+	ev := NewUpdateEvent(c.AnonymousID, fromVersion, toVersion, goos, goarch)
+	return client.Send(ctx, []Event{ev})
+}
+
 // SendHeartbeat sends a heartbeat/update_check event immediately and
 // synchronously. Respects opt-out; returns ErrNoBackend when no key is baked.
 func SendHeartbeat(ctx context.Context, p Paths, getenv func(string) string, currentVersion, latestVersion, goos string, updateAvailable bool) error {

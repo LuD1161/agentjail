@@ -51,6 +51,8 @@ func main() {
 		os.Exit(runTelemetry(args[1:]))
 	case "feedback":
 		os.Exit(runFeedback(args[1:]))
+	case "update":
+		os.Exit(runUpdate(args[1:]))
 	case "help", "-h", "--help":
 		// Explicit help request: write to stdout, exit 0 (success).
 		usage(os.Stdout)
@@ -132,6 +134,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Maintenance"))
 	maintenance := []cmd{
+		{"update", "Update agentjail binaries to the latest release"},
 		{"uninstall", "Remove hooks, daemon service, and local policy state"},
 		{"version", "Print version information"},
 		{"help", "Show help"},

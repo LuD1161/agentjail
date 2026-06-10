@@ -65,7 +65,7 @@ func runTelemetryWith(p telemetry.Paths, getenv func(string) string, args []stri
 // commands collapse to "other" so we never record arbitrary argv.
 func featureName(cmd string) string {
 	switch cmd {
-	case "install", "uninstall", "status", "version", "try", "logs", "policy", "mcp", "ui", "telemetry", "feedback":
+	case "install", "uninstall", "status", "version", "try", "logs", "policy", "mcp", "ui", "telemetry", "feedback", "update":
 		return cmd
 	case "help", "-h", "--help":
 		return "help"
