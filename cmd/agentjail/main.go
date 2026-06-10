@@ -21,6 +21,13 @@ func main() {
 		os.Exit(2)
 	}
 
+	if args[0] != "telemetry" {
+		recordFeatureUsed(args[0])
+		// Fire the throttled update check + heartbeat asynchronously. Never
+		// adds latency; all network/file errors are silently discarded.
+		maybeRunUpdateCheck()
+	}
+
 	switch args[0] {
 	case "install":
 		runInstallCmd(args[1:])
@@ -40,6 +47,10 @@ func main() {
 		os.Exit(runMCP(args[1:]))
 	case "ui":
 		os.Exit(runUI(args[1:]))
+	case "telemetry":
+		os.Exit(runTelemetry(args[1:]))
+	case "feedback":
+		os.Exit(runFeedback(args[1:]))
 	case "help", "-h", "--help":
 		// Explicit help request: write to stdout, exit 0 (success).
 		usage(os.Stdout)
@@ -110,6 +121,8 @@ func usage(w io.Writer) {
 		{"policy", "Manage optional hardening rules"},
 		{"mcp", "Manage MCP server allow/block lists"},
 		{"ui", "Open the local web UI"},
+		{"telemetry", "Manage anonymous usage statistics"},
+		{"feedback", "Send anonymous feedback to the maintainers"},
 	}
 
 	for _, c := range cmds {

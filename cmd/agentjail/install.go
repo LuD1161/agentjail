@@ -30,6 +30,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,10 +39,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
 	"github.com/LuD1161/agentjail/internal/picker"
+	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -135,6 +138,19 @@ func runInstallCmd(args []string) {
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: install complete for %s. Restart the agent to activate the hook.", ag.DisplayName())))
+		if tp, err := telemetry.DefaultPaths(); err == nil {
+			telemetry.MaybePrintNotice(tp, os.Getenv, os.Stdout)
+			// Fire install telemetry synchronously (bounded 5s) so the install is
+			// captured even if the user uninstalls moments later; a fire-and-forget
+			// goroutine would be killed when this short-lived CLI exits. Never fails
+			// the install (errors, including ErrNoBackend, are ignored).
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = telemetry.SendInstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH,
+					os.Getenv("AGENTJAIL_INSTALL_METHOD"), []string{ag.ID()}, 1)
+			}()
+		}
 		return
 	}
 
@@ -238,6 +254,27 @@ func runInstallCmd(args []string) {
 
 	// Print styled summary.
 	anyFailed := printInstallSummary(os.Stdout, results)
+
+	if tp, err := telemetry.DefaultPaths(); err == nil {
+		telemetry.MaybePrintNotice(tp, os.Getenv, os.Stdout)
+		// Fire install telemetry synchronously (bounded 5s) so the install is
+		// captured even if the user uninstalls moments later; a fire-and-forget
+		// goroutine would be killed when this short-lived CLI exits. Never fails
+		// the install (errors, including ErrNoBackend, are ignored).
+		// Collect successfully installed agent IDs for the event.
+		var wiredAgents []string
+		for _, res := range results {
+			if !res.skipped && res.err == nil {
+				wiredAgents = append(wiredAgents, res.id)
+			}
+		}
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = telemetry.SendInstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH,
+				os.Getenv("AGENTJAIL_INSTALL_METHOD"), wiredAgents, len(detected))
+		}()
+	}
 
 	if anyFailed {
 		os.Exit(1)
@@ -401,6 +438,18 @@ type UninstallResult struct {
 func performFullUninstall(home, goos string) UninstallResult {
 	var r UninstallResult
 	env := buildAgentsEnv(home)
+
+	// Step 0: send uninstall telemetry BEFORE removing ~/.agentjail so that
+	// telemetry.json (and its anonymous ID) is still readable. Synchronous with
+	// a bounded 5s timeout — it must complete before teardown deletes the state;
+	// never fails the uninstall (errors, including ErrNoBackend, are ignored).
+	if tp, err := telemetry.DefaultPaths(); err == nil {
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = telemetry.SendUninstall(ctx, tp, os.Getenv, version, goos, runtime.GOARCH)
+		}()
+	}
 
 	// Step 1: unhook every agent; collect results, never abort early.
 	for _, ag := range agents.Registry() {

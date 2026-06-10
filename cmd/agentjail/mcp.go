@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
@@ -159,7 +160,76 @@ func runMCPBlock(server string) int {
 	return 0
 }
 
-// runMCPList prints the current MCP.Allowed and MCP.Blocked lists.
+// mcpDisplayServers returns the set of MCP servers to show in `mcp list`: those
+// discovered in the agent configs, unioned with any explicitly-allowed exact names
+// (so plugin/project-scoped servers that discovery misses — e.g. a plugin MCP — but
+// that you've allowed still appear). Glob patterns from the allow list are excluded
+// since they aren't concrete servers. Sorted for stable output.
+func mcpDisplayServers(discovered, allowed []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(n string) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, d := range discovered {
+		add(d)
+	}
+	for _, a := range allowed {
+		if !containsGlobMeta(a) {
+			add(a)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mcpServerStatus classifies an MCP server name against the allow/block lists.
+// Blocked takes precedence over allowed (security). Returns "allowed", "blocked",
+// or "none" — "none" meaning installed but not configured, i.e. denied by default.
+func mcpServerStatus(name string, allowed, blocked []string) string {
+	if matchesAnyGlob(name, blocked) {
+		return "blocked"
+	}
+	if matchesAnyGlob(name, allowed) {
+		return "allowed"
+	}
+	return "none"
+}
+
+// renderMCPInstalled prints the MCP servers discovered in the agent configs, each
+// tagged with its effective status: green ✓ allowed, red ✗ blocked, dim ○ none
+// (not configured — denied by default).
+func renderMCPInstalled(out io.Writer, u *ui.UI, installed, allowed, blocked []string) {
+	fmt.Fprintln(out, u.Section("Installed MCP servers"))
+	if len(installed) == 0 {
+		fmt.Fprintln(out, "  (none detected in Claude, Codex, or Cursor configs)")
+		fmt.Fprintln(out)
+		return
+	}
+	width := 0
+	for _, n := range installed {
+		if len(n) > width {
+			width = len(n)
+		}
+	}
+	for _, name := range installed {
+		pad := strings.Repeat(" ", width-len(name)+2)
+		switch mcpServerStatus(name, allowed, blocked) {
+		case "allowed":
+			fmt.Fprintln(out, "  "+u.Badge("ok", name+pad+"allowed"))
+		case "blocked":
+			fmt.Fprintln(out, "  "+u.Badge("fail", name+pad+"blocked"))
+		default:
+			fmt.Fprintln(out, "  "+u.Badge("dim", "○ "+name+pad+"not configured · denied by default"))
+		}
+	}
+	fmt.Fprintln(out)
+}
+
+// runMCPList prints installed MCP servers (with status) plus the allow/block lists.
 func runMCPList() int {
 	return runMCPListOutput(os.Stdout, os.Stderr)
 }
@@ -178,6 +248,14 @@ func runMCPListOutput(out, errOut io.Writer) int {
 	}
 
 	u := ui.New(out)
+
+	// Show the user's actually-installed MCP servers first, color-coded by status,
+	// so they can see at a glance which of their servers pass, are blocked, or are
+	// unconfigured (and therefore denied).
+	home, _ := os.UserHomeDir()
+	installed := mcpDisplayServers(discoverInstalledMCPServers(home), cfg.MCP.Allowed)
+	renderMCPInstalled(out, u, installed, cfg.MCP.Allowed, cfg.MCP.Blocked)
+
 	fmt.Fprintln(out, u.Section("MCP allowed"))
 	if len(cfg.MCP.Allowed) == 0 {
 		fmt.Fprintln(out, "  (none — all MCP calls denied)")

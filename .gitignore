@@ -48,3 +48,6 @@ video-hf-glass/
 video-hf-kinetic/
 video-hf-shield/
 video-hyperframes/
+
+# Internal design specs / brainstorming notes — local only, never shipped public.
+docs/superpowers/
