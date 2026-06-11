@@ -63,12 +63,24 @@ func TestNewInstallEvent_FieldsAndOptionals(t *testing.T) {
 
 // TestNewUninstallEvent_Fields verifies basic field presence.
 func TestNewUninstallEvent_Fields(t *testing.T) {
-	e := NewUninstallEvent("anon", "0.1.0", "darwin", "arm64")
+	e := NewUninstallEvent("anon", "0.1.0", "darwin", "arm64", nil)
 	if e.Event != "uninstall" {
 		t.Fatalf("event name=%q", e.Event)
 	}
 	if e.Properties["os"] != "darwin" || e.Properties["arch"] != "arm64" {
 		t.Fatalf("os/arch: %+v", e.Properties)
+	}
+	// Full teardown (nil agents) omits the agents field.
+	if _, ok := e.Properties["agents"]; ok {
+		t.Fatalf("full uninstall must omit agents: %+v", e.Properties)
+	}
+
+	// Single-agent removal records the unhooked agent so it's distinguishable
+	// from a full teardown.
+	se := NewUninstallEvent("anon", "0.1.0", "linux", "amd64", []string{"claude-code"})
+	agents, ok := se.Properties["agents"].([]string)
+	if !ok || len(agents) != 1 || agents[0] != "claude-code" {
+		t.Fatalf("single-agent uninstall agents=%v", se.Properties["agents"])
 	}
 }
 

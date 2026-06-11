@@ -107,7 +107,7 @@ func TestSendInstall_OptOutSkipsSend(t *testing.T) {
 // TestSendUninstall_NoBackendReturnsSentinel verifies the no-backend path.
 func TestSendUninstall_NoBackendReturnsSentinel(t *testing.T) {
 	err := SendUninstall(context.Background(), Paths{Base: t.TempDir()},
-		func(string) string { return "" }, "0.1.0", "linux", "amd64")
+		func(string) string { return "" }, "0.1.0", "linux", "amd64", nil)
 	if err != ErrNoBackend {
 		t.Fatalf("got %v want ErrNoBackend", err)
 	}

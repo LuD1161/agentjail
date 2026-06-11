@@ -387,6 +387,18 @@ func runUninstallCmd(args []string) {
 			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail uninstall: %v", err)))
 			os.Exit(1)
 		}
+		// Fire uninstall telemetry synchronously (bounded 5s) so a single-agent
+		// unhook is captured as churn, mirroring the single-agent install path; the
+		// agents list distinguishes it from a full teardown. ~/.agentjail is left
+		// intact here, so telemetry.json is still readable. Never fails the
+		// uninstall (errors, including ErrNoBackend, are ignored).
+		if tp, err := telemetry.DefaultPaths(); err == nil {
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = telemetry.SendUninstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH, []string{ag.ID()})
+			}()
+		}
 		uout := ui.New(os.Stdout)
 		fmt.Fprintln(os.Stdout, uout.Badge("ok", fmt.Sprintf("agentjail: uninstall complete for %s.", ag.DisplayName())))
 		return
@@ -447,7 +459,7 @@ func performFullUninstall(home, goos string) UninstallResult {
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = telemetry.SendUninstall(ctx, tp, os.Getenv, version, goos, runtime.GOARCH)
+			_ = telemetry.SendUninstall(ctx, tp, os.Getenv, version, goos, runtime.GOARCH, nil)
 		}()
 	}
 
