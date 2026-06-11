@@ -1312,3 +1312,87 @@ func TestProtectedDetail(t *testing.T) {
 		t.Fatalf("not-installed detail = %q", got)
 	}
 }
+
+// ---- shell rc PATH cleanup on uninstall ----------------------------------------
+
+// TestStripAgentjailPathBlock verifies the marker block is removed while
+// unrelated user content (including a dangling marker over a non-agentjail line)
+// is preserved, and that the operation is idempotent.
+func TestStripAgentjailPathBlock(t *testing.T) {
+	const userTop = "export EDITOR=vim\nalias ll='ls -la'\n"
+	rc := userTop + "\n# added by agentjail installer\nexport PATH=\"$HOME/.agentjail/bin:$PATH\"\n"
+
+	got, changed := stripAgentjailPathBlock(rc)
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	if strings.Contains(got, pathRCMarker) || strings.Contains(got, ".agentjail/bin") {
+		t.Fatalf("block not removed:\n%q", got)
+	}
+	if !strings.Contains(got, "export EDITOR=vim") || !strings.Contains(got, "alias ll='ls -la'") {
+		t.Fatalf("user content lost:\n%q", got)
+	}
+
+	// Idempotent: a second pass changes nothing.
+	if _, changed2 := stripAgentjailPathBlock(got); changed2 {
+		t.Fatal("expected idempotent second pass (changed=false)")
+	}
+
+	// A dangling marker above an unrelated line must not eat the user line.
+	dangling := "# added by agentjail installer\nexport KEEP=1\n"
+	out, ch := stripAgentjailPathBlock(dangling)
+	if !ch || strings.Contains(out, pathRCMarker) {
+		t.Fatalf("marker not removed: %q", out)
+	}
+	if !strings.Contains(out, "export KEEP=1") {
+		t.Fatalf("unrelated line after marker was wrongly removed: %q", out)
+	}
+}
+
+// TestFullUninstallCleansShellRCPath verifies performFullUninstall scrubs the
+// installer PATH block from every shell rc that has it (here .zshrc and .bashrc),
+// preserves user content, and reports the cleaned files.
+func TestFullUninstallCleansShellRCPath(t *testing.T) {
+	home := t.TempDir()
+	block := "\n# added by agentjail installer\nexport PATH=\"$HOME/.agentjail/bin:$PATH\"\n"
+
+	zshrc := filepath.Join(home, ".zshrc")
+	bashrc := filepath.Join(home, ".bashrc")
+	if err := os.WriteFile(zshrc, []byte("# my zsh\nexport ZK=1\n"+block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bashrc, []byte("# my bash\nexport BK=1\n"+block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A rc without the block must be left untouched and not reported.
+	profile := filepath.Join(home, ".profile")
+	if err := os.WriteFile(profile, []byte("export UNRELATED=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := performFullUninstall(home, "linux")
+
+	for _, rc := range []string{zshrc, bashrc} {
+		b, err := os.ReadFile(rc)
+		if err != nil {
+			t.Fatalf("read %s: %v", rc, err)
+		}
+		if strings.Contains(string(b), pathRCMarker) {
+			t.Errorf("%s still contains the installer marker:\n%s", rc, b)
+		}
+	}
+	// User content preserved.
+	zb, _ := os.ReadFile(zshrc)
+	if !strings.Contains(string(zb), "export ZK=1") {
+		t.Errorf(".zshrc user content lost:\n%s", zb)
+	}
+	// Untouched file unchanged.
+	pb, _ := os.ReadFile(profile)
+	if string(pb) != "export UNRELATED=1\n" {
+		t.Errorf(".profile was modified: %q", pb)
+	}
+	// Both block-bearing files reported, the untouched one not.
+	if len(r.RCCleaned) != 2 {
+		t.Fatalf("RCCleaned = %v, want the 2 rc files with the block", r.RCCleaned)
+	}
+}

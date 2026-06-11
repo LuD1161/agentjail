@@ -460,6 +460,10 @@ type UninstallResult struct {
 	// the file existed (ENOENT is swallowed and does not set this field).
 	LogFileErr error
 
+	// RCCleaned lists the shell rc files from which the agentjail PATH block was
+	// removed (empty when none contained it).
+	RCCleaned []string
+
 	// HardFailed is true when any step that should succeed actually failed.
 	HardFailed bool
 }
@@ -519,7 +523,109 @@ func performFullUninstall(home, goos string) UninstallResult {
 		// Not a hard failure — the log is ephemeral.
 	}
 
+	// Step 5: scrub the PATH block install.sh appended to the shell rc(s). We
+	// check every candidate rc (zsh/bash/bash_profile/profile/fish) so cleanup
+	// works regardless of which shell the user runs. Best-effort — a failure
+	// here never fails the uninstall (the env file under ~/.agentjail is already
+	// gone with the dir; this only tidies the rc reference).
+	r.RCCleaned = cleanupShellRCPath(home)
+
 	return r
+}
+
+// pathRCMarker is the comment line install.sh writes immediately above the PATH
+// export it appends to a shell rc. uninstall scrubs this marker and the PATH
+// line that follows it.
+const pathRCMarker = "# added by agentjail installer"
+
+// stripAgentjailPathBlock removes every agentjail-installer PATH block from shell
+// rc content: the marker line, the line right after it (only when it references
+// ~/.agentjail/bin, so unrelated user lines are never touched), and a single
+// blank line directly preceding the marker (install.sh prepends one). It returns
+// the rewritten content and whether anything changed.
+func stripAgentjailPathBlock(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	changed := false
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == pathRCMarker {
+			changed = true
+			// Drop a single blank line we may have emitted before the marker.
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+				out = out[:len(out)-1]
+			}
+			// Skip the following line only when it's our PATH line, so a marker
+			// left dangling above unrelated content can't eat a user line.
+			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
+				i++
+			}
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return strings.Join(out, "\n"), changed
+}
+
+// cleanupShellRCPath removes the agentjail PATH block from every candidate shell
+// rc file under home (and $ZDOTDIR/.zshrc when set). Best-effort: files that are
+// absent, unreadable, or unwritable are skipped. Returns the rc files actually
+// modified. Each modified file is rewritten atomically (temp + rename) preserving
+// its original permissions.
+func cleanupShellRCPath(home string) []string {
+	candidates := []string{
+		filepath.Join(home, ".zshrc"),
+		filepath.Join(home, ".bashrc"),
+		filepath.Join(home, ".bash_profile"),
+		filepath.Join(home, ".profile"),
+		filepath.Join(home, ".config", "fish", "config.fish"),
+	}
+	if zd := os.Getenv("ZDOTDIR"); zd != "" {
+		candidates = append(candidates, filepath.Join(zd, ".zshrc"))
+	}
+
+	var cleaned []string
+	seen := map[string]bool{}
+	for _, rc := range candidates {
+		if seen[rc] {
+			continue
+		}
+		seen[rc] = true
+
+		b, err := os.ReadFile(rc)
+		if err != nil {
+			continue // absent or unreadable — nothing to do
+		}
+		newContent, changed := stripAgentjailPathBlock(string(b))
+		if !changed {
+			continue
+		}
+
+		mode := os.FileMode(0o644)
+		if info, statErr := os.Stat(rc); statErr == nil {
+			mode = info.Mode().Perm()
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(rc), ".agentjail-rc-*.tmp")
+		if err != nil {
+			continue
+		}
+		tmpName := tmp.Name()
+		if _, err := tmp.WriteString(newContent); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			continue
+		}
+		_ = tmp.Chmod(mode)
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpName)
+			continue
+		}
+		if err := os.Rename(tmpName, rc); err != nil {
+			_ = os.Remove(tmpName)
+			continue
+		}
+		cleaned = append(cleaned, rc)
+	}
+	return cleaned
 }
 
 // uninstallDaemon unloads the launchd service and removes the plist file.
@@ -588,7 +694,20 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 		lines = append(lines, u.Badge("fail", "some steps failed — see above"))
 	} else {
 		lines = append(lines, u.Badge("ok", "agentjail fully removed"))
-		lines = append(lines, u.Badge("dim", "PATH: delete the '# added by agentjail installer' line from your shell rc if present"))
+		if len(r.RCCleaned) > 0 {
+			homeDir, _ := os.UserHomeDir()
+			display := make([]string, 0, len(r.RCCleaned))
+			for _, p := range r.RCCleaned {
+				if homeDir != "" && strings.HasPrefix(p, homeDir+"/") {
+					p = "~" + strings.TrimPrefix(p, homeDir)
+				}
+				display = append(display, p)
+			}
+			lines = append(lines, u.Badge("ok", "PATH: removed the installer line from "+strings.Join(display, ", ")))
+			lines = append(lines, u.Badge("dim", "open a new shell (or unset PATH manually) for it to drop from the current session"))
+		} else {
+			lines = append(lines, u.Badge("dim", "PATH: no installer line found in your shell rc (nothing to clean)"))
+		}
 	}
 
 	body := strings.Join(lines, "\n")
