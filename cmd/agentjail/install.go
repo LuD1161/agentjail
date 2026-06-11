@@ -9,11 +9,15 @@
 //  5. Installs the launchd plist at ~/Library/LaunchAgents/com.agentjail.daemon.plist
 //     with ProgramArguments patched to ~/.agentjail/bin/agentjail-daemon.
 //  6. Runs launchctl unload/load to (re)start the daemon.
-//  7. Detects which agents are present on the machine (claude-code, codex, cursor).
-//  8. Presents an interactive multi-select picker (or falls back to non-interactive).
-//  9. Dispatches agent.Install(env) for each selected agent.
-//
-// 10. Prints a summary and exits non-zero if any selected install failed.
+//  7. Detects which agents are present on the machine (claude-code, codex, cursor)
+//     and which of them already have the agentjail hook wired.
+//  8. If every detected agent is already protected, the run is just a binary +
+//     daemon refresh (steps 1-6 above): it skips the picker and reports, so
+//     re-running `curl … | sh` on an installed machine behaves like an update.
+//  9. Otherwise presents an interactive multi-select picker (already-protected
+//     agents are marked) or falls back to non-interactive selection.
+// 10. Dispatches agent.Install(env) for each selected agent.
+// 11. Prints a summary and exits non-zero if any selected install failed.
 //
 // Use `agentjail install --for <agent>` for single-agent back-compat.
 // Use `agentjail install --all` / `--yes` for non-interactive "install all".
@@ -163,17 +167,36 @@ func runInstallCmd(args []string) {
 	env := buildAgentsEnv(home)
 	detected := detectAll(env)
 
+	// Snapshot which detected agents are already protected. The daemon preamble
+	// above has already (re)installed the binaries and restarted the daemon, so
+	// if every detected agent is already wired this run is effectively just a
+	// binary/daemon refresh — there is nothing new to wire. Skip the picker and
+	// report, so re-running `curl … | sh` (or `agentjail install`) on an
+	// already-protected machine behaves like an update instead of re-prompting.
+	state := computeInstallState(detected, func(a agents.Agent) agents.Status { return a.Status(env) })
+	if state.allProtected() {
+		v := version
+		if v == "" {
+			v = "dev"
+		}
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: already protecting all %d detected agent(s); refreshed binaries and daemon to %s.", state.present, v)))
+		fmt.Fprintln(os.Stdout, u.Badge("dim", "nothing to wire — run 'agentjail status' to verify, or 'agentjail install --for <agent>' to add another."))
+		return
+	}
+
 	fmt.Fprintln(os.Stdout)
 	fmt.Fprintln(os.Stdout, u.Section(u.Emoji("🔍  ")+"Discovering coding agents"))
 
-	// Build picker items (all detected start checked).
+	// Build picker items (all detected start checked). Mark which agents are
+	// already protected so a re-run shows current state at a glance.
 	var items []picker.Item
 	for _, r := range detected {
 		if r.d.Present {
 			items = append(items, picker.Item{
 				ID:      r.ag.ID(),
 				Label:   r.ag.DisplayName(),
-				Detail:  r.d.Evidence,
+				Detail:  protectedDetail(r.d.Evidence, state.byID[r.ag.ID()]),
 				Checked: true,
 			})
 		}
@@ -819,6 +842,48 @@ func detectAll(env agents.Env) []detectedAgent {
 		out = append(out, detectedAgent{ag: ag, d: ag.Detect(env)})
 	}
 	return out
+}
+
+// agentInstallState summarizes, across all detected agents, how many are present
+// and how many already have the agentjail hook wired. byID maps an agent ID to
+// true when that agent is already protected.
+type agentInstallState struct {
+	present   int
+	installed int
+	byID      map[string]bool
+}
+
+// allProtected reports whether every present agent is already wired — i.e. there
+// is nothing new for the discovery flow to do, so a re-run is just a refresh.
+func (s agentInstallState) allProtected() bool {
+	return s.present > 0 && s.installed == s.present
+}
+
+// computeInstallState builds an agentInstallState from detection results, using
+// statusOf to read each agent's current hook status (injectable for tests).
+// Only present (detected) agents are counted.
+func computeInstallState(detected []detectedAgent, statusOf func(agents.Agent) agents.Status) agentInstallState {
+	st := agentInstallState{byID: make(map[string]bool, len(detected))}
+	for _, r := range detected {
+		if !r.d.Present {
+			continue
+		}
+		st.present++
+		if statusOf(r.ag).Installed {
+			st.byID[r.ag.ID()] = true
+			st.installed++
+		}
+	}
+	return st
+}
+
+// protectedDetail annotates a picker item's detail line with whether the agent
+// is already protected, so a re-run shows current state at a glance.
+func protectedDetail(evidence string, installed bool) string {
+	if installed {
+		return evidence + "  ·  already protected"
+	}
+	return evidence + "  ·  not protected yet"
 }
 
 // countPresent counts how many detected agents are present.

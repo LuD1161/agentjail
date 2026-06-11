@@ -1254,3 +1254,61 @@ func TestUsageCommandLabelsNoWrap(t *testing.T) {
 		}
 	}
 }
+
+// ---- already-installed re-run detection ----------------------------------------
+
+// TestComputeInstallState verifies the present/installed accounting that drives
+// the "already protected → skip the picker" re-run path. Only present agents are
+// counted; allProtected is true only when every present agent is wired.
+func TestComputeInstallState(t *testing.T) {
+	reg := agents.Registry() // claude-code, cursor, codex
+	// Two present agents, one absent (the absent one must be ignored entirely).
+	detected := []detectedAgent{
+		{ag: reg[0], d: agents.Detection{Present: true}},
+		{ag: reg[1], d: agents.Detection{Present: true}},
+		{ag: reg[2], d: agents.Detection{Present: false}},
+	}
+
+	// None installed → not all protected.
+	st := computeInstallState(detected, func(a agents.Agent) agents.Status { return agents.Status{Installed: false} })
+	if st.present != 2 || st.installed != 0 || st.allProtected() {
+		t.Fatalf("none installed: present=%d installed=%d allProtected=%v", st.present, st.installed, st.allProtected())
+	}
+
+	// Only the first present agent installed → partial, not all protected.
+	installed := map[string]bool{reg[0].ID(): true}
+	st = computeInstallState(detected, func(a agents.Agent) agents.Status { return agents.Status{Installed: installed[a.ID()]} })
+	if st.present != 2 || st.installed != 1 || st.allProtected() {
+		t.Fatalf("partial: present=%d installed=%d allProtected=%v", st.present, st.installed, st.allProtected())
+	}
+	if !st.byID[reg[0].ID()] || st.byID[reg[1].ID()] {
+		t.Fatalf("byID wrong: %+v", st.byID)
+	}
+
+	// Every present agent installed (the absent one stays uncounted) → all protected.
+	allIn := func(a agents.Agent) agents.Status { return agents.Status{Installed: true} }
+	st = computeInstallState(detected, allIn)
+	if st.present != 2 || st.installed != 2 || !st.allProtected() {
+		t.Fatalf("all: present=%d installed=%d allProtected=%v", st.present, st.installed, st.allProtected())
+	}
+	if st.byID[reg[2].ID()] {
+		t.Fatalf("absent agent must not appear in byID: %+v", st.byID)
+	}
+
+	// No present agents → never "all protected" (avoids a vacuous true).
+	none := []detectedAgent{{ag: reg[0], d: agents.Detection{Present: false}}}
+	if computeInstallState(none, allIn).allProtected() {
+		t.Fatal("no present agents must not be allProtected")
+	}
+}
+
+// TestProtectedDetail verifies the picker detail annotation distinguishes
+// already-protected agents from not-yet-protected ones while preserving evidence.
+func TestProtectedDetail(t *testing.T) {
+	if got := protectedDetail("~/.claude found", true); !strings.HasPrefix(got, "~/.claude found") || !strings.Contains(got, "already protected") {
+		t.Fatalf("installed detail = %q", got)
+	}
+	if got := protectedDetail("~/.claude found", false); !strings.HasPrefix(got, "~/.claude found") || !strings.Contains(got, "not protected yet") {
+		t.Fatalf("not-installed detail = %q", got)
+	}
+}
