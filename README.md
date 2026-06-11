@@ -184,6 +184,7 @@ Downloads the latest release tarball for your platform (`darwin-arm64` / `darwin
 2. Presents a styled interactive multi-select list — all detected agents start checked; press Space to uncheck, Enter to confirm. "Just press Enter" protects everything. Install and status output use a consistent colored style (terracotta accent, semantic green/yellow/red badges); degrades to plain text when piped or `NO_COLOR=1` is set.
 3. Works under `curl | sh`: the picker reads the keyboard from `/dev/tty` directly, so stdin being the install pipe is not a problem.
 4. Without a TTY (CI / non-interactive): hooks are wired for **all detected** agents automatically, no prompts.
+5. Already protected? Re-running the one-liner refreshes the binaries and daemon to the latest release, and if every detected agent is already wired it skips the picker and reports — so `curl … | sh` on an installed machine behaves like an update. The picker also marks which agents are already protected when some still need wiring.
 
 **Linux note:** detection runs cross-platform, but the daemon (launchd) is macOS-only in this release. On Linux, detected agents are reported but hook wiring is skipped with a clear message (pass `--allow-unsupported` to exit 0 in automation).
 
