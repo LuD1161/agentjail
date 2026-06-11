@@ -36,6 +36,7 @@ type PolicyConfig struct {
 	File         FileConfig    `yaml:"file"`
 	Commands     CommandConfig `yaml:"commands"`
 	Network      NetworkConfig `yaml:"network"`
+	Web          WebConfig     `yaml:"web"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -115,6 +116,20 @@ type NetworkConfig struct {
 	// for outbound TCP connections.  The resolver runs at shield startup; DNS
 	// (UDP 53) and loopback are always permitted regardless of this list.
 	AllowedHosts []string `yaml:"allowed_hosts"`
+}
+
+// WebConfig governs the agent's web read tools (WebSearch / WebFetch), which
+// web_policy.rego allows by default to stop them escalating to the user on every
+// call. WebSearch is always allowed; WebFetch is allowed unless its target host
+// matches a Blocked glob.
+type WebConfig struct {
+	// Blocked is a list of host glob patterns; a WebFetch whose URL host matches
+	// any of them is denied (rule_id web_policy/fetch_blocked). Patterns match
+	// case-insensitively and `*` spans dots (so "*tracking*" matches subdomains,
+	// "*.internal" matches a suffix, "169.254.*" a prefix). Empty by default —
+	// nothing is blocked. This is domain control, not exfil-proofing; to make
+	// WebFetch prompt again, disable web_policy/fetch via disabled_rules.
+	Blocked []string `yaml:"blocked"`
 }
 
 // Load reads a PolicyConfig from a YAML file at path.
@@ -217,6 +232,12 @@ func Default() *PolicyConfig {
 				"us.i.posthog.com",
 			},
 		},
+		// Web read tools (WebSearch/WebFetch) are allowed by default; no hosts
+		// are blocked out of the box. Add host globs here to deny specific
+		// WebFetch targets.
+		Web: WebConfig{
+			Blocked: []string{},
+		},
 	}
 }
 
@@ -293,6 +314,13 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Network.AllowedHosts = append([]string(nil), overlay.Network.AllowedHosts...)
 	} else {
 		result.Network.AllowedHosts = append([]string(nil), base.Network.AllowedHosts...)
+	}
+
+	// Web.Blocked
+	if len(overlay.Web.Blocked) > 0 {
+		result.Web.Blocked = append([]string(nil), overlay.Web.Blocked...)
+	} else {
+		result.Web.Blocked = append([]string(nil), base.Web.Blocked...)
 	}
 
 	// DisabledRules — overlay wins if non-empty, else keep base.
@@ -375,7 +403,8 @@ func Save(cfg *PolicyConfig, path string) error {
 //	    "temp_roots":  [...]   // injected at runtime by the daemon
 //	  },
 //	  "commands": { "extra_block": [...] },
-//	  "network":  { "allowed_hosts": [...] }
+//	  "network":  { "allowed_hosts": [...] },
+//	  "web":      { "blocked": [...] }
 //	}
 //
 // Nil slices are serialised as empty JSON arrays so Rego sees [] not null.
@@ -414,6 +443,10 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 		},
 		"network": map[string]interface{}{
 			"allowed_hosts": sliceOrEmpty(c.Network.AllowedHosts),
+		},
+		// web.blocked is read by web_policy.rego to deny WebFetch to matching hosts.
+		"web": map[string]interface{}{
+			"blocked": sliceOrEmpty(c.Web.Blocked),
 		},
 		// disabled_rules is read by resolver.rego to suppress non-locked candidates.
 		// Rego reads it as data.agentjail.config.disabled_rules.
