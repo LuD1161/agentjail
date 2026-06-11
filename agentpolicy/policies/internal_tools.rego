@@ -15,7 +15,9 @@
 #
 # Deliberately NOT included (these keep their normal governance because they have
 # real side effects): Bash, Read, Write, Edit, NotebookEdit, the worktree / cron /
-# schedule tools, WebFetch / WebSearch (network egress), and all MCP tools.
+# schedule tools, and all MCP tools. WebFetch / WebSearch are network egress and
+# are governed separately by web_policy.rego (allowed by default, with a
+# WebFetch host blocklist) rather than lumped in here.
 #
 # Pattern: `candidate contains r if { ... }` (partial rule entry). resolver.rego
 # owns `decision`. An "allow" candidate only wins when no deny/ask candidate

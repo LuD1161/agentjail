@@ -240,6 +240,41 @@ func TestDefaultNetworkAllowedHostsIncludesTelemetry(t *testing.T) {
 		telemetryHost, cfg.Network.AllowedHosts)
 }
 
+// TestDefaultWebBlockedIsEmpty verifies WebFetch is unrestricted out of the box
+// (no hosts blocked) and the slice is non-nil so Rego sees [] not null.
+func TestDefaultWebBlockedIsEmpty(t *testing.T) {
+	cfg := Default()
+	if cfg.Web.Blocked == nil || len(cfg.Web.Blocked) != 0 {
+		t.Errorf("expected Web.Blocked = [] (non-nil empty), got %#v", cfg.Web.Blocked)
+	}
+}
+
+// TestMergeWebBlockedOverlay verifies a policy.yaml web.blocked overlay replaces
+// the (empty) default, and that ToOPAData projects it under web.blocked.
+func TestMergeWebBlockedOverlay(t *testing.T) {
+	overlay := &PolicyConfig{Web: WebConfig{Blocked: []string{"*tracking*", "169.254.*"}}}
+	merged := Merge(Default(), overlay)
+	if !reflect.DeepEqual(merged.Web.Blocked, []string{"*tracking*", "169.254.*"}) {
+		t.Fatalf("merged Web.Blocked = %v", merged.Web.Blocked)
+	}
+
+	data := merged.ToOPAData()
+	web, ok := data["web"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("ToOPAData missing web object: %#v", data["web"])
+	}
+	if !reflect.DeepEqual(web["blocked"], []string{"*tracking*", "169.254.*"}) {
+		t.Fatalf("ToOPAData web.blocked = %#v", web["blocked"])
+	}
+
+	// An empty overlay keeps the default (empty) — and never projects nil.
+	keep := Merge(Default(), &PolicyConfig{})
+	kdata := keep.ToOPAData()["web"].(map[string]interface{})
+	if kdata["blocked"] == nil {
+		t.Fatal("ToOPAData web.blocked must be [] not nil")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Validate()
 // ---------------------------------------------------------------------------

@@ -119,6 +119,28 @@ mcp:
   blocked: ["*stripe*", "*payment*"]
 ```
 
+### `web_policy.rego` — web read tools (WebSearch / WebFetch)
+
+Coding agents route their read-only web tools through the hook. Without a rule
+these hit `resolver/default` → **ask**, so every search/fetch prompts the user
+(and the agent host's per-domain "don't ask again" can't suppress an agentjail
+`ask`). So agentjail governs them explicitly: **WebSearch is always allowed** (a
+query to the harness's search backend, no arbitrary endpoint), and **WebFetch is
+allowed by default** (read-only GET) **unless its target host matches a
+configurable blocklist**:
+
+```yaml
+# ~/.agentjail/policy.yaml
+web:
+  blocked: ["*tracking*", "*.internal", "169.254.*"]   # host globs; default []
+```
+
+Host globs match case-insensitively and `*` spans dots. This is domain control,
+not exfil-proofing — a determined prompt-injected agent could pick an unlisted
+host; the bigger exfil vector (Bash `curl`/POST) stays governed by
+`command_policy`. Users who want WebFetch to prompt again can add
+`web_policy/fetch` to `disabled_rules` (it falls back to the default ask).
+
 ### `command_policy.rego` — dangerous shell patterns
 
 Block or prompt before high-risk patterns: `rm -rf` outside the project,

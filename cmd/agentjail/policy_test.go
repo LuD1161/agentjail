@@ -52,6 +52,7 @@ func TestCoreRuleNames(t *testing.T) {
 		"no_daemon_kill",
 		"no_hook_self_disable",
 		"resolver",
+		"web_policy",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("coreRuleNames() = %v, want %v", names, want)

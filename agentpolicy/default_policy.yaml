@@ -76,3 +76,17 @@ network:
     - proxy.golang.org
     - sum.golang.org
     - deno.land
+
+web:
+  # The agent's web read tools — WebSearch and WebFetch — are allowed by default
+  # so they don't prompt on every call. WebSearch is always allowed; WebFetch is
+  # a read-only GET allowed unless its target host matches a pattern below.
+  #
+  # Patterns are host globs, matched case-insensitively, where "*" spans dots:
+  #   "*tracking*"   → any host containing "tracking" (incl. subdomains)
+  #   "*.internal"   → any host ending in ".internal"
+  #   "169.254.*"    → link-local metadata addresses
+  # This is domain control, not exfil-proofing (a determined agent can pick an
+  # unlisted host; Bash curl/POST stays governed by command policy). To make
+  # WebFetch prompt again, add "web_policy/fetch" to disabled_rules.
+  blocked: []
