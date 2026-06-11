@@ -55,8 +55,9 @@ func SendInstall(ctx context.Context, p Paths, getenv func(string) string, versi
 // SendUninstall sends an uninstall event immediately and synchronously. Must be
 // called BEFORE ~/.agentjail state is removed so telemetry.json (and its
 // anonymous ID) is still readable. Respects opt-out. Returns ErrNoBackend when
-// no key is configured.
-func SendUninstall(ctx context.Context, p Paths, getenv func(string) string, version, goos, goarch string) error {
+// no key is configured. agents carries the unhooked agent IDs for a single-agent
+// (`--for`) removal, or nil for a full teardown.
+func SendUninstall(ctx context.Context, p Paths, getenv func(string) string, version, goos, goarch string, agents []string) error {
 	client := DefaultClient()
 	if !client.HasBackend() {
 		return ErrNoBackend
@@ -68,7 +69,7 @@ func SendUninstall(ctx context.Context, p Paths, getenv func(string) string, ver
 	if enabled, _ := Resolve(c, getenv); !enabled {
 		return nil // opt-out respected
 	}
-	ev := NewUninstallEvent(c.AnonymousID, version, goos, goarch)
+	ev := NewUninstallEvent(c.AnonymousID, version, goos, goarch, agents)
 	return client.Send(ctx, []Event{ev})
 }
 

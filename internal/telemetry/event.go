@@ -129,11 +129,17 @@ func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, ag
 }
 
 // NewUninstallEvent: fired immediately before agentjail teardown so churn is
-// captured even when ~/.agentjail is removed moments later.
-func NewUninstallEvent(distinctID, version, goos, goarch string) Event {
+// captured even when ~/.agentjail is removed moments later. agents is the list
+// of agent enum IDs that were unhooked: a single entry (e.g. ["claude-code"])
+// for a `--for <agent>` single-agent removal, or empty/nil for a full teardown.
+// Its presence distinguishes a partial unhook from a full uninstall.
+func NewUninstallEvent(distinctID, version, goos, goarch string, agents []string) Event {
 	p := base(distinctID, version)
 	p["os"] = goos
 	p["arch"] = goarch
+	if len(agents) > 0 {
+		p["agents"] = agents
+	}
 	return Event{Event: "uninstall", Properties: p}
 }
 

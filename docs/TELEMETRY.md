@@ -67,12 +67,15 @@ delivered by the daemon (see [How it's delivered](#how-its-delivered)).
 | `agents` | `["claude-code","cursor"]` | Optional; the agent enums whose hooks were wired |
 | `agents_detected` | `3` | How many supported agents were found on the machine (a count) |
 
-### `uninstall` — emitted immediately before a full teardown
-Sent **before** `~/.agentjail` is removed, so we can see churn.
+### `uninstall` — emitted immediately on teardown (full or single-agent)
+Sent **before** any state is removed, so we can see churn. A full
+`agentjail uninstall` and a single-agent `agentjail uninstall --for <agent>` both
+emit this; the optional `agents` field distinguishes them.
 | Property | Example | Notes |
 |---|---|---|
 | `os` | `"darwin"` / `"linux"` | |
 | `arch` | `"arm64"` / `"amd64"` | |
+| `agents` | `["claude-code"]` | Optional; the agent enum(s) unhooked by a `--for <agent>` single-agent removal. **Omitted** for a full teardown (so absence = full uninstall) |
 
 ### `update` — emitted when you run `agentjail update`
 | Property | Example | Notes |
