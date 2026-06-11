@@ -16,8 +16,9 @@
 # A second set (benign_tools, below) auto-allows tools that DO touch the
 # filesystem/shell but only in ways already governed elsewhere or with no new
 # side effect: Glob (read-only path enumeration), BashOutput / KillShell
-# (in-session lifecycle of an already-approved background shell), and Task /
-# Agent (subagent dispatch — the subagent's own tool calls fire this same hook).
+# (in-session lifecycle of an already-approved background shell), Task / Agent
+# (subagent dispatch — the subagent's own tool calls fire this same hook), and
+# Skill (loads instructions; anything it executes is hooked just the same).
 #
 # Deliberately NOT included (these keep their normal governance because they have
 # real, ungoverned side effects): Bash, Read, Write, Edit, NotebookEdit, the
@@ -72,12 +73,16 @@ candidate contains r if {
 #   - KillShell:  terminates an agent-spawned background shell by id.
 #   - Task/Agent: dispatches a subagent — whose own tool calls fire this same
 #                 PreToolUse hook, so they remain independently governed.
+#   - Skill:      loads a skill's instructions — anything it then executes
+#                 (Bash, Read/Write, bundled scripts) fires this hook too, so
+#                 the invocation itself has no ungoverned side effect.
 benign_tools := {
 	"Glob",
 	"BashOutput",
 	"KillShell",
 	"Task",
 	"Agent",
+	"Skill",
 }
 
 candidate contains r if {

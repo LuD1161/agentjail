@@ -110,6 +110,14 @@ test_subagent_dispatch_allowed if {
 	}
 }
 
+test_skill_allowed if {
+	decision == benign_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "Skill",
+		"tool_input": {"command": "some-skill"},
+	}
+}
+
 # 5. Grep is deliberately NOT auto-allowed: it returns file contents and must
 #    stay governed (otherwise it bypasses file_policy's sensitive-path deny).
 test_grep_not_auto_allowed if {
