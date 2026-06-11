@@ -284,15 +284,15 @@ add_to_path() {
 cat <<EOF
 
 🎉  agentjail ${VERSION} installed!
-
-🚀  Quick start
-      agentjail status        verify daemon + hook
-      agentjail logs          watch decisions live
 EOF
 
 add_to_path
 
 cat <<EOF
+
+🚀  Quick start
+      agentjail status        verify daemon + hook
+      agentjail logs          watch decisions live
 
 📚  Docs  ·  https://github.com/${REPO}
 
