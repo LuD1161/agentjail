@@ -190,8 +190,17 @@ mkdir -p "$INSTALL_DIR"
 INSTALLED=""
 for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
     if [ -f "$TMP/$bin" ]; then
-        cp "$TMP/$bin" "$INSTALL_DIR/$bin"
-        chmod 0755 "$INSTALL_DIR/$bin"
+        # Install atomically: stage into a temp file in the SAME dir, then
+        # rename over the target. A plain `cp` rewrites the existing inode in
+        # place — on a re-install macOS still holds a cached code signature
+        # (AMFI) for that inode from the previously-executed binary, so the new
+        # bytes fail validation and the next exec is SIGKILL'd ("Killed: 9").
+        # A rename swaps in a fresh inode, so the signature validates cleanly
+        # and it is safe even while the old daemon binary is still running.
+        tmp_bin="$INSTALL_DIR/.$bin.tmp.$$"
+        cp "$TMP/$bin" "$tmp_bin"
+        chmod 0755 "$tmp_bin"
+        mv -f "$tmp_bin" "$INSTALL_DIR/$bin"
         INSTALLED="${INSTALLED} $bin"
     fi
 done
