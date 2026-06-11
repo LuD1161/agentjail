@@ -13,11 +13,20 @@
 # allow-list is effectively Claude-only by virtue of the tool names; there is no
 # Codex/Cursor internal-tool surface to add.
 #
+# A second set (benign_tools, below) auto-allows tools that DO touch the
+# filesystem/shell but only in ways already governed elsewhere or with no new
+# side effect: Glob (read-only path enumeration), BashOutput / KillShell
+# (in-session lifecycle of an already-approved background shell), and Task /
+# Agent (subagent dispatch — the subagent's own tool calls fire this same hook).
+#
 # Deliberately NOT included (these keep their normal governance because they have
-# real side effects): Bash, Read, Write, Edit, NotebookEdit, the worktree / cron /
-# schedule tools, and all MCP tools. WebFetch / WebSearch are network egress and
-# are governed separately by web_policy.rego (allowed by default, with a
-# WebFetch host blocklist) rather than lumped in here.
+# real, ungoverned side effects): Bash, Read, Write, Edit, NotebookEdit, the
+# worktree / cron / schedule tools, the MCP resource tools, and all MCP tools.
+# Grep is excluded on purpose: it returns file CONTENTS, so allowing it would
+# bypass file_policy's sensitive-path deny (a Read of ~/.ssh/id_rsa is blocked, a
+# grep of it would not be) — it must stay governed. WebFetch / WebSearch are
+# network egress, governed separately by web_policy.rego (allowed by default,
+# with a WebFetch host blocklist).
 #
 # Pattern: `candidate contains r if { ... }` (partial rule entry). resolver.rego
 # owns `decision`. An "allow" candidate only wins when no deny/ask candidate
@@ -52,5 +61,32 @@ candidate contains r if {
 		"rule_id": "internal_tools/allow",
 		"reason": "agent internal tool — no external side effects",
 		"impact": "in-session orchestration only (task list / plan mode / tool-schema load)",
+	}
+}
+
+# Benign tools that touch the filesystem/shell only in already-governed or
+# side-effect-free ways. Kept separate from internal_tools (and given a distinct
+# rule_id) so the allow reason stays accurate and telemetry can tell them apart.
+#   - Glob:       read-only path enumeration (returns paths, never file content).
+#   - BashOutput: reads stdout/stderr of an ALREADY-approved background shell.
+#   - KillShell:  terminates an agent-spawned background shell by id.
+#   - Task/Agent: dispatches a subagent — whose own tool calls fire this same
+#                 PreToolUse hook, so they remain independently governed.
+benign_tools := {
+	"Glob",
+	"BashOutput",
+	"KillShell",
+	"Task",
+	"Agent",
+}
+
+candidate contains r if {
+	input.hook_event == "PreToolUse"
+	input.tool_name in benign_tools
+	r := {
+		"action": "allow",
+		"rule_id": "internal_tools/benign_allow",
+		"reason": "benign harness tool — read-only path enumeration, in-session shell lifecycle, or subagent dispatch (whose calls are independently hooked)",
+		"impact": "no ungoverned side effect (paths only / already-approved shell / hooked subagent calls)",
 	}
 }
