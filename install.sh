@@ -219,30 +219,35 @@ export AGENTJAIL_INSTALL_METHOD="${AGENTJAIL_INSTALL_METHOD:-curl}"
 
 "$INSTALL_DIR/agentjail" install
 
-# --- Add ~/.agentjail/bin to PATH (default on; opt out: AGENTJAIL_NO_MODIFY_PATH=1) ---
+# --- Put agentjail on PATH (default on; opt out: AGENTJAIL_NO_MODIFY_PATH=1) ---
 
-# _path_manual prints the copy-paste fallback when we can't (or shouldn't) edit a
-# shell rc — used for the opt-out, unknown shells, or an unwritable rc file.
-# shellcheck disable=SC2016  # $HOME/$PATH are written/displayed literally on purpose
-_path_manual() {
-    printf '\n📌  Add to PATH — append to your shell rc (~/.zshrc, ~/.bashrc):\n'
-    printf '      export PATH="$HOME/.agentjail/bin:$PATH"\n'
+AGENTJAIL_HOME_DIR="${AGENTJAIL_HOME:-$HOME/.agentjail}"
+ENV_FILE="$AGENTJAIL_HOME_DIR/env"
+
+# write_env_file drops a rustup-style script. `source $HOME/.agentjail/env` puts
+# agentjail on PATH in the CURRENT shell, independent of which rc the user has.
+# The INSTALL_DIR is baked as an absolute literal (correct under a custom
+# AGENTJAIL_HOME), and the case guard makes re-sourcing idempotent.
+# shellcheck disable=SC2016  # ${PATH}/$PATH are written literally into the script on purpose
+write_env_file() {
+    {
+        printf '# agentjail shell environment. Put `agentjail` on your PATH with:\n'
+        printf '#   source "%s"\n' "$ENV_FILE"
+        printf 'case ":${PATH}:" in\n'
+        printf '    *":%s:"*) ;;\n' "$INSTALL_DIR"
+        printf '    *) export PATH="%s:$PATH" ;;\n' "$INSTALL_DIR"
+        printf 'esac\n'
+    } > "$ENV_FILE" 2>/dev/null
 }
 
-# add_to_path makes `agentjail` runnable by name. If the install dir is already
-# on PATH it does nothing; otherwise it appends a single marked, idempotent line
-# to the login shell's rc file (zsh/bash/fish), and tells the user to reload it.
-# shellcheck disable=SC2016  # $HOME/$PATH are written/displayed literally on purpose
+# add_to_path appends a single marked, idempotent line to the login shell's rc
+# (zsh/bash/fish) so `agentjail` is on PATH in FUTURE shells. Best-effort and
+# SILENT — all user-facing guidance is printed by the final block below.
+# Honors AGENTJAIL_NO_MODIFY_PATH=1 (the env file is still written either way).
+# shellcheck disable=SC2016  # $HOME/$PATH are written into the rc literally on purpose
 add_to_path() {
-    # Already active in this PATH? Then `agentjail` works right now.
-    case ":${PATH}:" in
-        *":${INSTALL_DIR}:"*)
-            printf '\n📌  PATH  ·  already configured — run `agentjail status` now.\n'
-            return 0
-            ;;
-    esac
-
-    [ "${AGENTJAIL_NO_MODIFY_PATH:-0}" = "1" ] && { _path_manual; return 0; }
+    [ "${AGENTJAIL_NO_MODIFY_PATH:-0}" = "1" ] && return 0
+    case ":${PATH}:" in *":${INSTALL_DIR}:"*) return 0 ;; esac
 
     shell_name=$(basename "${SHELL:-sh}")
     case "$shell_name" in
@@ -266,27 +271,39 @@ add_to_path() {
 
     # Idempotent: skip if our marker is already in the rc file.
     if [ -f "$rc" ] && grep -q 'added by agentjail installer' "$rc" 2>/dev/null; then
-        printf '\n📌  PATH  ·  already set in %s — run: source %s\n' "$rc" "$rc"
         return 0
     fi
-
-    if mkdir -p "$(dirname "$rc")" 2>/dev/null && \
-       printf '\n# added by agentjail installer\n%s\n' "$line" >> "$rc" 2>/dev/null; then
-        printf '\n📌  PATH  ·  added ~/.agentjail/bin to %s\n' "$rc"
-        printf '      run:  source %s   (or open a new terminal), then `agentjail status`\n' "$rc"
-    else
-        _path_manual
-    fi
+    mkdir -p "$(dirname "$rc")" 2>/dev/null && \
+        printf '\n# added by agentjail installer\n%s\n' "$line" >> "$rc" 2>/dev/null
 }
 
-# --- Done ---
+# --- Done — write env file, edit rc, then print a clear conditional next step ---
 
-cat <<EOF
-
-🎉  agentjail ${VERSION} installed!
-EOF
-
+write_env_file
 add_to_path
+
+printf '\n🎉  agentjail %s installed — the hook is active now.\n' "${VERSION}"
+printf '    (enforcement uses an absolute path; PATH below is only for the `agentjail` CLI)\n'
+
+if command -v agentjail >/dev/null 2>&1; then
+    # Already resolvable (reinstall, or INSTALL_DIR was already on PATH).
+    printf '\n✅  Ready — run:  agentjail status\n'
+else
+    printf '\n┌─ One step to use the `agentjail` command ─────────────────────\n'
+    printf '│\n'
+    printf '│   source %s\n' "$ENV_FILE"
+    printf '│       …or just open a new terminal (your shell rc was updated)\n'
+    printf '│\n'
+    printf '│   then:  agentjail status\n'
+    printf '│\n'
+    printf '│   ▶ or run it right now, no PATH needed:\n'
+    printf '│       %s/agentjail status\n' "$INSTALL_DIR"
+    if [ "${AGENTJAIL_NO_MODIFY_PATH:-0}" = "1" ]; then
+        printf '│\n'
+        printf '│   (AGENTJAIL_NO_MODIFY_PATH=1 — your shell rc was left untouched)\n'
+    fi
+    printf '└───────────────────────────────────────────────────────────────\n'
+fi
 
 cat <<EOF
 
