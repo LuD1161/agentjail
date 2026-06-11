@@ -70,25 +70,56 @@ test_sudo_chained_deny if {
 }
 
 # ---------------------------------------------------------------------------
-# 3. git push --force → deny
+# 3. git push --force — branch-aware: deny on default branch, allow on a topic
+#    branch, ask when the branch is implicit.
 # ---------------------------------------------------------------------------
 
+git_push_force_default_deny := {
+	"action":  "deny",
+	"rule_id": "command_policy/no-git-push-force",
+	"reason":  "force-pushing the default branch (main/master) rewrites shared history and can destroy others' commits",
+	"impact":  "would rewrite history on the default branch",
+}
+
 test_git_push_force_deny if {
-	agentjail.decision == {
-		"action":  "deny",
-		"rule_id": "command_policy/no-git-push-force",
-		"reason":  "force-pushing rewrites remote history and can permanently destroy commits",
-		"impact":  "would rewrite remote history",
-	} with input as bash_input("git push origin main --force")
+	agentjail.decision == git_push_force_default_deny with input as bash_input("git push origin main --force")
 }
 
 test_git_push_f_deny if {
-	agentjail.decision == {
-		"action":  "deny",
-		"rule_id": "command_policy/no-git-push-force",
-		"reason":  "force-pushing rewrites remote history and can permanently destroy commits",
-		"impact":  "would rewrite remote history",
-	} with input as bash_input("git push origin main -f")
+	agentjail.decision == git_push_force_default_deny with input as bash_input("git push origin main -f")
+}
+
+# `git push origin +main` (refspec force) also targets the default branch → deny.
+test_git_push_plus_main_deny if {
+	agentjail.decision == git_push_force_default_deny with input as bash_input("git push origin +main")
+}
+
+# Force-pushing a topic/feature branch → allow (normal rebase / PR update).
+test_git_push_force_topic_allow if {
+	d := agentjail.decision with input as bash_input("git push --force origin feature/my-branch")
+	d.action == "allow"
+	d.rule_id == "command_policy/allow-git-push-force-topic"
+}
+
+test_git_push_f_topic_allow if {
+	d := agentjail.decision with input as bash_input("git push -f origin my-topic")
+	d.action == "allow"
+	d.rule_id == "command_policy/allow-git-push-force-topic"
+}
+
+# Bare `git push -f` (implicit current branch) → ask (can't read the branch).
+test_git_push_force_implicit_ask if {
+	d := agentjail.decision with input as bash_input("git push -f")
+	d.action == "ask"
+	d.rule_id == "command_policy/confirm-git-push-force"
+}
+
+# A topic branch whose name merely contains "main" as a substring is NOT the
+# default branch and stays allowed (word-boundary guard).
+test_git_push_force_mainlike_branch_allow if {
+	d := agentjail.decision with input as bash_input("git push -f origin feature-maintenance")
+	d.action == "allow"
+	d.rule_id == "command_policy/allow-git-push-force-topic"
 }
 
 # ---------------------------------------------------------------------------

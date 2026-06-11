@@ -62,7 +62,7 @@ var ruleRegistry = []RuleEntry{
 	{
 		ID:          "command_policy/no-git-push-force",
 		Source:      RuleSourceCore,
-		Description: "Block git push --force to protected remotes",
+		Description: "Block git force-push to the default branch (main/master)",
 	},
 	{
 		ID:          "command_policy/no-chmod-777",
@@ -123,6 +123,11 @@ var ruleRegistry = []RuleEntry{
 		ID:          "command_policy/confirm-git-push",
 		Source:      RuleSourceCore,
 		Description: "Ask before git push to a remote",
+	},
+	{
+		ID:          "command_policy/confirm-git-push-force",
+		Source:      RuleSourceCore,
+		Description: "Ask before a force-push whose target branch is implicit (bare git push -f)",
 	},
 	{
 		ID:          "command_policy/confirm-publish",

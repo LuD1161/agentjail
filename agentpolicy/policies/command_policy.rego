@@ -133,15 +133,74 @@ candidate contains r if {
 	}
 }
 
-# git push --force or git push -f (destructive remote history rewrite).
+# ---------------------------------------------------------------------------
+# git force-push — branch-aware.
+#
+# Force-pushing a topic/feature branch is a normal rebase / PR-update workflow,
+# so it should NOT be blocked. Force-pushing the default branch (main/master)
+# rewrites shared history and can destroy others' commits, so it stays denied.
+# When the target branch can't be read from the command (`git push -f` with no
+# explicit refspec — it pushes the *current* branch, which the daemon can't see
+# from the command string), we ask rather than guess.
+#
+# "Force" = -f / --force / --force-with-lease, or the `+<refspec>` push syntax.
+# ---------------------------------------------------------------------------
+
+# A force-push of any form.
+_git_push_force if regex.match(`\bgit\s+push\b.*\s(-f\b|--force\b)`, cmd)
+
+_git_push_force if regex.match(`\bgit\s+push\b.*\s\+\S+`, cmd) # git push origin +branch
+
+# The command names a protected default branch (main/master) as a ref. Preceded
+# by a space, "/", "+", or ":" so it matches `origin main`, `+main`, `HEAD:main`,
+# `origin/main`. Over-broad on purpose (errs toward deny for a destructive op):
+# any mention of a main/master ref token in a force-push command counts.
+_git_push_default_branch if regex.match(`(^|[\s/+:])(main|master)\b`, cmd)
+
+# The command carries an explicit `<remote> <refspec>` (≥2 non-flag args), so the
+# branch IS named — as opposed to a bare `git push -f` that pushes the current
+# branch implicitly.
+_git_push_explicit_target if regex.match(`\bgit\s+push\b(\s+-{1,2}[\w-]+(=\S+)?)*\s+[^\s-]\S*\s+\+?\S+`, cmd)
+
+# Force-push to the default branch → deny (rewrites shared history).
 candidate contains r if {
 	is_bash
-	regex.match(`\bgit\s+push\b.*\s(-f\b|--force\b)`, cmd)
+	_git_push_force
+	_git_push_default_branch
 	r := {
 		"action":  "deny",
 		"rule_id": "command_policy/no-git-push-force",
-		"reason":  "force-pushing rewrites remote history and can permanently destroy commits",
-		"impact":  "would rewrite remote history",
+		"reason":  "force-pushing the default branch (main/master) rewrites shared history and can destroy others' commits",
+		"impact":  "would rewrite history on the default branch",
+	}
+}
+
+# Force-push to an explicit non-default branch (your own topic branch) → allow.
+candidate contains r if {
+	is_bash
+	_git_push_force
+	_git_push_explicit_target
+	not _git_push_default_branch
+	r := {
+		"action":  "allow",
+		"rule_id": "command_policy/allow-git-push-force-topic",
+		"reason":  "force-pushing a non-default (topic/feature) branch is a normal rebase / PR-update workflow",
+		"impact":  "rewrites history on a non-default branch only",
+	}
+}
+
+# Force-push with no explicit branch (`git push -f`) → ask: the target is the
+# implicit current branch, which can't be read from the command, so confirm it
+# isn't the default branch.
+candidate contains r if {
+	is_bash
+	_git_push_force
+	not _git_push_explicit_target
+	not _git_push_default_branch
+	r := {
+		"action":  "ask",
+		"rule_id": "command_policy/confirm-git-push-force",
+		"reason":  "force-push target branch is implicit; confirm you are not force-pushing the default branch",
 	}
 }
 

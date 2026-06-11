@@ -144,9 +144,12 @@ host; the bigger exfil vector (Bash `curl`/POST) stays governed by
 ### `command_policy.rego` — dangerous shell patterns
 
 Block or prompt before high-risk patterns: `rm -rf` outside the project,
-`curl … | bash`, `git push --force`, `chmod -R 777`, `sudo`, `dd`, `> /dev/disk*`,
+`curl … | bash`, `chmod -R 777`, `sudo`, `dd`, `> /dev/disk*`,
 `ssh-keygen`, `gpg --export-secret-keys`, `env | curl` exfil, and more; *ask* on
-package publish. An always-on, locked `command_policy/no-policy-mutation` rule
+package publish. **git force-push is branch-aware**: force-pushing the default
+branch (`main`/`master`) is denied, force-pushing a topic/feature branch is
+allowed (normal rebase / PR-update flow), and a bare `git push -f` (implicit
+current branch) asks. An always-on, locked `command_policy/no-policy-mutation` rule
 blocks an agent from running `agentjail policy disable`/`mcp` or writing into
 `~/.agentjail/`.
 
