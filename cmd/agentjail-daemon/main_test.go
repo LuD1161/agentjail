@@ -770,6 +770,197 @@ func TestReloadDiscardsStaleCacheWrite(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Track B: ask decisions must not be cached
+// ---------------------------------------------------------------------------
+
+// askRegoPolicy is a test policy that returns "ask" by default and "allow"
+// only for Bash commands that contain the word "safe".
+const askRegoPolicy = `
+package agentjail
+
+import future.keywords.if
+
+default decision = {"action": "ask", "reason": "confirm intent", "rule_id": "test/ask"}
+
+decision = {"action": "allow", "reason": "allowed", "rule_id": "test/allow"} if {
+    input.tool_name == "Bash"
+    contains(input.tool_input.command, "safe")
+}
+`
+
+// newTestServerWithPolicy builds a server like newTestServer but uses the
+// provided Rego source instead of testRegoPolicy.
+func newTestServerWithPolicy(t *testing.T, regoSrc string) (*server, string) {
+	t.Helper()
+
+	sockPath := filepath.Join(shortSockDir(t), "test.sock")
+
+	eng, err := policy.NewHookOPAEngine(context.Background(), [][2]string{
+		{"test.rego", regoSrc},
+	})
+	if err != nil {
+		t.Fatalf("NewHookOPAEngine: %v", err)
+	}
+
+	srv := &server{
+		engine: eng,
+		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+	}
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		_ = ln.Close()
+		_ = os.Remove(sockPath)
+	})
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				return
+			}
+			srv.wg.Add(1)
+			go srv.handleConn(ctx, conn)
+		}
+	}()
+
+	return srv, sockPath
+}
+
+// TestDaemon_AskDecisionNotCached verifies that "ask" decisions are never
+// stored in the cache, so every call for the same input is re-evaluated by OPA
+// (enabling Claude Code's "Yes, during this session" mechanism to work).
+func TestDaemon_AskDecisionNotCached(t *testing.T) {
+	ctx := context.Background()
+
+	eng, err := policy.NewHookOPAEngine(ctx, [][2]string{
+		{"test.rego", askRegoPolicy},
+	})
+	if err != nil {
+		t.Fatalf("NewHookOPAEngine: %v", err)
+	}
+
+	srv := &server{
+		engine: eng,
+		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+	}
+
+	req := Request{
+		ID:        "ask-test-1",
+		HookEvent: "PreToolUse",
+		ToolName:  "Read",
+		ToolInput: map[string]interface{}{"file_path": "/home/user/secret.txt"},
+		SessionID: "s1",
+		CWD:       "/home/user",
+	}
+
+	// First eval — should return "ask".
+	resp1, err := srv.eval(ctx, req)
+	if err != nil {
+		t.Fatalf("first eval error: %v", err)
+	}
+	if resp1.Action != "ask" {
+		t.Errorf("first eval: expected action=ask, got %q", resp1.Action)
+	}
+
+	// Cache must still be empty — ask decisions must not be stored.
+	stats := srv.cache.Stats()
+	if stats.Size != 0 {
+		t.Errorf("after ask eval: expected cache size=0, got %d (ask was incorrectly cached)", stats.Size)
+	}
+
+	// Second eval of the same input — must also return "ask" (re-evaluated).
+	req.ID = "ask-test-2"
+	resp2, err := srv.eval(ctx, req)
+	if err != nil {
+		t.Fatalf("second eval error: %v", err)
+	}
+	if resp2.Action != "ask" {
+		t.Errorf("second eval: expected action=ask, got %q", resp2.Action)
+	}
+
+	// Both calls must have been cache misses (>= 2 misses).
+	stats = srv.cache.Stats()
+	if stats.Misses < 2 {
+		t.Errorf("expected >= 2 cache misses for ask decisions, got %d", stats.Misses)
+	}
+	if stats.Hits != 0 {
+		t.Errorf("expected 0 cache hits for ask decisions, got %d", stats.Hits)
+	}
+}
+
+// TestDaemon_AllowDenyStillCached verifies that allow and deny verdicts continue
+// to be stored in the cache after the ask-not-cached fix.
+func TestDaemon_AllowDenyStillCached(t *testing.T) {
+	ctx := context.Background()
+
+	eng, err := policy.NewHookOPAEngine(ctx, [][2]string{
+		{"test.rego", testRegoPolicy},
+	})
+	if err != nil {
+		t.Fatalf("NewHookOPAEngine: %v", err)
+	}
+
+	srv := &server{
+		engine: eng,
+		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+	}
+
+	allowReq := Request{
+		ID:        "cache-allow-1",
+		HookEvent: "PreToolUse",
+		ToolName:  "Write",
+		ToolInput: map[string]interface{}{"file_path": "/tmp/hello.txt", "content": "hi"},
+		SessionID: "s1",
+		CWD:       "/tmp",
+	}
+
+	// Eval an allow decision.
+	resp, err := srv.eval(ctx, allowReq)
+	if err != nil {
+		t.Fatalf("allow eval error: %v", err)
+	}
+	if resp.Action != "allow" {
+		t.Errorf("expected action=allow, got %q", resp.Action)
+	}
+	stats := srv.cache.Stats()
+	if stats.Size != 1 {
+		t.Errorf("after allow eval: expected cache size=1, got %d (allow was not cached)", stats.Size)
+	}
+
+	denyReq := Request{
+		ID:        "cache-deny-1",
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": "rm -rf /danger"},
+		SessionID: "s1",
+		CWD:       "/tmp",
+	}
+
+	// Eval a deny decision.
+	resp, err = srv.eval(ctx, denyReq)
+	if err != nil {
+		t.Fatalf("deny eval error: %v", err)
+	}
+	if resp.Action != "deny" {
+		t.Errorf("expected action=deny, got %q", resp.Action)
+	}
+	stats = srv.cache.Stats()
+	if stats.Size != 2 {
+		t.Errorf("after deny eval: expected cache size=2, got %d (deny was not cached)", stats.Size)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

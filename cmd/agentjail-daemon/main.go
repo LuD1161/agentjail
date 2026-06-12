@@ -187,7 +187,7 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		}, err
 	}
 
-	if s.gen.Load() == genAtStart {
+	if s.gen.Load() == genAtStart && d.Action != "ask" {
 		cache.Set(cacheKey, d)
 	}
 
