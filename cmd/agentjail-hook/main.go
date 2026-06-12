@@ -410,6 +410,9 @@ func runClaude(agent string) {
 
 	case "ask":
 		writeAsk(resp.Reason)
+		if resp.RuleID != "" && resp.RuleID != "resolver/default" {
+			fmt.Fprintf(os.Stderr, "agentjail: to disable this check permanently: agentjail policy disable %s\n", resp.RuleID)
+		}
 		os.Exit(0)
 
 	default:
