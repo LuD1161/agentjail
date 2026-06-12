@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	flushInterval        = 6 * time.Hour
+	flushInterval        = 1 * time.Hour
 	initialFlushInterval = 2 * time.Minute // first flush catches short-lived daemons
 	checkpointInterval   = 60 * time.Second
 	spoolMaxEvents       = 1000
