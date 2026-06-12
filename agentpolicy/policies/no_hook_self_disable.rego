@@ -120,14 +120,19 @@ candidate contains r if {
 # Including it here would add a duplicate candidate — not harmful but redundant.
 # ---------------------------------------------------------------------------
 
-candidate contains r if {
+_is_hook_config_write_bash if {
 	input.hook_event == "PreToolUse"
 	input.tool_name == "Bash"
 	c := input.tool_input.command
 	regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.(claude|codex|cursor)\b`, c)
+	regex.match(`(>|>>|\btee\b|\bcp\b|\bmv\b|\bsed\s+(-[^i]*)?-i|\bperl\s+(-[^i]*)?-i|\bchmod\b|\brm\b|\bmkdir\b|\binstall\b|\bln\b|\btouch\b|\bdd\b|\brsync\b|\btruncate\b)`, c)
+}
+
+candidate contains r if {
+	_is_hook_config_write_bash
 	r := {
 		"action":  "deny",
 		"rule_id": "library/no-hook-self-disable",
-		"reason":  "Bash command references a hook/policy configuration directory; self-disable risk (library/no-hook-self-disable)",
+		"reason":  "Bash command writes to a hook/policy configuration directory; self-disable risk (library/no-hook-self-disable)",
 	}
 }
