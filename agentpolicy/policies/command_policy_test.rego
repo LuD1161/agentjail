@@ -672,3 +672,19 @@ test_mutation_guard_logs_not_denied if {
 	d := agentjail.decision with input as bash_input("agentjail logs")
 	d.rule_id != "command_policy/no-policy-mutation"
 }
+
+# ---------------------------------------------------------------------------
+# Linux home path coverage (plan 002)
+# ---------------------------------------------------------------------------
+
+test_bash_cat_linux_home_ssh_deny if {
+	d := agentjail.decision with input as bash_input("cat /home/dev/.ssh/id_rsa")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_cat_linux_root_aws_deny if {
+	d := agentjail.decision with input as bash_input("cat /root/.aws/credentials")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}

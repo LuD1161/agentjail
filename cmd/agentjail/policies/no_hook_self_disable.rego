@@ -70,17 +70,17 @@ _lib_hook_path := input.tool_input.old_path if {
 # Protected paths that control hook / daemon lifecycle.
 _is_hook_config(p) if {
 	# ~/.claude/settings*.json — Claude Code hook configuration
-	regex.match(`^/Users/[^/]+/\.claude/settings[^/]*\.json$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/settings[^/]*\.json$`, p)
 }
 
 _is_hook_config(p) if {
 	# ~/.codex/ — Codex CLI config directory
-	regex.match(`^/Users/[^/]+/\.codex(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.codex(/|$)`, p)
 }
 
 _is_hook_config(p) if {
 	# ~/.cursor/ — Cursor editor config directory
-	regex.match(`^/Users/[^/]+/\.cursor(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.cursor(/|$)`, p)
 }
 
 _is_hook_config(p) if {
@@ -124,7 +124,7 @@ candidate contains r if {
 	input.hook_event == "PreToolUse"
 	input.tool_name == "Bash"
 	c := input.tool_input.command
-	regex.match(`/Users/[^/\s'"]+/\.(claude|codex|cursor)\b`, c)
+	regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.(claude|codex|cursor)\b`, c)
 	r := {
 		"action":  "deny",
 		"rule_id": "library/no-hook-self-disable",

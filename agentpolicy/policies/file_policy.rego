@@ -159,7 +159,7 @@ is_temp_path(p) if {
 # ---------------------------------------------------------------------------
 
 is_agentjail_self(p) if {
-	regex.match(`^/Users/[^/]+/\.agentjail(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.agentjail(/|$)`, p)
 }
 
 # ---------------------------------------------------------------------------
@@ -170,27 +170,27 @@ is_agentjail_self(p) if {
 
 # ~/.ssh/ — SSH private keys, known_hosts, config
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.ssh(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.ssh(/|$)`, p)
 }
 
 # ~/.aws/ — AWS credentials, config, session tokens
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.aws(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.aws(/|$)`, p)
 }
 
 # ~/.gnupg/ — GPG private keys and trust databases
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.gnupg(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.gnupg(/|$)`, p)
 }
 
 # ~/Downloads/ — potentially sensitive downloaded material
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/Downloads(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/Downloads(/|$)`, p)
 }
 
 # ~/Desktop/ — often contains sensitive documents / credentials
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/Desktop(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/Desktop(/|$)`, p)
 }
 
 # ~/.agentjail/ is intentionally NOT listed here — it has its own predicate
@@ -200,37 +200,37 @@ is_protected_credential(p) if {
 
 # ~/.config/ — application configs that may contain tokens (e.g. gh, gcloud, kubectl)
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.config(/|$)`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.config(/|$)`, p)
 }
 
 # ~/.npmrc — npm registry credentials (auth tokens, passwords)
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.npmrc$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.npmrc$`, p)
 }
 
 # ~/.pypirc — PyPI upload credentials
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.pypirc$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.pypirc$`, p)
 }
 
 # ~/.git-credentials — git credential store (plaintext passwords)
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.git-credentials$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.git-credentials$`, p)
 }
 
 # ~/.docker/config.json — Docker registry credentials and auth tokens
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.docker/config\.json$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.docker/config\.json$`, p)
 }
 
 # ~/.kube/config — Kubernetes cluster credentials and access tokens
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.kube/config$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.kube/config$`, p)
 }
 
 # ~/.cargo/credentials and credentials.toml — Cargo (Rust) registry tokens
 is_protected_credential(p) if {
-	regex.match(`^/Users/[^/]+/\.cargo/credentials(\.toml)?$`, p)
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.cargo/credentials(\.toml)?$`, p)
 }
 
 # ~/Library/Keychains/ — macOS Keychain files (passwords, certificates)

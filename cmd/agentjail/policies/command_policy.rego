@@ -320,12 +320,12 @@ _is_policy_mutation if {
 	# Shell write/redirect directly into ~/.agentjail/ subtree
 	# Covers: > ~/.agentjail/..., >> ~/.agentjail/..., tee ~/.agentjail/...
 	# Also matches $HOME/.agentjail and /Users/<u>/.agentjail
-	regex.match(`(>|>>|\btee\b)\s*(~|(\$HOME)|/Users/[^/\s'"]+)/\.agentjail\b`, cmd)
+	regex.match(`(>|>>|\btee\b)\s*(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.agentjail\b`, cmd)
 }
 
 _is_policy_mutation if {
 	# In-place editing tools targeting agentjail paths (sed -i, perl -i, etc.)
-	regex.match(`\b(sed|awk|perl|python3?)\b[^\n]*(~|(\$HOME)|/Users/[^/\s'"]+)/\.agentjail\b`, cmd)
+	regex.match(`\b(sed|awk|perl|python3?)\b[^\n]*(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.agentjail\b`, cmd)
 }
 
 candidate contains r if {
@@ -365,13 +365,13 @@ candidate contains r if {
 
 # Sensitive path patterns — mirrors file_policy.rego's is_sensitive_path
 # clauses but matches against the raw command string rather than tool_input.file_path.
-contains_sensitive_path(c) if regex.match(`/Users/[^/\s'"]+/\.ssh\b`, c)
+contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.ssh\b`, c)
 
-contains_sensitive_path(c) if regex.match(`/Users/[^/\s'"]+/\.aws\b`, c)
+contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.aws\b`, c)
 
-contains_sensitive_path(c) if regex.match(`/Users/[^/\s'"]+/\.gnupg\b`, c)
+contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.gnupg\b`, c)
 
-contains_sensitive_path(c) if regex.match(`/Users/[^/\s'"]+/\.agentjail\b`, c)
+contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.agentjail\b`, c)
 
 contains_sensitive_path(c) if regex.match(`\bid_(rsa|ed25519|ecdsa|dsa)\b`, c)
 
@@ -382,34 +382,34 @@ contains_sensitive_path(c) if regex.match(`(^|\s|/)\.env(\.[a-zA-Z0-9_-]+)?(\s|$
 contains_sensitive_path(c) if regex.match(`\.(pem|p12|pfx|jks|keystore)\b`, c)
 
 # ~/.npmrc — npm registry auth tokens (matches ~/, $HOME/, and absolute /Users/<u>/ forms)
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.npmrc(\s|$|"|')`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.npmrc(\s|$|"|')`, c)
 
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.npmrc$`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.npmrc$`, c)
 
 # ~/.pypirc — PyPI upload credentials
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.pypirc(\s|$|"|')`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.pypirc(\s|$|"|')`, c)
 
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.pypirc$`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.pypirc$`, c)
 
 # ~/.git-credentials — git plaintext password store
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.git-credentials(\s|$|"|')`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.git-credentials(\s|$|"|')`, c)
 
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.git-credentials$`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.git-credentials$`, c)
 
 # ~/.docker/config.json — Docker registry auth tokens
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.docker/config\.json(\s|$|"|')`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.docker/config\.json(\s|$|"|')`, c)
 
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.docker/config\.json$`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.docker/config\.json$`, c)
 
 # ~/.kube/config — Kubernetes credentials
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.kube/config(\s|$|"|')`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.kube/config(\s|$|"|')`, c)
 
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.kube/config$`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.kube/config$`, c)
 
 # ~/.cargo/credentials and credentials.toml — Cargo registry tokens
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.cargo/credentials(\.toml)?(\s|$|"|')`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.cargo/credentials(\.toml)?(\s|$|"|')`, c)
 
-contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/\.cargo/credentials(\.toml)?$`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.cargo/credentials(\.toml)?$`, c)
 
 # ~/Library/Keychains/ — macOS Keychain files
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/Library/Keychains/`, c)

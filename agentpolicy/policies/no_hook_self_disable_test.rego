@@ -123,3 +123,12 @@ test_no_hook_documents_not_denied if {
 test_no_hook_project_settings_not_denied if {
 	not agentjail.decision.action == "deny" with input as write_hook("/Users/dev/project/config/settings.json")
 }
+
+# ---------------------------------------------------------------------------
+# Linux home path coverage (plan 002)
+# ---------------------------------------------------------------------------
+
+test_no_hook_linux_home_claude_settings_denied if {
+	agentjail.decision.action == "deny" with input as write_hook("/home/dev/.claude/settings.json")
+	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/home/dev/.claude/settings.json")
+}

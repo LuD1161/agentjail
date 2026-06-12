@@ -547,6 +547,30 @@ test_project_local_docker_config_not_denied if {
 	agentjail.decision.action != "deny" with input as read_event("/Users/dev/myproject/.docker/config.json")
 }
 
+# ---------------------------------------------------------------------------
+# Linux home path coverage (plan 002)
+# ---------------------------------------------------------------------------
+
+test_linux_home_ssh_denied if {
+	agentjail.decision.action == "deny" with input as write_event("/home/dev/.ssh/id_rsa")
+	agentjail.decision.rule_id == deny_sensitive with input as write_event("/home/dev/.ssh/id_rsa")
+}
+
+test_linux_home_aws_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/home/dev/.aws/credentials")
+	agentjail.decision.rule_id == deny_sensitive with input as read_event("/home/dev/.aws/credentials")
+}
+
+test_linux_root_ssh_denied if {
+	agentjail.decision.action == "deny" with input as write_event("/root/.ssh/id_rsa")
+	agentjail.decision.rule_id == deny_sensitive with input as write_event("/root/.ssh/id_rsa")
+}
+
+test_linux_home_agentjail_self if {
+	agentjail.decision.action == "deny" with input as write_event("/home/dev/.agentjail/policy.yaml")
+	agentjail.decision.rule_id == agentjail_self with input as write_event("/home/dev/.agentjail/policy.yaml")
+}
+
 # NEGATIVE: ~/.npmrc.bak (backup file) must NOT be denied by the npmrc rule
 # (the anchored regex ends with $; .npmrc.bak has an extra suffix)
 test_npmrc_bak_not_denied if {
