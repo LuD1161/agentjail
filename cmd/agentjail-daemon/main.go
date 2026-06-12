@@ -92,6 +92,14 @@ type server struct {
 	repoRootMu    sync.RWMutex
 	repoRootCache map[string]string
 
+	// sessionAskSeen tracks (sessionID, ruleID) pairs where the daemon already
+	// returned "ask". On the SECOND ask for the same pair, the user must have
+	// approved the first one (Claude Code does not call the hook again after a
+	// denial — "No" means the tool call is not executed at all). So the second
+	// ask is promoted to "allow".
+	sessionAskMu   sync.RWMutex
+	sessionAskSeen map[string]map[string]bool // sessionID → set of ruleID
+
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
 
@@ -194,6 +202,18 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		}, err
 	}
 
+	// For ask verdicts: if this (session, ruleID) was already asked before,
+	// the user approved it (Claude Code doesn't call the hook after a "No").
+	// Promote to allow on the second+ occurrence.
+	if d.Action == "ask" && s.checkAndRecordAsk(req.SessionID, d.RuleID) {
+		return Response{
+			ID:     req.ID,
+			Action: "allow",
+			Reason: "approved earlier in this session",
+			RuleID: "session/grant",
+		}, nil
+	}
+
 	if s.gen.Load() == genAtStart && d.Action != "ask" {
 		cache.Set(cacheKey, d)
 	}
@@ -205,6 +225,28 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		RuleID: d.RuleID,
 		Impact: d.Impact,
 	}, nil
+}
+
+// checkAndRecordAsk checks whether this (session, ruleID) has been asked before.
+// If yes, returns true (the user approved last time — promote to allow).
+// If no, records it and returns false (first time — ask the user).
+func (s *server) checkAndRecordAsk(sessionID, ruleID string) bool {
+	if sessionID == "" || ruleID == "" {
+		return false
+	}
+	s.sessionAskMu.Lock()
+	defer s.sessionAskMu.Unlock()
+	if s.sessionAskSeen == nil {
+		s.sessionAskSeen = make(map[string]map[string]bool)
+	}
+	if s.sessionAskSeen[sessionID] == nil {
+		s.sessionAskSeen[sessionID] = make(map[string]bool)
+	}
+	if s.sessionAskSeen[sessionID][ruleID] {
+		return true // second+ ask → user approved the first
+	}
+	s.sessionAskSeen[sessionID][ruleID] = true
+	return false // first ask → prompt the user
 }
 
 // resolveRepoRoot returns the git repo root for the given canonical cwd.

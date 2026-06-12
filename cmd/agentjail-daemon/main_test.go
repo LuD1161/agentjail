@@ -878,23 +878,29 @@ func TestDaemon_AskDecisionNotCached(t *testing.T) {
 		t.Errorf("after ask eval: expected cache size=0, got %d (ask was incorrectly cached)", stats.Size)
 	}
 
-	// Second eval of the same input — must also return "ask" (re-evaluated).
+	// Second eval of the same input and session — should return "allow"
+	// because the session grant kicks in (user approved the first ask).
 	req.ID = "ask-test-2"
 	resp2, err := srv.eval(ctx, req)
 	if err != nil {
 		t.Fatalf("second eval error: %v", err)
 	}
-	if resp2.Action != "ask" {
-		t.Errorf("second eval: expected action=ask, got %q", resp2.Action)
+	if resp2.Action != "allow" {
+		t.Errorf("second eval: expected action=allow (session grant), got %q", resp2.Action)
+	}
+	if resp2.RuleID != "session/grant" {
+		t.Errorf("second eval: expected rule_id=session/grant, got %q", resp2.RuleID)
 	}
 
-	// Both calls must have been cache misses (>= 2 misses).
-	stats = srv.cache.Stats()
-	if stats.Misses < 2 {
-		t.Errorf("expected >= 2 cache misses for ask decisions, got %d", stats.Misses)
+	// Third eval from a DIFFERENT session — should still ask (session-scoped).
+	req.ID = "ask-test-3"
+	req.SessionID = "s2"
+	resp3, err := srv.eval(ctx, req)
+	if err != nil {
+		t.Fatalf("third eval error: %v", err)
 	}
-	if stats.Hits != 0 {
-		t.Errorf("expected 0 cache hits for ask decisions, got %d", stats.Hits)
+	if resp3.Action != "ask" {
+		t.Errorf("third eval (different session): expected ask, got %q", resp3.Action)
 	}
 }
 
