@@ -86,6 +86,11 @@ file_path := input.tool_input.old_path if {
 # ---------------------------------------------------------------------------
 # Boundary predicate: true when p is exactly input.cwd or strictly under it.
 # Uses equal-or-prefix-with-slash to avoid /Users/u/proj2 matching /Users/u/proj.
+#
+# Worktree awareness: when the cwd is a worktree under <repo>/.claude/worktrees/,
+# the parent repo root is also considered "in project". This is necessary because
+# agents in worktrees legitimately read files from the parent repo (CLAUDE.md,
+# package.json, configs, etc.) while their cwd is the worktree subdirectory.
 # ---------------------------------------------------------------------------
 
 in_project(p) if {
@@ -97,6 +102,27 @@ in_project(p) if {
 	input.cwd != ""
 	startswith(p, concat("", [input.cwd, "/"]))
 }
+
+in_project(p) if {
+	input.cwd != ""
+	_worktree_parent != ""
+	p == _worktree_parent
+}
+
+in_project(p) if {
+	input.cwd != ""
+	_worktree_parent != ""
+	startswith(p, concat("", [_worktree_parent, "/"]))
+}
+
+# _worktree_parent extracts the repo root from a worktree cwd.
+# e.g. /Users/u/repo/.claude/worktrees/agent-abc123 → /Users/u/repo
+# Returns "" if cwd is not a worktree path.
+_worktree_parent := parent if {
+	contains(input.cwd, "/.claude/worktrees/")
+	parts := split(input.cwd, "/.claude/worktrees/")
+	parent := parts[0]
+} else := ""
 
 # ---------------------------------------------------------------------------
 # Temp path predicate.
