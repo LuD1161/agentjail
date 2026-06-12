@@ -168,12 +168,63 @@ test_env_example_in_project_asks if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/Downloads/
+# A3: ~/Downloads/ — downgraded from hard deny to ask (non-sensitive files)
 # ---------------------------------------------------------------------------
 
-test_downloads_denied if {
-	agentjail.decision.action == "deny" with input as read_event("/Users/dev/Downloads/invoice.pdf")
-	agentjail.decision.rule_id == deny_sensitive with input as read_event("/Users/dev/Downloads/invoice.pdf")
+downloads_ask := "file_policy/downloads_review"
+
+# Ask: Read of .srt in ~/Downloads/
+test_downloads_srt_asks if {
+	agentjail.decision.action == "ask" with input as read_event("/Users/dev/Downloads/subtitle.srt")
+	agentjail.decision.rule_id == downloads_ask with input as read_event("/Users/dev/Downloads/subtitle.srt")
+}
+
+# Ask: Read of .pdf in ~/Downloads/
+test_downloads_pdf_asks if {
+	agentjail.decision.action == "ask" with input as read_event("/Users/dev/Downloads/invoice.pdf")
+	agentjail.decision.rule_id == downloads_ask with input as read_event("/Users/dev/Downloads/invoice.pdf")
+}
+
+# Ask: Read of .png in ~/Downloads/
+test_downloads_png_asks if {
+	agentjail.decision.action == "ask" with input as read_event("/Users/dev/Downloads/screenshot.png")
+	agentjail.decision.rule_id == downloads_ask with input as read_event("/Users/dev/Downloads/screenshot.png")
+}
+
+# Ask: Write of .txt in ~/Downloads/
+test_downloads_txt_write_asks if {
+	agentjail.decision.action == "ask" with input as write_event("/Users/dev/Downloads/notes.txt")
+	agentjail.decision.rule_id == downloads_ask with input as write_event("/Users/dev/Downloads/notes.txt")
+}
+
+# Deny: Read of .pem in ~/Downloads/ (via is_sensitive_basename)
+test_downloads_pem_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/Downloads/server.pem")
+	agentjail.decision.rule_id == deny_sensitive with input as read_event("/Users/dev/Downloads/server.pem")
+}
+
+# Deny: Read of .env in ~/Downloads/ (via is_sensitive_basename)
+test_downloads_env_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/Downloads/.env")
+	agentjail.decision.rule_id == deny_sensitive with input as read_event("/Users/dev/Downloads/.env")
+}
+
+# Deny: Read of id_rsa in ~/Downloads/ (via is_sensitive_basename)
+test_downloads_id_rsa_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/Downloads/id_rsa")
+	agentjail.decision.rule_id == deny_sensitive with input as read_event("/Users/dev/Downloads/id_rsa")
+}
+
+# Deny: Read of SERVER.PEM (uppercase) in ~/Downloads/ (case-insensitive extension matching)
+test_downloads_uppercase_pem_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/Downloads/SERVER.PEM")
+	agentjail.decision.rule_id == deny_sensitive with input as read_event("/Users/dev/Downloads/SERVER.PEM")
+}
+
+# Ask: Linux path /home/dev/Downloads/video.srt → ask
+test_downloads_linux_path_asks if {
+	agentjail.decision.action == "ask" with input as read_event_cwd("/home/dev/Downloads/video.srt", "/home/dev/project")
+	agentjail.decision.rule_id == downloads_ask with input as read_event_cwd("/home/dev/Downloads/video.srt", "/home/dev/project")
 }
 
 # ---------------------------------------------------------------------------

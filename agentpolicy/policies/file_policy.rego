@@ -183,11 +183,6 @@ is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.gnupg(/|$)`, p)
 }
 
-# ~/Downloads/ — potentially sensitive downloaded material
-is_protected_credential(p) if {
-	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/Downloads(/|$)`, p)
-}
-
 # ~/Desktop/ — often contains sensitive documents / credentials
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/Desktop(/|$)`, p)
@@ -278,6 +273,30 @@ is_protected_credential(p) if {
 }
 
 # ---------------------------------------------------------------------------
+# Downloads path predicate — ~/Downloads/ (downgraded from hard deny to ask).
+# Fires an "ask" candidate for non-sensitive files. Sensitive files (matching
+# is_sensitive_basename) still get denied via the sensitive_credential rules.
+# ---------------------------------------------------------------------------
+
+is_downloads_path(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/Downloads(/|$)`, p)
+}
+
+candidate contains r if {
+	input.tool_name in {"Write", "Edit", "Read"}
+	p := file_path
+	is_downloads_path(p)
+	not is_sensitive_basename(p)
+	not is_agentjail_self(p)
+	msg := sprintf("file %q is in ~/Downloads — review before proceeding", [p])
+	r := {
+		"action":  "ask",
+		"rule_id": "file_policy/downloads_review",
+		"reason":  msg,
+	}
+}
+
+# ---------------------------------------------------------------------------
 # Sensitive basename predicate — basename/extension patterns.
 # These DOWNGRADE to "ask" when inside cwd; remain "deny" when outside.
 # ---------------------------------------------------------------------------
@@ -305,9 +324,9 @@ is_sensitive_basename(p) if {
 	regex.match(`(^|/)\.?secrets($|[._-])`, p)
 }
 
-# PEM / key / PKCS12 / JKS files — certificate private keys
+# PEM / key / PKCS12 / JKS files — certificate private keys (case-insensitive)
 is_sensitive_basename(p) if {
-	regex.match(`\.(pem|key|p12|pfx|jks|keystore)$`, p)
+	regex.match(`\.(pem|key|p12|pfx|jks|keystore)$`, lower(p))
 }
 
 # .netrc — machine credentials for FTP/HTTP/curl
@@ -515,6 +534,13 @@ file_specific_matched if {
 file_specific_matched if {
 	p := file_path
 	is_temp_path(p)
+}
+
+file_specific_matched if {
+	p := file_path
+	is_downloads_path(p)
+	not is_sensitive_basename(p)
+	not is_agentjail_self(p)
 }
 
 candidate contains r if {
