@@ -9,12 +9,19 @@ row when done.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Run `opa test` in CI and fix `make test-all` | P1 | S | — | TODO |
-| 002 | Cover Linux home paths in sensitive-path & self-protection Rego | P1 | M | 001 | TODO |
-| 003 | Close the newline-split bypass in `no_daemon_kill` | P1 | S | 001 | TODO |
-| 004 | Close the env-var-prefix `sudo` bypass in `command_policy` | P1 | S | 001 | TODO |
-| 005 | Fix the SIGHUP reload cache race in the daemon | P2 | S | — | TODO |
-| 006 | Add enforcement-level tests for the locked self-protection rules | P2 | S | 001 | TODO |
+| 001 | Run `opa test` in CI and fix `make test-all` | P1 | S | — | DONE |
+| 002 | Cover Linux home paths in sensitive-path & self-protection Rego | P1 | M | 001 | DONE |
+| 003 | Close the newline-split bypass in `no_daemon_kill` | P1 | S | 001 | DONE |
+| 004 | Close the env-var-prefix `sudo` bypass in `command_policy` | P1 | S | 001 | DONE |
+| 005 | Fix the SIGHUP reload cache race in the daemon | P2 | S | — | DONE |
+| 006 | Add enforcement-level tests for the locked self-protection rules | P2 | S | 001 | DONE |
+
+All six landed on `main` 2026-06-11 as one commit each (cherry-picked from
+isolated worktrees). Integration gate on merged `main`: `opa test` 350/350,
+`go test ./... -race` 681 passed, `go build`/`go vet` clean, embed mirror
+byte-identical. Plan 004's test input was adjusted (`/etc/shadow` →
+`/evil/bin … whoami`) because the original collided with a higher-priority
+sensitive-path rule — documented, in-scope. Not yet pushed to origin.
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale).
