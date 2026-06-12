@@ -84,13 +84,15 @@ file_path := input.tool_input.old_path if {
 }
 
 # ---------------------------------------------------------------------------
-# Boundary predicate: true when p is exactly input.cwd or strictly under it.
-# Uses equal-or-prefix-with-slash to avoid /Users/u/proj2 matching /Users/u/proj.
+# Boundary predicate: true when p is within the project.
 #
-# Worktree awareness: when the cwd is a worktree under <repo>/.claude/worktrees/,
-# the parent repo root is also considered "in project". This is necessary because
-# agents in worktrees legitimately read files from the parent repo (CLAUDE.md,
-# package.json, configs, etc.) while their cwd is the worktree subdirectory.
+# "In project" means any of:
+#   1. p is exactly input.cwd or strictly under it
+#   2. p is exactly input.repo_root or strictly under it (daemon resolves
+#      the git repo root via `git rev-parse --show-toplevel` and injects it)
+#
+# repo_root handles both the monorepo case (cwd is repo/web, file is repo/src/)
+# and the worktree case (cwd is repo/.claude/worktrees/agent-xxx, file is repo/).
 # ---------------------------------------------------------------------------
 
 in_project(p) if {
@@ -104,39 +106,13 @@ in_project(p) if {
 }
 
 in_project(p) if {
-	input.cwd != ""
-	_worktree_parent != ""
-	p == _worktree_parent
+	input.repo_root != ""
+	p == input.repo_root
 }
 
 in_project(p) if {
-	input.cwd != ""
-	_worktree_parent != ""
-	startswith(p, concat("", [_worktree_parent, "/"]))
-}
-
-# _worktree_parent extracts the repo root from a worktree cwd.
-# e.g. /Users/u/repo/.claude/worktrees/agent-abc123 → /Users/u/repo
-# Returns "" if cwd is not a worktree path.
-_worktree_parent := parent if {
-	contains(input.cwd, "/.claude/worktrees/")
-	parts := split(input.cwd, "/.claude/worktrees/")
-	parent := parts[0]
-} else := ""
-
-# _cwd_ancestors returns all parent directories of the cwd up to the root.
-# This handles monorepo/subdir cwd: when cwd is /repo/web but the file is
-# /repo/src/foo.py, we check if the file is under any ancestor of cwd.
-# Limited to 5 levels to avoid matching too broadly (e.g. /Users/u/).
-_cwd_ancestor_1 := regex.replace(input.cwd, `/[^/]+$`, "")
-_cwd_ancestor_2 := regex.replace(_cwd_ancestor_1, `/[^/]+$`, "")
-
-in_project(p) if {
-	input.cwd != ""
-	_cwd_ancestor_1 != input.cwd
-	_cwd_ancestor_1 != ""
-	count(split(_cwd_ancestor_1, "/")) >= 5
-	startswith(p, concat("", [_cwd_ancestor_1, "/"]))
+	input.repo_root != ""
+	startswith(p, concat("", [input.repo_root, "/"]))
 }
 
 # ---------------------------------------------------------------------------

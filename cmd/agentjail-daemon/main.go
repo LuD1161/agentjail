@@ -37,6 +37,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -85,6 +86,11 @@ type server struct {
 	engine   policy.HookEngine
 	cache    policy.Cache
 	gen      atomic.Uint64 // bumped on every reload; guards stale cache writes
+
+	// repoRootCache maps canonical cwd → git repo root (or "" for non-git dirs).
+	// Populated lazily by resolveRepoRoot; never evicted (repo roots don't move).
+	repoRootMu    sync.RWMutex
+	repoRootCache map[string]string
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
@@ -152,6 +158,7 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		ToolInput: normalizedInput,
 		SessionID: req.SessionID,
 		CWD:       canonCWD,
+		RepoRoot:  s.resolveRepoRoot(canonCWD),
 	}
 
 	// Cache key includes the canonical cwd so a file decision that varies by
@@ -198,6 +205,45 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		RuleID: d.RuleID,
 		Impact: d.Impact,
 	}, nil
+}
+
+// resolveRepoRoot returns the git repo root for the given canonical cwd.
+// Results are cached — git repo roots don't move during a daemon's lifetime.
+// Returns "" for non-git directories or on any error.
+func (s *server) resolveRepoRoot(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+
+	s.repoRootMu.RLock()
+	if root, ok := s.repoRootCache[cwd]; ok {
+		s.repoRootMu.RUnlock()
+		return root
+	}
+	s.repoRootMu.RUnlock()
+
+	// Run git rev-parse --show-toplevel with a short timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	root := ""
+	if err == nil {
+		root = strings.TrimSpace(string(out))
+		// Canonicalize the git root the same way we canonicalize cwd.
+		if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil {
+			root = resolved
+		}
+	}
+
+	s.repoRootMu.Lock()
+	if s.repoRootCache == nil {
+		s.repoRootCache = make(map[string]string)
+	}
+	s.repoRootCache[cwd] = root
+	s.repoRootMu.Unlock()
+
+	return root
 }
 
 // canonicalizeCWD resolves a working directory to its canonical absolute form:

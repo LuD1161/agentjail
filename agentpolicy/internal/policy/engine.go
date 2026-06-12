@@ -45,6 +45,7 @@ type HookInput struct {
 	ToolInput map[string]interface{} `json:"tool_input"` // raw tool_input from the hook
 	SessionID string                 `json:"session_id"`
 	CWD       string                 `json:"cwd"`
+	RepoRoot  string                 `json:"repo_root,omitempty"` // git repo root resolved by daemon; empty if not a git repo
 }
 
 // Engine is the abstraction new callers depend on. The concrete
