@@ -172,6 +172,38 @@ func TestMirrorPolicyDecisions(t *testing.T) {
 			toolInput: map[string]interface{}{"command": "npm publish"},
 			want:      "ask",
 		},
+		// ----- no_daemon_kill (locked self-protection) -----
+		{
+			name:      "Bash pkill agentjail-daemon → deny (no_daemon_kill)",
+			toolName:  "Bash",
+			toolInput: map[string]interface{}{"command": "pkill -f agentjail-daemon"},
+			want:      "deny",
+		},
+		{
+			name:      "Bash killall agentjail-hook → deny (no_daemon_kill)",
+			toolName:  "Bash",
+			toolInput: map[string]interface{}{"command": "killall agentjail-hook"},
+			want:      "deny",
+		},
+		{
+			name:      "Bash launchctl stop com.agentjail.daemon → deny (no_daemon_kill)",
+			toolName:  "Bash",
+			toolInput: map[string]interface{}{"command": "launchctl stop com.agentjail.daemon"},
+			want:      "deny",
+		},
+		// ----- no_hook_self_disable (locked self-protection) -----
+		{
+			name:      "Write ~/.claude/settings.json → deny (no_hook_self_disable)",
+			toolName:  "Write",
+			toolInput: map[string]interface{}{"file_path": "/Users/dev/.claude/settings.json"},
+			want:      "deny",
+		},
+		{
+			name:      "Write ~/.codex/config → deny (no_hook_self_disable)",
+			toolName:  "Write",
+			toolInput: map[string]interface{}{"file_path": "/Users/dev/.codex/config.toml"},
+			want:      "deny",
+		},
 	}
 
 	ctx := context.Background()
