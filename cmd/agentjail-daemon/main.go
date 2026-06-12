@@ -43,6 +43,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -83,6 +84,7 @@ type server struct {
 	engineMu sync.RWMutex
 	engine   policy.HookEngine
 	cache    policy.Cache
+	gen      atomic.Uint64 // bumped on every reload; guards stale cache writes
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
@@ -160,6 +162,7 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 	s.engineMu.RLock()
 	eng := s.engine
 	cache := s.cache
+	genAtStart := s.gen.Load()
 	s.engineMu.RUnlock()
 
 	if d, ok := cache.Get(cacheKey); ok {
@@ -184,7 +187,9 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		}, err
 	}
 
-	cache.Set(cacheKey, d)
+	if s.gen.Load() == genAtStart {
+		cache.Set(cacheKey, d)
+	}
 
 	return Response{
 		ID:     req.ID,
@@ -520,6 +525,7 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 	}
 	s.engineMu.Lock()
 	s.engine = eng
+	s.gen.Add(1)
 	// Invalidate the cache on reload so decisions from the old rule set
 	// cannot leak into the new one. Borrowed from Linux page cache
 	// flush-on-policy-change semantics.

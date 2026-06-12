@@ -739,6 +739,36 @@ func TestDaemon_UnknownYAMLKeyFailsStartup(t *testing.T) {
 	}
 }
 
+// TestReloadDiscardsStaleCacheWrite verifies that a reload increments the
+// generation counter, causing eval to skip the cache.Set for in-flight
+// decisions computed against the pre-reload engine.
+func TestReloadDiscardsStaleCacheWrite(t *testing.T) {
+	ctx := context.Background()
+
+	eng, err := policy.NewHookOPAEngine(ctx, [][2]string{
+		{"test.rego", testRegoPolicy},
+	})
+	if err != nil {
+		t.Fatalf("NewHookOPAEngine: %v", err)
+	}
+
+	srv := &server{
+		engine: eng,
+		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+	}
+
+	gen := srv.gen.Load()
+
+	cfg := agentconfig.Default()
+	if err := srv.reload(ctx, [][2]string{{"test.rego", testRegoPolicy}}, cfg); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	if srv.gen.Load() == gen {
+		t.Error("gen should have incremented after reload; eval would incorrectly cache stale verdicts")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
