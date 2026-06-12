@@ -58,12 +58,12 @@ _cmd := input.tool_input.command
 # rather than the bare "agentjail" or the ~/.agentjail path, so this never fires on
 # the same input as core's sensitive-path rule (which matches /.agentjail/).
 _kills_agentjail if {
-	regex.match(`\b(pkill|killall)\b[^\n]*agentjail-(daemon|hook|shield|netproxy)`, _cmd)
+	regex.match(`\b(pkill|killall)\b[\s\S]*agentjail-(daemon|hook|shield|netproxy)`, _cmd)
 }
 
 # launchctl stop|kill of the daemon label (bootout/unload/remove are core-covered).
 _kills_agentjail if {
-	regex.match(`\blaunchctl\s+(stop|kill)\b[^\n]*com\.agentjail`, _cmd)
+	regex.match(`\blaunchctl\s+(stop|kill)\b[\s\S]*com\.agentjail`, _cmd)
 }
 
 # Candidate entry — resolver.rego is the sole producer of `decision`.
