@@ -133,11 +133,11 @@ candidate contains r if {
 }
 
 # rm -rf on absolute paths (catches rm -rf / and rm -rf /anywhere).
-# /tmp/agentjail is the only absolute-tmp exception (used by test fixtures).
+# /(tmp|private/tmp)/<child> paths are exempted (requires a child path — bare /tmp stays denied).
 candidate contains r if {
 	is_bash
 	regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/`, cmd)
-	not regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/tmp/agentjail`, cmd)
+	not regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/(tmp|private/tmp)/[^\s'"]+`, cmd)
 	r := {
 		"action":  "deny",
 		"rule_id": "command_policy/no-rm-rf-absolute",
@@ -532,7 +532,7 @@ any_dangerous_pattern if {
 
 any_dangerous_pattern if {
 	regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/`, cmd)
-	not regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/tmp/agentjail`, cmd)
+	not regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/(tmp|private/tmp)/[^\s'"]+`, cmd)
 }
 
 any_dangerous_pattern if {

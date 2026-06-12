@@ -493,6 +493,57 @@ test_docker_push_ask if {
 	} with input as bash_input("docker push myorg/myimage:latest")
 }
 
+# ---------------------------------------------------------------------------
+# A2: Broadened /tmp/ exemption for rm -rf
+# ---------------------------------------------------------------------------
+
+# rm -rf /tmp/broll-verify-xxx → allow (child of /tmp)
+test_rm_rf_tmp_child_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input("rm -rf /tmp/broll-verify-xxx")
+}
+
+# rm -rf /tmp/claude-worktree-abc → allow (child of /tmp)
+test_rm_rf_tmp_worktree_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input("rm -rf /tmp/claude-worktree-abc")
+}
+
+# rm -rf /private/tmp/test-dir → allow (macOS /private/tmp child)
+test_rm_rf_private_tmp_child_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input("rm -rf /private/tmp/test-dir")
+}
+
+# rm -rf /tmp (bare — no child path) → still deny
+test_rm_rf_bare_tmp_deny if {
+	agentjail.decision == {
+		"action":  "deny",
+		"rule_id": "command_policy/no-rm-rf-absolute",
+		"reason":  "recursive force-delete of absolute paths outside the project directory risks destroying the system",
+		"impact":  "would recursively delete absolute path",
+	} with input as bash_input("rm -rf /tmp")
+}
+
+# rm -rf /usr/local/bin → still deny
+test_rm_rf_usr_local_deny if {
+	agentjail.decision == {
+		"action":  "deny",
+		"rule_id": "command_policy/no-rm-rf-absolute",
+		"reason":  "recursive force-delete of absolute paths outside the project directory risks destroying the system",
+		"impact":  "would recursively delete absolute path",
+	} with input as bash_input("rm -rf /usr/local/bin")
+}
+
 test_gh_release_create_ask if {
 	agentjail.decision == {
 		"action":  "ask",
