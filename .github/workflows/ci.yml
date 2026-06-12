@@ -35,6 +35,14 @@ jobs:
       - name: test
         run: go test ./... -race
 
+      - name: setup opa
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: opa test
+        run: opa test agentpolicy/policies/
+
   smoke:
     name: smoke (hook e2e)
     runs-on: macos-14

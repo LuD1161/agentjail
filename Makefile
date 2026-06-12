@@ -20,8 +20,9 @@ vet:  ## go vet on the laptop tree
 test:  ## go test the laptop tree with -race
 	go test ./... -race
 
-test-all:  ## go test laptop + cloud trees with -race
-	go test ./... -race && (cd agentpermissions && go test ./... -race)
+test-all:  ## go test (all workspace modules) + opa test, all with -race
+	go test ./... -race
+	opa test agentpolicy/policies/
 
 opa-test:  ## opa test over agentpolicy/policies/ (requires opa on PATH)
 	opa test agentpolicy/policies/
