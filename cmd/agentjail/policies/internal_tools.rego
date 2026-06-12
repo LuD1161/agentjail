@@ -16,13 +16,15 @@
 # A second set (benign_tools, below) auto-allows tools that DO touch the
 # filesystem/shell but only in ways already governed elsewhere or with no new
 # side effect: Glob (read-only path enumeration), BashOutput / KillShell
-# (in-session lifecycle of an already-approved background shell), Task / Agent
-# (subagent dispatch — the subagent's own tool calls fire this same hook), and
-# Skill (loads instructions; anything it executes is hooked just the same).
+# (in-session lifecycle of an already-approved background shell), Task / Agent /
+# Workflow (subagent dispatch — the subagent's own tool calls fire this same
+# hook), Skill (loads instructions; anything it executes is hooked just the
+# same), and EnterWorktree / ExitWorktree (worktree lifecycle — tool calls
+# within the worktree are independently hooked).
 #
 # Deliberately NOT included (these keep their normal governance because they have
-# real, ungoverned side effects): Bash, Read, Write, Edit, NotebookEdit, the
-# worktree / cron / schedule tools, the MCP resource tools, and all MCP tools.
+# real, ungoverned side effects): Bash, Read, Write, Edit, NotebookEdit,
+# the MCP resource tools, and all MCP tools.
 # Grep is excluded on purpose: it returns file CONTENTS, so allowing it would
 # bypass file_policy's sensitive-path deny (a Read of ~/.ssh/id_rsa is blocked, a
 # grep of it would not be) — it must stay governed. WebFetch / WebSearch are
@@ -52,6 +54,13 @@ internal_tools := {
 	"EnterPlanMode",
 	"ExitPlanMode",
 	"AskUserQuestion",
+	"CronCreate",
+	"CronDelete",
+	"CronList",
+	"ScheduleWakeup",
+	"LSP",
+	"DesignSync",
+	"SendMessage",
 }
 
 candidate contains r if {
@@ -68,14 +77,19 @@ candidate contains r if {
 # Benign tools that touch the filesystem/shell only in already-governed or
 # side-effect-free ways. Kept separate from internal_tools (and given a distinct
 # rule_id) so the allow reason stays accurate and telemetry can tell them apart.
-#   - Glob:       read-only path enumeration (returns paths, never file content).
-#   - BashOutput: reads stdout/stderr of an ALREADY-approved background shell.
-#   - KillShell:  terminates an agent-spawned background shell by id.
-#   - Task/Agent: dispatches a subagent — whose own tool calls fire this same
-#                 PreToolUse hook, so they remain independently governed.
-#   - Skill:      loads a skill's instructions — anything it then executes
-#                 (Bash, Read/Write, bundled scripts) fires this hook too, so
-#                 the invocation itself has no ungoverned side effect.
+#   - Glob:            read-only path enumeration (returns paths, never file content).
+#   - BashOutput:      reads stdout/stderr of an ALREADY-approved background shell.
+#   - KillShell:       terminates an agent-spawned background shell by id.
+#   - Task/Agent:      dispatches a subagent — whose own tool calls fire this same
+#                      PreToolUse hook, so they remain independently governed.
+#   - Skill:           loads a skill's instructions — anything it then executes
+#                      (Bash, Read/Write, bundled scripts) fires this hook too, so
+#                      the invocation itself has no ungoverned side effect.
+#   - Workflow:        orchestrates multi-agent workflows — like Agent, subagent
+#                      calls are independently hooked.
+#   - EnterWorktree:   creates a git worktree for isolated work — tool calls
+#                      within the worktree are independently hooked.
+#   - ExitWorktree:    exits/cleans up an agent-owned worktree.
 benign_tools := {
 	"Glob",
 	"BashOutput",
@@ -83,6 +97,9 @@ benign_tools := {
 	"Task",
 	"Agent",
 	"Skill",
+	"Workflow",
+	"EnterWorktree",
+	"ExitWorktree",
 }
 
 candidate contains r if {

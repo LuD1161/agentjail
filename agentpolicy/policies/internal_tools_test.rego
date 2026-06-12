@@ -118,7 +118,57 @@ test_skill_allowed if {
 	}
 }
 
-# 5. Grep is deliberately NOT auto-allowed: it returns file contents and must
+# 5. New internal tools: cron, LSP, scheduling, messaging
+test_cron_create_allowed if {
+	decision == internal_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "CronCreate",
+		"tool_input": {},
+	}
+}
+
+test_lsp_allowed if {
+	decision == internal_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "LSP",
+		"tool_input": {"action": "references"},
+	}
+}
+
+test_send_message_allowed if {
+	decision == internal_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "SendMessage",
+		"tool_input": {"to": "agent-1", "message": "hello"},
+	}
+}
+
+# 6. New benign tools: Workflow, worktree
+test_workflow_allowed if {
+	decision == benign_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "Workflow",
+		"tool_input": {"script": "export const meta = {}"},
+	}
+}
+
+test_enter_worktree_allowed if {
+	decision == benign_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "EnterWorktree",
+		"tool_input": {},
+	}
+}
+
+test_exit_worktree_allowed if {
+	decision == benign_allow with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "ExitWorktree",
+		"tool_input": {},
+	}
+}
+
+# 7. Grep is deliberately NOT auto-allowed: it returns file contents and must
 #    stay governed (otherwise it bypasses file_policy's sensitive-path deny).
 test_grep_not_auto_allowed if {
 	not "Grep" in internal_tools
