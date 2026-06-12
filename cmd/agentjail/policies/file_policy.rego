@@ -475,6 +475,37 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
+# Rule 6 — Agent harness internal paths: allow.
+# Claude Code stores session data, tool results, and image caches under
+# ~/.claude/projects/. These are agent-internal and safe to read/write.
+# ~/.claude/settings*.json is still denied by no_hook_self_disable.
+# ---------------------------------------------------------------------------
+
+is_agent_harness_path(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/projects(/|$)`, p)
+}
+
+is_agent_harness_path(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/image-cache(/|$)`, p)
+}
+
+is_agent_harness_path(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/todos(/|$)`, p)
+}
+
+candidate contains r if {
+	input.tool_name in {"Write", "Edit", "Read"}
+	p := file_path
+	is_agent_harness_path(p)
+	not is_agentjail_self(p)
+	r := {
+		"action":  "allow",
+		"rule_id": "file_policy/agent_harness_allow",
+		"reason":  "path is in agent harness internal directory",
+	}
+}
+
+# ---------------------------------------------------------------------------
 # Guarded default: ask — unknown file-tool path escalates to a human.
 #
 # This candidate only fires when the tool is Write, Edit, or Read AND no
@@ -534,6 +565,12 @@ file_specific_matched if {
 file_specific_matched if {
 	p := file_path
 	is_temp_path(p)
+}
+
+file_specific_matched if {
+	p := file_path
+	is_agent_harness_path(p)
+	not is_agentjail_self(p)
 }
 
 file_specific_matched if {
