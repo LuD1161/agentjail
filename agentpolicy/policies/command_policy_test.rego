@@ -69,6 +69,25 @@ test_sudo_chained_deny if {
 	} with input as bash_input("echo done && sudo apt-get install -y nginx")
 }
 
+test_sudo_env_askpass_prefix_deny if {
+	agentjail.decision.action == "deny" with input as bash_input("SUDO_ASKPASS=/tmp/x sudo -A whoami")
+	agentjail.decision.rule_id == "command_policy/no-sudo" with input as bash_input("SUDO_ASKPASS=/tmp/x sudo -A whoami")
+}
+
+test_sudo_env_path_prefix_deny if {
+	agentjail.decision.action == "deny" with input as bash_input("PATH=/evil/bin sudo whoami")
+	agentjail.decision.rule_id == "command_policy/no-sudo" with input as bash_input("PATH=/evil/bin sudo whoami")
+}
+
+test_sudo_multi_env_prefix_deny if {
+	agentjail.decision.action == "deny" with input as bash_input("A=1 B=2 sudo id")
+}
+
+# A normal KEY=value assignment WITHOUT sudo must NOT trigger no-sudo.
+test_env_assignment_without_sudo_not_sudo_denied if {
+	agentjail.decision.rule_id != "command_policy/no-sudo" with input as bash_input("FOO=bar echo hello")
+}
+
 # ---------------------------------------------------------------------------
 # 3. git push --force — branch-aware: deny on default branch, allow on a topic
 #    branch, ask when the branch is implicit.

@@ -83,6 +83,19 @@ candidate contains r if {
 	}
 }
 
+# sudo preceded by one or more KEY=value env-var assignments,
+# e.g. `SUDO_ASKPASS=/tmp/x sudo -A cmd` or `PATH=/evil:$PATH sudo cmd`.
+candidate contains r if {
+	is_bash
+	regex.match(`(^|;|&&|\|\|)\s*([A-Za-z_][A-Za-z0-9_]*=\S*\s+)+sudo(\s|$)`, cmd)
+	r := {
+		"action":  "deny",
+		"rule_id": "command_policy/no-sudo",
+		"reason":  "agents must not escalate privileges via sudo",
+		"impact":  "would escalate to root",
+	}
+}
+
 # dd writing from a device node: dd if=/dev/...
 candidate contains r if {
 	is_bash
