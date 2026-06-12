@@ -510,6 +510,14 @@ is_agent_harness_path(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/todos(/|$)`, p)
 }
 
+is_agent_harness_path(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/skills(/|$)`, p)
+}
+
+is_agent_harness_path(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/plugins(/|$)`, p)
+}
+
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
 	p := file_path

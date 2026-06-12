@@ -61,6 +61,8 @@ internal_tools := {
 	"LSP",
 	"DesignSync",
 	"SendMessage",
+	"UpdatePlan",
+	"update_plan",
 }
 
 candidate contains r if {
