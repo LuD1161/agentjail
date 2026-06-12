@@ -124,6 +124,21 @@ _worktree_parent := parent if {
 	parent := parts[0]
 } else := ""
 
+# _cwd_ancestors returns all parent directories of the cwd up to the root.
+# This handles monorepo/subdir cwd: when cwd is /repo/web but the file is
+# /repo/src/foo.py, we check if the file is under any ancestor of cwd.
+# Limited to 5 levels to avoid matching too broadly (e.g. /Users/u/).
+_cwd_ancestor_1 := regex.replace(input.cwd, `/[^/]+$`, "")
+_cwd_ancestor_2 := regex.replace(_cwd_ancestor_1, `/[^/]+$`, "")
+
+in_project(p) if {
+	input.cwd != ""
+	_cwd_ancestor_1 != input.cwd
+	_cwd_ancestor_1 != ""
+	count(split(_cwd_ancestor_1, "/")) >= 5
+	startswith(p, concat("", [_cwd_ancestor_1, "/"]))
+}
+
 # ---------------------------------------------------------------------------
 # Temp path predicate.
 #
