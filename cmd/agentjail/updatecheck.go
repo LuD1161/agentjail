@@ -26,9 +26,13 @@ import (
 // updateCheckThrottle is the minimum time between successive update checks.
 const updateCheckThrottle = 24 * time.Hour
 
-// githubLatestURL is the GitHub releases "latest" API for the agentjail repo.
-// Overridable in tests via updateCheckURL.
-var updateCheckURL = "https://api.github.com/repos/LuD1161/agentjail/releases/latest"
+// updateCheckURL is the primary endpoint for version checks (agentjail Worker).
+// Overridable in tests.
+var updateCheckURL = "https://releases.agentjail.io/v1/latest"
+
+// updateCheckFallbackURL is the GitHub releases API used when the Worker is
+// unreachable or returns an empty version.
+var updateCheckFallbackURL = "https://api.github.com/repos/LuD1161/agentjail/releases/latest"
 
 // updateCheckTimestampFile returns the path to the throttle timestamp file.
 func updateCheckTimestampFile() (string, error) {
@@ -69,20 +73,35 @@ func recordUpdateCheckTimestamp() {
 	_ = os.WriteFile(f, []byte(time.Now().UTC().Format(time.RFC3339)), 0o600)
 }
 
-// githubRelease is the minimal shape we need from the GitHub releases API.
-type githubRelease struct {
+// githubRelease is kept for backward compatibility with existing tests.
+type githubRelease = latestResponse
+
+// latestResponse handles both the Worker shape {"version":"v1.2.3"} and the
+// GitHub shape {"tag_name":"v1.2.3"}.
+type latestResponse struct {
+	Version string `json:"version"`
 	TagName string `json:"tag_name"`
 }
 
-// fetchLatestVersion calls the GitHub releases API and returns the latest
-// version tag (e.g. "v1.2.3"). Returns "" on any error.
+// fetchLatestVersion tries the Worker URL first, then falls back to GitHub.
+// Returns "" when both sources fail or return no usable version.
 func fetchLatestVersion(ctx context.Context) string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateCheckURL, nil)
+	if v := fetchVersionFromURL(ctx, updateCheckURL); v != "" {
+		return v
+	}
+	return fetchVersionFromURL(ctx, updateCheckFallbackURL)
+}
+
+// fetchVersionFromURL makes a GET request to url, adds analytics headers, and
+// returns the version string found in the response. Returns "" on any error.
+func fetchVersionFromURL(ctx context.Context, url string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "agentjail/"+version)
+	req.Header.Set("X-Agentjail-Version", version)
 
 	hc := &http.Client{Timeout: 5 * time.Second}
 	resp, err := hc.Do(req)
@@ -93,9 +112,12 @@ func fetchLatestVersion(ctx context.Context) string {
 	if resp.StatusCode != 200 {
 		return ""
 	}
-	var rel githubRelease
+	var rel latestResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return ""
+	}
+	if v := strings.TrimSpace(rel.Version); v != "" {
+		return v
 	}
 	return strings.TrimSpace(rel.TagName)
 }
