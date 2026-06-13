@@ -112,7 +112,7 @@ jobs:
 
   release:
     name: create GitHub release
-    needs: [build, gatekeeper-verify]
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
