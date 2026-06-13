@@ -39,7 +39,16 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/telemetry"
+	"github.com/LuD1161/agentjail/internal/updater"
 )
+
+// maxDownloadBytes is the maximum number of bytes allowed per download (100 MB).
+const maxDownloadBytes = 100 * 1024 * 1024
+
+// signingPubKey is the minisign public key used to verify release SHA256SUMS
+// signatures. An empty string disables signature verification (dev/pre-release
+// builds that have no signed manifest).
+var signingPubKey = ""
 
 // updateBinaries is the ordered list of binaries placed in $INSTALL_DIR,
 // matching install.sh exactly.
@@ -51,14 +60,21 @@ var updateBinaries = []string{
 	"agentjail-netproxy",
 }
 
-// updateURLBaseFn returns the GitHub releases download base URL for a version.
+// updateURLBaseFn returns the primary download base URL for a version.
 // It is a package-level variable so tests can override it to point at a mock
-// HTTP server without hitting the real GitHub API.
-// Mirrors install.sh: https://github.com/${REPO}/releases/download/${VERSION}
+// HTTP server without hitting the real network.
 var updateURLBaseFn = updateURLBase
 
 // updateURLBase is the default implementation of updateURLBaseFn.
+// It routes through the Cloudflare Worker at releases.agentjail.io first; the
+// Worker itself proxies to GitHub, providing integrity checks and analytics.
 func updateURLBase(ver string) string {
+	return fmt.Sprintf("https://releases.agentjail.io/download/%s", ver)
+}
+
+// updateURLBaseGitHubFallback returns the direct GitHub releases URL as a
+// fallback when the Worker URL is unreachable.
+func updateURLBaseGitHubFallback(ver string) string {
 	return fmt.Sprintf("https://github.com/LuD1161/agentjail/releases/download/%s", ver)
 }
 
@@ -85,7 +101,20 @@ func defaultUpdateInstallDir() (string, error) {
 
 // runUpdate is the entry point for `agentjail update`.
 // Returns an exit code (0 = success, 1 = error).
-func runUpdate(_ []string) int {
+//
+// Flags:
+//
+//	--force   Reinstall the current version (e.g. for repair). Downgrade is
+//	          still refused even with --force.
+func runUpdate(args []string) int {
+	// Parse --force flag.
+	force := false
+	for _, a := range args {
+		if a == "--force" {
+			force = true
+		}
+	}
+
 	// ── SECURITY GATE: interactive human confirmation required ───────────────
 	// This operation replaces agentjail's own binaries and restarts its daemon.
 	// An agent MUST NOT be able to trigger it. We not only open /dev/tty but also
@@ -104,7 +133,7 @@ func runUpdate(_ []string) int {
 		return 1
 	}
 
-	return performUpdate(installDir, currentGOOS, runtime.GOARCH)
+	return performUpdate(installDir, currentGOOS, runtime.GOARCH, force)
 }
 
 // confirmUpdateInteractive opens /dev/tty, prints a warning, and requires the
@@ -133,9 +162,10 @@ func confirmUpdateInteractive() bool {
 }
 
 // performUpdate is the testable core of runUpdate. It accepts an explicit
-// installDir (tests pass a t.TempDir()) and goos/goarch for platform detection.
+// installDir (tests pass a t.TempDir()), goos/goarch for platform detection,
+// and force to allow reinstalling the same version.
 // Returns 0 on success, non-zero on error.
-func performUpdate(installDir, goos, goarch string) int {
+func performUpdate(installDir, goos, goarch string, force bool) int {
 	current := version
 	if current == "" {
 		current = "dev"
@@ -152,16 +182,37 @@ func performUpdate(installDir, goos, goarch string) int {
 	}
 
 	// Step 2: gate on version comparison.
-	if !isNewerVersion(current, latest) {
+	// Downgrade is always refused (even with --force).
+	// Same version: proceed only with --force (reinstall/repair).
+	// Newer version: always proceed.
+	if isSemver(current) && isSemver(latest) {
+		if isNewerVersion(latest, current) {
+			// latest < current — downgrade
+			fmt.Fprintf(os.Stderr, "agentjail update: downgrade not supported (%s → %s); refusing.\n", current, latest)
+			return 0
+		}
+		if current == latest || (!isNewerVersion(current, latest) && !isNewerVersion(latest, current)) {
+			// same version
+			if !force {
+				fmt.Printf("agentjail update: already up to date (%s).\n", current)
+				return 0
+			}
+			fmt.Printf("agentjail update: reinstalling %s (--force).\n", current)
+		} else {
+			// latest > current — normal upgrade
+			fmt.Printf("agentjail update: %s → %s\n", current, latest)
+		}
+	} else if !isNewerVersion(current, latest) {
+		// Non-semver current (dev builds) — skip.
 		if !isSemver(current) {
 			fmt.Printf("agentjail update: current build is a development version (%s); skipping update.\n", current)
 		} else {
 			fmt.Printf("agentjail update: already up to date (%s).\n", current)
 		}
 		return 0
+	} else {
+		fmt.Printf("agentjail update: %s → %s\n", current, latest)
 	}
-
-	fmt.Printf("agentjail update: %s → %s\n", current, latest)
 
 	// Step 3: download tarball + SHA256SUMS into a temp directory.
 	tmpDir, err := os.MkdirTemp("", "agentjail-update-*")
@@ -176,15 +227,37 @@ func performUpdate(installDir, goos, goarch string) int {
 
 	fmt.Printf("  downloading %s …\n", tarball)
 	tarballPath := filepath.Join(tmpDir, tarball)
-	if err := downloadFile(ctx, urlBase+"/"+tarball, tarballPath); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail update: download tarball: %v\n", err)
-		return 1
+
+	// Try primary (Worker) URL; fall back to GitHub direct on failure.
+	dlErr := downloadFile(ctx, urlBase+"/"+tarball, tarballPath)
+	if dlErr != nil {
+		fallbackBase := updateURLBaseGitHubFallback(latest)
+		fmt.Fprintf(os.Stderr, "  warning: primary download failed (%v); retrying via GitHub…\n", dlErr)
+		if err2 := downloadFile(ctx, fallbackBase+"/"+tarball, tarballPath); err2 != nil {
+			fmt.Fprintf(os.Stderr, "agentjail update: download tarball: %v\n", err2)
+			return 1
+		}
+		urlBase = fallbackBase
 	}
 
 	sumsPath := filepath.Join(tmpDir, "SHA256SUMS")
 	if err := downloadFile(ctx, urlBase+"/SHA256SUMS", sumsPath); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail update: download SHA256SUMS: %v\n", err)
 		return 1
+	}
+
+	// Step 3b: verify minisign signature on SHA256SUMS (when key is configured).
+	if signingPubKey != "" {
+		sigPath := filepath.Join(tmpDir, "SHA256SUMS.minisig")
+		if err := downloadFile(ctx, urlBase+"/SHA256SUMS.minisig", sigPath); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail update: download SHA256SUMS.minisig: %v\n", err)
+			return 1
+		}
+		if err := updater.VerifySignature(sumsPath, sigPath, signingPubKey); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail update: signature verification failed: %v\n", err)
+			return 1
+		}
+		fmt.Println("  signature verified")
 	}
 
 	// Step 4: verify SHA256 — mirrors install.sh exactly.
@@ -214,7 +287,34 @@ func performUpdate(installDir, goos, goarch string) int {
 		}
 	}
 
-	// Step 7: atomically replace each binary in the install directory.
+	// Step 7: create a backup of existing binaries for rollback on failure.
+	backupDir, err := os.MkdirTemp("", "agentjail-update-backup-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail update: create backup dir: %v\n", err)
+		if goos == "darwin" && plistPath != "" {
+			_ = launchctlLoad(plistPath)
+		}
+		return 1
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Copy existing binaries to backup dir.
+	backed := []string{}
+	for _, binName := range updateBinaries {
+		existing := filepath.Join(installDir, binName)
+		if _, err := os.Stat(existing); os.IsNotExist(err) {
+			continue // not installed yet — nothing to back up
+		}
+		backupDst := filepath.Join(backupDir, binName)
+		if copyErr := copyFile(existing, backupDst); copyErr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not back up %s: %v\n", binName, copyErr)
+			// Non-fatal: proceed without backup for this binary.
+			continue
+		}
+		backed = append(backed, binName)
+	}
+
+	// Step 8: atomically replace each binary in the install directory.
 	if err := os.MkdirAll(installDir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail update: mkdir %s: %v\n", installDir, err)
 		if goos == "darwin" && plistPath != "" {
@@ -224,6 +324,8 @@ func performUpdate(installDir, goos, goarch string) int {
 	}
 
 	installed := 0
+	swapped := []string{}
+	var swapErr error
 	for _, binName := range updateBinaries {
 		src := filepath.Join(tmpDir, binName)
 		if _, err := os.Stat(src); os.IsNotExist(err) {
@@ -233,19 +335,44 @@ func performUpdate(installDir, goos, goarch string) int {
 		dst := filepath.Join(installDir, binName)
 		if err := atomicReplaceBinary(src, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail update: replace %s: %v\n", binName, err)
-			// Restart daemon (best-effort) if we stopped it, then fail.
-			if goos == "darwin" && plistPath != "" {
-				_ = launchctlLoad(plistPath)
-			}
-			return 1
+			swapErr = err
+			break
 		}
+		swapped = append(swapped, binName)
 		installed++
 	}
 
-	// Step 8: restart the daemon.
+	if swapErr != nil {
+		// Rollback: restore backups for all already-swapped binaries.
+		fmt.Fprintln(os.Stderr, "  rolling back installed binaries…")
+		for _, binName := range swapped {
+			backupSrc := filepath.Join(backupDir, binName)
+			dst := filepath.Join(installDir, binName)
+			if _, statErr := os.Stat(backupSrc); statErr == nil {
+				if restoreErr := atomicReplaceBinary(backupSrc, dst); restoreErr != nil {
+					fmt.Fprintf(os.Stderr, "  warning: rollback of %s failed: %v\n", binName, restoreErr)
+				}
+			}
+		}
+		if goos == "darwin" && plistPath != "" {
+			_ = launchctlLoad(plistPath)
+		}
+		return 1
+	}
+
+	// Step 9: restart the daemon.
 	if goos == "darwin" && plistPath != "" {
 		if err := launchctlLoad(plistPath); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: could not restart daemon: %v\n", err)
+			// Daemon restart failed — rollback and restore old daemon.
+			fmt.Fprintf(os.Stderr, "  warning: could not restart daemon: %v; rolling back…\n", err)
+			for _, binName := range backed {
+				backupSrc := filepath.Join(backupDir, binName)
+				dst := filepath.Join(installDir, binName)
+				if restoreErr := atomicReplaceBinary(backupSrc, dst); restoreErr != nil {
+					fmt.Fprintf(os.Stderr, "  warning: rollback of %s failed: %v\n", binName, restoreErr)
+				}
+			}
+			_ = launchctlLoad(plistPath)
 		} else {
 			fmt.Println("  daemon restarted")
 		}
@@ -255,7 +382,7 @@ func performUpdate(installDir, goos, goarch string) int {
 
 	fmt.Printf("agentjail update: updated %d binaries  %s → %s\n", installed, current, latest)
 
-	// Step 9: emit update telemetry (best-effort; respects opt-out).
+	// Step 10: emit update telemetry (best-effort; respects opt-out).
 	if tp, err := telemetry.DefaultPaths(); err == nil {
 		tCtx, tCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer tCancel()
@@ -263,6 +390,26 @@ func performUpdate(installDir, goos, goarch string) int {
 	}
 
 	return 0
+}
+
+// copyFile copies the file at src to dst, creating dst if needed.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open src %q: %w", src, err)
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create dst %q: %w", dst, err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy %q → %q: %w", src, dst, err)
+	}
+	return nil
 }
 
 // downloadFile fetches url via HTTP and writes the body to dst.
@@ -289,8 +436,14 @@ func downloadFile(ctx context.Context, url, dst string) error {
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// Enforce a 100 MB download cap to prevent runaway/malicious responses.
+	limited := io.LimitReader(resp.Body, maxDownloadBytes+1)
+	n, err := io.Copy(f, limited)
+	if err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	if n > maxDownloadBytes {
+		return fmt.Errorf("download of %s exceeds %d MB limit; aborting", dst, maxDownloadBytes/(1024*1024))
 	}
 	return nil
 }
