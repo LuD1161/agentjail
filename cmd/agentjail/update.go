@@ -48,7 +48,7 @@ const maxDownloadBytes = 100 * 1024 * 1024
 // signingPubKey is the minisign public key used to verify release SHA256SUMS
 // signatures. An empty string disables signature verification (dev/pre-release
 // builds that have no signed manifest).
-var signingPubKey = ""
+var signingPubKey = "RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ"
 
 // updateBinaries is the ordered list of binaries placed in $INSTALL_DIR,
 // matching install.sh exactly.

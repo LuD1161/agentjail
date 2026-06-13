@@ -18,6 +18,15 @@ import (
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// disableSignatureVerification clears signingPubKey for the duration of the
+// test so mock servers don't need to serve .minisig files.
+func disableSignatureVerification(t *testing.T) {
+	t.Helper()
+	saved := signingPubKey
+	signingPubKey = ""
+	t.Cleanup(func() { signingPubKey = saved })
+}
+
 // makeFakeTarball creates a minimal .tar.gz in destDir containing the given
 // binaries (each file contains its own name as content).
 // Returns (tarballPath, sha256hex, tarballName).
@@ -456,6 +465,7 @@ func TestPerformUpdate_FetchFails(t *testing.T) {
 
 // TestPerformUpdate_SHA256Mismatch verifies that a tampered tarball is rejected.
 func TestPerformUpdate_SHA256Mismatch(t *testing.T) {
+	disableSignatureVerification(t)
 	srcDir := t.TempDir()
 	installDir := t.TempDir()
 
@@ -525,6 +535,7 @@ func TestPerformUpdate_SHA256Mismatch(t *testing.T) {
 // TestPerformUpdate_AtomicSwap verifies end-to-end binary replacement with a
 // mock HTTP server serving the tarball, valid SHA256SUMS, and the version API.
 func TestPerformUpdate_AtomicSwap(t *testing.T) {
+	disableSignatureVerification(t)
 	srcDir := t.TempDir()
 	installDir := t.TempDir()
 
@@ -641,6 +652,7 @@ func TestFeatureName_Update(t *testing.T) {
 
 // TestPerformUpdate_ForceReinstall verifies that --force reinstalls the same version.
 func TestPerformUpdate_ForceReinstall(t *testing.T) {
+	disableSignatureVerification(t)
 	srcDir := t.TempDir()
 	installDir := t.TempDir()
 
@@ -795,6 +807,7 @@ func TestDownloadFile_WithinLimit(t *testing.T) {
 // TestPerformUpdate_RollbackOnSwapFailure verifies that when an atomic swap
 // fails mid-way, already-swapped binaries are restored from backup.
 func TestPerformUpdate_RollbackOnSwapFailure(t *testing.T) {
+	disableSignatureVerification(t)
 	srcDir := t.TempDir()
 	installDir := t.TempDir()
 
