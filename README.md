@@ -30,10 +30,8 @@ curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh |
 
 <sub><i>A coding agent gets blocked before it fires. <a href="assets/agentjail-demo.mp4">▶ Watch the 36-second demo with sound</a> &middot; source in <a href="video/">video/</a>.</i></sub>
 
-<!-- Re-add when the repo goes public (they 404 while private):
 [![GitHub Stars](https://img.shields.io/github/stars/LuD1161/agentjail?style=flat)](https://github.com/LuD1161/agentjail/stargazers)
 [![GitHub downloads](https://img.shields.io/github/downloads/LuD1161/agentjail/total.svg?style=flat)](https://github.com/LuD1161/agentjail/releases)
--->
 
 </div>
 
@@ -156,9 +154,12 @@ You may genuinely want this service — but only after you've made an explicit d
 
 ## Install
 
+**macOS / Linux (one-liner):**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
+
+**Homebrew:** `brew install LuD1161/tap/agentjail`
 
 Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards.
 
@@ -180,12 +181,6 @@ agentjail install --all               # non-interactive, install all detected
 **Agent discovery + picker:** the installer presents a styled interactive multi-select — all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
 
 **Linux note:** detection runs cross-platform, but the daemon (launchd) is macOS-only in this release. On Linux, detected agents are reported but hook wiring is skipped with a clear message.
-
-**Homebrew:**
-```sh
-brew install LuD1161/tap/agentjail
-agentjail install
-```
 
 **From source:**
 ```sh

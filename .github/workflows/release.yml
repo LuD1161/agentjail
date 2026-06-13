@@ -248,6 +248,10 @@ jobs:
                           "agentjail-shield", "agentjail-netproxy"
             end
 
+            def post_install
+              system bin/"agentjail", "install", "--all"
+            end
+
             test do
               assert_match version.to_s, shell_output("#{bin}/agentjail version")
             end
