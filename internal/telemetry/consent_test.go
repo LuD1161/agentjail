@@ -47,7 +47,7 @@ func TestLoadConsent_CreatesDefaultsWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConsent: %v", err)
 	}
-	if !c.Enabled || c.AnonymousID == "" || c.Schema != 1 {
+	if !c.Enabled || c.AnonymousID == "" || c.Schema != 2 {
 		t.Fatalf("bad defaults: %+v", c)
 	}
 	// Persisted at 0600.

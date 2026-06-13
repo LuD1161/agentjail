@@ -53,18 +53,29 @@ func LoadConsent(p Paths) (Consent, error) {
 	if err == nil {
 		var c Consent
 		if jErr := json.Unmarshal(b, &c); jErr == nil && c.Schema >= 1 && c.AnonymousID != "" {
+			if c.Schema < 2 {
+				if mid := stableMachineID(); mid != "" {
+					c.AnonymousID = mid
+					c.Schema = 2
+					_ = SaveConsent(p, c)
+				}
+			}
 			return c, nil
 		}
 		// Corrupt/old: fall through and re-init.
 	} else if !os.IsNotExist(err) {
 		return Consent{}, err
 	}
+	anonID := stableMachineID()
+	if anonID == "" {
+		anonID = uuid.NewString()
+	}
 	c := Consent{
 		Enabled:     true,
-		AnonymousID: uuid.NewString(),
+		AnonymousID: anonID,
 		FirstSeen:   time.Now().UTC().Format("2006-01-02"),
 		NoticeShown: false,
-		Schema:      1,
+		Schema:      2,
 	}
 	if err := SaveConsent(p, c); err != nil {
 		return Consent{}, err
