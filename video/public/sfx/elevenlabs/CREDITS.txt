@@ -5,4 +5,4 @@ intro<-Clean futuristic UI power-on
 ouro<-Soft cinematic impact / logo reveal
 blip<-Subtle high-tech UI confirmation
 pad<-Minimal ambient sci-fi drone
-Verify ElevenLabs commercial license tier before public launch use.
+Licensed under ElevenLabs paid plan — commercial use permitted.
