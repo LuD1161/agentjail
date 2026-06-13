@@ -138,7 +138,7 @@ jobs:
           MINISIGN_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -yqq minisign
-          echo "$MINISIGN_KEY" > /tmp/minisign.key
+          echo "$MINISIGN_KEY" | base64 -d > /tmp/minisign.key
           minisign -S -s /tmp/minisign.key -m dist/SHA256SUMS \
             -x dist/SHA256SUMS.minisig \
             -t "agentjail ${{ github.ref_name }}" -q
