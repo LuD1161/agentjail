@@ -20,6 +20,8 @@ import (
 	"golang.org/x/term"
 )
 
+const scrollbackCap = 500
+
 // richState holds all mutable state for the rich status bar. Access is
 // single-threaded (one goroutine drives the log loop) so no mutex is needed on
 // the counters; the terminal write helpers are called inline.
@@ -47,6 +49,14 @@ type richState struct {
 
 	// Whether rich mode is active.
 	active bool
+
+	// Scrollback ring buffer for resize replay.
+	scrollback    [500]string
+	scrollbackWr  int
+	scrollbackLen int
+
+	// When true, renderEvalLine skips recordEvent/redrawBar (used during catchup tail render).
+	suppressRecord bool
 }
 
 // newRichState returns an initialized richState. It queries the terminal size.
@@ -150,6 +160,7 @@ func (r *richState) resize(opts logsOpts) {
 	}
 	fmt.Printf("\x1b[%d;%dr", topRow, bottomRow)
 	fmt.Printf("\x1b[%d;0H", topRow)
+	r.replayTail()
 }
 
 // cleanup resets the scrolling region and positions the cursor cleanly at the
@@ -329,4 +340,31 @@ func savedSummary(impacts []string) string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+func (r *richState) pushLine(line string) {
+	r.scrollback[r.scrollbackWr%scrollbackCap] = line
+	r.scrollbackWr++
+	if r.scrollbackLen < scrollbackCap {
+		r.scrollbackLen++
+	}
+}
+
+func (r *richState) replayTail() {
+	if r.scrollbackLen == 0 {
+		return
+	}
+	viewportH := r.rows - 7
+	if viewportH < 1 {
+		viewportH = 1
+	}
+	count := r.scrollbackLen
+	if count > viewportH {
+		count = viewportH
+	}
+	start := (r.scrollbackWr - count + scrollbackCap) % scrollbackCap
+	for i := 0; i < count; i++ {
+		idx := (start + i) % scrollbackCap
+		fmt.Println(r.scrollback[idx])
+	}
 }

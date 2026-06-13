@@ -391,6 +391,97 @@ func streamLogs(opts logsOpts, doneCh <-chan struct{}, winchCh <-chan os.Signal)
 	// Buffer for partial lines (when EOF hits mid-line; resume on next read).
 	var pending []byte
 
+	// ── Catchup: fast-forward through historical content ──────────────────
+	// In rich+follow mode, read all existing lines without rendering each
+	// one — only update status-bar counters. Then display the last screenful.
+	// This avoids slow line-by-line terminal output when the log is large.
+	if rich != nil && rich.active {
+		viewportH := rich.rows - 7 // 3 header + 3 status bar + 1 margin
+		if viewportH < 1 {
+			viewportH = 1
+		}
+
+		tailBuf := make([][]byte, viewportH)
+		tailWr := 0
+		tailLen := 0
+
+		for {
+			chunk, rerr := reader.ReadString('\n')
+			if len(chunk) > 0 {
+				if len(pending) > 0 {
+					chunk = string(pending) + chunk
+					pending = pending[:0]
+				}
+				if rerr == nil {
+					raw := []byte(strings.TrimRight(chunk, "\n"))
+
+					var el evalLine
+					wouldDisplay := false
+					if jerr := json.Unmarshal(raw, &el); jerr == nil {
+						switch {
+						case el.Msg == "eval":
+							wouldDisplay = true
+							if opts.since > 0 && time.Since(el.Time) > opts.since {
+								wouldDisplay = false
+							}
+							if wouldDisplay && len(opts.actions) > 0 && !containsStr(opts.actions, strings.ToLower(el.Action)) {
+								wouldDisplay = false
+							}
+							if wouldDisplay && opts.tool != "" && el.Tool != opts.tool {
+								wouldDisplay = false
+							}
+							if wouldDisplay && opts.session != "" && !strings.Contains(el.SessionID, opts.session) {
+								wouldDisplay = false
+							}
+							if wouldDisplay {
+								var impact string
+								if strings.ToLower(el.Action) == "deny" {
+									impact = impactFor(el)
+								}
+								rich.recordEvent(el.Action, el.ElapsedUs, impact)
+							}
+						case el.Level == "WARN" || el.Level == "WARNING" || el.Level == "ERROR":
+							wouldDisplay = true
+						default:
+							wouldDisplay = opts.all
+						}
+					} else {
+						wouldDisplay = true
+					}
+
+					if wouldDisplay {
+						tailBuf[tailWr%viewportH] = append([]byte(nil), raw...)
+						tailWr++
+						if tailLen < viewportH {
+							tailLen++
+						}
+					}
+					continue
+				}
+				pending = append(pending, chunk...)
+			}
+
+			if rerr != nil {
+				break
+			}
+		}
+
+		if tailLen > 0 {
+			rich.suppressRecord = true
+			start := 0
+			if tailWr > viewportH {
+				start = tailWr - tailLen
+			}
+			for i := 0; i < tailLen; i++ {
+				idx := (start + i) % viewportH
+				processLine(tailBuf[idx], opts, rich)
+			}
+			rich.suppressRecord = false
+		}
+
+		rich.redrawBar(opts.useColor)
+	}
+
 	for {
 		// Check for shutdown signal or window resize.
 		select {
@@ -610,9 +701,10 @@ func renderEvalLine(line evalLine, opts logsOpts, rich *richState) error {
 		// Latency: ms format, sub-1ms shows ⚡ (no LATENCY column — show inline hint only).
 		latHint := latencyStr(line.ElapsedUs, opts.useColor)
 
+		var outputLine string
 		if opts.useColor {
 			actionColor := actionANSI(line.Action)
-			fmt.Printf("%s  %s  %s%s%s  %s  %s  %s%s%s\n",
+			outputLine = fmt.Sprintf("%s  %s  %s%s%s  %s  %s  %s%s%s",
 				timeStr,
 				srcStr,
 				actionColor, actionPad, ansiReset,
@@ -621,14 +713,17 @@ func renderEvalLine(line evalLine, opts logsOpts, rich *richState) error {
 				ansiDim, latHint, ansiReset,
 			)
 		} else {
-			fmt.Printf("%s  %s  %-7s  %-18s  %s  %s\n",
+			outputLine = fmt.Sprintf("%s  %s  %-7s  %-18s  %s  %s",
 				timeStr, srcStr, actionUpper, toolStr, impactStr, latHint,
 			)
 		}
+		rich.pushLine(outputLine)
+		fmt.Println(outputLine)
 
-		// Update rich state counters + status bar.
-		rich.recordEvent(line.Action, line.ElapsedUs, impact)
-		rich.redrawBar(opts.useColor)
+		if !rich.suppressRecord {
+			rich.recordEvent(line.Action, line.ElapsedUs, impact)
+			rich.redrawBar(opts.useColor)
+		}
 
 		// Verbose secondary line — still useful in rich mode.
 		if opts.verbose {
