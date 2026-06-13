@@ -21,7 +21,10 @@ foot-gun **before it fires** — no changes to how you use your agent.
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
-or `brew install LuD1161/tap/agentjail`
+or 
+```
+brew install LuD1161/tap/agentjail
+```
 
 <br>
 
