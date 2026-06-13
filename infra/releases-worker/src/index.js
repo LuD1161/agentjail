@@ -186,10 +186,10 @@ export default {
       arch: qarch,
     });
 
-    // Route: / — redirect browsers to the GitHub repo
+    // Route: / — redirect browsers to the latest GitHub release page
     if (pathname === "/" || pathname === "") {
       return Response.redirect(
-        `https://github.com/${GITHUB_REPO}`,
+        `https://github.com/${GITHUB_REPO}/releases/latest`,
         302
       );
     }
