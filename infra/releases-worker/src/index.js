@@ -186,6 +186,14 @@ export default {
       arch: qarch,
     });
 
+    // Route: / — redirect browsers to the GitHub repo
+    if (pathname === "/" || pathname === "") {
+      return Response.redirect(
+        `https://github.com/${GITHUB_REPO}`,
+        302
+      );
+    }
+
     // Route: /health
     if (pathname === "/health") {
       return new Response(JSON.stringify({ ok: true }), {
