@@ -117,10 +117,10 @@ spin() {
 
 if [ "${LOCAL_TARBALL:-}" = "" ] && [ "$VERSION" = "latest" ]; then
     echo "    resolving latest release…"
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-              | grep '"tag_name"' \
+    VERSION=$(curl -fsSL "https://releases.agentjail.io/v1/latest" \
+              | grep '"version"' \
               | head -1 \
-              | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
+              | sed -E 's/.*"version": "([^"]+)".*/\1/')
     if [ -z "$VERSION" ]; then
         echo "agentjail installer: could not resolve latest release." >&2
         echo "  Check: https://github.com/${REPO}/releases" >&2
@@ -148,7 +148,7 @@ if [ -n "${LOCAL_TARBALL:-}" ]; then
         | sed "s|$(basename "$LOCAL_TARBALL")|$TARBALL|" \
         > "$TMP/SHA256SUMS"
 else
-    URL_BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+    URL_BASE="https://releases.agentjail.io/download/${VERSION}"
 
     spin "downloading ${TARBALL}" \
         curl -fsSL -o "$TMP/$TARBALL" "${URL_BASE}/${TARBALL}"
