@@ -1,0 +1,8 @@
+ElevenLabs Sound Effects (text-to-SFX), generated for agentjail.
+keys<-Rapid mechanical keyboard typing
+deny<-Futuristic UI access denied
+intro<-Clean futuristic UI power-on
+ouro<-Soft cinematic impact / logo reveal
+blip<-Subtle high-tech UI confirmation
+pad<-Minimal ambient sci-fi drone
+Verify ElevenLabs commercial license tier before public launch use.

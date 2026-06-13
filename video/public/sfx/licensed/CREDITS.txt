@@ -1,0 +1,5 @@
+Licensed SFX pack
+=================
+UI sounds: Kenney 'Interface Sounds' (https://kenney.nl / OpenGameArt) — CC0 1.0 (public domain).
+Files mapped: keys<-click2, deny<-dustbin, intro<-appear-online, outro<-message, blip<-snap2.
+Ambient pad: synthesized (shared with the synth pack).

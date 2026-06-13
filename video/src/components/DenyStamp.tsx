@@ -15,12 +15,12 @@ export const DenyStamp: React.FC<{rule: string; enterFrame: number}> = ({rule, e
     <div style={{
       transform: `scale(${scale})`, transformOrigin: 'left center', opacity,
       display: 'inline-flex', alignItems: 'center', gap: 12,
-      color: theme.red, fontWeight: 700,
+      color: theme.red, fontWeight: 700, fontSize: 26, whiteSpace: 'nowrap',
     }}>
       <span>{'✗ Blocked by agentjail'}</span>
       <span style={{
         background: 'rgba(224,86,79,0.15)', border: `1px solid ${theme.red}`,
-        borderRadius: 4, padding: '2px 8px', fontSize: 22,
+        borderRadius: 4, padding: '2px 8px', fontSize: 20,
       }}>
         {'DENY · ' + rule}
       </span>

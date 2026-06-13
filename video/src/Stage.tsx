@@ -3,26 +3,16 @@ import {AbsoluteFill, Sequence, useCurrentFrame, interpolate} from 'remotion';
 import {theme} from './theme';
 import {ClaudeCodePane} from './components/ClaudeCodePane';
 import {LogsPane} from './components/LogsPane';
+import {MacDesktop, TerminalWindow} from './components/MacFrame';
 import {IntroCard} from './components/IntroCard';
 import {InstallCard} from './components/InstallCard';
 import type {TranscriptLine, LogRow} from './script';
 import {
   beat1, beat2, seedRows, denyRow1, denyRow2, montageIcons, installCmd,
 } from './script';
-
-// Per-line local start frames within a beat (frame 0 = beat start). Spaced so
-// each line finishes typing — at the Typewriter's slow default speed — before
-// the next begins, and so the final line lingers before the beat ends.
-// Order: user, assistant, tool, blocked, recover.
-const LINE_STARTS = [0, 78, 132, 188, 232];
-const DENY_LOCAL = LINE_STARTS[3]; // the blocked line — deny stamp + log row land here
-
-// Timeline (30fps). Each section holds well past its last animation so nothing
-// reads as rushed; transitions are gentle crossfades.
-const BEAT1_FROM = 120;                 // intro: 0..120 (~4s)
-const BEAT2_FROM = 470;                 // beat 1: 120..470 (~11.7s, incl. hold)
-const OUTRO_FROM = 850;                 // beat 2: 470..850 (~12.7s, incl. ~2s hold)
-const TOTAL = 1080;                     // outro: 850..1080 (~7.7s)
+import {
+  LINE_STARTS, DENY_LOCAL, BEAT1_FROM, BEAT2_FROM, OUTRO_FROM, TOTAL,
+} from './timing';
 
 // One beat: Claude Code pane on the left, synced logs pane on the right.
 // `priorDeny` rows are already-present (static) DENY rows from earlier beats;
@@ -38,9 +28,12 @@ const Beat: React.FC<{
     {row: newDeny, appearFrame: DENY_LOCAL},
   ];
   return (
-    <AbsoluteFill style={{flexDirection: 'row'}}>
-      <ClaudeCodePane cwd="~/acme-api" lines={lines} startFrames={LINE_STARTS} />
-      <LogsPane rows={rows} />
+    <AbsoluteFill>
+      <MacDesktop />
+      <TerminalWindow>
+        <ClaudeCodePane cwd="~/acme-api" lines={lines} startFrames={LINE_STARTS} />
+        <LogsPane rows={rows} />
+      </TerminalWindow>
     </AbsoluteFill>
   );
 };
