@@ -67,6 +67,7 @@ async function fetchChecksums(version) {
  * Query params: v (installed version), os, arch (for analytics only)
  */
 async function handleLatest(request, env) {
+  // Synthetic URL used as a CF Cache API key — never actually fetched.
   const cacheKey = new Request("https://cache.internal/v1/latest", { method: "GET" });
   const cache = caches.default;
 
