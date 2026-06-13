@@ -737,6 +737,27 @@ test_mutation_guard_status_not_denied if {
 	d.rule_id != "command_policy/no-policy-mutation"
 }
 
+# POSITIVE: agentjail update → deny (defense-in-depth alongside TTY gate)
+test_mutation_guard_update_deny if {
+	d := agentjail.decision with input as bash_input("agentjail update")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE: agentjail update --force → deny
+test_mutation_guard_update_force_deny if {
+	d := agentjail.decision with input as bash_input("agentjail update --force")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE (evasion): quoted path to agentjail update → deny
+test_mutation_guard_update_quoted_path_deny if {
+	d := agentjail.decision with input as bash_input("\"$HOME/.agentjail/bin/agentjail\" update")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
 # NEGATIVE: agentjail logs → must NOT trigger mutation guard (read-only)
 test_mutation_guard_logs_not_denied if {
 	d := agentjail.decision with input as bash_input("agentjail logs")

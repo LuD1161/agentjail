@@ -330,6 +330,12 @@ _is_policy_mutation if {
 }
 
 _is_policy_mutation if {
+	# agentjail … update [--force] — binary self-modification
+	_mentions_agentjail
+	regex.match(`\bupdate\b`, cmd)
+}
+
+_is_policy_mutation if {
 	# Shell write/redirect directly into ~/.agentjail/ subtree
 	# Covers: > ~/.agentjail/..., >> ~/.agentjail/..., tee ~/.agentjail/...
 	# Also matches $HOME/.agentjail and /Users/<u>/.agentjail
