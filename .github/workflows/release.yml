@@ -246,6 +246,7 @@ jobs:
             end
 
             def post_install
+              ENV["AGENTJAIL_INSTALL_METHOD"] = "brew"
               system bin/"agentjail", "install", "--all"
             end
 
