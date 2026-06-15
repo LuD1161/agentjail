@@ -267,7 +267,7 @@ agentjail mcp allow claude-mem    # trust a server
 agentjail mcp block my-payment-bot
 ```
 
-Install auto-seeds the allowlist from your existing MCP config. Changes require interactive terminal confirmation.
+Install auto-seeds the allowlist from your existing MCP config (including Claude Code plugins). Changes require interactive terminal confirmation.
 
 </details>
 

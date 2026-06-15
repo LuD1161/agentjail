@@ -359,3 +359,231 @@ func TestMatchesAnyGlob(t *testing.T) {
 		}
 	}
 }
+
+// ---- pluginMCPServerKeys ----------------------------------------------------
+
+func TestPluginMCPServerKeys_Wrapped(t *testing.T) {
+	r := strings.NewReader(`{"mcpServers": {"posthog": {"type": "http", "url": "https://mcp.posthog.com"}}}`)
+	got := pluginMCPServerKeys(r)
+	if len(got) != 1 || got[0] != "posthog" {
+		t.Errorf("expected [posthog], got %v", got)
+	}
+}
+
+func TestPluginMCPServerKeys_Flat(t *testing.T) {
+	r := strings.NewReader(`{"context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]}}`)
+	got := pluginMCPServerKeys(r)
+	if len(got) != 1 || got[0] != "context7" {
+		t.Errorf("expected [context7], got %v", got)
+	}
+}
+
+func TestPluginMCPServerKeys_FlatFiltersMetadata(t *testing.T) {
+	r := strings.NewReader(`{"version": "1.0", "$schema": "http://...", "my-server": {"command": "node", "args": ["server.js"]}}`)
+	got := pluginMCPServerKeys(r)
+	if len(got) != 1 || got[0] != "my-server" {
+		t.Errorf("expected [my-server], got %v", got)
+	}
+}
+
+func TestPluginMCPServerKeys_Empty(t *testing.T) {
+	got := pluginMCPServerKeys(strings.NewReader(""))
+	if len(got) != 0 {
+		t.Errorf("expected nil for empty reader, got %v", got)
+	}
+}
+
+func TestPluginMCPServerKeys_MalformedJSON(t *testing.T) {
+	got := pluginMCPServerKeys(strings.NewReader("{bad"))
+	if len(got) != 0 {
+		t.Errorf("expected nil for malformed JSON, got %v", got)
+	}
+}
+
+// ---- claudePluginMCPServers -------------------------------------------------
+
+func TestClaudePluginMCPServers_HappyPath(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+
+	posthogInstall := filepath.Join(home, "posthog-install")
+	if err := os.MkdirAll(posthogInstall, 0o700); err != nil {
+		t.Fatalf("mkdir posthog install: %v", err)
+	}
+	context7Install := filepath.Join(home, "context7-install")
+	if err := os.MkdirAll(context7Install, 0o700); err != nil {
+		t.Fatalf("mkdir context7 install: %v", err)
+	}
+
+	posthogMCP := `{"mcpServers": {"posthog": {"type": "http", "url": "https://mcp.posthog.com"}}}`
+	if err := os.WriteFile(filepath.Join(posthogInstall, ".mcp.json"), []byte(posthogMCP), 0o600); err != nil {
+		t.Fatalf("write posthog .mcp.json: %v", err)
+	}
+	context7MCP := `{"context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]}}`
+	if err := os.WriteFile(filepath.Join(context7Install, ".mcp.json"), []byte(context7MCP), 0o600); err != nil {
+		t.Fatalf("write context7 .mcp.json: %v", err)
+	}
+
+	registry := `{"version": 1, "plugins": {"posthog@claude-plugins-official": [{"installPath": "` + posthogInstall + `"}], "context7@claude-plugins-official": [{"installPath": "` + context7Install + `"}]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir, "installed_plugins.json"), []byte(registry), 0o600); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+
+	got := claudePluginMCPServers(home)
+	want := []string{"plugin_context7_context7", "plugin_posthog_posthog"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i, name := range got {
+		if name != want[i] {
+			t.Errorf("got[%d]=%q, want %q", i, name, want[i])
+		}
+	}
+}
+
+func TestClaudePluginMCPServers_MultiEntry(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+
+	// First entry has no .mcp.json
+	firstInstall := filepath.Join(home, "first-install")
+	if err := os.MkdirAll(firstInstall, 0o700); err != nil {
+		t.Fatalf("mkdir first install: %v", err)
+	}
+
+	// Second entry has .mcp.json
+	secondInstall := filepath.Join(home, "second-install")
+	if err := os.MkdirAll(secondInstall, 0o700); err != nil {
+		t.Fatalf("mkdir second install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(secondInstall, ".mcp.json"), []byte(`{"mcpServers": {"my-tool": {}}}`), 0o600); err != nil {
+		t.Fatalf("write .mcp.json: %v", err)
+	}
+
+	registry := `{"version": 1, "plugins": {"myplugin@org": [{"installPath": "` + firstInstall + `"}, {"installPath": "` + secondInstall + `"}]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir, "installed_plugins.json"), []byte(registry), 0o600); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+
+	got := claudePluginMCPServers(home)
+	if len(got) != 1 || got[0] != "plugin_myplugin_my-tool" {
+		t.Errorf("expected [plugin_myplugin_my-tool], got %v", got)
+	}
+}
+
+func TestClaudePluginMCPServers_MalformedKey(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+
+	install := filepath.Join(home, "install")
+	if err := os.MkdirAll(install, 0o700); err != nil {
+		t.Fatalf("mkdir install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(install, ".mcp.json"), []byte(`{"mcpServers": {"tool": {}}}`), 0o600); err != nil {
+		t.Fatalf("write .mcp.json: %v", err)
+	}
+
+	// Registry key without @
+	registry := `{"version": 1, "plugins": {"no-at-sign": [{"installPath": "` + install + `"}]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir, "installed_plugins.json"), []byte(registry), 0o600); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+
+	got := claudePluginMCPServers(home)
+	if len(got) != 0 {
+		t.Errorf("expected nil for malformed key, got %v", got)
+	}
+}
+
+func TestClaudePluginMCPServers_MissingFile(t *testing.T) {
+	home := t.TempDir()
+	got := claudePluginMCPServers(home)
+	if len(got) != 0 {
+		t.Errorf("expected nil for missing registry, got %v", got)
+	}
+}
+
+func TestClaudePluginMCPServers_RelativePath(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+
+	// Entry with a relative installPath — should be skipped for security
+	registry := `{"version": 1, "plugins": {"myplugin@org": [{"installPath": "relative/path"}]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir, "installed_plugins.json"), []byte(registry), 0o600); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+
+	got := claudePluginMCPServers(home)
+	if len(got) != 0 {
+		t.Errorf("expected nil for relative path, got %v", got)
+	}
+}
+
+func TestClaudePluginMCPServers_MissingMCPJSON(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+
+	install := filepath.Join(home, "install")
+	if err := os.MkdirAll(install, 0o700); err != nil {
+		t.Fatalf("mkdir install: %v", err)
+	}
+	// No .mcp.json written
+
+	registry := `{"version": 1, "plugins": {"myplugin@org": [{"installPath": "` + install + `"}]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir, "installed_plugins.json"), []byte(registry), 0o600); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+
+	got := claudePluginMCPServers(home)
+	if len(got) != 0 {
+		t.Errorf("expected empty when no .mcp.json in installPath, got %v", got)
+	}
+}
+
+func TestDiscoverMCPSeedList_PluginBlocklisted(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+
+	install := filepath.Join(home, "stripe-install")
+	if err := os.MkdirAll(install, 0o700); err != nil {
+		t.Fatalf("mkdir install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(install, ".mcp.json"), []byte(`{"mcpServers": {"stripe": {}}}`), 0o600); err != nil {
+		t.Fatalf("write .mcp.json: %v", err)
+	}
+
+	registry := `{"version": 1, "plugins": {"stripe-tools@some-org": [{"installPath": "` + install + `"}]}}`
+	if err := os.WriteFile(filepath.Join(pluginsDir, "installed_plugins.json"), []byte(registry), 0o600); err != nil {
+		t.Fatalf("write installed_plugins.json: %v", err)
+	}
+
+	var w bytes.Buffer
+	got := discoverMCPSeedList(home, &w)
+
+	for _, name := range got {
+		if strings.Contains(name, "stripe") {
+			t.Errorf("stripe server %q should have been filtered by blocklist", name)
+		}
+	}
+	if !strings.Contains(w.String(), "stripe") {
+		t.Errorf("expected warning mentioning stripe, got: %q", w.String())
+	}
+}

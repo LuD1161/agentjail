@@ -1,8 +1,9 @@
-// mcp_discovery.go — discover installed MCP server names from the three
+// mcp_discovery.go — discover installed MCP server names from the four
 // supported agent config formats at install time.
 //
 // Sources (global only; project-level .mcp.json is out of scope for V1):
 //   - Claude Code: ~/.claude.json → top-level "mcpServers" object; keys are names.
+//   - Claude Code plugins: ~/.claude/plugins/installed_plugins.json → plugin_<name>_<key>.
 //   - Codex CLI:   ~/.codex/config.toml → [mcp_servers.<name>] section headers.
 //   - Cursor:      ~/.cursor/mcp.json → "mcpServers" object; keys are names.
 //
@@ -43,6 +44,9 @@ func discoverInstalledMCPServers(home string) []string {
 		seen[name] = struct{}{}
 	}
 	for _, name := range cursorMCPServers(home) {
+		seen[name] = struct{}{}
+	}
+	for _, name := range claudePluginMCPServers(home) {
 		seen[name] = struct{}{}
 	}
 
@@ -144,6 +148,100 @@ func parseCodexMCPSections(data []byte) []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// pluginMCPServerKeys parses a .mcp.json reader and returns the MCP server
+// names it contains. It handles both wrapped format ({"mcpServers": {...}}) and
+// flat format ({"serverName": {"command": ...}}). Metadata keys that are not
+// valid MCP server configs are filtered out. Any parse error returns nil.
+func pluginMCPServerKeys(r io.Reader) []string {
+	var top map[string]json.RawMessage
+	if err := json.NewDecoder(r).Decode(&top); err != nil {
+		return nil
+	}
+	// Wrapped format: {"mcpServers": {"name": {...}}}
+	if raw, ok := top["mcpServers"]; ok {
+		var servers map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return nil
+		}
+		names := make([]string, 0, len(servers))
+		for k := range servers {
+			names = append(names, k)
+		}
+		return names
+	}
+	// Flat format: {"serverName": {"command": ...}}
+	// Accept top-level keys whose value is an object containing at least one
+	// known MCP field; this filters out metadata keys like "version", "$schema".
+	mcpFields := map[string]bool{"command": true, "url": true, "type": true, "args": true, "env": true}
+	var names []string
+	for k, raw := range top {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			continue
+		}
+		for field := range obj {
+			if mcpFields[field] {
+				names = append(names, k)
+				break
+			}
+		}
+	}
+	return names
+}
+
+// claudePluginMCPServers reads the Claude Code plugin registry and returns
+// MCP server names in the form "plugin_<pluginName>_<serverKey>".
+// Missing registry file → nil, not error.
+func claudePluginMCPServers(home string) []string {
+	registryPath := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
+	f, err := os.Open(registryPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var registry struct {
+		Plugins map[string][]struct {
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if err := json.NewDecoder(f).Decode(&registry); err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	for registryKey, entries := range registry.Plugins {
+		pluginName, _, ok := strings.Cut(registryKey, "@")
+		if !ok || pluginName == "" {
+			continue
+		}
+		for _, entry := range entries {
+			if !filepath.IsAbs(entry.InstallPath) {
+				continue
+			}
+			mcpFile, err := os.Open(filepath.Join(entry.InstallPath, ".mcp.json"))
+			if err != nil {
+				continue
+			}
+			keys := pluginMCPServerKeys(mcpFile)
+			mcpFile.Close()
+			for _, key := range keys {
+				seen["plugin_"+pluginName+"_"+key] = struct{}{}
+			}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // filterAndWarnMCPNames filters discovered names through the default blocked
