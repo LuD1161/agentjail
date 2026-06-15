@@ -401,6 +401,49 @@ func streamLogs(opts logsOpts, doneCh <-chan struct{}, winchCh <-chan os.Signal)
 			viewportH = 1
 		}
 
+		// Process rotated files for counter recovery (oldest first).
+		rotated := discoverRotatedLogs(opts.logPath)
+		for _, rp := range rotated {
+			rf, rerr := os.Open(rp)
+			if rerr != nil {
+				continue
+			}
+			rreader := bufio.NewReaderSize(rf, 256*1024)
+			for {
+				chunk, rerr := rreader.ReadString('\n')
+				if len(chunk) > 0 && rerr == nil {
+					raw := []byte(strings.TrimRight(chunk, "\n"))
+					var el evalLine
+					if jerr := json.Unmarshal(raw, &el); jerr == nil && el.Msg == "eval" {
+						wouldCount := true
+						if opts.since > 0 && time.Since(el.Time) > opts.since {
+							wouldCount = false
+						}
+						if wouldCount && len(opts.actions) > 0 && !containsStr(opts.actions, strings.ToLower(el.Action)) {
+							wouldCount = false
+						}
+						if wouldCount && opts.tool != "" && el.Tool != opts.tool {
+							wouldCount = false
+						}
+						if wouldCount && opts.session != "" && !strings.Contains(el.SessionID, opts.session) {
+							wouldCount = false
+						}
+						if wouldCount {
+							var impact string
+							if strings.ToLower(el.Action) == "deny" {
+								impact = impactFor(el)
+							}
+							rich.recordEvent(el.Action, el.ElapsedUs, impact)
+						}
+					}
+				}
+				if rerr != nil {
+					break
+				}
+			}
+			rf.Close()
+		}
+
 		tailBuf := make([][]byte, viewportH)
 		tailWr := 0
 		tailLen := 0
@@ -893,4 +936,23 @@ func fileIno(path string) uint64 {
 		return 0
 	}
 	return sys.Ino
+}
+
+// discoverRotatedLogs returns paths to rotated log files (e.g., path.5, path.4,
+// ..., path.1) that exist on disk, sorted oldest-first (highest suffix first).
+// The current (non-suffixed) log file is NOT included in the result.
+func discoverRotatedLogs(basePath string) []string {
+	var paths []string
+	for i := 1; ; i++ {
+		p := fmt.Sprintf("%s.%d", basePath, i)
+		if _, err := os.Stat(p); err != nil {
+			break
+		}
+		paths = append(paths, p)
+	}
+	// Reverse: oldest (highest suffix) first.
+	for i, j := 0, len(paths)-1; i < j; i, j = i+1, j-1 {
+		paths[i], paths[j] = paths[j], paths[i]
+	}
+	return paths
 }

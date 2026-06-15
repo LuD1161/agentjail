@@ -24,8 +24,9 @@ func TestInstallPlistContainsDaemonPath(t *testing.T) {
 	const daemonBin = "/Users/test/.agentjail/bin/agentjail-daemon"
 	const rulesDir = "/Users/test/.agentjail/rules"
 	const logPath = "/Users/test/.agentjail/daemon.log"
+	const crashLogPath = "/Users/test/.agentjail/crash.log"
 
-	if err := installPlist(daemonBin, rulesDir, logPath, dst); err != nil {
+	if err := installPlist(daemonBin, rulesDir, logPath, crashLogPath, dst); err != nil {
 		t.Fatalf("installPlist: %v", err)
 	}
 
@@ -44,8 +45,17 @@ func TestInstallPlistContainsDaemonPath(t *testing.T) {
 	if !strings.Contains(content, logPath) {
 		t.Errorf("plist does not contain logPath %q", logPath)
 	}
+	if !strings.Contains(content, crashLogPath) {
+		t.Errorf("plist does not contain crashLogPath %q", crashLogPath)
+	}
 	if strings.Contains(content, "__LOG_PATH__") {
 		t.Errorf("plist still contains unpatched __LOG_PATH__ placeholder")
+	}
+	if strings.Contains(content, "__CRASH_LOG_PATH__") {
+		t.Errorf("plist still contains unpatched __CRASH_LOG_PATH__ placeholder")
+	}
+	if !strings.Contains(content, "--log="+logPath) {
+		t.Errorf("plist does not contain --log= flag with logPath %q", logPath)
 	}
 }
 
@@ -58,11 +68,12 @@ func TestInstallPlistIdempotent(t *testing.T) {
 	const daemonBin = "/bin/agentjail-daemon"
 	const rulesDir = "/rules"
 	const logPath = "/log/daemon.log"
+	const crashLogPath = "/log/crash.log"
 
-	if err := installPlist(daemonBin, rulesDir, logPath, dst); err != nil {
+	if err := installPlist(daemonBin, rulesDir, logPath, crashLogPath, dst); err != nil {
 		t.Fatalf("first installPlist: %v", err)
 	}
-	if err := installPlist(daemonBin, rulesDir, logPath, dst); err != nil {
+	if err := installPlist(daemonBin, rulesDir, logPath, crashLogPath, dst); err != nil {
 		t.Fatalf("second installPlist: %v", err)
 	}
 }

@@ -909,7 +909,8 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 	// the path `agentjail logs` reads by default.
 	plistDst := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
 	daemonLogPath := filepath.Join(home, ".agentjail", "daemon.log")
-	if err := installPlist(daemonDst, rulesD, daemonLogPath, plistDst); err != nil {
+	crashLogPath := filepath.Join(home, ".agentjail", "crash.log")
+	if err := installPlist(daemonDst, rulesD, daemonLogPath, crashLogPath, plistDst); err != nil {
 		return fmt.Errorf("install launchd plist: %w", err)
 	}
 	fmt.Fprintln(w, u.Step(5, 6, "launchd plist installed", true))
@@ -1107,10 +1108,20 @@ func writeDefaultPolicy(home string, mcpSeed []string) error {
 }
 
 // plistTemplate is the launchd plist with placeholders for the daemon path,
-// rules directory, and log path. __DAEMON_PATH__, __RULES_DIR__ and
-// __LOG_PATH__ are patched at install time. The daemon writes its slog JSON to
-// stderr; launchd redirects both stderr and stdout to __LOG_PATH__, which must
-// match the path `agentjail logs` reads (~/.agentjail/daemon.log).
+// rules directory, log path, and crash log path. Placeholders are patched at
+// install time:
+//   - __DAEMON_PATH__   — absolute path to the agentjail-daemon binary
+//   - __RULES_DIR__     — absolute path to the rules directory
+//   - __LOG_PATH__      — daemon.log, managed by the daemon's internal rotating
+//     writer (passed via --log flag); `agentjail logs` reads this file
+//   - __CRASH_LOG_PATH__ — crash.log, written by launchd via StandardErrorPath /
+//     StandardOutPath; captures panics and runtime output on restart
+//
+// The split keeps structured slog JSON in daemon.log (rotated by the daemon)
+// separate from raw crash/panic output in crash.log (captured by launchd).
+// launchd opens StandardErrorPath/StandardOutPath with O_TRUNC on each restart,
+// which is acceptable for crash.log but would wipe structured logs if pointed at
+// daemon.log.
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1121,28 +1132,30 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <array>
         <string>__DAEMON_PATH__</string>
         <string>--rules=__RULES_DIR__</string>
+        <string>--log=__LOG_PATH__</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardErrorPath</key>
-    <string>__LOG_PATH__</string>
+    <string>__CRASH_LOG_PATH__</string>
     <key>StandardOutPath</key>
-    <string>__LOG_PATH__</string>
+    <string>__CRASH_LOG_PATH__</string>
 </dict>
 </plist>
 `
 
 // installPlist writes the launchd plist to dst with the daemon binary path,
-// rules directory, and log path patched in.
-func installPlist(daemonBin, rulesDir, logPath, dst string) error {
+// rules directory, log path, and crash log path patched in.
+func installPlist(daemonBin, rulesDir, logPath, crashLogPath, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
 	}
 	content := strings.ReplaceAll(plistTemplate, "__DAEMON_PATH__", daemonBin)
 	content = strings.ReplaceAll(content, "__RULES_DIR__", rulesDir)
 	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
+	content = strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
 	return os.WriteFile(dst, []byte(content), 0o644)
 }
 

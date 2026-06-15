@@ -50,6 +50,7 @@ import (
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
 
@@ -506,21 +507,14 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		// `agentjail logs -v` formatter shows on the same row as the verdict.
 		summary := summarizeToolInput(req.ToolName, req.ToolInput)
 
-		// NOTE on `elapsed_us` (see docs/adr/0002-latency-as-engineering-metric.md):
-		// This measures cache lookup + (on miss) OPA Rego eval + cache set —
-		// internal to s.eval. It is NOT the user-perceived latency. End-to-end
-		// wall time = elapsed_us + ~10 ms plumbing (hook fork/exec, socket I/O,
-		// JSON marshal). When citing performance externally, use the smoke test's
-		// end-to-end wall time, not this field. The field is kept for forensics
-		// user-facing `agentjail logs` rich view hides it.
-
-		if err != nil {
-			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
-		} else {
-			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
-		}
-
-		if encErr := enc.Encode(resp); encErr != nil {
+		// Write the response to the client BEFORE logging. This ensures that
+		// log rotation (which holds a mutex and may do file I/O) does not add
+		// latency to the hook response. The client is unblocked first; the log
+		// write follows. If the client has already disconnected we still log
+		// the eval result for forensics (the log is useful even when the hook
+		// fell open).
+		encErr := enc.Encode(resp)
+		if encErr != nil {
 			if isClientGone(encErr) {
 				// The caller (e.g. agentjail-hook) closed the connection before we
 				// finished writing — expected whenever eval exceeds the hook's
@@ -531,6 +525,23 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			} else {
 				slog.Warn("write response", "req_id", req.ID, "err", encErr)
 			}
+			// Fall through to log the eval result even when the client is gone.
+		}
+
+		// NOTE on `elapsed_us` (see docs/adr/0002-latency-as-engineering-metric.md):
+		// This measures cache lookup + (on miss) OPA Rego eval + cache set —
+		// internal to s.eval. It is NOT the user-perceived latency. End-to-end
+		// wall time = elapsed_us + ~10 ms plumbing (hook fork/exec, socket I/O,
+		// JSON marshal). When citing performance externally, use the smoke test's
+		// end-to-end wall time, not this field. The field is kept for forensics;
+		// the user-facing `agentjail logs` rich view hides it.
+		if err != nil {
+			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
+		} else {
+			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
+		}
+
+		if encErr != nil && !isClientGone(encErr) {
 			return
 		}
 	}
@@ -768,15 +779,33 @@ func defaultPolicyPath() string {
 	return filepath.Join(home, ".agentjail", "policy.yaml")
 }
 
+// defaultLogPath returns ~/.agentjail/daemon.log.
+func defaultLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/agentjail-daemon.log"
+	}
+	return filepath.Join(home, ".agentjail", "daemon.log")
+}
+
 func main() {
 	socketPath := flag.String("socket", defaultSocketPath(), "path to Unix domain socket")
 	policyPath := flag.String("policy", defaultPolicyPath(), "path to policy.yaml (data overlay for OPA)")
 	rulesDir := flag.String("rules", "", "path to Rego rules directory (default: uses inline default policy)")
+	logPath := flag.String("log", defaultLogPath(), "path to structured log file (rotated internally)")
 	flag.Parse()
 
-	// Structured JSON logging to stderr — stdout is reserved for future
-	// query interfaces. slog default level = Info.
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+	// Open the rotating log writer before setting up slog so all startup
+	// messages land in the file. 10 MB per file, 5 rotated backups.
+	logWriter, err := logrotate.New(*logPath, 10*1024*1024, 5)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail-daemon: open log %s: %v\n", *logPath, err)
+		os.Exit(1)
+	}
+	defer logWriter.Close()
+
+	// Structured JSON logging to the rotating file. slog default level = Info.
+	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
