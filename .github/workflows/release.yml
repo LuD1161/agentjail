@@ -91,7 +91,7 @@ jobs:
           - platform: darwin-arm64
             runner: macos-14
           - platform: darwin-amd64
-            runner: macos-13
+            runner: macos-15
     steps:
       - uses: actions/checkout@v4
 
