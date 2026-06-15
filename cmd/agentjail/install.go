@@ -42,6 +42,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -1078,33 +1079,73 @@ func copyBinary(src, dst string) error {
 }
 
 // writeDefaultPolicy writes the default policy YAML to ~/.agentjail/policy.yaml
-// only if the destination does not already exist (write-once idempotency — AC2.3).
-//
-// When mcpSeed is non-empty, the discovered MCP server names are pre-populated
-// into mcp.allowed on the first write (R10). The policy is written via
-// config.Save so the result is always a valid, well-structured PolicyConfig —
-// the YAML template files are NOT changed.
-//
-// Re-install: if policy.yaml already exists, this function is a no-op, so user
-// customisations are never clobbered.
+// if the file does not already exist. On re-install (file exists), it merges
+// any newly discovered MCP servers into mcp.allowed without clobbering user
+// customisations — servers already present or matching a blocked pattern are
+// skipped.
 func writeDefaultPolicy(home string, mcpSeed []string) error {
 	dst := filepath.Join(home, ".agentjail", "policy.yaml")
 	if _, err := os.Stat(dst); err == nil {
-		fmt.Println("  policy.yaml already exists — skipping.")
-		return nil
+		return mergeNewMCPServers(dst, mcpSeed)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
 
-	// Build the initial config from defaults and inject the seed list.
 	cfg := config.Default()
 	if len(mcpSeed) > 0 {
 		cfg.MCP.Allowed = mcpSeed
 	}
 
 	return config.Save(cfg, dst)
+}
+
+// mergeNewMCPServers adds newly discovered MCP server names to an existing
+// policy.yaml's mcp.allowed list. It is additive only — existing entries and
+// user-blocked servers are never touched. A load failure is non-fatal (the
+// install continues with the existing policy).
+func mergeNewMCPServers(path string, mcpSeed []string) error {
+	if len(mcpSeed) == 0 {
+		fmt.Println("  policy.yaml already exists — no new MCP servers to add.")
+		return nil
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		fmt.Println("  policy.yaml already exists — skipping (could not load for merge).")
+		return nil
+	}
+
+	existing := make(map[string]struct{}, len(cfg.MCP.Allowed))
+	for _, name := range cfg.MCP.Allowed {
+		existing[name] = struct{}{}
+	}
+
+	var added []string
+	for _, name := range mcpSeed {
+		if _, ok := existing[name]; ok {
+			continue
+		}
+		if matchesAnyGlob(name, cfg.MCP.Blocked) {
+			continue
+		}
+		added = append(added, name)
+	}
+
+	if len(added) == 0 {
+		fmt.Println("  policy.yaml already exists — no new MCP servers to add.")
+		return nil
+	}
+
+	cfg.MCP.Allowed = append(cfg.MCP.Allowed, added...)
+	sort.Strings(cfg.MCP.Allowed)
+
+	if err := config.Save(cfg, path); err != nil {
+		return fmt.Errorf("merge MCP servers: %w", err)
+	}
+	fmt.Printf("  policy.yaml: merged %d new MCP server(s): %s\n", len(added), strings.Join(added, ", "))
+	return nil
 }
 
 // plistTemplate is the launchd plist with placeholders for the daemon path,

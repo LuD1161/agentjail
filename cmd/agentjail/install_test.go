@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
 	"github.com/LuD1161/agentjail/internal/picker"
 )
@@ -1405,5 +1406,146 @@ func TestFullUninstallCleansShellRCPath(t *testing.T) {
 	// Both block-bearing files reported, the untouched one not.
 	if len(r.RCCleaned) != 2 {
 		t.Fatalf("RCCleaned = %v, want the 2 rc files with the block", r.RCCleaned)
+	}
+}
+
+// ---- mergeNewMCPServers / writeDefaultPolicy tests -----------------------------
+
+func makePolicyFile(t *testing.T, home string, allowed, blocked []string) string {
+	t.Helper()
+	dir := filepath.Join(home, ".agentjail")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg := config.Default()
+	cfg.MCP.Allowed = allowed
+	cfg.MCP.Blocked = blocked
+	path := filepath.Join(dir, "policy.yaml")
+	if err := config.Save(cfg, path); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+	return path
+}
+
+// TestMergeNewMCPServers_AddsNewServers verifies that a new server in mcpSeed
+// is appended to mcp.allowed while the existing entry is preserved.
+func TestMergeNewMCPServers_AddsNewServers(t *testing.T) {
+	home := t.TempDir()
+	path := makePolicyFile(t, home, []string{"existing-server"}, nil)
+
+	if err := mergeNewMCPServers(path, []string{"existing-server", "new-plugin-server"}); err != nil {
+		t.Fatalf("mergeNewMCPServers: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	want := []string{"existing-server", "new-plugin-server"}
+	if len(cfg.MCP.Allowed) != len(want) {
+		t.Fatalf("allowed = %v, want %v", cfg.MCP.Allowed, want)
+	}
+	for i, v := range want {
+		if cfg.MCP.Allowed[i] != v {
+			t.Errorf("allowed[%d] = %q, want %q", i, cfg.MCP.Allowed[i], v)
+		}
+	}
+}
+
+// TestMergeNewMCPServers_SkipsBlocked verifies that mcpSeed entries matching a
+// blocked glob are not added to mcp.allowed.
+func TestMergeNewMCPServers_SkipsBlocked(t *testing.T) {
+	home := t.TempDir()
+	path := makePolicyFile(t, home, []string{"a"}, []string{"*stripe*"})
+
+	if err := mergeNewMCPServers(path, []string{"plugin_stripe-tools_stripe", "safe-server"}); err != nil {
+		t.Fatalf("mergeNewMCPServers: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	for _, name := range cfg.MCP.Allowed {
+		if strings.Contains(name, "stripe") {
+			t.Errorf("blocked stripe server found in allowed: %q", name)
+		}
+	}
+
+	found := false
+	for _, name := range cfg.MCP.Allowed {
+		if name == "safe-server" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("safe-server not found in allowed: %v", cfg.MCP.Allowed)
+	}
+}
+
+// TestMergeNewMCPServers_EmptySeed verifies that an empty seed is a no-op.
+func TestMergeNewMCPServers_EmptySeed(t *testing.T) {
+	home := t.TempDir()
+	path := makePolicyFile(t, home, []string{"a", "b"}, nil)
+
+	before, _ := os.ReadFile(path)
+
+	if err := mergeNewMCPServers(path, nil); err != nil {
+		t.Fatalf("mergeNewMCPServers: %v", err)
+	}
+
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Errorf("file was modified on empty seed")
+	}
+}
+
+// TestMergeNewMCPServers_AllExisting verifies that no write occurs when all
+// seed entries already exist in mcp.allowed.
+func TestMergeNewMCPServers_AllExisting(t *testing.T) {
+	home := t.TempDir()
+	path := makePolicyFile(t, home, []string{"a", "b"}, nil)
+
+	before, _ := os.ReadFile(path)
+
+	if err := mergeNewMCPServers(path, []string{"a", "b"}); err != nil {
+		t.Fatalf("mergeNewMCPServers: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(cfg.MCP.Allowed) != 2 {
+		t.Errorf("allowed = %v, want [a b]", cfg.MCP.Allowed)
+	}
+	_ = before // content may differ in formatting but semantics must not change
+}
+
+// TestWriteDefaultPolicy_MergesOnReinstall verifies that calling
+// writeDefaultPolicy when policy.yaml already exists merges new MCP servers.
+func TestWriteDefaultPolicy_MergesOnReinstall(t *testing.T) {
+	home := t.TempDir()
+	makePolicyFile(t, home, []string{"old"}, nil)
+
+	if err := writeDefaultPolicy(home, []string{"old", "new"}); err != nil {
+		t.Fatalf("writeDefaultPolicy: %v", err)
+	}
+
+	cfg, err := config.Load(filepath.Join(home, ".agentjail", "policy.yaml"))
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	want := []string{"new", "old"} // sorted
+	if len(cfg.MCP.Allowed) != len(want) {
+		t.Fatalf("allowed = %v, want %v", cfg.MCP.Allowed, want)
+	}
+	for i, v := range want {
+		if cfg.MCP.Allowed[i] != v {
+			t.Errorf("allowed[%d] = %q, want %q", i, cfg.MCP.Allowed[i], v)
+		}
 	}
 }

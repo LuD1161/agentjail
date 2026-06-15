@@ -225,23 +225,21 @@ func TestWriteDefaultPolicyIdempotent(t *testing.T) {
 	}
 
 	dst := filepath.Join(home, ".agentjail", "policy.yaml")
-	before, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatalf("read before: %v", err)
-	}
 
-	// Second write (re-install simulation): file already exists, must be skipped.
-	if err := writeDefaultPolicy(home, []string{"new-server"}); err != nil {
+	// Second write (re-install simulation): file already exists.
+	// Same seed — must be a no-op (idempotent when seed is unchanged).
+	if err := writeDefaultPolicy(home, []string{"initial-server"}); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 
-	after, err := os.ReadFile(dst)
+	cfg, err := config.Load(dst)
 	if err != nil {
-		t.Fatalf("read after: %v", err)
+		t.Fatalf("config.Load: %v", err)
 	}
 
-	if string(before) != string(after) {
-		t.Errorf("policy.yaml was modified on re-install (AC2.3 violation)\nbefore:\n%s\nafter:\n%s", before, after)
+	// Only "initial-server" should be present — no duplicates.
+	if len(cfg.MCP.Allowed) != 1 || cfg.MCP.Allowed[0] != "initial-server" {
+		t.Errorf("expected [initial-server], got %v", cfg.MCP.Allowed)
 	}
 }
 
