@@ -65,6 +65,24 @@ var updateBinaries = []string{
 // HTTP server without hitting the real network.
 var updateURLBaseFn = updateURLBase
 
+// resolveExecutablePath returns the resolved path of the running binary and
+// whether it appears to be managed by Homebrew. It resolves symlinks so that
+// a brew-installed binary (which lives under /opt/homebrew/Cellar/ and is
+// symlinked into /opt/homebrew/bin/) is correctly identified.
+func resolveExecutablePath() (string, bool) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		resolved = exe
+	}
+	lower := strings.ToLower(resolved)
+	brew := strings.Contains(lower, "/homebrew/") || strings.Contains(lower, "/cellar/")
+	return resolved, brew
+}
+
 // updateURLBase is the default implementation of updateURLBaseFn.
 // It routes through the Cloudflare Worker at releases.agentjail.io first; the
 // Worker itself proxies to GitHub, providing integrity checks and analytics.
@@ -131,6 +149,23 @@ func runUpdate(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail update: %v\n", err)
 		return 1
+	}
+
+	// Detect path mismatch: if the running binary is not in installDir,
+	// the update would silently not take effect for the user's shell.
+	if exePath, brew := resolveExecutablePath(); exePath != "" {
+		exeDir := filepath.Dir(exePath)
+		if exeDir != installDir {
+			if brew {
+				fmt.Fprintf(os.Stderr, "agentjail update: this binary was installed via Homebrew (%s).\n", exePath)
+				fmt.Fprintln(os.Stderr, "  Run `brew upgrade agentjail` to update instead.")
+			} else {
+				fmt.Fprintf(os.Stderr, "agentjail update: the running binary is at %s\n", exePath)
+				fmt.Fprintf(os.Stderr, "  but updates install to %s.\n", installDir)
+				fmt.Fprintln(os.Stderr, "  The update would not take effect. Update via your package manager instead.")
+			}
+			return 1
+		}
 	}
 
 	return performUpdate(installDir, currentGOOS, runtime.GOARCH, force)

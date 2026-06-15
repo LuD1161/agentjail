@@ -875,3 +875,21 @@ func TestPerformUpdate_RollbackOnSwapFailure(t *testing.T) {
 		t.Errorf("agentjail content after update = %q, want %q", got, "fake-binary:agentjail")
 	}
 }
+
+// ── resolveExecutablePath tests ───────────────────────────────────────────────
+
+func TestResolveExecutablePath_ReturnsNonEmpty(t *testing.T) {
+	path, _ := resolveExecutablePath()
+	if path == "" {
+		t.Error("resolveExecutablePath returned empty path")
+	}
+}
+
+func TestResolveExecutablePath_DetectsHomebrew(t *testing.T) {
+	// The test binary runs from a temp dir, not a Homebrew Cellar, so it
+	// must NOT be detected as brew-managed.
+	_, brew := resolveExecutablePath()
+	if brew {
+		t.Error("test binary should not be detected as brew-managed")
+	}
+}

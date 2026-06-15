@@ -206,10 +206,18 @@ func maybeRunUpdateCheck() {
 		newer := isNewerVersion(current, latest)
 
 		if newer {
-			fmt.Fprintf(os.Stderr,
-				"agentjail: update available: %s → %s  (run: curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh)\n",
-				current, latest,
-			)
+			_, brew := resolveExecutablePath()
+			if brew {
+				fmt.Fprintf(os.Stderr,
+					"agentjail: update available: %s → %s  (run: brew upgrade agentjail)\n",
+					current, latest,
+				)
+			} else {
+				fmt.Fprintf(os.Stderr,
+					"agentjail: update available: %s → %s  (run: agentjail update)\n",
+					current, latest,
+				)
+			}
 		}
 
 		// Emit heartbeat telemetry (best-effort; ignores ErrNoBackend and opt-out).
