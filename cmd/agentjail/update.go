@@ -33,6 +33,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -152,18 +153,35 @@ func runUpdate(args []string) int {
 	}
 
 	// Detect path mismatch: if the running binary is not in installDir,
-	// the update would silently not take effect for the user's shell.
+	// delegate to the appropriate package manager instead of silently
+	// updating the wrong location.
 	if exePath, brew := resolveExecutablePath(); exePath != "" {
 		exeDir := filepath.Dir(exePath)
 		if exeDir != installDir {
 			if brew {
-				fmt.Fprintf(os.Stderr, "agentjail update: this binary was installed via Homebrew (%s).\n", exePath)
-				fmt.Fprintln(os.Stderr, "  Run `brew upgrade agentjail` to update instead.")
-			} else {
-				fmt.Fprintf(os.Stderr, "agentjail update: the running binary is at %s\n", exePath)
-				fmt.Fprintf(os.Stderr, "  but updates install to %s.\n", installDir)
-				fmt.Fprintln(os.Stderr, "  The update would not take effect. Update via your package manager instead.")
+				current := version
+				if current == "" {
+					current = "dev"
+				}
+				fmt.Println("agentjail update: installed via Homebrew — running `brew upgrade agentjail`…")
+				cmd := exec.Command("brew", "upgrade", "agentjail")
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					fmt.Fprintf(os.Stderr, "agentjail update: brew upgrade failed: %v\n", err)
+					return 1
+				}
+				// Emit telemetry for brew upgrade path (best-effort).
+				if tp, err := telemetry.DefaultPaths(); err == nil {
+					tCtx, tCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer tCancel()
+					_ = telemetry.SendUpdate(tCtx, tp, os.Getenv, current, "brew-upgrade", currentGOOS, runtime.GOARCH)
+				}
+				return 0
 			}
+			fmt.Fprintf(os.Stderr, "agentjail update: the running binary is at %s\n", exePath)
+			fmt.Fprintf(os.Stderr, "  but updates install to %s.\n", installDir)
+			fmt.Fprintln(os.Stderr, "  The update would not take effect. Update via your package manager instead.")
 			return 1
 		}
 	}
