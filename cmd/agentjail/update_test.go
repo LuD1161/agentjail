@@ -449,8 +449,10 @@ func TestPerformUpdate_FetchFails(t *testing.T) {
 	defer srv.Close()
 
 	origURL := updateCheckURL
+	origFallback := updateCheckFallbackURL
 	updateCheckURL = srv.URL
-	defer func() { updateCheckURL = origURL }()
+	updateCheckFallbackURL = srv.URL
+	defer func() { updateCheckURL = origURL; updateCheckFallbackURL = origFallback }()
 
 	origVersion := version
 	version = "v1.0.0"

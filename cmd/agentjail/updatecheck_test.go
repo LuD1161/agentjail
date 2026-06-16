@@ -85,8 +85,10 @@ func TestFetchLatestVersion_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 	orig := updateCheckURL
+	origFallback := updateCheckFallbackURL
 	updateCheckURL = srv.URL
-	defer func() { updateCheckURL = orig }()
+	updateCheckFallbackURL = srv.URL
+	defer func() { updateCheckURL = orig; updateCheckFallbackURL = origFallback }()
 
 	got := fetchLatestVersion(t.Context())
 	if got != "" {
