@@ -465,6 +465,13 @@ type UninstallResult struct {
 	// removed (empty when none contained it).
 	RCCleaned []string
 
+	// BrewUninstalled is true when the running binary was brew-managed and
+	// brew uninstall was attempted.
+	BrewUninstalled bool
+
+	// BrewErr is non-nil when brew uninstall was attempted but failed.
+	BrewErr error
+
 	// HardFailed is true when any step that should succeed actually failed.
 	HardFailed bool
 }
@@ -530,6 +537,19 @@ func performFullUninstall(home, goos string) UninstallResult {
 	// here never fails the uninstall (the env file under ~/.agentjail is already
 	// gone with the dir; this only tidies the rc reference).
 	r.RCCleaned = cleanupShellRCPath(home)
+
+	// Step 6: if the running binary is brew-managed, also run brew uninstall
+	// so the Homebrew copy is removed and `which agentjail` returns nothing.
+	if _, brew := resolveExecutablePath(); brew {
+		r.BrewUninstalled = true
+		cmd := exec.Command("brew", "uninstall", "agentjail")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			r.BrewErr = err
+			r.HardFailed = true
+		}
+	}
 
 	return r
 }
@@ -688,6 +708,14 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("fail", "FAILED to remove: "+r.InstallDirErr.Error())))
 	} else {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed")))
+	}
+
+	if r.BrewUninstalled {
+		if r.BrewErr != nil {
+			lines = append(lines, u.KeyValue("homebrew", "", u.Badge("fail", "brew uninstall failed: "+r.BrewErr.Error())))
+		} else {
+			lines = append(lines, u.KeyValue("homebrew", "", u.Badge("ok", "brew formula removed")))
+		}
 	}
 
 	lines = append(lines, "")
