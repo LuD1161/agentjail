@@ -120,7 +120,7 @@ if [ "${LOCAL_TARBALL:-}" = "" ] && [ "$VERSION" = "latest" ]; then
     VERSION=$(curl -fsSL "https://releases.agentjail.io/v1/latest" \
               | grep '"version"' \
               | head -1 \
-              | sed -E 's/.*"version": "([^"]+)".*/\1/')
+              | sed -E 's/.*"version":[ ]*"([^"]+)".*/\1/')
     if [ -z "$VERSION" ]; then
         echo "agentjail installer: could not resolve latest release." >&2
         echo "  Check: https://github.com/${REPO}/releases" >&2
