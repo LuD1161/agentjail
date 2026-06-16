@@ -247,7 +247,6 @@ write_env_file() {
 # shellcheck disable=SC2016  # $HOME/$PATH are written into the rc literally on purpose
 add_to_path() {
     [ "${AGENTJAIL_NO_MODIFY_PATH:-0}" = "1" ] && return 0
-    case ":${PATH}:" in *":${INSTALL_DIR}:"*) return 0 ;; esac
 
     shell_name=$(basename "${SHELL:-sh}")
     case "$shell_name" in
