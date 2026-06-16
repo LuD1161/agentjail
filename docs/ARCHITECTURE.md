@@ -177,6 +177,42 @@ See ADRs [0012](adr/0012-daemon-config-overlay.md),
 
 ---
 
+## OS-native Sandbox (`agentjail-shield`)
+
+The hook layer is cooperative — the agent must call the hook, and the hook must
+pattern-match the command. Shell tricks like variable expansion, `eval`, or
+non-shell interpreters (`python -c`, `osascript`) can bypass hook-level
+protection. `agentjail-shield` closes this gap by wrapping the agent in the
+operating system's kernel sandbox *before* exec'ing it. Every subprocess
+inherits the restrictions.
+
+```
+agentjail-shield
+  │
+  ├─ [macOS]  generates Seatbelt sbpl profile → sandbox-exec -p <profile> <agent>
+  ├─ [Linux]  landlock_create_ruleset + landlock_restrict_self → execve <agent>
+  └─ [other]  warning → exec <agent> (fail-open; hook still active)
+```
+
+**macOS (Seatbelt):** deny-list based. Denies writes to sensitive paths
+(`~/.ssh`, `~/.aws`, `~/.gnupg`, etc.), denies reads of credential paths, and
+restricts network egress. When `agentjail-netproxy` is running (default), the
+agent is restricted to localhost-only outbound TCP and all HTTPS traffic flows
+through the proxy, which enforces `network.allowed_hosts` from `policy.yaml`.
+
+**Linux (Landlock):** allowlist-based. Grants read-write to `/tmp` and the
+project CWD, read-only to system directories and `$HOME`, and denies everything
+else. Sensitive subdirectories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.agentjail`)
+are never allowlisted.
+
+**No special privileges required.** Both `sandbox-exec` and Landlock run as the
+invoking user — no sudo, no entitlement, no kernel module.
+
+For the full user guide, see [`docs/SANDBOX.md`](./SANDBOX.md).
+For the decision record, see [ADR 0001](./adr/0001-os-sandbox-enforcement-layer.md).
+
+---
+
 ## Isolation Tiers
 
 agentjail is designed across three levels of isolation strength. They are not mutually exclusive — stronger tiers can layer on top of lighter ones.
