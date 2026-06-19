@@ -229,12 +229,14 @@ The agent runs normally on the host. agentjail intercepts at the agent's own too
 
 ### Tier 2 — Container / MicroVM (stronger isolation)
 
-The agent runs inside a Docker container or a microVM (Firecracker on Linux, libkrun on macOS). The host monitors the container boundary — file access via virtio-fs mounts, network via a TAP-based egress proxy, process events via cgroups or eBPF. The same OPA policy engine runs on the host side of the boundary.
+The agent runs inside a microVM. The proposed substrate is **Microsandbox** (built on libkrun) for the developer-laptop path — macOS (HVF), Linux (KVM), and Windows (WSL2) — with **Firecracker** retained as the server-fleet backend. The VM boundary enforces egress from `network.allowed_hosts` and keeps credentials out of the guest; the Tier 1 hook + daemon run *inside* the VM unchanged. The same OPA policy engine governs both sides of the boundary.
 
 **What it adds over Tier 1:**
 - Hard containment: an agent that attempts to ignore hooks is physically prevented from reaching the host filesystem or network.
 - Works for agents that do not support hooks at all.
 - Stronger audit trail: every syscall crossing the boundary is logged, not just declared tool calls.
+
+> Substrate selection, the two-backend split, and the long-term pros/cons are decided in [ADR 0016](./adr/0016-tier2-microsandbox-substrate.md) (status: Proposed). The libkrun and Firecracker spikes live under [`agentjail/research/`](../agentjail/research/).
 
 ### Tier 3 — Kernel Module (strongest isolation)
 

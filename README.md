@@ -321,7 +321,7 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 |------|------|--------|
 | **1 — Hook** | PreToolUse hook + OPA daemon + core policies | ✅ shipped |
 | **1.5 — Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` | ✅ shipped |
-| **2 — MicroVM** | Firecracker/libkrun VM-boundary enforcement | 🔬 spike done |
+| **2 — MicroVM** | Microsandbox (laptop, all OSes) + Firecracker (fleet) VM-boundary enforcement | 📋 proposed ([ADR 0016](./docs/adr/0016-tier2-microsandbox-substrate.md)); spikes done |
 | **3 — Kernel module** | eBPF LSM / macOS SystemExtension | 📋 planned |
 
 <details>
