@@ -123,6 +123,123 @@ This matches the split the spikes already imply: libkrun for laptops, Firecracke
 
 The self-protection locked set (`file_policy/agentjail_self`, `library/no-daemon-kill`, `library/no-hook-self-disable`, `command_policy/no-policy-mutation`, `resolver/*`) still applies inside the VM — an agent that convinces the user to disable the sandbox is a threat the microVM does not address, and agentjail's locked rules do.
 
+## Long-term / enterprise horizon
+
+Tier 1/1.5 sell the developer. **Tier 2 is what sells the CISO** — it converts
+agentjail from a developer-safety tool into a procurement-defensible enterprise
+control. This section records how the decision above serves the corporate
+long-horizon, grounded in the existing ADRs rather than aspiration.
+
+### Containment vs. enforcement — the audit-trail distinction
+
+Today's strongest claim (ADR 0001) is *enforcement on the same OS the agent
+runs on*: a kernel exploit or a `sandbox-exec` removal (the risk 0001 flagged)
+escapes it. Tier 2 puts a **separate kernel** between the agent and the host.
+The threat-matrix row `kernel exploit / container escape → separate kernel,
+host safe` is the row that matters to a SOC2/ISO 27001 auditor: it converts
+"policy says no" into "physically cannot reach." Layered audit — semantic
+decision (Tier 1) + kernel denial (Tier 1.5) + VM-boundary syscall log (Tier 2)
+— is materially more defensible than any single layer, and is what an evidence
+request actually returns.
+
+### Windows — the largest enterprise blocker, now unblocked
+
+ADR 0007 deferred Windows because the shield has no native primitive. Tier 2's
+WSL2 path changes the corporate math: no AppContainer/restricted-token port is
+required — Windows engineers get containment via WSL2, which is already
+Microsoft's recommended path and enabled by default on most enterprise Win11
+fleet images. Windows is the majority of the enterprise laptop market; without
+a Windows containment story agentjail is a non-starter for most Fortune-500
+procurement. Tier 2 makes Windows a first-class Tier 2 target *without* a
+native sandbox engineering effort — the cheapest way to roughly double
+addressable market, and consistent with 0007's "WSL is the recommended Windows
+path."
+
+### Credential governance — ADR 0004 broker + VM secret protection together
+
+ADR 0004's broker strips ambient creds and issues scoped, short-lived ones
+(Tier 1.5). Tier 2's Microsandbox secret protection means **credentials never
+enter the guest at all** — placeholders swapped on TLS handshake to allowlisted
+hosts, real tokens never present in the agent's execution environment. The
+combination is the strongest cred story short of HSM-backed per-call
+attestation: even a fully-compromised agent physically cannot exfiltrate a token
+because no real token exists in its environment. This maps directly to SOC2
+CC6.1 (logical access) / ISO 27001 A.9.4.2 (network separation) — the controls
+a corporate security team writes into a vendor-risk questionnaire.
+
+### Egress control = DLP at the VM boundary
+
+ADR 0004's own gap table admits the Tier 1.5 hole: "Raw TCP on 443 to a
+non-allowlisted host would bypass the network proxy because it doesn't go
+through `HTTPS_PROXY`." Tier 2's deny-all networking, enforced at the VMM
+boundary, closes that — there is no path out that doesn't cross the
+hypervisor. For a corporate DLP/SOC team, "egress is impossible except to an
+allowlist, enforced below the agent's OS" is the exact control they want for
+any process that touches source code + prod creds. It is driven by the *same*
+`network.allowed_hosts` already in `policy.yaml` (ADR 0012 config overlay) —
+no parallel ruleset for the platform team to drift.
+
+### Fleet management — the two-backend split is the enterprise deployment story
+
+The Microsandbox (laptops) / Firecracker (fleets) split maps to how
+corporations actually deploy:
+
+- **Developer laptops** → per-session Microsandbox VM (lightweight, one boot
+  per session).
+- **Hosted CI runners / internal agent platforms** → Firecracker with
+  snapshot/restore for pre-warmed VMs + REST API for orchestration (the
+  existing firecracker-spike's destination).
+
+One `policy.yaml` drives both. A platform team manages 1000 dev laptops + 50
+CI runners from a single policy source and the same intelligence layer. The
+`VMBackend` interface (`boot / mount / set-egress / exec / teardown`) keeps
+the fleet backend swappable without touching Tier 1/1.5.
+
+### Graduated enforcement = the enterprise adoption curve
+
+Corporations pilot, then expand. Tier 2 being opt-in
+(`agentjail-shield --tier2`) means a security team can deploy Tier 1 (zero
+friction, `curl | sh`) to 1000 engineers, prove value from the audit logs,
+then flip the high-paranoia teams (finance, prod-access, anyone touching
+customer data) to Tier 2 *without changing policy or workflow*. This is the
+canonical enterprise land-and-expand pattern, and it works because one config
+(ADR 0012) drives all three tiers.
+
+### Defense-in-depth as the procurement differentiator
+
+No competitor offers semantic policy + kernel sandbox + microVM together. The
+microVM-only players (Microsandbox, Firecracker) give a locked room; agentjail
+gives a locked room with a guard that understands intent (`git push --force
+main` vs `feature-branch`), can **ask** the user (`npm publish`?), and produces
+a semantic audit. The enterprise buyer's control triad is **prevent +
+explain + evidence** — only the layered architecture delivers all three. For
+OSS adoption the positioning is "not competing with Microsandbox, competing
+with 'I'll just be careful'"; for enterprise it is "the only offering that
+does both layers."
+
+### Honest corporate gaps (worth knowing before a sales conversation)
+
+- **Hypervisor requirement.** Some regulated environments (financial, gov)
+  disable VT-x/HVF on laptops. Those fall back to Tier 1/1.5 — still better
+  than nothing, but not the containment story. Accepted above.
+- **WSL2 ≠ native Windows.** Requires the user to run WSL2. Most enterprise
+  Win11 has it, but it is one more item for procurement to bless, and it is
+  "Windows running a Linux guest," not a native Windows sandbox.
+- **Per-session, not per-call.** ~320 ms boot fixes the model at one VM per
+  agent session. A corporate team wanting true per-tool-call isolation
+  (Lambda-shape) must wait for the Firecracker-fleet future — not the laptop
+  path. Fine for interactive dev; a real constraint for some CI patterns.
+- **External dependency (Microsandbox).** A corporate vendor-risk review will
+  ask about bus-factor. The `VMBackend` interface + raw-libkrun fallback is
+  the answer, but it is a conversation, not a slam-dunk. Firecracker (Apache
+  2.0, AWS Lambda-hardened) on the fleet side carries more enterprise weight.
+
+Tier 3 (eBPF LSM / macOS SystemExtension) stays open and coherent: it becomes
+the fleet-wide boundary for machines that cannot or will not run a VM
+(locked-down servers, regulated laptops with virtualization disabled), while
+Tier 2 is the per-session VM for everyone else. Tier 2 does not foreclose
+Tier 3; it clarifies it.
+
 ## Consequences
 
 **Positive:**
