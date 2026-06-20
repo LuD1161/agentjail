@@ -341,7 +341,8 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 | Tier | What | Status |
 |------|------|--------|
 | **1 — Hook** | PreToolUse hook + OPA daemon + core policies | ✅ shipped |
-| **1.5 — Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` | ✅ shipped |
+| **1.5 — Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` + env-stripping + secrets broker | ✅ shipped |
+| **1.5 — Observability** | SQLite decision store, replay CLI, local web UI with server-side filters | ✅ shipped |
 | **2 — MicroVM** | Microsandbox (laptop, all OSes) + Firecracker (fleet) VM-boundary enforcement | 📋 proposed ([ADR 0016](./docs/adr/0016-tier2-microsandbox-substrate.md)); spikes done |
 | **3 — Kernel module** | eBPF LSM / macOS SystemExtension | 📋 planned |
 
@@ -350,7 +351,7 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 
 **Platform support:** macOS + Linux today. Windows deferred — WSL works in the meantime. ([ADR 0007](./docs/adr/0007-windows-support-deferred.md))
 
-**v0.2.0 — credential broker** ([ADR 0004](./docs/adr/0004-credential-broker-tier1.md)): strips ambient credentials at agent launch and issues short-lived scoped credentials on request.
+**Tier 2 — MicroVM:** microsandbox Go SDK integration for hardware-isolated agent execution on macOS (HVF), Linux (KVM), and Windows (WSL2).
 
 </details>
 

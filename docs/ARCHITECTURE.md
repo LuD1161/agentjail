@@ -208,8 +208,62 @@ are never allowlisted.
 **No special privileges required.** Both `sandbox-exec` and Landlock run as the
 invoking user — no sudo, no entitlement, no kernel module.
 
+**Environment hardening** (before exec):
+- Strips ambient credentials from the agent's env (configurable blocklist)
+- Audits for root, readable credential files, IMDS reachability
+- `agentjail-secrets` broker issues scoped, short-lived credentials via
+  `grant`/`revoke` over Unix socket (AES-256-GCM at rest)
+
 For the full user guide, see [`docs/SANDBOX.md`](./SANDBOX.md).
 For the decision record, see [ADR 0001](./adr/0001-os-sandbox-enforcement-layer.md).
+
+---
+
+## Decision Store (SQLite)
+
+Every policy decision is persisted to `~/.agentjail/agentjail.db` (SQLite, WAL
+mode). The daemon writes; the CLI, UI, and replay tools read via `ReadOnlyStore`
+(a separate read-only connection that cannot write even if type-asserted).
+
+```
+agentjail-daemon (writer)
+  │  RecordDecision / RecordAuditEvent
+  ▼
+agentjail.db  (WAL mode, concurrent readers OK)
+  ▲
+  │  ListDecisions / CountActionsBySession / ListSessions
+agentjail logs / replay / ui  (readers via OpenReadOnly)
+```
+
+**Schema highlights:**
+- `decisions` table: `id`, `ts`, `session_id`, `tool_name`, `action`, `rule_id`,
+  `reason`, `summary`, `tool_input_redacted`, `elapsed_us`, `cwd`, `agent`
+- `sessions` table: `session_id`, `agent`, `start_ts`, `end_ts`, `decision_count`
+- `audit_events` table: policy enable/disable/reload mutations
+- Indexes on `(session_id, ts)`, `ts`, `action`, `tool_name`, `rule_id`
+- Automatic retention cleanup via `Cleanup(maxAge)`
+- Tool input redaction at write time (secrets, keys, tokens stripped before storage)
+
+**Filter support:** `store.Filter` supports `SessionID` (substring), `Actions`
+(case-insensitive OR), `Tool` (exact), `Rule` (case-insensitive substring),
+`AfterID` (keyset pagination, direction-aware for ASC/DESC), and `Limit` (clamped
+to [100, 10000]).
+
+---
+
+## Local UI
+
+`agentjail ui` starts a loopback-only HTTP server backed by the SQLite store.
+
+- `/api/state` — sessions, counters (global), recent events (filtered)
+- `/api/session?id=<id>` — chronological session replay with filters
+- `/api/audit` — policy-mutation audit log
+- Server-side filter query params: `action`, `tool`, `rule`, `limit`
+- Counters (`total_allow`/`deny`/`ask`) are always global; only `recent_events`
+  and session replay rows are filtered
+- `FilteredCount` and `TotalDecisions` in response for "showing N of M"
+- Frontend sends filters with 300ms debounce; SSE live events remain client-filtered
+- `--edit-policy` opt-in enables policy enable/disable controls (read-only by default)
 
 ---
 
