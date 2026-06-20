@@ -138,6 +138,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	fmt.Fprint(w, ":ok\n\n")
 	flusher.Flush()
 
 	ch := make(chan string, 64)

@@ -30,6 +30,27 @@
     .session-active { background: #161b22; border-left: 2px solid #388bfd; }
     .event-row     { cursor: pointer; }
     .event-row:hover { background: #161b22; }
+    .timeline-grid {
+      display: grid;
+      grid-template-columns: var(--tl-cols, 64px 52px 120px 1fr 70px);
+      gap: 8px;
+      align-items: center;
+    }
+    .timeline-header { user-select: none; }
+    .timeline-header span {
+      position: relative;
+      padding-right: 6px;
+    }
+    .col-resize-handle {
+      position: absolute;
+      right: -4px;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      cursor: col-resize;
+      z-index: 1;
+    }
+    .col-resize-handle:hover, .col-resize-handle.active { background: #3b82f6; opacity: 0.4; border-radius: 2px; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #0d1117; }
     ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
@@ -326,10 +347,19 @@ function renderTimeline() {
     return;
   }
 
-  container.innerHTML = visible.map((ev, i) => {
+  const header = `<div class="timeline-header px-4 py-1 sticky top-0 z-10" style="background:#161b22;border-bottom:1px solid #30363d">
+    <div class="timeline-grid" id="tl-header-grid">
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Time<div class="col-resize-handle" data-col="0"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Action<div class="col-resize-handle" data-col="1"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Tool<div class="col-resize-handle" data-col="2"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Summary<div class="col-resize-handle" data-col="3"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Session</span>
+    </div>
+  </div>`;
+
+  const rows = visible.map((ev, i) => {
     const t = ev.time ? new Date(ev.time).toLocaleTimeString('en-US', {hour12:false}) : '—';
     const action = (ev.action || '').toLowerCase();
-    const actionClass = action === 'allow' ? 'action-allow' : action === 'deny' ? 'action-deny' : action === 'ask' ? 'action-ask' : 'action-other';
     const actionBadgeClass = action === 'allow' ? 'badge-allow' : action === 'deny' ? 'badge-deny' : action === 'ask' ? 'badge-ask' : '';
     const tool = ev.tool || '—';
     const summary = ev.summary || '';
@@ -349,16 +379,18 @@ function renderTimeline() {
     }
 
     return `<div class="event-row px-4 py-1" onclick="toggleExpand(${i})">
-      <div class="flex items-center gap-3 min-w-0">
-        <span class="text-gray-500 flex-none" style="width:56px">${t}</span>
-        <span class="badge ${actionBadgeClass} flex-none" style="width:46px;text-align:center">${(ev.action||'').toUpperCase()}</span>
-        <span class="text-gray-300 flex-none" style="width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${tool}">${tool}</span>
-        <span class="text-gray-500 flex-1 truncate">${escHtml(summary)}</span>
-        ${sessionShort ? `<span class="text-gray-700 flex-none text-xs">${sessionShort}</span>` : ''}
+      <div class="timeline-grid">
+        <span class="text-gray-500">${t}</span>
+        <span class="badge ${actionBadgeClass}" style="text-align:center">${(ev.action||'').toUpperCase()}</span>
+        <span class="text-gray-300 truncate" title="${tool}">${tool}</span>
+        <span class="text-gray-500 truncate">${escHtml(summary)}</span>
+        ${sessionShort ? `<span class="text-gray-700 text-xs">${sessionShort}</span>` : '<span></span>'}
       </div>
       ${details}
     </div>`;
   }).join('');
+
+  container.innerHTML = header + rows;
 
   // Auto-scroll to bottom if near bottom already.
   const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 40;
@@ -497,6 +529,37 @@ async function policyDisable(name, btn) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+// Column resize drag logic
+let tlColWidths = [64, 52, 120, null, 70]; // null = flex (1fr)
+function applyColWidths() {
+  const cols = tlColWidths.map(w => w == null ? '1fr' : w + 'px').join(' ');
+  document.documentElement.style.setProperty('--tl-cols', cols);
+}
+document.addEventListener('mousedown', e => {
+  const handle = e.target.closest('.col-resize-handle');
+  if (!handle) return;
+  e.preventDefault();
+  const col = parseInt(handle.dataset.col);
+  const startX = e.clientX;
+  const headerGrid = document.getElementById('tl-header-grid');
+  if (!headerGrid) return;
+  const cells = headerGrid.children;
+  const startW = cells[col].getBoundingClientRect().width;
+  handle.classList.add('active');
+  const onMove = ev => {
+    const newW = Math.max(30, startW + ev.clientX - startX);
+    tlColWidths[col] = Math.round(newW);
+    applyColWidths();
+  };
+  const onUp = () => {
+    handle.classList.remove('active');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+});
+
 function escHtml(s) {
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
