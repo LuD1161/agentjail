@@ -32,7 +32,7 @@
     .event-row:hover { background: #161b22; }
     .timeline-grid {
       display: grid;
-      grid-template-columns: var(--tl-cols, 64px 52px 120px 1fr 90px 140px);
+      grid-template-columns: var(--tl-cols, 64px 52px 100px minmax(120px,1fr) 70px 140px);
       gap: 8px;
       align-items: center;
     }
@@ -93,12 +93,14 @@
 <body class="font-mono text-sm h-screen flex flex-col overflow-hidden">
 
 <!-- Top bar -->
-<header class="border-b border-gray-800 px-4 py-2 flex-none">
+<header class="border-b border-gray-800 px-4 py-3 flex-none">
   <div class="flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <span class="font-bold text-white text-base">agentjail ui</span>
+    <div class="flex items-center gap-4">
+      <svg viewBox="0 0 54 54" fill="#edecec" style="height:20px;width:20px;flex-shrink:0"><rect x="18" width="18" height="18"/><rect x="0" y="18" width="18" height="18"/><rect x="36" y="18" width="18" height="18"/><rect x="0" y="36" width="18" height="18"/><rect x="18" y="36" width="18" height="18"/><rect x="36" y="36" width="18" height="18"/></svg>
+      <span class="text-white font-bold text-sm tracking-wider" style="font-family:'Courier New',monospace;letter-spacing:0.15em">AGENTJAIL</span>
       <span class="live-dot" id="live-dot" title="connected"></span>
       <span class="text-xs text-gray-500" id="conn-status">connecting…</span>
+      <span class="text-xs text-gray-600">|</span>
       <span class="badge badge-source" id="source-badge">source: loading…</span>
       <span class="text-xs source-warning hidden" id="source-warning"></span>
       <span class="text-xs text-gray-600">|</span>
@@ -106,7 +108,7 @@
       <span class="text-xs" id="count-deny"><span class="text-red-400 font-bold" id="n-deny">0</span> <span class="text-gray-500">deny</span></span>
       <span class="text-xs" id="count-ask"><span class="text-yellow-400 font-bold" id="n-ask">0</span> <span class="text-gray-500">ask</span></span>
     </div>
-    <div class="text-xs text-yellow-600 font-semibold">&#9888; local dev tool — NOT in v0.1.0-alpha release</div>
+    <div class="text-xs text-gray-600">v0.1.2</div>
   </div>
 </header>
 
@@ -421,18 +423,6 @@ function renderTimeline() {
     const sessionShort = ev.session_id ? ev.session_id.substring(0,8) : '';
     const expanded = expandedEventIdx === i;
 
-    let details = '';
-    if (expanded) {
-      details = `<div class="expand-details ml-8">
-        ${ev.session_id ? `<div><span class="text-gray-600">session:</span> ${ev.session_id}</div>` : ''}
-        ${ev.rule_id ? `<div><span class="text-gray-600">rule:</span> ${ev.rule_id}</div>` : ''}
-        ${ev.reason ? `<div><span class="text-gray-600">reason:</span> ${ev.reason}</div>` : ''}
-        ${ev.impact ? `<div><span class="text-gray-600">impact:</span> <span class="text-red-400">${ev.impact}</span></div>` : ''}
-        ${ev.summary ? `<div><span class="text-gray-600">command:</span> ${escHtml(ev.summary)}</div>` : ''}
-        ${ev.tool_input_redacted ? `<div><span class="text-gray-600">tool_input:</span> <pre class="whitespace-pre-wrap text-gray-400 mt-1">${escHtml(ev.tool_input_redacted)}</pre></div>` : ''}
-      </div>`;
-    }
-
     const agentName = ev.agent || '';
     const sessIcon = agentName ? agentIcon(agentName).replace(/width="18"/,'width="12"').replace(/height="18"/,'height="12"') : '';
     const ruleShort = (ev.rule_id || '').split('/').pop() || '';
@@ -443,10 +433,18 @@ function renderTimeline() {
         <span class="badge ${actionBadgeClass}" style="text-align:center">${(ev.action||'').toUpperCase()}</span>
         <span class="text-gray-300 truncate" title="${tool}">${tool}</span>
         <span class="text-gray-500 truncate">${escHtml(summary)}</span>
-        <span class="text-gray-600 text-xs truncate flex items-center gap-1" title="${ev.session_id || ''}">${sessIcon}${sessionShort}</span>
+        <span class="text-gray-600 text-xs flex items-center gap-1 overflow-hidden" title="${ev.session_id || ''}">${sessIcon}<span class="truncate">${sessionShort}</span></span>
         <span class="text-gray-600 text-xs truncate" title="${ev.rule_id || ''}">${escHtml(ruleShort)}</span>
       </div>
-      ${details}
+      ${expanded ? `<div class="expand-details" style="margin-left:124px">
+        ${ev.session_id ? `<div><span class="text-gray-600">session:</span> ${ev.session_id}</div>` : ''}
+        ${ev.agent ? `<div><span class="text-gray-600">agent:</span> ${ev.agent}</div>` : ''}
+        ${ev.rule_id ? `<div><span class="text-gray-600">rule:</span> ${ev.rule_id}</div>` : ''}
+        ${ev.reason ? `<div><span class="text-gray-600">reason:</span> ${ev.reason}</div>` : ''}
+        ${ev.impact ? `<div><span class="text-gray-600">impact:</span> <span class="text-red-400">${ev.impact}</span></div>` : ''}
+        ${ev.summary ? `<div><span class="text-gray-600">command:</span> ${escHtml(ev.summary)}</div>` : ''}
+        ${ev.tool_input_redacted ? `<div><span class="text-gray-600">tool_input:</span> <pre class="whitespace-pre-wrap text-gray-400 mt-1">${escHtml(ev.tool_input_redacted)}</pre></div>` : ''}
+      </div>` : ''}
     </div>`;
   }).join('');
 
@@ -628,7 +626,7 @@ document.addEventListener('mousedown', e => {
 });
 
 // Column resize drag logic
-let tlColWidths = [64, 52, 120, null, 90, 140]; // null = flex (1fr)
+let tlColWidths = [64, 52, 100, null, 70, 140]; // null = flex (1fr)
 function applyColWidths() {
   const cols = tlColWidths.map(w => w == null ? '1fr' : w + 'px').join(' ');
   document.documentElement.style.setProperty('--tl-cols', cols);
