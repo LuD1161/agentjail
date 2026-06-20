@@ -511,6 +511,8 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 	for _, sess := range sessions {
 		ss := &SessionState{
 			ID:        sess.SessionID,
+			Agent:     sess.Agent,
+			CWD:       sess.CWD,
 			FirstSeen: sess.StartTs,
 			LastSeen:  sess.EndTs,
 			Total:     sess.DecisionCount,

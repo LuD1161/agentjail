@@ -154,7 +154,7 @@
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-let sessions = {};        // id -> {id, total, allow, deny, ask, first_seen, last_seen}
+let sessions = {};        // id -> {id, agent, cwd, total, allow, deny, ask, first_seen, last_seen}
 let events = [];          // ring buffer of last 500 EvalLine objects
 let selectedSession = null; // null = all
 let expandedEventIdx = null;
@@ -282,18 +282,42 @@ function updateCounters() {
 // ---------------------------------------------------------------------------
 // Render sessions sidebar
 // ---------------------------------------------------------------------------
+function agentIcon(agent) {
+  const a = (agent || '').toLowerCase();
+  if (a.includes('claude'))  return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#cc785c" stroke-width="1.5" fill="#cc785c22"/><text x="8" y="11.5" text-anchor="middle" fill="#cc785c" font-size="9" font-weight="bold" font-family="monospace">C</text></svg>`;
+  if (a.includes('cursor'))  return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#00b4d8" stroke-width="1.5" fill="#00b4d822"/><text x="8" y="11.5" text-anchor="middle" fill="#00b4d8" font-size="9" font-weight="bold" font-family="monospace">U</text></svg>`;
+  if (a.includes('codex'))   return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#10a37f" stroke-width="1.5" fill="#10a37f22"/><text x="8" y="11.5" text-anchor="middle" fill="#10a37f" font-size="9" font-weight="bold" font-family="monospace">X</text></svg>`;
+  if (a.includes('opencode')) return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#a78bfa" stroke-width="1.5" fill="#a78bfa22"/><text x="8" y="11.5" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="bold" font-family="monospace">O</text></svg>`;
+  if (a === 'try')           return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#6b7280" stroke-width="1.5" fill="#6b728022"/><text x="8" y="11.5" text-anchor="middle" fill="#6b7280" font-size="9" font-weight="bold" font-family="monospace">?</text></svg>`;
+  return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4b5563" stroke-width="1.5" fill="#4b556322"/><text x="8" y="11.5" text-anchor="middle" fill="#4b5563" font-size="9" font-weight="bold" font-family="monospace">A</text></svg>`;
+}
+
+function sessionLabel(s) {
+  const name = s.id || '';
+  if (name.length <= 20) return name;
+  return name.substring(0, 18) + '…';
+}
+
 function renderSessions() {
   const list = document.getElementById('sessions-list');
   const sorted = Object.values(sessions).sort((a,b) =>
     new Date(b.last_seen) - new Date(a.last_seen));
 
   list.innerHTML = sorted.map(s => {
-    const short = s.id.substring(0, 12);
+    const label = sessionLabel(s);
     const active = selectedSession === s.id;
+    const icon = agentIcon(s.agent);
+    const agentName = s.agent ? `<span class="text-gray-600">${s.agent}</span>` : '';
     return `<div class="session-row px-3 py-2 ${active ? 'session-active' : ''}" onclick="selectSession('${s.id}')">
-      <div class="text-xs text-gray-300 font-semibold truncate" title="${s.id}">&#9654; ${short}…</div>
-      <div class="text-xs text-gray-500">${s.total} events
-        ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
+      <div class="flex items-center gap-2 min-w-0">
+        ${icon}
+        <div class="min-w-0 flex-1">
+          <div class="text-xs text-gray-300 font-semibold truncate" title="${s.id}">${escHtml(label)}</div>
+          <div class="text-xs text-gray-500">${s.total} events
+            ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
+            ${agentName}
+          </div>
+        </div>
       </div>
     </div>`;
   }).join('');

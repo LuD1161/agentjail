@@ -37,6 +37,8 @@ type EvalLine struct {
 // SessionState tracks per-session aggregated stats.
 type SessionState struct {
 	ID        string    `json:"id"`
+	Agent     string    `json:"agent,omitempty"`
+	CWD       string    `json:"cwd,omitempty"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
 	Total     int       `json:"total"`
