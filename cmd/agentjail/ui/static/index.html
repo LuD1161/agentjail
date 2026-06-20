@@ -32,7 +32,7 @@
     .event-row:hover { background: #1c2333; }
     .timeline-grid {
       display: grid;
-      grid-template-columns: var(--tl-cols, 60px 50px 90px minmax(80px,1fr) 56px 120px);
+      grid-template-columns: var(--tl-cols, 60px 50px 90px minmax(80px,1fr) 150px 120px);
       gap: 8px;
       align-items: center;
     }
@@ -647,7 +647,7 @@ document.addEventListener('mousedown', e => {
 });
 
 // Column resize drag logic
-let tlColWidths = [60, 50, 90, null, 56, 120]; // null = flex (1fr)
+let tlColWidths = [60, 50, 90, null, 150, 120]; // null = flex (1fr)
 function applyColWidths() {
   const cols = tlColWidths.map(w => w == null ? '1fr' : w + 'px').join(' ');
   document.documentElement.style.setProperty('--tl-cols', cols);
