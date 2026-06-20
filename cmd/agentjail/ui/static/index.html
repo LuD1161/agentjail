@@ -32,7 +32,7 @@
     .event-row:hover { background: #161b22; }
     .timeline-grid {
       display: grid;
-      grid-template-columns: var(--tl-cols, 64px 52px 120px 1fr 70px);
+      grid-template-columns: var(--tl-cols, 64px 52px 120px 1fr 90px 140px);
       gap: 8px;
       align-items: center;
     }
@@ -407,7 +407,8 @@ function renderTimeline() {
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Action<div class="col-resize-handle" data-col="1"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Tool<div class="col-resize-handle" data-col="2"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Summary<div class="col-resize-handle" data-col="3"></div></span>
-      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Session</span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Session<div class="col-resize-handle" data-col="4"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Rule</span>
     </div>
   </div>`;
 
@@ -432,13 +433,18 @@ function renderTimeline() {
       </div>`;
     }
 
+    const agentName = ev.agent || '';
+    const sessIcon = agentName ? agentIcon(agentName).replace(/width="18"/,'width="12"').replace(/height="18"/,'height="12"') : '';
+    const ruleShort = (ev.rule_id || '').split('/').pop() || '';
+
     return `<div class="event-row px-4 py-1" onclick="toggleExpand(${i})">
       <div class="timeline-grid">
         <span class="text-gray-500">${t}</span>
         <span class="badge ${actionBadgeClass}" style="text-align:center">${(ev.action||'').toUpperCase()}</span>
         <span class="text-gray-300 truncate" title="${tool}">${tool}</span>
         <span class="text-gray-500 truncate">${escHtml(summary)}</span>
-        ${sessionShort ? `<span class="text-gray-700 text-xs">${sessionShort}</span>` : '<span></span>'}
+        <span class="text-gray-600 text-xs truncate flex items-center gap-1" title="${ev.session_id || ''}">${sessIcon}${sessionShort}</span>
+        <span class="text-gray-600 text-xs truncate" title="${ev.rule_id || ''}">${escHtml(ruleShort)}</span>
       </div>
       ${details}
     </div>`;
@@ -622,7 +628,7 @@ document.addEventListener('mousedown', e => {
 });
 
 // Column resize drag logic
-let tlColWidths = [64, 52, 120, null, 70]; // null = flex (1fr)
+let tlColWidths = [64, 52, 120, null, 90, 140]; // null = flex (1fr)
 function applyColWidths() {
   const cols = tlColWidths.map(w => w == null ? '1fr' : w + 'px').join(' ');
   document.documentElement.style.setProperty('--tl-cols', cols);
