@@ -37,20 +37,18 @@
       align-items: center;
     }
     .timeline-header { user-select: none; }
-    .timeline-header span {
-      position: relative;
-      padding-right: 6px;
-    }
+    .timeline-header span { position: relative; }
     .col-resize-handle {
       position: absolute;
-      right: -4px;
+      right: -5px;
       top: 0;
       bottom: 0;
-      width: 8px;
+      width: 9px;
       cursor: col-resize;
-      z-index: 1;
+      z-index: 2;
+      border-left: 1px solid #30363d;
     }
-    .col-resize-handle:hover, .col-resize-handle.active { background: #3b82f6; opacity: 0.4; border-radius: 2px; }
+    .col-resize-handle:hover, .col-resize-handle.active { border-left-color: #3b82f6; background: rgba(59,130,246,0.15); }
     .pane-drag-h {
       width: 8px; flex: none; cursor: col-resize; position: relative; z-index: 5;
       background: #1c2128;
