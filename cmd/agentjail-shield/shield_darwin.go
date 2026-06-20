@@ -7,19 +7,13 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 )
 
 const sandboxExecPath = "/usr/bin/sandbox-exec"
-
-// netproxyDefaultAddr is the address the netproxy listens on when started by
-// the shield.  It must match the address the agent connects to via HTTPS_PROXY.
-const netproxyDefaultAddr = "127.0.0.1:9100"
 
 // sensitiveWritePaths returns the baseline set of paths that should be denied
 // for writes.  This mirrors the is_sensitive_path predicates in
@@ -292,76 +286,6 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	return sb.String()
 }
 
-// findNetproxyBinary locates the agentjail-netproxy binary.
-//
-// Search order (first hit wins):
-//  1. $AGENTJAIL_NETPROXY env var
-//  2. ~/.agentjail/bin/agentjail-netproxy
-//  3. Sibling of the shield binary itself (filepath.Dir(os.Args[0]))
-func findNetproxyBinary() (string, error) {
-	// 1. Explicit env override.
-	if envPath := os.Getenv("AGENTJAIL_NETPROXY"); envPath != "" {
-		if _, err := os.Stat(envPath); err == nil {
-			return envPath, nil
-		}
-		return "", fmt.Errorf("$AGENTJAIL_NETPROXY=%s does not exist", envPath)
-	}
-
-	// 2. ~/.agentjail/bin/agentjail-netproxy
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		candidate := filepath.Join(home, ".agentjail", "bin", "agentjail-netproxy")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-
-	// 3. Sibling of the shield binary.
-	if len(os.Args) > 0 && os.Args[0] != "" {
-		candidate := filepath.Join(filepath.Dir(os.Args[0]), "agentjail-netproxy")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-
-	return "", fmt.Errorf("agentjail-netproxy binary not found; " +
-		"set $AGENTJAIL_NETPROXY, install to ~/.agentjail/bin/, " +
-		"or place alongside agentjail-shield")
-}
-
-// startNetproxy starts agentjail-netproxy as a child process with the given
-// policy path, waits up to 200 ms for it to bind on proxyAddr, and returns the
-// running *exec.Cmd.  Caller is responsible for calling cmd.Process.Kill() on
-// exit.
-func startNetproxy(netproxyPath, proxyAddr, policyPath string) (*exec.Cmd, error) {
-	cmd := exec.Command(netproxyPath,
-		"--addr="+proxyAddr,
-		"--policy="+policyPath,
-	)
-	// Pipe netproxy stderr to our stderr so proxy logs appear alongside shield logs.
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start netproxy: %w", err)
-	}
-
-	// Wait up to 200 ms for the proxy to bind its listen socket.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", proxyAddr, 20*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: netproxy started (pid=%d) listening on %s\n", cmd.Process.Pid, proxyAddr)
-			return cmd, nil
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Proxy didn't bind in time — kill it and abort.
-	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("netproxy did not bind on %s within 200ms; per-host enforcement unavailable", proxyAddr)
-}
-
 // runShield is the macOS implementation of the shield launcher.
 //
 // When noNetproxy is false (the default):
@@ -449,7 +373,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 				"  Please file an issue at https://github.com/LuD1161/agentjail/issues.\n",
 			sandboxExecPath,
 		)
-		execAgent(agentPath, agentArgs, withNetproxy)
+		execAgent(cfg, agentPath, agentArgs, withNetproxy)
 		return
 	}
 
@@ -461,17 +385,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	argv = append(argv, agentPath)
 	argv = append(argv, agentArgs...)
 
-	// Build the environment: inherit everything + set proxy vars when netproxy is active.
-	env := os.Environ()
+	// Build the environment: inherit everything + strip ambient creds + set proxy vars + granted secrets.
+	env := stripEnv(os.Environ(), cfg)
 	if withNetproxy {
-		proxyURL := "http://" + netproxyDefaultAddr
-		env = append(env,
-			"HTTPS_PROXY="+proxyURL,
-			"HTTP_PROXY="+proxyURL,
-			"ALL_PROXY="+proxyURL,
-		)
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=%s (per-host enforcement via netproxy)\n", proxyURL)
+		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-host enforcement via netproxy)\n", netproxyDefaultAddr)
 	}
+	grantEnvVars, _ := requestSecretGrants(cfg)
+	env = append(env, grantEnvVars...)
 
 	// syscall.Exec replaces this process entirely.  If it returns, it failed.
 	if err := syscall.Exec(sandboxExecPath, argv, env); err != nil {
@@ -481,17 +402,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 }
 
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
-// is absent (fail-open path).
-func execAgent(agentPath string, agentArgs []string, withNetproxy bool) {
-	env := os.Environ()
+// is absent (fail-open path).  Env stripping still applies.
+func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool) {
+	env := stripEnv(os.Environ(), cfg)
 	if withNetproxy {
-		proxyURL := "http://" + netproxyDefaultAddr
-		env = append(env,
-			"HTTPS_PROXY="+proxyURL,
-			"HTTP_PROXY="+proxyURL,
-			"ALL_PROXY="+proxyURL,
-		)
+		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
 	}
+	grantEnvVars, _ := requestSecretGrants(cfg)
+	env = append(env, grantEnvVars...)
 	argv := append([]string{agentPath}, agentArgs...)
 	if err := syscall.Exec(agentPath, argv, env); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: exec agent failed: %v\n", err)

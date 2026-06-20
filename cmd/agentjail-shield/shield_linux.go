@@ -5,8 +5,11 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
+	"os/exec"
+	"os/signal"
+	"runtime"
+	"syscall"
 	"unsafe"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
@@ -19,6 +22,31 @@ import (
 // other applyLandlock error fails CLOSED.
 var errLandlockUnsupported = errors.New("landlock not supported by kernel")
 
+// netproxyDefaultPort is the TCP port the netproxy listens on.  Landlock
+// network rules (ABI v4+, kernel 6.7+) allow the agent to CONNECT only to
+// this port, forcing all HTTPS traffic through agentjail-netproxy which
+// enforces network.allowed_hosts.
+const netproxyDefaultPort = 9100
+
+// landlockRuleNetPort is the rule type for Landlock network port rules.
+// It corresponds to LANDLOCK_RULE_NET_PORT from include/uapi/linux/landlock.h.
+// golang.org/x/sys/unix v0.45.0 does not yet expose this constant.
+const landlockRuleNetPort = 2
+
+// landlockNetPortAttr is the attribute struct for Landlock network port rules.
+// It corresponds to struct landlock_net_port_attr from the kernel UAPI:
+//
+//	struct landlock_net_port_attr {
+//	    __u64 allowed_access;
+//	    __u64 port;
+//	};
+//
+// golang.org/x/sys/unix v0.45.0 does not yet expose this struct.
+type landlockNetPortAttr struct {
+	AllowedAccess uint64
+	Port          uint64
+}
+
 // runShield is the Linux implementation of the shield launcher.
 //
 // It uses the Landlock LSM (Linux 5.13+, June 2021) to restrict the process
@@ -29,6 +57,13 @@ var errLandlockUnsupported = errors.New("landlock not supported by kernel")
 // This means the Linux implementation must enumerate all paths the agent
 // legitimately needs to write (project CWD, /tmp, /dev/null, etc.) rather
 // than just listing the paths to deny.
+//
+// Network egress: Landlock gained LANDLOCK_ACCESS_NET_CONNECT_TCP in ABI v4
+// (Linux 6.7, Jan 2024).  When netproxy is enabled and the kernel supports
+// ABI v4+, the agent is restricted to TCP connect only on the netproxy port
+// (9100).  All other TCP connect is denied, including IMDS (169.254.169.254)
+// and direct egress.  On kernels < 6.7, network ABI is unavailable; a
+// warning is printed and FS-only Landlock is applied (current behavior).
 //
 // Landlock caveat: truncate(2) is only covered as of ABI v3 (Linux 6.2).
 // On kernels < 6.2 an agent can truncate sensitive files.  We document this
@@ -41,17 +76,35 @@ var errLandlockUnsupported = errors.New("landlock not supported by kernel")
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
 func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string) {
-	// Network egress restriction is not available on Linux via Landlock.
-	// Landlock is a filesystem LSM; it has no network ABI.
-	// eBPF-based enforcement is Tier 3 (requires CAP_NET_ADMIN / CAP_SYS_ADMIN).
-	fmt.Fprintln(os.Stderr, "agentjail-shield: network egress restriction not supported on Linux (Landlock has no network ABI); use eBPF in Tier 3")
-
-	// agentjail-netproxy is not started on Linux — sbpl is macOS-only.
-	// Per-host network control requires Tier 2 (microVM) or Tier 3 (eBPF).
+	// Start netproxy as a child process BEFORE applying Landlock — netproxy
+	// needs unrestricted network access to reach upstream hosts.  Landlock
+	// (applied below) restricts the shield + agent, not the netproxy child
+	// which was already forked before restriction.
+	netproxyPort := 0
+	var netproxyCmd *exec.Cmd
 	if !noNetproxy {
-		slog.Warn("agentjail-netproxy not supported on Linux yet; use Tier 2 microVM or eBPF for per-host network control")
+		netproxyPort = netproxyDefaultPort
+		netproxyBin, findErr := findNetproxyBinary()
+		if findErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"agentjail-shield WARNING: %v\n"+
+					"  Falling back to no per-host network enforcement.\n"+
+					"  Use --no-netproxy to suppress this warning.\n",
+				findErr,
+			)
+		} else {
+			cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
+			if startErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"agentjail-shield WARNING: could not start netproxy: %v\n"+
+						"  Falling back to no per-host network enforcement.\n",
+					startErr,
+				)
+			} else {
+				netproxyCmd = cmd
+			}
+		}
 	}
-	_ = policyPath // not used on Linux; passed only for signature uniformity
 
 	if profilePrint {
 		fmt.Fprintln(os.Stderr, "=== agentjail-shield: Linux Landlock rule summary ===")
@@ -64,12 +117,25 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		fmt.Fprintln(os.Stderr, "Deny (all access):")
 		fmt.Fprintln(os.Stderr, "  everything not listed above")
 		fmt.Fprintln(os.Stderr, "Note: Landlock is allowlist-based; this is an inversion of the sbpl deny-list.")
-		fmt.Fprintln(os.Stderr, "Note: network egress restriction requires eBPF (Tier 3); not available here.")
+		if netproxyPort > 0 {
+			fmt.Fprintf(os.Stderr, "Network (ABI v4+, kernel 6.7+):\n")
+			fmt.Fprintf(os.Stderr, "  Allow TCP connect to port %d (netproxy) only\n", netproxyPort)
+			fmt.Fprintln(os.Stderr, "  Deny all other TCP connect (IMDS, direct egress)")
+			fmt.Fprintln(os.Stderr, "  On kernel < 6.7: warning printed, FS-only Landlock applied")
+		} else {
+			fmt.Fprintln(os.Stderr, "Network: not restricted (--no-netproxy; FS-only Landlock)")
+		}
 		fmt.Fprintln(os.Stderr, "=======================================================")
+		cleanupNetproxy(netproxyCmd)
 		os.Exit(0)
 	}
 
-	if err := applyLandlock(cfg); err != nil {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Apply Landlock to the current process.  The agent (run as a child
+	// below) inherits all Landlock restrictions.
+	if err := applyLandlock(cfg, netproxyPort); err != nil {
 		if errors.Is(err, errLandlockUnsupported) {
 			fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: Landlock unavailable: %v\n"+
 				"  Sandbox enforcement DISABLED. Requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y.\n"+
@@ -79,16 +145,59 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 				"  Refusing to run the agent unsandboxed (fail-closed).\n"+
 				"  Set AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1 to override (NOT recommended).\n", err)
 			if os.Getenv("AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED") != "1" {
+				cleanupNetproxy(netproxyCmd)
 				os.Exit(1)
 			}
 		}
 	}
 
-	// execve the agent; the process and all descendants inherit the Landlock
-	// restrictions (Landlock is irreversible once applied).
-	argv := append([]string{agentPath}, agentArgs...)
-	if err := unix.Exec(agentPath, argv, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail-shield: exec agent failed: %v\n", err)
+	// Build the agent's environment: inherit + strip ambient creds + proxy vars + granted secrets.
+	env := stripEnv(os.Environ(), cfg)
+	if netproxyCmd != nil {
+		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-host enforcement via netproxy)\n", netproxyDefaultAddr)
+	}
+	grantEnvVars, activeGrants := requestSecretGrants(cfg)
+	env = append(env, grantEnvVars...)
+
+	// Run the agent as a child process.  Unlike macOS (which uses
+	// syscall.Exec to replace the shield process), Linux uses os/exec so
+	// the shield stays alive as the parent and can:
+	//   - forward signals (SIGINT, SIGTERM) to the agent
+	//   - kill and reap the netproxy child on agent exit (zombie cleanup)
+	//
+	// Landlock restrictions are inherited by the agent child because
+	// Landlock applies to the process and all fork/exec descendants.
+	agentCmd := exec.Command(agentPath, agentArgs...)
+	agentCmd.Env = env
+	agentCmd.Stdin = os.Stdin
+	agentCmd.Stdout = os.Stdout
+	agentCmd.Stderr = os.Stderr
+
+	// Forward SIGINT and SIGTERM to the agent child so interactive agents
+	// (claude, codex) receive Ctrl-C normally.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		for sig := range sigCh {
+			if agentCmd.Process != nil {
+				_ = agentCmd.Process.Signal(sig)
+			}
+		}
+	}()
+
+	runErr := agentCmd.Run()
+
+	// Kill and reap the netproxy child (zombie cleanup).
+	cleanupNetproxy(netproxyCmd)
+	revokeSecretGrants(activeGrants)
+
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "agentjail-shield: agent failed: %v\n", runErr)
 		os.Exit(1)
 	}
 }
@@ -97,11 +206,18 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 // process.  After this call returns (nil error), the process and all its
 // fork/exec descendants cannot access filesystem paths not explicitly allowed.
 //
+// When netproxyPort > 0 and the kernel supports ABI v4+ (Linux 6.7+), the
+// ruleset also handles TCP network connect: only connects to netproxyPort
+// are allowed; all other TCP connect is denied.  TCP bind is handled but
+// never granted, so all bind operations are denied.  On kernels < 6.7,
+// network rules are skipped and a warning is printed (FS-only Landlock).
+//
 // Landlock ABI negotiation: we probe for the supported ABI version and build
 // the handled access mask accordingly:
 //   - ABI v1 (Linux 5.13): base FS access set
 //   - ABI v2 (Linux 5.19): adds REFER (cross-directory rename/hardlink)
 //   - ABI v3 (Linux 6.2):  adds TRUNCATE
+//   - ABI v4 (Linux 6.7):  adds NET_BIND_TCP, NET_CONNECT_TCP
 //   - ABI v5 (Linux 6.10): adds IOCTL_DEV
 //
 // Note on REFER (ABI v2+): REFER is included in the *handled* mask so the
@@ -109,7 +225,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 // allowed_access. This means cross-directory rename/hardlink is denied by
 // default on v2+ kernels (safe). On v1 kernels REFER is unavailable and such
 // operations follow legacy DAC — an acceptable trade-off for older kernels.
-func applyLandlock(cfg *config.PolicyConfig) error {
+func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Probe supported Landlock ABI version (ruleset_attr=NULL, size=0, flags=VERSION).
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if errno != 0 {
@@ -138,8 +254,27 @@ func applyLandlock(cfg *config.PolicyConfig) error {
 		handled |= unix.LANDLOCK_ACCESS_FS_IOCTL_DEV // 6.10
 	}
 
+	// Network access handling (ABI v4+, Linux 6.7+).
+	// When netproxyPort > 0, we handle CONNECT_TCP (deny all unless explicitly
+	// allowed) and BIND_TCP (deny all — agent never needs to bind).  Only a
+	// rule for netproxyPort is added, so the agent can only connect to the
+	// netproxy.  On kernels < 6.7, handledNet stays 0 (no network restriction).
+	handledNet := uint64(0)
+	if netproxyPort > 0 {
+		if abi >= 4 {
+			handledNet = unix.LANDLOCK_ACCESS_NET_CONNECT_TCP | unix.LANDLOCK_ACCESS_NET_BIND_TCP
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"agentjail-shield WARNING: Landlock network ABI requires kernel 6.7+ (current ABI v%d).\n"+
+					"  Network egress restriction is NOT applied.  Consider --no-netproxy or upgrading.\n", abi)
+		}
+	}
+
 	// Create the real ruleset.
-	rulesetAttr := unix.LandlockRulesetAttr{Access_fs: handled}
+	rulesetAttr := unix.LandlockRulesetAttr{
+		Access_fs:  handled,
+		Access_net: handledNet,
+	}
 	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET,
 		uintptr(unsafe.Pointer(&rulesetAttr)), unsafe.Sizeof(rulesetAttr), 0)
 	if errno != 0 {
@@ -228,6 +363,23 @@ func applyLandlock(cfg *config.PolicyConfig) error {
 				return fmt.Errorf("allow extra %s: %w", p, err)
 			}
 		}
+	}
+
+	// Network rules: allow TCP connect to the netproxy port only (ABI v4+).
+	// BIND_TCP is handled but no rule is added → all binds are denied.
+	if netproxyPort > 0 && abi >= 4 {
+		netAttr := landlockNetPortAttr{
+			AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_CONNECT_TCP),
+			Port:          uint64(netproxyPort),
+		}
+		if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
+			uintptr(rulesetFd), uintptr(landlockRuleNetPort),
+			uintptr(unsafe.Pointer(&netAttr)), 0, 0, 0); e != 0 {
+			return fmt.Errorf("landlock_add_rule(net port %d): %w", netproxyPort, e)
+		}
+		fmt.Fprintf(os.Stderr,
+			"agentjail-shield INFO: Landlock network restriction active (ABI v%d) — TCP connect allowed only to port %d\n",
+			abi, netproxyPort)
 	}
 
 	// PR_SET_NO_NEW_PRIVS: required before landlock_restrict_self.

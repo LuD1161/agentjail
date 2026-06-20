@@ -49,12 +49,16 @@ func main() {
 	policyPath := flag.String("policy", defaultPolicyPath(), "path to ~/.agentjail/policy.yaml")
 	profilePrint := flag.Bool("profile-print", false, "print the sandbox profile to stderr and exit without running the agent")
 	noNetproxy := flag.Bool("no-netproxy", false, "disable agentjail-netproxy; revert to port-based network filtering (no per-host enforcement)")
+	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
+	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1)")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--no-netproxy] -- <agent-cmd> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--no-netproxy] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml (default: ~/.agentjail/policy.yaml)")
 		fmt.Fprintln(os.Stderr, "  --profile-print     print the generated sandbox profile to stderr and exit 0")
 		fmt.Fprintln(os.Stderr, "  --no-netproxy       disable the localhost HTTPS proxy; reverts to port-based network filtering")
+		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
+		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Wraps the coding agent in the OS-native sandbox before exec.")
 		fmt.Fprintln(os.Stderr, "Requires a '--' separator between shield flags and the agent command.")
@@ -88,6 +92,12 @@ func main() {
 		if loaded.File.ExtraAllow == nil {
 			loaded.File.ExtraAllow = defaults.File.ExtraAllow
 		}
+		if loaded.Secrets.EnvBlocklist == nil {
+			loaded.Secrets.EnvBlocklist = defaults.Secrets.EnvBlocklist
+		}
+		if loaded.Secrets.StripOnLaunch == nil {
+			loaded.Secrets.StripOnLaunch = defaults.Secrets.StripOnLaunch
+		}
 		cfg = loaded
 	}
 
@@ -100,6 +110,21 @@ func main() {
 		os.Exit(127)
 	}
 	agentArgs := args[1:]
+
+	// Run the environment audit before shield setup.  The audit is
+	// best-effort and non-blocking: warnings are printed to stderr.
+	// In --audit-strict mode, critical findings abort the launch.
+	auditResult := runAudit()
+	printAuditWarnings(auditResult)
+	if *auditJSON != "" {
+		if err := writeAuditJSON(auditResult, *auditJSON); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: could not write audit JSON: %v\n", err)
+		}
+	}
+	if *auditStrict && hasCriticalFindings(auditResult) {
+		fmt.Fprintln(os.Stderr, "agentjail-shield: --audit-strict: refusing to launch due to critical audit findings")
+		os.Exit(1)
+	}
 
 	// Delegate to the OS-specific sandbox implementation.
 	runShield(cfg, agentPath, agentArgs, *profilePrint, *noNetproxy, *policyPath)

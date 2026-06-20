@@ -81,8 +81,10 @@ nor its descendants can lift them.
 **Known limitations:**
 - `truncate(2)` is only covered as of ABI v3 (Linux 6.2). On older kernels, an
   agent could truncate sensitive files.
-- Network egress restriction is **not available** via Landlock (filesystem LSM
-  only). Per-host network control requires Tier 2 (microVM) or Tier 3 (eBPF).
+- Network egress restriction via Landlock requires **kernel 6.7+** (ABI v4),
+  which adds `LANDLOCK_ACCESS_NET_CONNECT_TCP`. On 6.7+ with netproxy enabled,
+  the agent is restricted to TCP connect only on the netproxy port (9100). On
+  older kernels, network is unrestricted by Landlock (a warning is printed).
 
 ### Other platforms
 
@@ -125,8 +127,15 @@ environment variables.
 
 ### Linux
 
-Network enforcement is not available on Linux via Landlock. Use Tier 2 (microVM)
-or Tier 3 (eBPF) for network-level control.
+On kernel 6.7+ (Landlock ABI v4), agentjail-shield restricts the agent's TCP
+connect to the netproxy port (9100) only, using `LANDLOCK_ACCESS_NET_CONNECT_TCP`.
+All other TCP connect is denied at the kernel level. The `agentjail-netproxy`
+child process then enforces `network.allowed_hosts` from `policy.yaml`, the same
+as on macOS.
+
+On kernels < 6.7, Landlock network ABI is unavailable. A warning is printed and
+FS-only Landlock is applied (network egress is not restricted by Landlock). Use
+Tier 2 (microVM) or Tier 3 (eBPF) for network-level control on older kernels.
 
 ---
 
@@ -143,6 +152,8 @@ The `--` separator between shield flags and the agent command is **required**.
 | `--policy=PATH` | `~/.agentjail/policy.yaml` | Path to the policy config file |
 | `--profile-print` | `false` | Print the generated sandbox profile to stderr and exit (does not run the agent) |
 | `--no-netproxy` | `false` | Disable `agentjail-netproxy`; revert to port-based network filtering |
+| `--audit-json=PATH` | `""` | Write environment audit findings as JSON to PATH (use `-` for stdout) |
+| `--audit-strict` | `false` | Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1) |
 
 ### Examples
 
@@ -159,9 +170,68 @@ agentjail-shield --policy=/path/to/policy.yaml -- claude
 # Disable the network proxy (port-based filtering only)
 agentjail-shield --no-netproxy -- claude
 
+# Output environment audit as JSON
+agentjail-shield --audit-json=- -- claude
+
+# Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1)
+agentjail-shield --audit-strict -- claude
+
 # Test: try to read a private key (should fail with EPERM)
 agentjail-shield -- sh -c "cat ~/.ssh/id_rsa"
 ```
+
+---
+
+## Environment audit at launch
+
+Before launching the agent, `agentjail-shield` performs a best-effort
+environment audit and prints warnings to stderr. The audit checks for
+over-permissive configuration that increases the blast radius of a foot-gun:
+
+| Check | Severity | What it detects |
+|---|---|---|
+| Root | Critical | Running as root (uid 0) |
+| Ambient cred files | Warning | `~/.aws/credentials` or `~/.ssh/id_rsa` is readable |
+| Ambient env vars | Warning | `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`, etc. are set (pre-stripping) |
+| IMDS version | Critical | IMDSv1 is enabled (should be IMDSv2 with hop-limit=1) |
+| IAM role | Critical/Info | Instance role name suggests AdministratorAccess (heuristic) |
+
+Use `--audit-json=PATH` to output structured findings as JSON (use `-` for
+stdout). Use `--audit-strict` to refuse launching when critical findings
+are detected.
+
+---
+
+## Env stripping at launch
+
+Before exec'ing the agent, `agentjail-shield` strips ambient credentials
+from the environment. This prevents the agent from using credentials that
+are already in the shell's environment (e.g. `AWS_SECRET_ACCESS_KEY` set
+via a shell profile), which would bypass the filesystem and network
+restrictions entirely.
+
+### `secrets.env_blocklist` — env vars to strip
+
+```yaml
+secrets:
+  env_blocklist:
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - "*_API_KEY"           # glob: matches any var ending in _API_KEY
+  strip_on_launch: true      # default: true
+```
+
+The default blocklist covers: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`, `AWS_SECURITY_TOKEN`, `AWS_DELEGATION_TOKEN`,
+`PGPASSWORD`, `REDIS_PASSWORD`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`.
+
+Glob patterns use `path.Match` semantics (`*` matches any sequence of
+non-`/` characters). Set `strip_on_launch: false` to disable stripping.
+
+If the `agentjail-secrets` broker is running, the shield adds
+`AGENTJAIL_SECRETS=1` to signal that scoped creds are available via the
+broker.
 
 ---
 
@@ -206,7 +276,7 @@ network:
     - "*.example.com"          # wildcard: matches sub.example.com, not example.com
 ```
 
-Enforced by `agentjail-netproxy` on macOS. Wildcards follow cert-style matching:
+Enforced by `agentjail-netproxy` on macOS and Linux. Wildcards follow cert-style matching:
 `*.example.com` matches `foo.example.com` and `foo.bar.example.com`, but **not**
 `example.com` itself.
 
@@ -234,7 +304,7 @@ Enforced by `agentjail-netproxy` on macOS. Wildcards follow cert-style matching:
 | Landlock unsupported (Linux < 5.13) | **Fail-open** with loud warning |
 | Landlock setup error (other) | **Fail-closed**: refuses to run unless `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` |
 | `policy.yaml` missing or unreadable | Falls back to built-in defaults |
-| `agentjail-netproxy` not found | Falls back to port-based filtering with warning |
+| `agentjail-netproxy` not found | Falls back to no per-host enforcement with warning (macOS: port-based filtering; Linux: unrestricted network) |
 | Unsupported platform | **Fail-open** with warning |
 
 ---
@@ -252,7 +322,7 @@ They serve complementary roles:
 | UX decisions (allow / deny / ask) | Yes | No (deny only) |
 | Catch shell/eval/Python file writes | No (whack-a-mole) | **Yes** (kernel-level) |
 | Catch subprocess bypass | No | **Yes** (inherited by descendants) |
-| Network per-host enforcement | No | **Yes** (via netproxy on macOS) |
+| Network per-host enforcement | No | **Yes** (via netproxy on macOS and Linux 6.7+) |
 
 Use both for defense in depth. The hook catches the 90% case with good UX; the
 sandbox is the safety net that catches the rest.
