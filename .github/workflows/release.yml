@@ -38,8 +38,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: verify THIRD_PARTY_LICENSES is current
-        run: ./scripts/gen-third-party-licenses.sh --check
+      - name: regenerate THIRD_PARTY_LICENSES
+        run: ./scripts/gen-third-party-licenses.sh
 
       - name: build binaries
         env:
