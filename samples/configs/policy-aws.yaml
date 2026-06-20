@@ -1,0 +1,121 @@
+# policy-aws.yaml — AWS policy pack template (ADR 0017).
+#
+# Demonstrates the AWS pack: per-account posture, an AWS MCP server with a
+# read-only per-tool allowlist, and a network allowlist for typical AWS
+# endpoints. Combine with the opt-in library rule:
+#
+#   agentjail policy enable no_aws_destructive
+#
+# so destructive AWS CLI commands are denied/asked even when no aws posture
+# config applies (the fail-safe default is prod).
+#
+# Posture -> verdict matrix:
+#   sandbox: reads allow, create/update allow, delete ask
+#   prod:    reads allow, create/update ask,  delete deny
+#   locked:  reads allow, create/update deny, delete deny
+#   custom:  per-account allow_cud / deny_delete / read_only flags
+#
+# default_posture is the fail-safe: any account not listed under accounts is
+# treated as default_posture (prod here -> delete denied). Add an account id
+# under accounts with posture: sandbox to bless it for CUD.
+#
+# The daemon resolves the account from `aws --profile <name>` via
+# ~/.aws/config (role_arn -> account id, or sso_account_id). An unresolvable
+# profile falls back to default_posture.
+#
+# Install:
+#   cp samples/configs/policy-aws.yaml ~/.agentjail/policy.yaml
+#   agentjail policy enable no_aws_destructive
+#   kill -HUP $(pgrep -f agentjail-daemon)
+
+mcp:
+  # Allow the AWS MCP server plus common dev/read servers.
+  allowed:
+    - "aws-cli"
+    - "filesystem"
+    - "fetch"
+  # Always block payment/billing/comms servers regardless of the allowlist.
+  blocked:
+    - "*stripe*"
+    - "*payment*"
+    - "*billing*"
+    - "*twilio*"
+    - "*sendgrid*"
+  servers:
+    # AWS MCP server: read-only tool allowlist. List*/Get*/Describe* are
+    # allowed; Delete*/Terminate*/Create*/Update* are denied by omission
+    # (mcp_policy/tool_not_allowed). This is intent-level gating at the MCP
+    # server-name + tool-name layer (ADR 0017); the CLI posture below covers
+    # `aws ...` Bash commands.
+    aws-cli:
+      allowed_tools:
+        - "ListBuckets"
+        - "ListObjects"
+        - "ListObjectsV2"
+        - "GetBucketLocation"
+        - "GetObject"
+        - "HeadObject"
+        - "DescribeInstances"
+        - "DescribeDBInstances"
+        - "DescribeStacks"
+        - "GetFunction"
+        - "ListFunctions"
+        - "ListRoles"
+        - "GetCallerIdentity"
+
+# AWS per-account posture (ADR 0017 / P1.2).
+aws:
+  default_posture: prod        # fail-safe: unknown account -> prod (delete denied)
+  accounts:
+    # Sandbox account — bless for CUD; delete still asks.
+    "111122223333":
+      posture: sandbox
+      allow_cud: true
+    # Prod account — delete denied, create/update ask.
+    "444455556666":
+      posture: prod
+      deny_delete: true
+    # Locked account — no CUD at all, reads only.
+    "777788889999":
+      posture: locked
+      read_only: true
+  # Resource-level overrides: S3 ARN glob -> posture (most-specific wins).
+  # Applies to unambiguous bucket forms (s3://, --bucket).
+  resources:
+    "arn:aws:s3:::prod-logs-*":
+      posture: locked
+      deny_delete: true
+    "arn:aws:s3:::sandbox-*":
+      posture: sandbox
+
+# Network: typical AWS + dev endpoints. The shield restricts outbound TCP to
+# these resolved IPs (macOS Seatbelt / Linux Landlock-net when available).
+network:
+  allowed_hosts:
+    - "api.github.com"
+    - "raw.githubusercontent.com"
+    - "registry.npmjs.org"
+    - "pypi.org"
+    - "proxy.golang.org"
+    - "s3.amazonaws.com"
+    - "sts.amazonaws.com"
+    - "iam.amazonaws.com"
+    - "ec2.amazonaws.com"
+    - "rds.amazonaws.com"
+    - "lambda.amazonaws.com"
+    - "cloudformation.amazonaws.com"
+    # us.i.posthog.com is the agentjail anonymous telemetry backend; remove
+    # if you disable telemetry.
+    - "us.i.posthog.com"
+
+file:
+  extra_deny: []
+  extra_allow: []
+
+commands:
+  extra_block: []
+
+# No rules disabled. To turn off the AWS pack's CLI enforcement, remove the
+# `aws:` section (reverts to library/no-aws-destructive's prod default) or
+# disable the library rule (`agentjail policy disable no_aws_destructive`).
+disabled_rules: []

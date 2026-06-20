@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/store"
 	"golang.org/x/term"
 )
 
@@ -59,14 +61,14 @@ type agentInfo struct {
 // display names. Lookup is case-sensitive; the daemon writes lower-case keys.
 // Unknown agents fall back to the "unknown" entry.
 var agentRegistry = map[string]agentInfo{
-	"claude":      {Display: "Claude",  Glyph: "✳", ASCIIGlyph: "*", Color: ansiColorClaude},
-	"claude-code": {Display: "Claude",  Glyph: "✳", ASCIIGlyph: "*", Color: ansiColorClaude},
-	"cursor":      {Display: "Cursor",  Glyph: "▸", ASCIIGlyph: ">", Color: ansiColorCursor},
-	"codex":       {Display: "Codex",   Glyph: "◆", ASCIIGlyph: "#", Color: ansiColorCodex},
+	"claude":      {Display: "Claude", Glyph: "✳", ASCIIGlyph: "*", Color: ansiColorClaude},
+	"claude-code": {Display: "Claude", Glyph: "✳", ASCIIGlyph: "*", Color: ansiColorClaude},
+	"cursor":      {Display: "Cursor", Glyph: "▸", ASCIIGlyph: ">", Color: ansiColorCursor},
+	"codex":       {Display: "Codex", Glyph: "◆", ASCIIGlyph: "#", Color: ansiColorCodex},
 	// try rows: rendered dimmed; the glyph uses a plain asterisk (dim context).
-	"try":         {Display: "try",     Glyph: "*", ASCIIGlyph: "*", Color: ansiColorTry},
+	"try": {Display: "try", Glyph: "*", ASCIIGlyph: "*", Color: ansiColorTry},
 	// unknown: neutral mid-dot; no distinct color — rendered with ansiDim.
-	"unknown":     {Display: "unknown", Glyph: "·", ASCIIGlyph: ".", Color: ""},
+	"unknown": {Display: "unknown", Glyph: "·", ASCIIGlyph: ".", Color: ""},
 }
 
 // agentDisplay returns the canonical display name for the given raw agent
@@ -204,6 +206,8 @@ func sourceCell(agent, sessionID, cwd string) string {
 // logsOpts holds parsed options for the logs subcommand.
 type logsOpts struct {
 	logPath  string        // path to daemon.log
+	dbPath   string        // path to SQLite event store
+	useDB    bool          // read decisions from SQLite instead of daemon.log
 	follow   bool          // tail -f mode
 	actions  []string      // filter by action (empty = all)
 	tool     string        // filter by tool (empty = all)
@@ -219,13 +223,13 @@ type logsOpts struct {
 
 // ANSI escape sequences. We keep them as bare strings — no external dep.
 const (
-	ansiReset    = "\033[0m"
-	ansiGreen    = "\033[32m"
-	ansiYellow   = "\033[33m"
-	ansiRedBold  = "\033[31;1m"
-	ansiDim      = "\033[2m"
-	ansiRed      = "\033[31m"
-	ansiBold     = "\033[1m"
+	ansiReset   = "\033[0m"
+	ansiGreen   = "\033[32m"
+	ansiYellow  = "\033[33m"
+	ansiRedBold = "\033[31;1m"
+	ansiDim     = "\033[2m"
+	ansiRed     = "\033[31m"
+	ansiBold    = "\033[1m"
 
 	// Per-agent brand colors (256-color ANSI; readable on dark terminals).
 	// Claude  — orange-amber  (#d97706 → xterm-256 214)
@@ -233,10 +237,10 @@ const (
 	// Cursor  — teal-green    (#10b981 → xterm-256 35)
 	// try     — neutral white (bright)
 	// unknown — dim grey (uses ansiDim, no extra constant needed)
-	ansiColorClaude  = "\033[38;5;214m"
-	ansiColorCodex   = "\033[38;5;75m"
-	ansiColorCursor  = "\033[38;5;35m"
-	ansiColorTry     = "\033[37m" // plain white; try rows are also dimmed
+	ansiColorClaude = "\033[38;5;214m"
+	ansiColorCodex  = "\033[38;5;75m"
+	ansiColorCursor = "\033[38;5;35m"
+	ansiColorTry    = "\033[37m" // plain white; try rows are also dimmed
 )
 
 // runLogs is the entry point for `agentjail logs`. Returns an exit code.
@@ -257,6 +261,7 @@ func runLogs(args []string) int {
 	}
 
 	logPath := fs.String("log", defaultLog, "path to daemon log")
+	dbPath := fs.String("db", filepath.Join(home, ".agentjail", "agentjail.db"), "path to SQLite event store")
 	noFollow := fs.Bool("no-follow", false, "print existing lines and exit (no tail)")
 	actionStr := fs.String("action", "", "filter by action(s), comma-separated (allow,ask,deny)")
 	tool := fs.String("tool", "", "filter by exact tool name")
@@ -273,6 +278,20 @@ func runLogs(args []string) int {
 			return 0
 		}
 		return 2
+	}
+
+	logExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "log" {
+			logExplicit = true
+		}
+	})
+	useDB := !logExplicit
+	if useDB {
+		if _, err := os.Stat(*dbPath); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail logs: SQLite store %s not available (%v), falling back to daemon.log\n", *dbPath, err)
+			useDB = false
+		}
 	}
 
 	// Parse --since duration.
@@ -307,6 +326,8 @@ func runLogs(args []string) int {
 
 	opts := logsOpts{
 		logPath:  *logPath,
+		dbPath:   *dbPath,
+		useDB:    useDB,
 		follow:   !*noFollow,
 		actions:  actions,
 		tool:     *tool,
@@ -335,7 +356,84 @@ func runLogs(args []string) int {
 	registerSIGWINCH(winchCh)
 	defer signal.Stop(winchCh)
 
+	if opts.useDB {
+		return streamStoredLogs(opts, doneCh)
+	}
 	return streamLogs(opts, doneCh, winchCh)
+}
+
+func streamStoredLogs(opts logsOpts, doneCh <-chan struct{}) int {
+	st, err := store.OpenReadOnly(opts.dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail logs: open %s: %v\n", opts.dbPath, err)
+		return 1
+	}
+	defer st.Close()
+
+	if opts.useColor {
+		if opts.follow {
+			fmt.Printf("%sagentjail logs — watching %s (Ctrl-C to stop)%s\n", ansiDim, opts.dbPath, ansiReset)
+		}
+		fmt.Printf("%s%s%-8s  %-*s  %-7s  %-18s  %-36s  %s%s\n",
+			ansiBold, ansiDim,
+			"TIME", sourceWidth, "SOURCE", "ACTION", "TOOL", "RULE", "LATENCY",
+			ansiReset)
+		fmt.Printf("%s%s%s\n", ansiDim, strings.Repeat("─", 8+2+sourceWidth+2+7+2+18+2+36+2+8), ansiReset)
+	}
+
+	lastID := int64(0)
+	for {
+		rows, err := st.ListDecisions(context.Background(), store.Filter{
+			SessionID: opts.session,
+			Since:     opts.since,
+			Actions:   opts.actions,
+			Tool:      opts.tool,
+			AfterID:   lastID,
+			Limit:     1000,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail logs: query %s: %v\n", opts.dbPath, err)
+			return 1
+		}
+		for _, row := range rows {
+			if row.ID > lastID {
+				lastID = row.ID
+			}
+			line := evalLineFromDecision(row)
+			if opts.raw {
+				b, _ := json.Marshal(line)
+				fmt.Println(string(b))
+				continue
+			}
+			_ = renderEvalLine(line, opts, nil)
+		}
+		if !opts.follow {
+			return 0
+		}
+		select {
+		case <-doneCh:
+			return 0
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func evalLineFromDecision(d store.DecisionRecord) evalLine {
+	return evalLine{
+		Time:      d.Ts,
+		Level:     "INFO",
+		Msg:       "eval",
+		Tool:      d.ToolName,
+		SessionID: d.SessionID,
+		Agent:     d.Agent,
+		CWD:       d.CWD,
+		Summary:   d.Summary,
+		Action:    d.Action,
+		RuleID:    d.RuleID,
+		Reason:    d.Reason,
+		Impact:    d.Impact,
+		ElapsedUs: d.ElapsedUs,
+	}
 }
 
 // streamLogs opens the log file and processes lines. Follows in tail mode.

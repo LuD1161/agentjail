@@ -47,6 +47,15 @@ type RuleEntry struct {
 // and TestLockedSetMatchesRego will catch it.
 var ruleRegistry = []RuleEntry{
 	// ------------------------------------------------------------------ //
+	// Core — aws_policy/* (per-account posture, ADR 0017)
+	// ------------------------------------------------------------------ //
+	{
+		ID:          "aws_policy/posture",
+		Source:      RuleSourceCore,
+		Description: "Per-account AWS posture: sandbox asks on delete, prod denies delete, locked denies CUD; fails safe to prod",
+	},
+
+	// ------------------------------------------------------------------ //
 	// Core — command_policy/*
 	// ------------------------------------------------------------------ //
 	{
@@ -248,6 +257,11 @@ var ruleRegistry = []RuleEntry{
 		ID:          "library/no-app-binary-write",
 		Source:      RuleSourceLibrary,
 		Description: "Block writes into application executable paths (/Applications, /usr/local/bin, …)",
+	},
+	{
+		ID:          "library/no-aws-destructive",
+		Source:      RuleSourceLibrary,
+		Description: "Deny destructive AWS CLI (delete/terminate), ask on create/run/s3 cp; defers to per-account posture when configured",
 	},
 	{
 		ID:          "library/no-destructive-git",

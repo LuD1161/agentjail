@@ -32,11 +32,13 @@ import (
 // serialised into OPA's data document via the OPA Go API (which accepts
 // map[string]any, not JSON-tagged structs directly).
 type PolicyConfig struct {
-	MCP          MCPConfig     `yaml:"mcp"`
-	File         FileConfig    `yaml:"file"`
-	Commands     CommandConfig `yaml:"commands"`
-	Network      NetworkConfig `yaml:"network"`
-	Web          WebConfig     `yaml:"web"`
+	MCP      MCPConfig     `yaml:"mcp"`
+	File     FileConfig    `yaml:"file"`
+	Commands CommandConfig `yaml:"commands"`
+	Network  NetworkConfig `yaml:"network"`
+	Web      WebConfig     `yaml:"web"`
+	AWS      AWSConfig     `yaml:"aws"`
+	Secrets  SecretsConfig `yaml:"secrets"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -130,6 +132,63 @@ type WebConfig struct {
 	// nothing is blocked. This is domain control, not exfil-proofing; to make
 	// WebFetch prompt again, disable web_policy/fetch via disabled_rules.
 	Blocked []string `yaml:"blocked"`
+}
+
+// AWSConfig configures per-account AWS posture (ADR 0017). The daemon
+// resolves the AWS account targeted by an `aws --profile <name>` CLI command
+// (from ~/.aws/config) and injects it as input.aws_account; aws_policy/*
+// reads the posture here and maps it to a verdict
+// (sandbox: CUD allow / delete ask; prod: CUD ask / delete deny;
+// locked: CUD deny; custom: per-account flags).
+//
+// default_posture is the fail-safe: an account not listed under accounts is
+// treated as default_posture (prod when unset). resources maps an ARN glob
+// (e.g. "arn:aws:s3:::prod-*") to a posture that overrides the account
+// posture for matching resources (most-specific / longest matching glob
+// wins).
+type AWSConfig struct {
+	DefaultPosture string                 `yaml:"default_posture"`
+	Accounts       map[string]AWSAccount  `yaml:"accounts"`
+	Resources      map[string]AWSResource `yaml:"resources"`
+}
+
+// AWSAccount is the per-account posture entry. Posture is one of
+// sandbox|prod|locked|custom. The boolean flags are consulted only when
+// posture is custom.
+type AWSAccount struct {
+	Posture    string `yaml:"posture"`
+	AllowCUD   bool   `yaml:"allow_cud"`
+	DenyDelete bool   `yaml:"deny_delete"`
+	ReadOnly   bool   `yaml:"read_only"`
+}
+
+// AWSResource is a resource-level posture override keyed by an ARN glob.
+type AWSResource struct {
+	Posture    string `yaml:"posture"`
+	DenyDelete bool   `yaml:"deny_delete"`
+}
+
+// SecretsConfig controls env stripping at agent launch.  When StripOnLaunch
+// is true (the default), agentjail-shield removes env vars matching
+// EnvBlocklist from the agent's environment before exec'ing it.  This
+// prevents ambient credentials (AWS_ACCESS_KEY_ID, PGPASSWORD, etc.) from
+// leaking into the sandboxed agent process.
+//
+// If the agentjail-secrets broker is running, stripped vars are replaced
+// with placeholders signalling that scoped creds are available via the
+// broker (Kind-A from ADR 0004).
+type SecretsConfig struct {
+	EnvBlocklist []string `yaml:"env_blocklist"`
+
+	StripOnLaunch *bool `yaml:"strip_on_launch"`
+
+	Grants []SecretGrant `yaml:"grants"`
+}
+
+type SecretGrant struct {
+	Name  string `yaml:"name"`
+	Scope string `yaml:"scope"`
+	TTL   string `yaml:"ttl"`
 }
 
 // Load reads a PolicyConfig from a YAML file at path.
@@ -238,6 +297,28 @@ func Default() *PolicyConfig {
 		Web: WebConfig{
 			Blocked: []string{},
 		},
+		// AWS per-account posture: fail-safe default is prod (unknown account
+		// -> delete denied). No accounts blessed by default.
+		AWS: AWSConfig{
+			DefaultPosture: "prod",
+			Accounts:       map[string]AWSAccount{},
+			Resources:      map[string]AWSResource{},
+		},
+		Secrets: SecretsConfig{
+			EnvBlocklist: []string{
+				"AWS_ACCESS_KEY_ID",
+				"AWS_SECRET_ACCESS_KEY",
+				"AWS_SESSION_TOKEN",
+				"AWS_SECURITY_TOKEN",
+				"AWS_DELEGATION_TOKEN",
+				"PGPASSWORD",
+				"REDIS_PASSWORD",
+				"GITHUB_TOKEN",
+				"ANTHROPIC_API_KEY",
+				"OPENAI_API_KEY",
+			},
+			StripOnLaunch: boolPtr(true),
+		},
 	}
 }
 
@@ -321,6 +402,54 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Web.Blocked = append([]string(nil), overlay.Web.Blocked...)
 	} else {
 		result.Web.Blocked = append([]string(nil), base.Web.Blocked...)
+	}
+
+	// AWS — fail-safe: default_posture falls back to "prod" if both empty.
+	// (An empty overlay default_posture means "keep base", not "clear" — and
+	// base is "prod" from Default(), so the fail-safe is preserved.)
+	switch {
+	case overlay.AWS.DefaultPosture != "":
+		result.AWS.DefaultPosture = overlay.AWS.DefaultPosture
+	case base.AWS.DefaultPosture != "":
+		result.AWS.DefaultPosture = base.AWS.DefaultPosture
+	default:
+		result.AWS.DefaultPosture = "prod"
+	}
+	// Accounts/Resources maps: union, overlay wins on conflict.
+	result.AWS.Accounts = make(map[string]AWSAccount, len(base.AWS.Accounts)+len(overlay.AWS.Accounts))
+	for k, v := range base.AWS.Accounts {
+		result.AWS.Accounts[k] = v
+	}
+	for k, v := range overlay.AWS.Accounts {
+		result.AWS.Accounts[k] = v
+	}
+	result.AWS.Resources = make(map[string]AWSResource, len(base.AWS.Resources)+len(overlay.AWS.Resources))
+	for k, v := range base.AWS.Resources {
+		result.AWS.Resources[k] = v
+	}
+	for k, v := range overlay.AWS.Resources {
+		result.AWS.Resources[k] = v
+	}
+
+	// Secrets.EnvBlocklist
+	if len(overlay.Secrets.EnvBlocklist) > 0 {
+		result.Secrets.EnvBlocklist = append([]string(nil), overlay.Secrets.EnvBlocklist...)
+	} else {
+		result.Secrets.EnvBlocklist = append([]string(nil), base.Secrets.EnvBlocklist...)
+	}
+	// Secrets.StripOnLaunch — pointer: nil means keep base, non-nil means override.
+	if overlay.Secrets.StripOnLaunch != nil {
+		result.Secrets.StripOnLaunch = boolPtr(*overlay.Secrets.StripOnLaunch)
+	} else if base.Secrets.StripOnLaunch != nil {
+		result.Secrets.StripOnLaunch = boolPtr(*base.Secrets.StripOnLaunch)
+	} else {
+		result.Secrets.StripOnLaunch = boolPtr(true)
+	}
+	// Secrets.Grants — overlay wins if non-empty, else keep base.
+	if len(overlay.Secrets.Grants) > 0 {
+		result.Secrets.Grants = append([]SecretGrant(nil), overlay.Secrets.Grants...)
+	} else {
+		result.Secrets.Grants = append([]SecretGrant(nil), base.Secrets.Grants...)
 	}
 
 	// DisabledRules — overlay wins if non-empty, else keep base.
@@ -427,6 +556,27 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 		}
 	}
 
+	accounts := make(map[string]interface{}, len(c.AWS.Accounts))
+	for acct, a := range c.AWS.Accounts {
+		accounts[acct] = map[string]interface{}{
+			"posture":     postureOrEmpty(a.Posture),
+			"allow_cud":   a.AllowCUD,
+			"deny_delete": a.DenyDelete,
+			"read_only":   a.ReadOnly,
+		}
+	}
+	resources := make(map[string]interface{}, len(c.AWS.Resources))
+	for glob, r := range c.AWS.Resources {
+		resources[glob] = map[string]interface{}{
+			"posture":     postureOrEmpty(r.Posture),
+			"deny_delete": r.DenyDelete,
+		}
+	}
+	defaultPosture := c.AWS.DefaultPosture
+	if defaultPosture == "" {
+		defaultPosture = "prod"
+	}
+
 	return map[string]interface{}{
 		"mcp": map[string]interface{}{
 			"allowed": sliceOrEmpty(c.MCP.Allowed),
@@ -448,10 +598,44 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 		"web": map[string]interface{}{
 			"blocked": sliceOrEmpty(c.Web.Blocked),
 		},
+		// aws per-account posture is read by aws_policy.rego (ADR 0017).
+		// default_posture is the fail-safe (prod); accounts/resources may be empty.
+		"aws": map[string]interface{}{
+			"default_posture": defaultPosture,
+			"accounts":        accounts,
+			"resources":       resources,
+		},
+		"secrets": map[string]interface{}{
+			"env_blocklist":   sliceOrEmpty(c.Secrets.EnvBlocklist),
+			"strip_on_launch": c.Secrets.StripOnLaunch != nil && *c.Secrets.StripOnLaunch,
+			"grants":          grantsToOPA(c.Secrets.Grants),
+		},
 		// disabled_rules is read by resolver.rego to suppress non-locked candidates.
 		// Rego reads it as data.agentjail.config.disabled_rules.
 		"disabled_rules": sliceOrEmpty(c.DisabledRules),
 	}
+}
+
+// postureOrEmpty returns p unchanged, or "" when empty. Used so an unset
+// posture serialises as an empty string (Rego treats it as the fail-safe
+// default_posture path).
+func postureOrEmpty(p string) string {
+	return p
+}
+
+func grantsToOPA(grants []SecretGrant) []interface{} {
+	if len(grants) == 0 {
+		return []interface{}{}
+	}
+	out := make([]interface{}, len(grants))
+	for i, g := range grants {
+		out[i] = map[string]interface{}{
+			"name":  g.Name,
+			"scope": g.Scope,
+			"ttl":   g.TTL,
+		}
+	}
+	return out
 }
 
 // Validate checks the config for obvious misconfigurations and returns a
@@ -470,4 +654,11 @@ func Validate(cfg *PolicyConfig) []string {
 		warns = append(warns, "mcp.allowed is empty — all MCP calls will be denied")
 	}
 	return warns
+}
+
+// boolPtr returns a pointer to b.  Used for SecretsConfig.StripOnLaunch
+// which is a *bool so that "not specified in YAML" (nil) can be
+// distinguished from "explicitly set to false".
+func boolPtr(b bool) *bool {
+	return &b
 }

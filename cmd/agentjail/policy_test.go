@@ -21,6 +21,7 @@ func TestLibraryRuleNames(t *testing.T) {
 	names := libraryRuleNames()
 	want := []string{
 		"no_app_binary_write",
+		"no_aws_destructive",
 		"no_destructive_git",
 		"no_history_read",
 		"no_launchctl",
@@ -45,6 +46,7 @@ func TestLibraryRuleNames(t *testing.T) {
 func TestCoreRuleNames(t *testing.T) {
 	names := coreRuleNames()
 	want := []string{
+		"aws_posture",
 		"command_policy",
 		"file_policy",
 		"internal_tools",

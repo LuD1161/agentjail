@@ -698,3 +698,159 @@ disabled_rules:
 		t.Errorf("expected default MCP.Blocked=%v, got %v", defaultBlocked, result.MCP.Blocked)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AWS per-account posture (ADR 0017 / P1.2)
+// ---------------------------------------------------------------------------
+
+// TestDefaultAWSPosture verifies the fail-safe default is prod with empty maps.
+func TestDefaultAWSPosture(t *testing.T) {
+	cfg := Default()
+	if cfg.AWS.DefaultPosture != "prod" {
+		t.Fatalf("Default AWS.DefaultPosture = %q, want %q", cfg.AWS.DefaultPosture, "prod")
+	}
+	if cfg.AWS.Accounts == nil {
+		t.Fatal("Default AWS.Accounts must be a non-nil map")
+	}
+	if cfg.AWS.Resources == nil {
+		t.Fatal("Default AWS.Resources must be a non-nil map")
+	}
+}
+
+// TestLoadAWSPosture parses an aws section with account + resource postures.
+func TestLoadAWSPosture(t *testing.T) {
+	src := `
+aws:
+  default_posture: prod
+  accounts:
+    "123456789012":
+      posture: sandbox
+      allow_cud: true
+    "987654321098":
+      posture: locked
+      read_only: true
+  resources:
+    "arn:aws:s3:::prod-*":
+      posture: locked
+      deny_delete: true
+`
+	overlay, err := decode(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if overlay.AWS.DefaultPosture != "prod" {
+		t.Errorf("default_posture = %q", overlay.AWS.DefaultPosture)
+	}
+	sandbox, ok := overlay.AWS.Accounts["123456789012"]
+	if !ok {
+		t.Fatal("missing account 123456789012")
+	}
+	if sandbox.Posture != "sandbox" || !sandbox.AllowCUD {
+		t.Errorf("sandbox account = %+v", sandbox)
+	}
+	locked, ok := overlay.AWS.Accounts["987654321098"]
+	if !ok {
+		t.Fatal("missing account 987654321098")
+	}
+	if locked.Posture != "locked" || !locked.ReadOnly {
+		t.Errorf("locked account = %+v", locked)
+	}
+	res, ok := overlay.AWS.Resources["arn:aws:s3:::prod-*"]
+	if !ok {
+		t.Fatal("missing resource override")
+	}
+	if res.Posture != "locked" || !res.DenyDelete {
+		t.Errorf("resource override = %+v", res)
+	}
+}
+
+// TestMergeAWSPosture verifies overlay default_posture wins and maps union.
+func TestMergeAWSPosture(t *testing.T) {
+	base := Default()
+	overlay := &PolicyConfig{
+		AWS: AWSConfig{
+			DefaultPosture: "sandbox",
+			Accounts: map[string]AWSAccount{
+				"111": {Posture: "sandbox"},
+			},
+			Resources: map[string]AWSResource{
+				"arn:aws:s3:::a-*": {Posture: "sandbox"},
+			},
+		},
+	}
+	merged := Merge(base, overlay)
+	if merged.AWS.DefaultPosture != "sandbox" {
+		t.Fatalf("merged default_posture = %q, want sandbox", merged.AWS.DefaultPosture)
+	}
+	if _, ok := merged.AWS.Accounts["111"]; !ok {
+		t.Error("overlay account missing after merge")
+	}
+}
+
+// TestMergeAWSPostureFailSafe verifies an empty overlay keeps prod.
+func TestMergeAWSPostureFailSafe(t *testing.T) {
+	merged := Merge(Default(), &PolicyConfig{})
+	if merged.AWS.DefaultPosture != "prod" {
+		t.Fatalf("merged default_posture = %q, want prod (fail-safe)", merged.AWS.DefaultPosture)
+	}
+}
+
+// TestToOPADataAWS verifies the aws section is projected for Rego.
+func TestToOPADataAWS(t *testing.T) {
+	cfg := &PolicyConfig{
+		AWS: AWSConfig{
+			DefaultPosture: "prod",
+			Accounts: map[string]AWSAccount{
+				"123": {Posture: "sandbox", AllowCUD: true, DenyDelete: false, ReadOnly: false},
+			},
+			Resources: map[string]AWSResource{
+				"arn:aws:s3:::prod-*": {Posture: "locked", DenyDelete: true},
+			},
+		},
+	}
+	data := cfg.ToOPAData()
+	aws, ok := data["aws"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("ToOPAData missing aws object: %#v", data["aws"])
+	}
+	if aws["default_posture"] != "prod" {
+		t.Errorf("aws.default_posture = %#v", aws["default_posture"])
+	}
+	accounts, ok := aws["accounts"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("aws.accounts not a map: %#v", aws["accounts"])
+	}
+	acct, ok := accounts["123"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing account 123 in ToOPAData")
+	}
+	if acct["posture"] != "sandbox" || acct["allow_cud"] != true {
+		t.Errorf("account 123 = %#v", acct)
+	}
+	resources, ok := aws["resources"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("aws.resources not a map: %#v", aws["resources"])
+	}
+	if _, ok := resources["arn:aws:s3:::prod-*"]; !ok {
+		t.Error("missing resource override in ToOPAData")
+	}
+}
+
+// TestToOPADataAWSEmpty verifies an empty AWS config still projects a valid
+// aws object (no nil maps) so Rego sees {} not null.
+func TestToOPADataAWSEmpty(t *testing.T) {
+	data := Default().ToOPAData()
+	aws, ok := data["aws"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("ToOPAData missing aws object: %#v", data["aws"])
+	}
+	if aws["default_posture"] != "prod" {
+		t.Errorf("default_posture = %#v, want prod", aws["default_posture"])
+	}
+	if accounts, ok := aws["accounts"].(map[string]interface{}); !ok || accounts == nil {
+		t.Errorf("aws.accounts must be a non-nil map: %#v", aws["accounts"])
+	}
+	if resources, ok := aws["resources"].(map[string]interface{}); !ok || resources == nil {
+		t.Errorf("aws.resources must be a non-nil map: %#v", aws["resources"])
+	}
+}

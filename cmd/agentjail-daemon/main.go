@@ -40,6 +40,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -51,6 +52,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/logrotate"
+	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
 
@@ -93,6 +95,13 @@ type server struct {
 	repoRootMu    sync.RWMutex
 	repoRootCache map[string]string
 
+	// awsProfiles is a lazily-parsed view of ~/.aws/config (or $AWS_CONFIG_FILE)
+	// mapping profile name → account-resolution fields. Populated on first
+	// resolveAWSAccount call; invalidated on SIGHUP reload so edits to
+	// ~/.aws/config take effect without a daemon restart. See ADR 0017.
+	awsCfgMu    sync.Mutex
+	awsProfiles map[string]awsProfileInfo
+
 	// sessionAskSeen tracks (sessionID, ruleID) pairs where the daemon already
 	// returned "ask". On the SECOND ask for the same pair, the user must have
 	// approved the first one (Claude Code does not call the hook again after a
@@ -106,6 +115,14 @@ type server struct {
 
 	// telemetry is nil-safe: a nil recorder records nothing.
 	telemetry *telemetry.Recorder
+
+	// eventStore persists decisions/audit/sessions to SQLite (ADR 0018).
+	// nil-safe: a nil store means the daemon continues without persistence
+	// (fail-open on logging, never on policy). decCh is a bounded buffer
+	// drained by a goroutine so a DB write never wedges a decision.
+	eventStore store.EventStore
+	decCh      chan store.DecisionRecord
+	decWg      sync.WaitGroup
 }
 
 // recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
@@ -121,6 +138,49 @@ func (s *server) recordTelemetry(action, ruleID, toolName, agentID string, elaps
 func (s *server) recordPolicyConfig(cfg *agentconfig.PolicyConfig, rulesDir string) {
 	if s.telemetry != nil {
 		s.telemetry.RecordPolicyConfig(countCustomRuleFiles(rulesDir), cfg.DisabledRules)
+	}
+}
+
+// enqueueDecision enqueues a decision record for async SQLite persistence
+// (ADR 0018). Fail-open: if the store is nil or the buffer is full, the
+// record is dropped with a Warn log — the policy decision was already
+// returned to the hook and is NOT affected. The buffer is bounded so a slow
+// DB cannot cause unbounded memory growth.
+func (s *server) enqueueDecision(d store.DecisionRecord) {
+	if s.eventStore == nil || s.decCh == nil {
+		return
+	}
+	select {
+	case s.decCh <- d:
+	default:
+		slog.Warn("store buffer full; dropping decision record (fail-open on logging)", "session_id", d.SessionID, "action", d.Action)
+	}
+}
+
+// drainDecisions consumes the decision channel and writes to the store. It
+// runs until ctx is cancelled, then drains any remaining records and exits
+// so graceful shutdown flushes pending writes.
+func (s *server) drainDecisions(ctx context.Context) {
+	defer s.decWg.Done()
+	for {
+		select {
+		case d := <-s.decCh:
+			if err := s.eventStore.RecordDecision(ctx, d); err != nil {
+				slog.Warn("store write decision failed (fail-open)", "err", err, "session_id", d.SessionID)
+			}
+		case <-ctx.Done():
+			// Flush remaining records before exiting.
+			for {
+				select {
+				case d := <-s.decCh:
+					if err := s.eventStore.RecordDecision(context.Background(), d); err != nil {
+						slog.Warn("store write decision failed during drain", "err", err)
+					}
+				default:
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -168,6 +228,16 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		SessionID: req.SessionID,
 		CWD:       canonCWD,
 		RepoRoot:  s.resolveRepoRoot(canonCWD),
+	}
+
+	// AWS account resolution (ADR 0017): for `aws --profile <name>` CLI
+	// commands, resolve the targeted account id from ~/.aws/config and inject
+	// it as input.aws_account so aws_policy/posture can apply per-account
+	// posture. Empty for non-AWS or unresolvable commands -> default_posture.
+	if req.ToolName == "Bash" {
+		if cmd, ok := normalizedInput["command"].(string); ok && isAWSCLICommand(cmd) {
+			input.AWSAccount = s.resolveAWSAccount(cmd)
+		}
 	}
 
 	// Cache key includes the canonical cwd so a file decision that varies by
@@ -288,6 +358,183 @@ func (s *server) resolveRepoRoot(cwd string) string {
 
 	return root
 }
+
+// ─── AWS account resolution (ADR 0017) ────────────────────────────────────
+
+// awsProfileInfo is the per-profile account-resolution data parsed from
+// ~/.aws/config. The account id is derived from role_arn (the 12-digit IAM
+// account in arn:aws:iam::<acct>:role/...) or sso_account_id. source_profile
+// chains to another profile when the profile itself has no role_arn/sso_account_id.
+type awsProfileInfo struct {
+	roleARN       string
+	ssoAccountID  string
+	sourceProfile string
+}
+
+// reAWSCLI matches a Bash command that invokes the AWS CLI as the first
+// significant token (allowing leading env-var assignments and whitespace).
+var reAWSCLI = regexp.MustCompile(`(^|[\s;&|(])aws\s+\S+`)
+
+// reAWSProfile captures the --profile argument value (--profile prod or
+// --profile=prod). AWS accepts both space- and equals-separated forms.
+var reAWSProfile = regexp.MustCompile(`--profile[ =](\S+)`)
+
+// reAWSRoleARNAccount captures the 12-digit account id from an IAM role ARN:
+// arn:aws:iam::123456789012:role/MyRole. Also accepts non-AWS partitions
+// (aws-cn, aws-us-gov) and any-length numeric account ids.
+var reAWSRoleARNAccount = regexp.MustCompile(`arn:aws[a-z-]*:iam::(\d+):`)
+
+// isAWSCLICommand reports whether cmd invokes the AWS CLI.
+func isAWSCLICommand(cmd string) bool {
+	return reAWSCLI.MatchString(cmd)
+}
+
+// extractAWSProfile returns the --profile name from an AWS CLI command, or
+// "default" when no --profile is given (the AWS CLI default profile).
+func extractAWSProfile(cmd string) string {
+	if m := reAWSProfile.FindStringSubmatch(cmd); len(m) == 2 {
+		return strings.Trim(m[1], `"'`)
+	}
+	return "default"
+}
+
+// accountFromRoleARN extracts the account id from an IAM role ARN, or "".
+func accountFromRoleARN(arn string) string {
+	if m := reAWSRoleARNAccount.FindStringSubmatch(arn); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+// awsConfigPath returns the AWS config file path, honoring AWS_CONFIG_FILE
+// (the env var the AWS CLI itself respects) and falling back to ~/.aws/config.
+func awsConfigPath() string {
+	if p := os.Getenv("AWS_CONFIG_FILE"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".aws", "config")
+}
+
+// resolveAWSAccount resolves the AWS account id targeted by an AWS CLI command
+// by extracting --profile and looking it up in ~/.aws/config. Returns "" when
+// unresolvable (no config, unknown profile, no role_arn/sso_account_id) so
+// aws_policy/posture falls back to default_posture.
+func (s *server) resolveAWSAccount(cmd string) string {
+	profile := extractAWSProfile(cmd)
+	if profile == "" {
+		return ""
+	}
+	profiles := s.loadAWSProfiles()
+	return accountForProfile(profiles, profile, map[string]bool{})
+}
+
+// accountForProfile resolves profile -> account, following source_profile
+// chains (with a visited set to avoid cycles). Returns "" if unresolvable.
+func accountForProfile(profiles map[string]awsProfileInfo, profile string, visited map[string]bool) string {
+	if visited[profile] {
+		return ""
+	}
+	visited[profile] = true
+	info, ok := profiles[profile]
+	if !ok {
+		return ""
+	}
+	if acct := accountFromRoleARN(info.roleARN); acct != "" {
+		return acct
+	}
+	if info.ssoAccountID != "" {
+		return info.ssoAccountID
+	}
+	if info.sourceProfile != "" {
+		return accountForProfile(profiles, info.sourceProfile, visited)
+	}
+	return ""
+}
+
+// loadAWSProfiles returns the cached parsed ~/.aws/config, parsing it lazily
+// on first call. Thread-safe; the cache is invalidated on SIGHUP reload.
+func (s *server) loadAWSProfiles() map[string]awsProfileInfo {
+	s.awsCfgMu.Lock()
+	defer s.awsCfgMu.Unlock()
+	if s.awsProfiles != nil {
+		return s.awsProfiles
+	}
+	path := awsConfigPath()
+	if path == "" {
+		s.awsProfiles = map[string]awsProfileInfo{}
+		return s.awsProfiles
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		slog.Debug("aws config unreadable; AWS posture will use default_posture", "path", path, "err", err)
+		s.awsProfiles = map[string]awsProfileInfo{}
+		return s.awsProfiles
+	}
+	s.awsProfiles = parseAWSConfig(string(b))
+	return s.awsProfiles
+}
+
+// parseAWSConfig parses an AWS config file (INI-like) into a profile->info map.
+// Sections are [default] or [profile <name>]; keys are key = value. Comments
+// (# or ;) and blank lines are ignored.
+func parseAWSConfig(content string) map[string]awsProfileInfo {
+	profiles := map[string]awsProfileInfo{}
+	current := ""
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inner := strings.TrimSpace(line[1 : len(line)-1])
+			if inner == "default" {
+				current = "default"
+			} else if strings.HasPrefix(inner, "profile ") {
+				current = strings.TrimSpace(inner[len("profile "):])
+			} else {
+				current = "" // non-profile section (e.g. sso-session), skip
+			}
+			continue
+		}
+		if current == "" {
+			continue
+		}
+		key, val, ok := splitAWSConfigKV(line)
+		if !ok {
+			continue
+		}
+		info := profiles[current]
+		switch key {
+		case "role_arn":
+			info.roleARN = val
+		case "sso_account_id":
+			info.ssoAccountID = val
+		case "source_profile":
+			info.sourceProfile = val
+		}
+		profiles[current] = info
+	}
+	return profiles
+}
+
+// splitAWSConfigKV splits a "key = value" (or "key=value") line, trimming the
+// value of surrounding quotes/whitespace. Returns ok=false if no "=" present.
+func splitAWSConfigKV(line string) (key, val string, ok bool) {
+	idx := strings.Index(line, "=")
+	if idx < 0 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(line[:idx])
+	val = strings.TrimSpace(line[idx+1:])
+	val = strings.Trim(val, `"'`)
+	return key, val, true
+}
+
+// ─── end AWS account resolution ───────────────────────────────────────────
 
 // canonicalizeCWD resolves a working directory to its canonical absolute form:
 //  1. If empty, returns "".
@@ -539,6 +786,22 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
 		} else {
 			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
+			// Persist the decision to SQLite (async, fail-open). The full
+			// tool_input is redacted at the store boundary (ADR 0019).
+			s.enqueueDecision(store.DecisionRecord{
+				Ts:        time.Now(),
+				SessionID: req.SessionID,
+				Agent:     req.Agent,
+				ToolName:  req.ToolName,
+				Summary:   summary,
+				Action:    resp.Action,
+				RuleID:    resp.RuleID,
+				Reason:    resp.Reason,
+				Impact:    resp.Impact,
+				ElapsedUs: elapsed.Microseconds(),
+				CWD:       req.CWD,
+				ToolInput: req.ToolInput,
+			})
 		}
 
 		if encErr != nil && !isClientGone(encErr) {
@@ -630,6 +893,11 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 	// flush-on-policy-change semantics.
 	s.cache.Invalidate()
 	s.engineMu.Unlock()
+	// Invalidate the AWS profile cache so edits to ~/.aws/config take effect
+	// on reload without a daemon restart (ADR 0017).
+	s.awsCfgMu.Lock()
+	s.awsProfiles = nil
+	s.awsCfgMu.Unlock()
 	return nil
 }
 
@@ -644,14 +912,15 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 // stem here too so the daemon correctly classifies it as non-custom and doesn't
 // subject it to staged quarantine.
 var coreFileStems = map[string]bool{
-	"command_policy":      true,
-	"file_policy":         true,
-	"internal_tools":      true,
-	"mcp_policy":          true,
-	"web_policy":          true,
-	"no_daemon_kill":      true,
+	"aws_posture":          true,
+	"command_policy":       true,
+	"file_policy":          true,
+	"internal_tools":       true,
+	"mcp_policy":           true,
+	"web_policy":           true,
+	"no_daemon_kill":       true,
 	"no_hook_self_disable": true,
-	"resolver":            true,
+	"resolver":             true,
 }
 
 // libraryFileStems is the set of rego file stems that are opt-in library rules.
@@ -661,6 +930,7 @@ var coreFileStems = map[string]bool{
 // NOTE: must match libraryRuleNames() in cmd/agentjail/library_embed.go.
 var libraryFileStems = map[string]bool{
 	"no_app_binary_write": true,
+	"no_aws_destructive":  true,
 	"no_destructive_git":  true,
 	"no_history_read":     true,
 	"no_launchctl":        true,
@@ -788,11 +1058,22 @@ func defaultLogPath() string {
 	return filepath.Join(home, ".agentjail", "daemon.log")
 }
 
+// defaultDBPath returns ~/.agentjail/agentjail.db (the SQLite store, ADR 0018).
+func defaultDBPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/agentjail.db"
+	}
+	return filepath.Join(home, ".agentjail", "agentjail.db")
+}
+
 func main() {
 	socketPath := flag.String("socket", defaultSocketPath(), "path to Unix domain socket")
 	policyPath := flag.String("policy", defaultPolicyPath(), "path to policy.yaml (data overlay for OPA)")
 	rulesDir := flag.String("rules", "", "path to Rego rules directory (default: uses inline default policy)")
 	logPath := flag.String("log", defaultLogPath(), "path to structured log file (rotated internally)")
+	dbPath := flag.String("db", defaultDBPath(), "path to SQLite event store (~/.agentjail/agentjail.db)")
+	retentionDur := flag.Duration("retention", 30*24*time.Hour, "max age to retain decisions/audit events in the store (e.g. 720h)")
 	flag.Parse()
 
 	// Open the rotating log writer before setting up slog so all startup
@@ -885,6 +1166,25 @@ func main() {
 	srv := &server{
 		engine: eng,
 		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+	}
+
+	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
+	// continues without persistence (fail-open on logging). On first run, if
+	// daemon.log exists and the store is empty, import the historical JSON-lines
+	// decisions (best-effort). Then run retention cleanup + start the async
+	// drain goroutine.
+	if st, serr := store.Open(*dbPath); serr == nil {
+		srv.eventStore = st
+		srv.decCh = make(chan store.DecisionRecord, 1024)
+		migrateDaemonLog(ctx, st, *logPath)
+		if cerr := st.Cleanup(ctx, *retentionDur); cerr != nil {
+			slog.Warn("store retention cleanup failed (non-fatal)", "err", cerr)
+		}
+		srv.decWg.Add(1)
+		go srv.drainDecisions(ctx)
+		slog.Info("sqlite event store opened", "db", *dbPath, "retention", *retentionDur)
+	} else {
+		slog.Warn("sqlite event store open failed; continuing without persistence (fail-open on logging)", "db", *dbPath, "err", serr)
 	}
 
 	// Wire telemetry recorder: nil-safe, failure-tolerant — if init fails, the
@@ -994,10 +1294,92 @@ func main() {
 			case <-time.After(5 * time.Second):
 				slog.Warn("drain timeout; forcing exit")
 			}
+			// Flush the async SQLite writer so pending decisions are persisted
+			// before exit. drainDecisions exits after draining the channel on
+			// ctx cancellation; wait for it (bounded).
+			flushDone := make(chan struct{})
+			go func() {
+				srv.decWg.Wait()
+				close(flushDone)
+			}()
+			select {
+			case <-flushDone:
+			case <-time.After(3 * time.Second):
+				slog.Warn("store drain timeout; forcing exit")
+			}
+			if srv.eventStore != nil {
+				_ = srv.eventStore.Close()
+			}
 			// Remove the socket file so a fresh start won't see a stale one.
 			_ = os.Remove(*socketPath)
 			return
 		}
+	}
+}
+
+// migrateDaemonLog imports historical decisions from an existing daemon.log
+// (slog JSON-lines, msg=="eval") into the SQLite store on first run, iff the
+// store is empty. Best-effort: unparseable lines are skipped, failures are
+// logged, and startup is never blocked. Migrated records have no tool_input
+// (the slog line only carries a summary).
+func migrateDaemonLog(ctx context.Context, st store.EventStore, logPath string) {
+	n, err := st.DecisionCount(ctx)
+	if err != nil || n > 0 {
+		return
+	}
+	f, err := os.Open(logPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	imported := 0
+	for sc.Scan() {
+		var line struct {
+			Time      time.Time `json:"time"`
+			Msg       string    `json:"msg"`
+			Tool      string    `json:"tool"`
+			SessionID string    `json:"session_id"`
+			Agent     string    `json:"agent"`
+			CWD       string    `json:"cwd"`
+			Summary   string    `json:"summary"`
+			Action    string    `json:"action"`
+			RuleID    string    `json:"rule_id"`
+			Reason    string    `json:"reason"`
+			Impact    string    `json:"impact"`
+			ElapsedUs int64     `json:"elapsed_us"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &line); err != nil {
+			continue
+		}
+		if line.Msg != "eval" || line.Action == "" {
+			continue
+		}
+		sid := line.SessionID
+		if sid == "" {
+			sid = "migrated"
+		}
+		if err := st.RecordDecision(ctx, store.DecisionRecord{
+			Ts:        line.Time,
+			SessionID: sid,
+			Agent:     line.Agent,
+			ToolName:  line.Tool,
+			Summary:   line.Summary,
+			Action:    line.Action,
+			RuleID:    line.RuleID,
+			Reason:    line.Reason,
+			Impact:    line.Impact,
+			ElapsedUs: line.ElapsedUs,
+			CWD:       line.CWD,
+		}); err != nil {
+			slog.Warn("daemon.log migration: insert failed (continuing)", "err", err)
+			continue
+		}
+		imported++
+	}
+	if imported > 0 {
+		slog.Info("migrated daemon.log decisions into sqlite", "count", imported)
 	}
 }
 

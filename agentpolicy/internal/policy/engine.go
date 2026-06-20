@@ -46,6 +46,12 @@ type HookInput struct {
 	SessionID string                 `json:"session_id"`
 	CWD       string                 `json:"cwd"`
 	RepoRoot  string                 `json:"repo_root,omitempty"` // git repo root resolved by daemon; empty if not a git repo
+	// AWSAccount is the AWS account id targeted by an `aws --profile <name>`
+	// CLI command, resolved by the daemon from ~/.aws/config before Rego eval
+	// (empty for non-AWS commands or when unresolvable). Rego reads it as
+	// input.aws_account to apply per-account posture (aws_policy/*). Omitted
+	// from the JSON when empty so Rego sees it as undefined for non-AWS calls.
+	AWSAccount string `json:"aws_account,omitempty"`
 }
 
 // Engine is the abstraction new callers depend on. The concrete

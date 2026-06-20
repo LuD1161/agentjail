@@ -83,6 +83,7 @@ You keep working exactly as before. The only difference: the dumb stuff quietly 
 | 🔥 | `git push --force origin main` | ❌ DENY | `command_policy/no-git-push-force` |
 | 📦 | `npm publish --access public` | ⚠️ ASK | `command_policy/confirm-publish` |
 | 🪤 | `echo ... >> ~/.zshrc` | ❌ DENY | `library/no-shell-init-write` |
+| ☁️ | `aws s3 rb --force prod-logs` | ❌ DENY | `library/no-aws-destructive` |
 | 🌐 | `tar \| curl https://code-review-ai.io` | ❌ DENY | `network` allowlist |
 
 <details>
@@ -170,7 +171,8 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 ```sh
 agentjail status                      # verify everything is wired
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
-agentjail logs                        # watch decisions live
+agentjail logs                        # watch SQLite-backed decisions live
+agentjail replay --list               # list recorded sessions for replay
 ```
 
 <details>
@@ -189,7 +191,7 @@ agentjail install --all               # non-interactive, install all detected
 **From source:**
 ```sh
 git clone https://github.com/LuD1161/agentjail.git && cd agentjail
-for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
+for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
     go build -o ~/.agentjail/bin/$bin ./cmd/$bin
 done
 ~/.agentjail/bin/agentjail install
@@ -198,6 +200,24 @@ done
 Requires Go 1.22+.
 
 **macOS Gatekeeper:** the `curl | sh` and `brew` paths are Gatekeeper-clean. If you download a release tarball through a browser: `xattr -d com.apple.quarantine ~/.agentjail/bin/agentjail`
+
+</details>
+
+<details>
+<summary><b>Local replay viewer (development builds)</b></summary>
+
+```sh
+agentjail ui
+```
+
+Opens a loopback-only viewer at `http://127.0.0.1:9101` backed by
+`~/.agentjail/agentjail.db`. It supports session replay, action/tool/rule/session
+filters, policy-mutation audit events, and redacted session-bundle downloads.
+The header shows whether data came from SQLite or the legacy `daemon.log`
+fallback and warns when the fallback may be stale or incomplete.
+
+Policy status is read-only by default. Start with `agentjail ui --edit-policy`
+only when you intentionally want enable/disable controls.
 
 </details>
 
@@ -231,7 +251,7 @@ Downloads the latest release, verifies SHA-256, atomically swaps binaries, resta
 | `no_hook_self_disable` | writes to agent settings (removing its own hook) |
 
 <details>
-<summary><b>6 opt-in library rules</b></summary>
+<summary><b>7 opt-in library rules</b></summary>
 
 ```sh
 agentjail policy list                      # see every rule + on/off/locked
@@ -242,6 +262,7 @@ agentjail policy enable no_shell_init_write
 |--|--|
 | `no_shell_init_write` | block writes to `~/.zshrc`, `~/.bashrc`, `~/.bash_profile` |
 | `no_app_binary_write` | block writes to `/Applications/*.app/Contents/MacOS/` |
+| `no_aws_destructive` | deny destructive AWS CLI (`s3 rb`, `delete-*`, `terminate-*`), ask on `create-*`/`run-instances`/`s3 cp`; defers to per-account posture when configured |
 | `no_launchctl` | block `osascript`, `launchctl submit`, `at`, `crontab` |
 | `no_history_read` | block reads of shell histories + browser cookies/history |
 | `no_shell_eval` | block `eval`, `bash -c $VAR`, base64-decode pipelines |
@@ -321,7 +342,7 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 |------|------|--------|
 | **1 — Hook** | PreToolUse hook + OPA daemon + core policies | ✅ shipped |
 | **1.5 — Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` | ✅ shipped |
-| **2 — MicroVM** | Firecracker/libkrun VM-boundary enforcement | 🔬 spike done |
+| **2 — MicroVM** | Microsandbox (laptop, all OSes) + Firecracker (fleet) VM-boundary enforcement | 📋 proposed ([ADR 0016](./docs/adr/0016-tier2-microsandbox-substrate.md)); spikes done |
 | **3 — Kernel module** | eBPF LSM / macOS SystemExtension | 📋 planned |
 
 <details>

@@ -1,7 +1,7 @@
 # samples/
 
-Drop-in examples for extending agentjail beyond the core 3 policies and
-6 library rules. Everything here is **optional** — copy what you want,
+Drop-in examples for extending agentjail beyond the core policies and
+7 library rules. Everything here is **optional** — copy what you want,
 edit what you need.
 
 ```
@@ -15,7 +15,8 @@ samples/
 └── configs/                        ← drop-in policy.yaml fragments
     ├── policy-strict.yaml                  lock everything down (recommended for CI/CD)
     ├── policy-dev-permissive.yaml          loosened for daily local dev
-    └── policy-mcp-heavy.yaml               for teams using many MCP servers
+    ├── policy-mcp-heavy.yaml               for teams using many MCP servers
+    └── policy-aws.yaml                     AWS pack: per-account posture + AWS MCP allowlist
 ```
 
 ---
@@ -106,7 +107,7 @@ field shows up in `agentjail logs` automatically — no Go code changes needed.
 
 ### Option D — enable a built-in library rule via the CLI
 
-For the 6 opt-in hardening rules that ship inside the binary:
+For the 7 opt-in hardening rules that ship inside the binary:
 
 ```sh
 agentjail policy list                               # see what's available
@@ -146,6 +147,23 @@ kill -HUP $(pgrep -f agentjail-daemon)
 The Rego rules reference `data.agentjail.config.*` to read this YAML at
 eval time — that's how MCP allowlists, network allow-hosts, and per-tool
 restrictions plug in without writing more Rego.
+
+### `policy-aws.yaml` — AWS pack
+
+The AWS pack template wires up per-account posture (ADR 0017), an AWS MCP
+server with a read-only per-tool allowlist, and a network allowlist for
+typical AWS endpoints. Copy it and enable the destructive-CLI library rule:
+
+```sh
+cp samples/configs/policy-aws.yaml ~/.agentjail/policy.yaml
+agentjail policy enable no_aws_destructive
+kill -HUP $(pgrep -f agentjail-daemon)
+```
+
+Then edit the `aws.accounts` map with your real account ids (find them with
+`aws sts get-caller-identity --profile <name>`). The daemon resolves the
+account from `aws --profile <name>` via `~/.aws/config`; accounts not listed
+fall back to `aws.default_posture` (fail-safe `prod` — delete denied).
 
 ## Authoring tips
 

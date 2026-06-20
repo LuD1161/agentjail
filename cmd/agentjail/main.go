@@ -41,10 +41,14 @@ func main() {
 		os.Exit(runTry(args[1:]))
 	case "logs":
 		os.Exit(runLogs(args[1:]))
+	case "replay":
+		os.Exit(runReplay(args[1:]))
 	case "policy":
 		os.Exit(runPolicy(args[1:]))
 	case "mcp":
 		os.Exit(runMCP(args[1:]))
+	case "secret":
+		os.Exit(runSecret(args[1:]))
 	case "ui":
 		os.Exit(runUI(args[1:]))
 	case "telemetry":
@@ -120,8 +124,10 @@ func usage(w io.Writer) {
 		{"status", "Show hook, daemon, and policy health"},
 		{"try", "Check whether an action would be allowed by policy (nothing is executed)"},
 		{"logs", "View policy decisions"},
+		{"replay", "Replay decisions from a saved session"},
 		{"policy", "Manage optional hardening rules"},
 		{"mcp", "Manage MCP server allow/block lists"},
+		{"secret", "Manage scoped secret grants"},
 		{"ui", "Open the local web UI"},
 		{"telemetry", "Manage anonymous usage statistics"},
 		{"feedback", "Send anonymous feedback to the maintainers"},
@@ -150,8 +156,10 @@ func usage(w io.Writer) {
 		"agentjail install --for codex",
 		"agentjail status",
 		"agentjail logs --action=deny --since=1h",
+		"agentjail replay --list",
 		"agentjail policy enable no_shell_init_write",
 		"agentjail mcp allow filesystem",
+		"agentjail secret list",
 		"agentjail mcp list",
 	}
 	for _, ex := range examples {

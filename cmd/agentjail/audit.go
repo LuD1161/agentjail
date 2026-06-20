@@ -15,10 +15,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/store"
 )
 
 // auditEvent is the structured record written to audit.log.
@@ -67,6 +71,15 @@ func appendAuditEvent(logPath, action, ruleID string) error {
 
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("audit: write to %s: %w", logPath, err)
+	}
+	if st, err := store.Open(filepath.Join(filepath.Dir(logPath), "agentjail.db")); err == nil {
+		defer st.Close()
+		_ = st.RecordAuditEvent(context.Background(), store.AuditRecord{
+			Ts:     time.Now().UTC(),
+			Action: action,
+			RuleID: ruleID,
+			User:   os.Getenv("USER"),
+		})
 	}
 	return nil
 }

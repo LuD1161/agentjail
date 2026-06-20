@@ -51,8 +51,9 @@ func TestCoreFileParity(t *testing.T) {
 
 	srcDir := sourceRoot(t)
 
-	// The six hook-path files that must be mirrored.
+	// The hook-path files that must be mirrored.
 	hookPathFiles := []string{
+		"aws_posture",
 		"command_policy",
 		"file_policy",
 		"mcp_policy",
