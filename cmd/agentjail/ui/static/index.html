@@ -33,7 +33,7 @@
     .timeline-grid {
       display: grid;
       grid-template-columns: var(--tl-cols, 60px 50px 50px 250px 200px minmax(100px,1fr));
-      gap: 8px;
+      gap: 16px;
       align-items: center;
     }
     .timeline-header { user-select: none; }
@@ -423,7 +423,7 @@ function renderTimeline() {
     return;
   }
 
-  const header = `<div class="timeline-header px-4 py-1 sticky top-0 z-10" style="background:#1a2030;border-bottom:1px solid #30363d">
+  const header = `<div class="timeline-header px-5 py-2 sticky top-0 z-10" style="background:#1a2030;border-bottom:1px solid #30363d">
     <div class="timeline-grid" id="tl-header-grid">
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Time<div class="col-resize-handle" data-col="0"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Action<div class="col-resize-handle" data-col="1"></div></span>
@@ -446,7 +446,7 @@ function renderTimeline() {
     const sessIcon = agentName ? agentIcon(agentName).replace(/width="18"/,'width="12"').replace(/height="18"/,'height="12"') : '';
     const ruleShort = (ev.rule_id || '').split('/').pop() || '';
 
-    return `<div class="event-row px-4 py-1" onclick="toggleExpand(${i})">
+    return `<div class="event-row px-5 py-2" onclick="toggleExpand(${i})">
       <div class="timeline-grid">
         <span class="text-gray-500">${t}</span>
         <span class="badge ${actionBadgeClass}" style="text-align:center">${(ev.action||'').toUpperCase()}</span>
