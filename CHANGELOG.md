@@ -2,6 +2,73 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.1.2 — 2026-06-20
+
+SQLite decision store, AWS policy pack, shield hardening, web UI with
+server-side filters, and E2E test infrastructure.
+
+### Added
+
+- **SQLite decision store** — WAL-mode event store at `~/.agentjail/agentjail.db`
+  with redaction, retention cleanup, concurrent reader/writer support, and indexes
+  on session_id, ts, action, tool_name, rule_id
+- **ReadOnlyStore** — separate read-only connection type (`sqliteROStore`) for UI,
+  logs, and replay; no write methods leak even via type assertion
+- **AWS policy pack** — `no_aws_destructive.rego` library rule (deny destructive,
+  ask mutating); per-account posture config (sandbox/prod/locked/custom);
+  `policy-aws.yaml` sample template
+- **Replay CLI** — `agentjail replay --session <id> --list --verbose --follow`
+  with formatted output and column headers
+- **Shield hardening** — env-stripping at launch (configurable blocklist),
+  environment audit (root/ambient creds/IMDS detection), Landlock network rules
+  with `runtime.LockOSThread()` preservation, `agentjail-netproxy` for per-host
+  egress on Linux
+- **Secrets broker** — `agentjail-secrets` binary (AES-256-GCM at rest, Unix
+  socket RPC, AWS/PG/Redis backends); shield calls grant/revoke for scoped env
+  var injection
+- **Web UI** — `agentjail ui` local replay viewer with SQLite backend, server-side
+  filters (action/tool/rule/limit query params), resizable panes and columns,
+  agent logos (Claude/Cursor/Codex/OpenCode), collapsible audit section, branded
+  header with GitHub star/issue links
+- **Server-side filters** — `/api/state` and `/api/session` accept `?action=`,
+  `?tool=`, `?rule=`, `?limit=` query params; counters remain global while events
+  are filtered; `FilteredCount` and `TotalDecisions` in response
+- **E2E test** — `make e2e` runs a 20-assertion new-user test script covering
+  build, daemon, hook decisions, SQLite store, replay, UI API, filters, try, and
+  SIGHUP reload; CI job on ubuntu-latest + macos-14
+
+### Fixed
+
+- AfterID keyset cursor for DESC pagination (`id < ?` not `id > ?`)
+- Session filter uses substring match (INSTR) consistently across SQLite and
+  daemon.log modes
+- UI connection pooling — one shared SQLite handle instead of per-request open
+- sqliteSnapshot over-fetch — SQL aggregate for counters, LIMIT for display
+- DSN path URL-encoding for paths with `?`, `#`, `%`
+- SSE "connecting..." stuck — flush `:ok` comment on connect
+- Limit clamping (default 100, max 10000) on all queries
+- SQLite fallthrough to daemon.log now logs a warning
+
+### Security
+
+- ADRs 0020-0024: environment audit, Landlock network, netproxy, secret server,
+  env-stripping at launch
+
+## v0.1.1 — 2026-06-15
+
+Plugin MCP discovery, log rotation, and brew telemetry fix.
+
+### Added
+
+- MCP plugin discovery — `agentjail install` now auto-whitelists Claude Code
+  plugin MCP servers from `~/.claude/plugins/`
+- Built-in log rotation — daemon manages its own log (10 MB, 5 backups) instead
+  of relying on launchd `StandardErrorPath`
+
+### Fixed
+
+- Brew install telemetry — formula now sets `AGENTJAIL_INSTALL_METHOD=brew`
+
 ## v0.1.0 — 2026-06-02
 
 First public release. Hook-based policy guardrails evaluate every coding-agent
