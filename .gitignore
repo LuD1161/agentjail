@@ -51,3 +51,6 @@ video-hyperframes/
 
 # Internal design specs / brainstorming notes — local only, never shipped public.
 docs/superpowers/
+
+# UI testing screenshots (local only)
+screenshots/
