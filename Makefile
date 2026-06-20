@@ -1,4 +1,4 @@
-.PHONY: help build shim vet test test-all opa-test smoke clean licenses licenses-check
+.PHONY: help build shim vet test test-all opa-test smoke e2e clean licenses licenses-check
 
 BIN ?= bin/agentjail
 
@@ -30,6 +30,9 @@ opa-test:  ## opa test over agentpolicy/policies/ (requires opa on PATH)
 smoke: ## run the end-to-end smoke tests (hook pipeline + OS sandbox)
 	bash cmd/agentjail-hook/test/smoke.sh
 	bash cmd/agentjail-shield/test/smoke.sh
+
+e2e: ## full new-user E2E test (build, daemon, hook, store, replay, UI, filters, try)
+	bash test/e2e-newuser.sh
 
 clean:  ## remove built binaries
 	rm -rf bin/

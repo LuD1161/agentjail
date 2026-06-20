@@ -62,3 +62,22 @@ jobs:
       # remains a local-dev target under `make smoke`.
       - name: hook smoke
         run: bash cmd/agentjail-hook/test/smoke.sh
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: e2e new-user test
+        run: bash test/e2e-newuser.sh
