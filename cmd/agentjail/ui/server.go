@@ -3,17 +3,21 @@
 // NOT in v0.1.0-alpha release. Local dev tool / demo prop only.
 //
 // Routes:
-//   GET  /                       embedded index.html
-//   GET  /events                 Server-Sent Events stream of daemon log lines
-//   GET  /api/state              JSON snapshot (sessions + recent events + counters)
-//   GET  /api/rules              JSON list of all rules with enabled status
-//   POST /api/policy/enable      ?name=<rule>  enable a library rule
-//   POST /api/policy/disable     ?name=<rule>  disable a library rule
-//   POST /api/policy/reload      send SIGHUP to daemon
+//
+//	GET  /                       embedded index.html
+//	GET  /events                 Server-Sent Events stream of daemon log lines
+//	GET  /api/state              JSON snapshot (sessions + recent events + counters)
+//	GET  /api/session            redacted chronological replay or downloadable bundle
+//	GET  /api/audit              recent policy-mutation audit events
+//	GET  /api/rules              JSON list of all rules with enabled status
+//	POST /api/policy/enable      edit mode only: enable a library rule
+//	POST /api/policy/disable     edit mode only: disable a library rule
+//	POST /api/policy/reload      edit mode only: send SIGHUP to daemon
 package ui
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,14 +31,22 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	localstore "github.com/LuD1161/agentjail/internal/store"
 )
 
 // Server is the local web UI HTTP server.
 type Server struct {
-	addr    string
-	logPath string
+	addr       string
+	logPath    string
+	dbPath     string
+	editPolicy bool
 
 	store *Store
+
+	// Cached read-only SQLite connection (lazily opened, shared across requests).
+	dbMu   sync.Mutex
+	dbConn localstore.ReadOnlyStore
 
 	// SSE broadcaster state.
 	subsMu sync.Mutex
@@ -43,18 +55,21 @@ type Server struct {
 
 // RuleInfo is the JSON shape for one rule in GET /api/rules.
 type RuleInfo struct {
-	Name    string `json:"name"`
-	Source  string `json:"source"` // "core" | "library"
-	Enabled bool   `json:"enabled"`
+	Name     string `json:"name"`
+	Source   string `json:"source"` // "core" | "library"
+	Enabled  bool   `json:"enabled"`
+	Editable bool   `json:"editable"`
 }
 
 // NewServer constructs (but does not start) the web UI server.
-func NewServer(addr, logPath string, store *Store) *Server {
+func NewServer(addr, logPath, dbPath string, editPolicy bool, store *Store) *Server {
 	return &Server{
-		addr:    addr,
-		logPath: logPath,
-		store:   store,
-		subs:    make(map[chan string]struct{}),
+		addr:       addr,
+		logPath:    logPath,
+		dbPath:     dbPath,
+		editPolicy: editPolicy,
+		store:      store,
+		subs:       make(map[chan string]struct{}),
 	}
 }
 
@@ -70,6 +85,8 @@ func (s *Server) Start(
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/events", s.handleSSE)
 	mux.HandleFunc("/api/state", s.handleState)
+	mux.HandleFunc("/api/session", s.handleSession)
+	mux.HandleFunc("/api/audit", s.handleAudit)
 	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRules(w, r, coreRuleNames, libraryRuleNames)
 	})
@@ -153,13 +170,103 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func parseFilterParams(r *http.Request) localstore.Filter {
+	q := r.URL.Query()
+	var f localstore.Filter
+	if a := q.Get("action"); a != "" {
+		f.Actions = strings.Split(a, ",")
+	}
+	f.Tool = q.Get("tool")
+	f.Rule = q.Get("rule")
+	if l := q.Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil {
+			f.Limit = n
+		}
+	}
+	return f
+}
+
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	f := parseFilterParams(r)
+	if snap, err := s.sqliteSnapshot(r.Context(), f); err == nil {
+		snap.Source = s.sqliteSourceStatus()
+		writeJSON(w, snap)
+		return
+	}
 	snap := s.store.Snapshot()
+	snap.Source = s.logSourceStatus()
 	writeJSON(w, snap)
+}
+
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sessionID := r.URL.Query().Get("id")
+	if sessionID == "" {
+		writeJSONError(w, "missing ?id=", http.StatusBadRequest)
+		return
+	}
+	st, err := s.openSQLite()
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("open db: %v", err), http.StatusInternalServerError)
+		return
+	}
+	f := parseFilterParams(r)
+	f.SessionID = sessionID
+	if f.Limit == 0 {
+		f.Limit = 5000
+	}
+	rows, err := st.ListDecisions(r.Context(), f)
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("query session: %v", err), http.StatusInternalServerError)
+		return
+	}
+	response := map[string]any{
+		"version":        1,
+		"exported_at":    time.Now().UTC(),
+		"session_id":     sessionID,
+		"source":         s.sqliteSourceStatus(),
+		"events":         decisionsToEvalLines(rows, true),
+		"filtered_count": len(rows),
+	}
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="agentjail-session-%s.json"`, safeFilename(sessionID)))
+	}
+	writeJSON(w, response)
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	st, err := s.openSQLite()
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("open db: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+	rows, err := st.ListAuditEvents(r.Context(), localstore.AuditFilter{Limit: 500, OrderDesc: true})
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("query audit events: %v", err), http.StatusInternalServerError)
+		return
+	}
+	events := make([]AuditEvent, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, AuditEvent{
+			ID:     row.ID,
+			Time:   row.Ts,
+			Action: row.Action,
+			RuleID: row.RuleID,
+			User:   row.User,
+		})
+	}
+	writeJSON(w, map[string]any{"events": events})
 }
 
 func (s *Server) handleRules(
@@ -187,9 +294,10 @@ func (s *Server) handleRules(
 		target := filepath.Join(rulesDir, name+".rego")
 		_, statErr := os.Stat(target)
 		rules = append(rules, RuleInfo{
-			Name:    name,
-			Source:  "library",
-			Enabled: statErr == nil,
+			Name:     name,
+			Source:   "library",
+			Enabled:  statErr == nil,
+			Editable: s.editPolicy,
 		})
 	}
 	writeJSON(w, rules)
@@ -203,6 +311,10 @@ func (s *Server) handlePolicyEnable(
 ) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.editPolicy {
+		writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
 		return
 	}
 	name := r.URL.Query().Get("name")
@@ -258,6 +370,10 @@ func (s *Server) handlePolicyDisable(
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.editPolicy {
+		writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
+		return
+	}
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		writeJSONError(w, "missing ?name=", http.StatusBadRequest)
@@ -294,6 +410,10 @@ func (s *Server) handlePolicyDisable(
 func (s *Server) handlePolicyReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.editPolicy {
+		writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
 		return
 	}
 	sighupDaemonFn()
@@ -373,6 +493,183 @@ func (s *Server) processLine(raw []byte) {
 		}
 	}
 	s.subsMu.Unlock()
+}
+
+func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (StateSnapshot, error) {
+	st, err := s.openSQLite()
+	if err != nil {
+		return StateSnapshot{}, err
+	}
+
+	sessions, err := st.ListSessions(ctx)
+	if err != nil {
+		return StateSnapshot{}, err
+	}
+	sessionByID := make(map[string]*SessionState, len(sessions))
+	snap := StateSnapshot{Sessions: make([]*SessionState, 0, len(sessions))}
+	for _, sess := range sessions {
+		ss := &SessionState{
+			ID:        sess.SessionID,
+			FirstSeen: sess.StartTs,
+			LastSeen:  sess.EndTs,
+			Total:     sess.DecisionCount,
+		}
+		if ss.LastSeen.IsZero() {
+			ss.LastSeen = sess.StartTs
+		}
+		sessionByID[sess.SessionID] = ss
+		snap.Sessions = append(snap.Sessions, ss)
+	}
+
+	counts, err := st.CountActionsBySession(ctx)
+	if err != nil {
+		return StateSnapshot{}, err
+	}
+	for _, ac := range counts {
+		ss := sessionByID[ac.SessionID]
+		if ss == nil && ac.SessionID != "" {
+			ss = &SessionState{ID: ac.SessionID}
+			sessionByID[ac.SessionID] = ss
+			snap.Sessions = append(snap.Sessions, ss)
+		}
+		if ss != nil {
+			switch ac.Action {
+			case "allow":
+				ss.Allow += ac.Count
+				snap.TotalAllow += ac.Count
+			case "deny":
+				ss.Deny += ac.Count
+				snap.TotalDeny += ac.Count
+			case "ask":
+				ss.Ask += ac.Count
+				snap.TotalAsk += ac.Count
+			}
+		}
+	}
+
+	snap.TotalDecisions = snap.TotalAllow + snap.TotalDeny + snap.TotalAsk
+
+	rf := f
+	rf.OrderDesc = true
+	if rf.Limit == 0 || rf.Limit > maxEvents {
+		rf.Limit = maxEvents
+	}
+	recent, err := st.ListDecisions(ctx, rf)
+	if err != nil {
+		return StateSnapshot{}, err
+	}
+	for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
+		recent[i], recent[j] = recent[j], recent[i]
+	}
+	snap.RecentEvents = decisionsToEvalLines(recent, false)
+	snap.FilteredCount = len(recent)
+	return snap, nil
+}
+
+func (s *Server) openSQLite() (localstore.ReadOnlyStore, error) {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	if s.dbConn != nil {
+		return s.dbConn, nil
+	}
+	if s.dbPath == "" {
+		return nil, fmt.Errorf("db path is empty")
+	}
+	if _, err := os.Stat(s.dbPath); err != nil {
+		return nil, err
+	}
+	conn, err := localstore.OpenReadOnly(s.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	s.dbConn = conn
+	return conn, nil
+}
+
+func decisionsToEvalLines(in []localstore.DecisionRecord, includeToolInput bool) []EvalLine {
+	out := make([]EvalLine, 0, len(in))
+	for _, d := range in {
+		line := EvalLine{
+			Time:      d.Ts,
+			Level:     "INFO",
+			Msg:       "eval",
+			Tool:      d.ToolName,
+			SessionID: d.SessionID,
+			Agent:     d.Agent,
+			CWD:       d.CWD,
+			Summary:   d.Summary,
+			Action:    d.Action,
+			RuleID:    d.RuleID,
+			Reason:    d.Reason,
+			Impact:    d.Impact,
+			ElapsedUs: d.ElapsedUs,
+		}
+		if includeToolInput {
+			line.ToolInputRedacted = d.ToolInputRedacted
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// AuditEvent is the stable JSON shape returned by GET /api/audit.
+type AuditEvent struct {
+	ID     int64     `json:"id"`
+	Time   time.Time `json:"time"`
+	Action string    `json:"action"`
+	RuleID string    `json:"rule_id,omitempty"`
+	User   string    `json:"user,omitempty"`
+}
+
+func (s *Server) sqliteSourceStatus() SourceStatus {
+	status := SourceStatus{
+		Kind:     "sqlite",
+		Path:     s.dbPath,
+		LivePath: s.logPath,
+	}
+	status.ModifiedAt = latestModTime(s.dbPath, s.dbPath+"-wal")
+	logModified := latestModTime(s.logPath)
+	if !status.ModifiedAt.IsZero() && logModified.After(status.ModifiedAt.Add(5*time.Second)) {
+		status.Warning = "SQLite is older than daemon.log; replay data may still be catching up."
+	}
+	return status
+}
+
+func (s *Server) logSourceStatus() SourceStatus {
+	return SourceStatus{
+		Kind:       "log",
+		Path:       s.logPath,
+		Fallback:   true,
+		Warning:    "SQLite is unavailable; showing legacy daemon.log fallback, which may be stale or incomplete.",
+		ModifiedAt: latestModTime(s.logPath),
+	}
+}
+
+func latestModTime(paths ...string) time.Time {
+	var latest time.Time
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err == nil && info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+	}
+	return latest
+}
+
+func safeFilename(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "session"
+	}
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------

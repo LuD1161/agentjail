@@ -2,7 +2,7 @@
 //
 // NOT in v0.1.0-alpha release. Local dev tool / demo prop only.
 // This subcommand launches a small local web server that shows all sessions,
-// their event traces, and allows one-click rule enable/disable.
+// their event traces, and optionally allows one-click rule enable/disable.
 package main
 
 import (
@@ -21,7 +21,9 @@ func runUI(args []string) int {
 	addr := "127.0.0.1:9101"
 	home, _ := os.UserHomeDir()
 	logPath := filepath.Join(home, ".agentjail", "daemon.log")
+	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
 	insecureBind := false
+	editPolicy := false
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -36,8 +38,15 @@ func runUI(args []string) int {
 			logPath = args[i]
 		case len(a) > 6 && a[:6] == "--log=":
 			logPath = a[6:]
+		case a == "--db" && i+1 < len(args):
+			i++
+			dbPath = args[i]
+		case len(a) > 5 && a[:5] == "--db=":
+			dbPath = a[5:]
 		case a == "--insecure-bind":
 			insecureBind = true
+		case a == "--edit-policy":
+			editPolicy = true
 		case a == "-h" || a == "--help":
 			printUIUsage()
 			return 0
@@ -61,7 +70,7 @@ func runUI(args []string) int {
 	fmt.Fprintln(os.Stderr, "press Ctrl-C to stop")
 
 	store := ui.NewStore()
-	srv := ui.NewServer(addr, logPath, store)
+	srv := ui.NewServer(addr, logPath, dbPath, editPolicy, store)
 
 	// Graceful shutdown on SIGINT / SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -80,10 +89,12 @@ func runUI(args []string) int {
 }
 
 func printUIUsage() {
-	fmt.Fprintln(os.Stderr, "usage: agentjail ui [--addr 127.0.0.1:9101] [--log PATH] [--insecure-bind]")
+	fmt.Fprintln(os.Stderr, "usage: agentjail ui [--addr 127.0.0.1:9101] [--db PATH] [--log PATH] [--edit-policy] [--insecure-bind]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  --addr ADDR        listen address (default: 127.0.0.1:9101)")
+	fmt.Fprintln(os.Stderr, "  --db PATH          path to SQLite event store (default: ~/.agentjail/agentjail.db)")
 	fmt.Fprintln(os.Stderr, "  --log PATH         path to daemon.log (default: ~/.agentjail/daemon.log)")
+	fmt.Fprintln(os.Stderr, "  --edit-policy      allow policy enable/disable controls (default: read-only)")
 	fmt.Fprintln(os.Stderr, "  --insecure-bind    allow non-loopback bind (no auth/TLS; use with care)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "NOTE: local dev tool only — NOT in the v0.1.0-alpha release")

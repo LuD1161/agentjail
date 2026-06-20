@@ -5,6 +5,7 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	localstore "github.com/LuD1161/agentjail/internal/store"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,7 +28,7 @@ import (
 
 func TestSSEFormat(t *testing.T) {
 	store := NewStore()
-	srv := NewServer("127.0.0.1:0", "/dev/null", store)
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", false, store)
 
 	// Minimal inline mux for the test.
 	mux := http.NewServeMux()
@@ -153,7 +156,7 @@ func TestPolicyEnableEndpoint(t *testing.T) {
 	}
 
 	store := NewStore()
-	srv := NewServer("127.0.0.1:0", "/dev/null", store)
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", true, store)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/policy/enable", func(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +193,7 @@ func TestPolicyEnableEndpoint(t *testing.T) {
 
 func TestPolicyEnableUnknownRule(t *testing.T) {
 	store := NewStore()
-	srv := NewServer("127.0.0.1:0", "/dev/null", store)
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", true, store)
 
 	libNames := func() []string { return []string{"known_rule"} }
 	libContent := func(name string) []byte { return nil }
@@ -217,6 +220,22 @@ func TestPolicyEnableUnknownRule(t *testing.T) {
 	}
 	if _, ok := out["error"]; !ok {
 		t.Errorf("response missing 'error' key: %v", out)
+	}
+}
+
+func TestPolicyEditingDisabledByDefault(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", false, NewStore())
+	libNames := func() []string { return []string{"known_rule"} }
+	libContent := func(string) []byte { return []byte("package agentjail") }
+
+	req := httptest.NewRequest(http.MethodPost, "/api/policy/enable?name=known_rule", nil)
+	rec := httptest.NewRecorder()
+	srv.handlePolicyEnable(rec, req, libNames, libContent)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if !strings.Contains(rec.Body.String(), "--edit-policy") {
+		t.Fatalf("response = %q, want edit-mode guidance", rec.Body.String())
 	}
 }
 
@@ -284,4 +303,168 @@ func TestIsLoopback(t *testing.T) {
 			t.Errorf("IsLoopback(%q) = %v; want %v", tc.addr, got, tc.want)
 		}
 	}
+}
+
+func TestSQLiteStateEndpoint(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "agentjail.db")
+	st, err := localstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	ctx := rContext()
+	if err := st.RecordDecision(ctx, localstore.DecisionRecord{
+		Ts:        time.Now().UTC(),
+		SessionID: "sess-1",
+		Agent:     "claude",
+		ToolName:  "Bash",
+		Action:    "deny",
+		RuleID:    "aws_policy/delete_denied",
+		Summary:   "aws s3 rb --force prod",
+	}); err != nil {
+		t.Fatalf("record decision: %v", err)
+	}
+
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/state", srv.handleState)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("GET state: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var snap StateSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if snap.TotalDeny != 1 {
+		t.Fatalf("TotalDeny = %d, want 1", snap.TotalDeny)
+	}
+	if len(snap.Sessions) != 1 || snap.Sessions[0].ID != "sess-1" {
+		t.Fatalf("sessions = %+v, want sess-1", snap.Sessions)
+	}
+	if snap.Source.Kind != "sqlite" || snap.Source.Fallback {
+		t.Fatalf("source = %+v, want sqlite without fallback", snap.Source)
+	}
+}
+
+func TestSQLiteSessionEndpoint(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "agentjail.db")
+	st, err := localstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	ctx := rContext()
+	if err := st.RecordDecision(ctx, localstore.DecisionRecord{
+		Ts:        time.Now().UTC(),
+		SessionID: "sess-2",
+		Agent:     "codex",
+		ToolName:  "Bash",
+		Action:    "ask",
+		RuleID:    "aws_policy/create_ask",
+		Summary:   "aws ec2 run-instances",
+		ToolInput: map[string]interface{}{"command": "aws ec2 run-instances", "api_key": "secret"},
+	}); err != nil {
+		t.Fatalf("record decision: %v", err)
+	}
+
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/session", srv.handleSession)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/session?id=sess-2&download=1")
+	if err != nil {
+		t.Fatalf("GET session: %v", err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Events []EvalLine `json:"events"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if len(out.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(out.Events))
+	}
+	if !strings.Contains(out.Events[0].ToolInputRedacted, "[redacted]") {
+		t.Fatalf("tool input was not redacted: %s", out.Events[0].ToolInputRedacted)
+	}
+	if disposition := resp.Header.Get("Content-Disposition"); !strings.Contains(disposition, "agentjail-session-sess-2.json") {
+		t.Fatalf("Content-Disposition = %q", disposition)
+	}
+}
+
+func TestAuditEndpoint(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "agentjail.db")
+	st, err := localstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.RecordAuditEvent(context.Background(), localstore.AuditRecord{
+		Ts:     time.Now().UTC(),
+		Action: "policy.disable",
+		RuleID: "command_policy/no-sudo",
+		User:   "alice",
+	}); err != nil {
+		t.Fatalf("record audit: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore())
+	req := httptest.NewRequest(http.MethodGet, "/api/audit", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAudit(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Events []AuditEvent `json:"events"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode audit: %v", err)
+	}
+	if len(out.Events) != 1 || out.Events[0].RuleID != "command_policy/no-sudo" {
+		t.Fatalf("audit events = %+v", out.Events)
+	}
+}
+
+func TestStateFallsBackToLogWithWarning(t *testing.T) {
+	store := NewStore()
+	store.Ingest([]byte(`{"time":"2026-05-24T03:00:00Z","level":"INFO","msg":"eval","tool":"Bash","session_id":"s1","action":"allow"}`))
+	srv := NewServer("127.0.0.1:0", "/tmp/daemon.log", filepath.Join(t.TempDir(), "missing.db"), false, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
+	rec := httptest.NewRecorder()
+	srv.handleState(rec, req)
+	var snap StateSnapshot
+	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if snap.Source.Kind != "log" || !snap.Source.Fallback || snap.Source.Warning == "" {
+		t.Fatalf("fallback source = %+v", snap.Source)
+	}
+}
+
+func TestSafeFilename(t *testing.T) {
+	if got := safeFilename("../session id"); got != "___session_id" {
+		t.Fatalf("safeFilename = %q", got)
+	}
+}
+
+func rContext() context.Context {
+	return context.Background()
 }

@@ -39,6 +39,9 @@
     .badge-ask   { background: #2a1d00; color: #d29922; border: 1px solid #3d2b00; }
     .badge-core  { background: #0d1b2e; color: #388bfd; border: 1px solid #1a3859; }
     .badge-lib   { background: #1a1225; color: #a371f7; border: 1px solid #2d1f45; }
+    .badge-source { background: #161b22; color: #8b949e; border: 1px solid #30363d; }
+    .source-warning { color: #d29922; }
+    .filter-input { background:#0d1117; border:1px solid #30363d; border-radius:4px; color:#c9d1d9; padding:2px 6px; }
     .btn-sm { padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
     .btn-sm:hover { opacity: .85; }
     .btn-enable  { background: #0d2316; color: #3fb950; border: 1px solid #1a4127; }
@@ -57,6 +60,8 @@
       <span class="font-bold text-white text-base">agentjail ui</span>
       <span class="live-dot" id="live-dot" title="connected"></span>
       <span class="text-xs text-gray-500" id="conn-status">connecting…</span>
+      <span class="badge badge-source" id="source-badge">source: loading…</span>
+      <span class="text-xs source-warning hidden" id="source-warning"></span>
       <span class="text-xs text-gray-600">|</span>
       <span class="text-xs" id="count-allow"><span class="text-green-400 font-bold" id="n-allow">0</span> <span class="text-gray-500">allow</span></span>
       <span class="text-xs" id="count-deny"><span class="text-red-400 font-bold" id="n-deny">0</span> <span class="text-gray-500">deny</span></span>
@@ -87,13 +92,34 @@
       <span>Timeline</span>
       <span class="text-gray-600 text-xs font-normal" id="timeline-filter-label"></span>
       <span class="flex-1"></span>
-      <span class="text-gray-600 text-xs">(live via SSE · click row to expand)</span>
+      <select id="filter-action" class="filter-input normal-case" onchange="filtersChanged()">
+        <option value="">all actions</option>
+        <option value="allow">allow</option>
+        <option value="deny">deny</option>
+        <option value="ask">ask</option>
+      </select>
+      <select id="filter-tool" class="filter-input normal-case" onchange="filtersChanged()">
+        <option value="">all tools</option>
+      </select>
+      <input id="filter-rule" class="filter-input normal-case" placeholder="rule contains…" oninput="filtersChanged()">
+      <button class="btn-sm border border-gray-700 normal-case text-gray-400" onclick="clearFilters()">clear</button>
+      <button id="export-session" class="btn-sm border border-blue-900 normal-case text-blue-400 hidden" onclick="exportSession()">export session</button>
     </div>
     <div class="overflow-y-auto flex-1" id="timeline">
       <!-- events injected by JS -->
     </div>
   </main>
 </div>
+
+<!-- Audit events -->
+<section class="border-t border-gray-800 flex-none" style="max-height: 150px; overflow-y: auto;">
+  <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 sticky top-0 z-10 flex items-center" style="background:#0d1117;">
+    <span>Audit events</span>
+    <span class="flex-1"></span>
+    <span class="text-gray-600 normal-case font-normal">policy and MCP mutations</span>
+  </div>
+  <div id="audit-table" class="px-2 py-1"></div>
+</section>
 
 <!-- Rules section -->
 <section class="border-t border-gray-800 flex-none" style="max-height: 220px; overflow-y: auto;">
@@ -112,15 +138,28 @@ let events = [];          // ring buffer of last 500 EvalLine objects
 let selectedSession = null; // null = all
 let expandedEventIdx = null;
 let rulesData = [];
+let sessionEvents = {};   // id -> full replay events from /api/session
+let auditEvents = [];
+let sourceStatus = null;
+let filters = {action:'', tool:'', rule:''};
+let filterDebounceTimer = null;
 
 const MAX_EVENTS = 500;
+
+function buildFilterQuery() {
+  const p = new URLSearchParams();
+  if (filters.action) p.set('action', filters.action);
+  if (filters.tool) p.set('tool', filters.tool);
+  if (filters.rule) p.set('rule', filters.rule);
+  return p.toString() ? '?' + p.toString() : '';
+}
 
 // ---------------------------------------------------------------------------
 // Bootstrap: load initial state + rules
 // ---------------------------------------------------------------------------
 async function loadState() {
   try {
-    const r = await fetch('/api/state');
+    const r = await fetch('/api/state' + buildFilterQuery());
     if (!r.ok) return;
     const data = await r.json();
     // Populate sessions
@@ -129,8 +168,22 @@ async function loadState() {
     }
     // Populate events
     events = (data.recent_events || []);
+    sourceStatus = data.source || null;
     renderAll();
   } catch(e) { console.error('loadState', e); }
+}
+
+async function loadAudit() {
+  try {
+    const r = await fetch('/api/audit');
+    if (!r.ok) {
+      auditEvents = [];
+    } else {
+      const data = await r.json();
+      auditEvents = data.events || [];
+    }
+    renderAudit();
+  } catch(e) { console.error('loadAudit', e); }
 }
 
 async function loadRules() {
@@ -188,6 +241,7 @@ function ingestEvent(line) {
 
   renderSessions();
   renderTimeline();
+  renderFilterOptions();
   updateCounters();
 }
 
@@ -229,7 +283,7 @@ function renderSessions() {
     (selectedSession === null ? ' session-active' : '');
 }
 
-function selectSession(id) {
+async function selectSession(id) {
   selectedSession = id;
   expandedEventIdx = null;
   renderSessions();
@@ -237,6 +291,20 @@ function selectSession(id) {
 
   const lbl = document.getElementById('timeline-filter-label');
   lbl.textContent = id ? `· ${id.substring(0,12)}…` : '';
+  document.getElementById('export-session').classList.toggle('hidden', !id);
+
+  if (id && !sessionEvents[id]) {
+    try {
+      const fq = buildFilterQuery();
+      const sep = fq ? '&' : '';
+      const r = await fetch(`/api/session?id=${encodeURIComponent(id)}${sep}${fq.replace('?','')}`);
+      if (r.ok) {
+        const data = await r.json();
+        sessionEvents[id] = data.events || [];
+        renderTimeline();
+      }
+    } catch(e) { console.error('load session', e); }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -244,9 +312,14 @@ function selectSession(id) {
 // ---------------------------------------------------------------------------
 function renderTimeline() {
   const container = document.getElementById('timeline');
-  const visible = selectedSession
-    ? events.filter(e => e.session_id === selectedSession)
+  const base = selectedSession
+    ? (sessionEvents[selectedSession] || events.filter(e => e.session_id === selectedSession))
     : events;
+  const visible = base.filter(ev =>
+    (!filters.action || (ev.action || '').toLowerCase() === filters.action) &&
+    (!filters.tool || (ev.tool || '') === filters.tool) &&
+    (!filters.rule || (ev.rule_id || '').toLowerCase().includes(filters.rule))
+  );
 
   if (visible.length === 0) {
     container.innerHTML = '<div class="px-4 py-6 text-xs text-gray-600">No events yet. Start an agent session and tool calls will stream here.</div>';
@@ -271,7 +344,7 @@ function renderTimeline() {
         ${ev.reason ? `<div><span class="text-gray-600">reason:</span> ${ev.reason}</div>` : ''}
         ${ev.impact ? `<div><span class="text-gray-600">impact:</span> <span class="text-red-400">${ev.impact}</span></div>` : ''}
         ${ev.summary ? `<div><span class="text-gray-600">command:</span> ${escHtml(ev.summary)}</div>` : ''}
-        ${ev.elapsed_us ? `<div><span class="text-gray-600">latency:</span> ${ev.elapsed_us}µs</div>` : ''}
+        ${ev.tool_input_redacted ? `<div><span class="text-gray-600">tool_input:</span> <pre class="whitespace-pre-wrap text-gray-400 mt-1">${escHtml(ev.tool_input_redacted)}</pre></div>` : ''}
       </div>`;
     }
 
@@ -297,6 +370,51 @@ function toggleExpand(idx) {
   renderTimeline();
 }
 
+function filtersChanged() {
+  filters.action = document.getElementById('filter-action').value;
+  filters.tool = document.getElementById('filter-tool').value;
+  filters.rule = document.getElementById('filter-rule').value.trim().toLowerCase();
+  expandedEventIdx = null;
+  renderTimeline();
+  clearTimeout(filterDebounceTimer);
+  filterDebounceTimer = setTimeout(() => {
+    if (selectedSession) {
+      delete sessionEvents[selectedSession];
+      selectSession(selectedSession);
+    } else {
+      loadState();
+    }
+  }, 300);
+}
+
+function clearFilters() {
+  document.getElementById('filter-action').value = '';
+  document.getElementById('filter-tool').value = '';
+  document.getElementById('filter-rule').value = '';
+  filters = {action:'', tool:'', rule:''};
+  renderTimeline();
+  if (selectedSession) {
+    delete sessionEvents[selectedSession];
+    selectSession(selectedSession);
+  } else {
+    loadState();
+  }
+}
+
+function renderFilterOptions() {
+  const select = document.getElementById('filter-tool');
+  const selected = select.value;
+  const tools = [...new Set(events.map(e => e.tool).filter(Boolean))].sort();
+  select.innerHTML = '<option value="">all tools</option>' +
+    tools.map(tool => `<option value="${escHtml(tool)}">${escHtml(tool)}</option>`).join('');
+  if (tools.includes(selected)) select.value = selected;
+}
+
+function exportSession() {
+  if (!selectedSession) return;
+  window.location.href = `/api/session?id=${encodeURIComponent(selectedSession)}&download=1`;
+}
+
 // ---------------------------------------------------------------------------
 // Render rules table
 // ---------------------------------------------------------------------------
@@ -313,7 +431,7 @@ function renderRules() {
     const status = rule.enabled ? '<span class="text-green-400 text-xs">enabled</span>' : '<span class="text-gray-600 text-xs">disabled</span>';
 
     let btn = '';
-    if (rule.source === 'library') {
+    if (rule.source === 'library' && rule.editable) {
       if (rule.enabled) {
         btn = `<button class="btn-sm btn-disable ml-2" onclick="policyDisable('${rule.name}', this)">disable</button>`;
       } else {
@@ -327,6 +445,24 @@ function renderRules() {
       <span class="flex-none">${srcBadge}</span>
       <span class="flex-none">${status}</span>
       <span>${btn}</span>
+      ${rule.source === 'library' && !rule.editable ? '<span class="text-gray-600 text-xs">read-only</span>' : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderAudit() {
+  const container = document.getElementById('audit-table');
+  if (!auditEvents.length) {
+    container.innerHTML = '<div class="text-xs text-gray-600 px-2 py-2">No audit events available.</div>';
+    return;
+  }
+  container.innerHTML = auditEvents.map(ev => {
+    const t = ev.time ? new Date(ev.time).toLocaleString() : '—';
+    return `<div class="grid grid-cols-4 gap-3 py-1 px-2 hover:bg-gray-900 rounded text-xs">
+      <span class="text-gray-500">${escHtml(t)}</span>
+      <span class="text-yellow-400">${escHtml(ev.action || '—')}</span>
+      <span class="text-gray-300 truncate" title="${escHtml(ev.rule_id || '')}">${escHtml(ev.rule_id || '—')}</span>
+      <span class="text-gray-500">${escHtml(ev.user || '—')}</span>
     </div>`;
   }).join('');
 }
@@ -369,7 +505,19 @@ function escHtml(s) {
 function renderAll() {
   renderSessions();
   renderTimeline();
+  renderFilterOptions();
+  renderSource();
   updateCounters();
+}
+
+function renderSource() {
+  if (!sourceStatus) return;
+  const badge = document.getElementById('source-badge');
+  const warning = document.getElementById('source-warning');
+  badge.textContent = `source: ${sourceStatus.kind} · ${sourceStatus.path || 'unknown'}`;
+  badge.title = sourceStatus.live_path ? `snapshot: ${sourceStatus.path}\nlive: ${sourceStatus.live_path}` : (sourceStatus.path || '');
+  warning.textContent = sourceStatus.warning || '';
+  warning.classList.toggle('hidden', !sourceStatus.warning);
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +525,7 @@ function renderAll() {
 // ---------------------------------------------------------------------------
 loadState();
 loadRules();
+loadAudit();
 connectSSE();
 </script>
 

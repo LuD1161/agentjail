@@ -16,21 +16,22 @@ const maxEvents = 500
 // EvalLine mirrors cmd/agentjail/logs.go evalLine — duplicated here to keep
 // the ui package self-contained (no cross-package import needed for a dev tool).
 type EvalLine struct {
-	Time      time.Time `json:"time"`
-	Level     string    `json:"level"`
-	Msg       string    `json:"msg"`
-	ReqID     string    `json:"req_id,omitempty"`
-	Tool      string    `json:"tool,omitempty"`
-	SessionID string    `json:"session_id,omitempty"`
-	Agent     string    `json:"agent,omitempty"`
-	CWD       string    `json:"cwd,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	Action    string    `json:"action,omitempty"`
-	RuleID    string    `json:"rule_id,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	Impact    string    `json:"impact,omitempty"`
-	ElapsedUs int64     `json:"elapsed_us,omitempty"`
-	Err       string    `json:"err,omitempty"`
+	Time              time.Time `json:"time"`
+	Level             string    `json:"level"`
+	Msg               string    `json:"msg"`
+	ReqID             string    `json:"req_id,omitempty"`
+	Tool              string    `json:"tool,omitempty"`
+	SessionID         string    `json:"session_id,omitempty"`
+	Agent             string    `json:"agent,omitempty"`
+	CWD               string    `json:"cwd,omitempty"`
+	Summary           string    `json:"summary,omitempty"`
+	Action            string    `json:"action,omitempty"`
+	RuleID            string    `json:"rule_id,omitempty"`
+	Reason            string    `json:"reason,omitempty"`
+	Impact            string    `json:"impact,omitempty"`
+	ElapsedUs         int64     `json:"elapsed_us,omitempty"`
+	ToolInputRedacted string    `json:"tool_input_redacted,omitempty"`
+	Err               string    `json:"err,omitempty"`
 }
 
 // SessionState tracks per-session aggregated stats.
@@ -44,13 +45,26 @@ type SessionState struct {
 	Ask       int       `json:"ask"`
 }
 
+// SourceStatus describes where the snapshot came from.
+type SourceStatus struct {
+	Kind       string    `json:"kind"` // "sqlite" | "log"
+	Path       string    `json:"path"`
+	LivePath   string    `json:"live_path,omitempty"`
+	Fallback   bool      `json:"fallback"`
+	Warning    string    `json:"warning,omitempty"`
+	ModifiedAt time.Time `json:"modified_at,omitempty"`
+}
+
 // StateSnapshot is the JSON shape returned by GET /api/state.
 type StateSnapshot struct {
-	Sessions     []*SessionState `json:"sessions"`
-	RecentEvents []EvalLine      `json:"recent_events"`
-	TotalAllow   int             `json:"total_allow"`
-	TotalDeny    int             `json:"total_deny"`
-	TotalAsk     int             `json:"total_ask"`
+	Sessions       []*SessionState `json:"sessions"`
+	RecentEvents   []EvalLine      `json:"recent_events"`
+	TotalAllow     int             `json:"total_allow"`
+	TotalDeny      int             `json:"total_deny"`
+	TotalAsk       int             `json:"total_ask"`
+	TotalDecisions int             `json:"total_decisions"`
+	FilteredCount  int             `json:"filtered_count"`
+	Source         SourceStatus    `json:"source"`
 }
 
 // Store is the thread-safe in-memory state for the UI server.
@@ -133,6 +147,7 @@ func (s *Store) Snapshot() StateSnapshot {
 		snap.TotalDeny += sess.Deny
 		snap.TotalAsk += sess.Ask
 	}
+	snap.TotalDecisions = snap.TotalAllow + snap.TotalDeny + snap.TotalAsk
 
 	return snap
 }
