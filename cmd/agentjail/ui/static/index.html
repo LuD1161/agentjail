@@ -18,18 +18,18 @@
     }
   </script>
   <style>
-    body { background: #0d1117; color: #e6edf3; }
-    .action-allow  { color: #3fb950; }
-    .action-deny   { color: #f85149; font-weight: 700; }
-    .action-ask    { color: #d29922; }
-    .action-other  { color: #8b949e; }
-    .rule-dot-on   { color: #3fb950; }
-    .rule-dot-off  { color: #484f58; }
+    body { background: #131720; color: #f0f3f6; }
+    .action-allow  { color: #56d364; }
+    .action-deny   { color: #ff7b72; font-weight: 700; }
+    .action-ask    { color: #e3b341; }
+    .action-other  { color: #9ca3af; }
+    .rule-dot-on   { color: #56d364; }
+    .rule-dot-off  { color: #545d68; }
     .session-row   { cursor: pointer; }
-    .session-row:hover { background: #161b22; }
-    .session-active { background: #161b22; border-left: 2px solid #388bfd; }
+    .session-row:hover { background: #1c2333; }
+    .session-active { background: #1c2333; border-left: 2px solid #58a6ff; }
     .event-row     { cursor: pointer; }
-    .event-row:hover { background: #161b22; }
+    .event-row:hover { background: #1c2333; }
     .timeline-grid {
       display: grid;
       grid-template-columns: var(--tl-cols, 64px 52px 100px minmax(120px,1fr) 70px 140px);
@@ -46,54 +46,58 @@
       width: 9px;
       cursor: col-resize;
       z-index: 2;
-      border-left: 1px solid #30363d;
+      border-left: 1px solid #3b4252;
     }
-    .col-resize-handle:hover, .col-resize-handle.active { border-left-color: #3b82f6; background: rgba(59,130,246,0.15); }
+    .col-resize-handle:hover, .col-resize-handle.active { border-left-color: #58a6ff; background: rgba(88,166,255,0.12); }
     .pane-drag-h {
       width: 8px; flex: none; cursor: col-resize; position: relative; z-index: 5;
-      background: #1c2128;
-      border-left: 1px solid #30363d; border-right: 1px solid #30363d;
+      background: #1a1f2e;
+      border-left: 1px solid #3b4252; border-right: 1px solid #3b4252;
       transition: background 0.15s;
-      background-image: url("data:image/svg+xml,%3Csvg width='2' height='8' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='1' fill='%23484f58'/%3E%3Ccircle cx='1' cy='5' r='1' fill='%23484f58'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg width='2' height='8' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='1' fill='%23545d68'/%3E%3Ccircle cx='1' cy='5' r='1' fill='%23545d68'/%3E%3C/svg%3E");
       background-repeat: repeat-y;
       background-position: center;
     }
-    .pane-drag-h:hover, .pane-drag-h.active { background-color: #3b82f6; background-image: none; }
+    .pane-drag-h:hover, .pane-drag-h.active { background-color: #58a6ff; background-image: none; }
     .pane-drag-v {
       height: 8px; flex: none; cursor: row-resize; position: relative; z-index: 5;
-      background: #1c2128;
-      border-top: 1px solid #30363d; border-bottom: 1px solid #30363d;
+      background: #1a1f2e;
+      border-top: 1px solid #3b4252; border-bottom: 1px solid #3b4252;
       transition: background 0.15s;
-      background-image: url("data:image/svg+xml,%3Csvg width='8' height='2' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='1' fill='%23484f58'/%3E%3Ccircle cx='5' cy='1' r='1' fill='%23484f58'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg width='8' height='2' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='1' fill='%23545d68'/%3E%3Ccircle cx='5' cy='1' r='1' fill='%23545d68'/%3E%3C/svg%3E");
       background-repeat: repeat-x;
       background-position: center;
     }
-    .pane-drag-v:hover, .pane-drag-v.active { background-color: #3b82f6; background-image: none; }
+    .pane-drag-v:hover, .pane-drag-v.active { background-color: #58a6ff; background-image: none; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #0d1117; }
-    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: #131720; }
+    ::-webkit-scrollbar-thumb { background: #3b4252; border-radius: 3px; }
     .badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-    .badge-allow { background: #0d2316; color: #3fb950; border: 1px solid #1a4127; }
-    .badge-deny  { background: #2d0f0e; color: #f85149; border: 1px solid #5a1d1d; }
-    .badge-ask   { background: #2a1d00; color: #d29922; border: 1px solid #3d2b00; }
-    .badge-core  { background: #0d1b2e; color: #388bfd; border: 1px solid #1a3859; }
-    .badge-lib   { background: #1a1225; color: #a371f7; border: 1px solid #2d1f45; }
-    .badge-source { background: #161b22; color: #8b949e; border: 1px solid #30363d; }
-    .source-warning { color: #d29922; }
-    .filter-input { background:#0d1117; border:1px solid #30363d; border-radius:4px; color:#c9d1d9; padding:2px 6px; }
+    .badge-allow { background: #122d1f; color: #56d364; border: 1px solid #1f4d2e; }
+    .badge-deny  { background: #351413; color: #ff7b72; border: 1px solid #6b2725; }
+    .badge-ask   { background: #332200; color: #e3b341; border: 1px solid #4d3800; }
+    .badge-core  { background: #0f1f3d; color: #58a6ff; border: 1px solid #1e3f6e; }
+    .badge-lib   { background: #1f1530; color: #bc8cff; border: 1px solid #352555; }
+    .badge-source { background: #1a1f2e; color: #9ca3af; border: 1px solid #3b4252; }
+    .source-warning { color: #e3b341; }
+    .filter-input { background:#131720; border:1px solid #3b4252; border-radius:4px; color:#d1d5db; padding:2px 6px; }
     .btn-sm { padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
     .btn-sm:hover { opacity: .85; }
-    .btn-enable  { background: #0d2316; color: #3fb950; border: 1px solid #1a4127; }
-    .btn-disable { background: #2d0f0e; color: #f85149; border: 1px solid #5a1d1d; }
-    .expand-details { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; margin-top: 4px; padding: 8px 12px; font-size: 11px; color: #8b949e; }
-    .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3fb950; animation: pulse 1.4s ease-in-out infinite; }
+    .btn-enable  { background: #122d1f; color: #56d364; border: 1px solid #1f4d2e; }
+    .btn-disable { background: #351413; color: #ff7b72; border: 1px solid #6b2725; }
+    .expand-details { background: #161b28; border: 1px solid #2a3040; border-radius: 4px; margin-top: 4px; padding: 8px 12px; font-size: 11px; color: #9ca3af; }
+    .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #56d364; animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:.3; } }
+    .collapsible-header { cursor: pointer; user-select: none; }
+    .collapsible-header:hover { background: #1c2333 !important; }
+    .collapsible-header .chevron { transition: transform 0.2s; display: inline-block; }
+    .collapsible-header.collapsed .chevron { transform: rotate(-90deg); }
   </style>
 </head>
 <body class="font-mono text-sm h-screen flex flex-col overflow-hidden">
 
 <!-- Top bar -->
-<header class="border-b border-gray-800 px-5 py-4 flex-none">
+<header class="border-b border-gray-700 px-5 py-4 flex-none">
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-4">
       <svg viewBox="0 0 32 32" style="height:28px;width:28px;flex-shrink:0"><rect width="32" height="32" rx="7" fill="#0A0A0B"/><g fill="#F5A623"><rect x="14.05" y="11.45" width="1.3" height="1.3"/><rect x="15.35" y="11.45" width="1.3" height="1.3"/><rect x="16.65" y="11.45" width="1.3" height="1.3"/><rect x="12.75" y="12.75" width="1.3" height="1.3"/><rect x="14.05" y="12.75" width="1.3" height="1.3"/><rect x="15.35" y="12.75" width="1.3" height="1.3"/><rect x="16.65" y="12.75" width="1.3" height="1.3"/><rect x="17.95" y="12.75" width="1.3" height="1.3"/><rect x="11.45" y="14.05" width="1.3" height="1.3"/><rect x="12.75" y="14.05" width="1.3" height="1.3"/><rect x="14.05" y="14.05" width="1.3" height="1.3"/><rect x="15.35" y="14.05" width="1.3" height="1.3"/><rect x="16.65" y="14.05" width="1.3" height="1.3"/><rect x="17.95" y="14.05" width="1.3" height="1.3"/><rect x="19.25" y="14.05" width="1.3" height="1.3"/><rect x="11.45" y="15.35" width="1.3" height="1.3"/><rect x="12.75" y="15.35" width="1.3" height="1.3"/><rect x="14.05" y="15.35" width="1.3" height="1.3"/><rect x="15.35" y="15.35" width="1.3" height="1.3"/><rect x="16.65" y="15.35" width="1.3" height="1.3"/><rect x="17.95" y="15.35" width="1.3" height="1.3"/><rect x="19.25" y="15.35" width="1.3" height="1.3"/><rect x="11.45" y="16.65" width="1.3" height="1.3"/><rect x="12.75" y="16.65" width="1.3" height="1.3"/><rect x="14.05" y="16.65" width="1.3" height="1.3"/><rect x="15.35" y="16.65" width="1.3" height="1.3"/><rect x="16.65" y="16.65" width="1.3" height="1.3"/><rect x="17.95" y="16.65" width="1.3" height="1.3"/><rect x="19.25" y="16.65" width="1.3" height="1.3"/><rect x="12.75" y="17.95" width="1.3" height="1.3"/><rect x="14.05" y="17.95" width="1.3" height="1.3"/><rect x="15.35" y="17.95" width="1.3" height="1.3"/><rect x="16.65" y="17.95" width="1.3" height="1.3"/><rect x="17.95" y="17.95" width="1.3" height="1.3"/><rect x="14.05" y="19.25" width="1.3" height="1.3"/><rect x="15.35" y="19.25" width="1.3" height="1.3"/><rect x="16.65" y="19.25" width="1.3" height="1.3"/></g><g fill="#FBEFD8"><rect x="10.875" y="6.5" width="1.25" height="19"/><rect x="13.875" y="6.5" width="1.25" height="19"/><rect x="16.875" y="6.5" width="1.25" height="19"/><rect x="19.875" y="6.5" width="1.25" height="19"/></g></svg>
@@ -125,16 +129,16 @@
 <div class="flex flex-1 overflow-hidden">
 
   <!-- Sidebar: sessions -->
-  <aside id="sidebar-pane" style="width:208px;flex:none" class="border-r border-gray-800 flex flex-col overflow-hidden">
-    <div class="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800">Sessions</div>
+  <aside id="sidebar-pane" style="width:208px;flex:none" class="border-r border-gray-700 flex flex-col overflow-hidden">
+    <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700">Sessions</div>
     <div class="overflow-y-auto flex-1" id="sessions-list">
       <!-- sessions injected by JS -->
     </div>
-    <div class="border-t border-gray-800 session-row px-3 py-2 text-xs text-gray-400"
+    <div class="border-t border-gray-700 session-row px-3 py-2 text-xs text-gray-400"
          id="session-all-row" onclick="selectSession(null)">
       &#9654; all sessions
     </div>
-    <div class="border-t border-gray-800 px-3 py-2 text-xs text-gray-600 text-center">v0.1.2</div>
+    <div class="border-t border-gray-700 px-3 py-2 text-xs text-gray-600 text-center">v0.1.2</div>
   </aside>
 
   <div class="pane-drag-h" data-pane="sidebar"></div>
@@ -144,7 +148,7 @@
 
     <!-- Timeline -->
     <main id="timeline-pane" class="flex-1 flex flex-col overflow-hidden" style="min-height:100px">
-      <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 flex items-center gap-2">
+      <div class="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700 flex items-center gap-2">
         <span>Timeline</span>
         <span class="text-gray-600 text-xs font-normal" id="timeline-filter-label"></span>
         <span class="flex-1"></span>
@@ -168,21 +172,23 @@
 
     <div class="pane-drag-v" data-pane="audit"></div>
 
-    <!-- Audit events -->
-    <section id="audit-pane" style="height:150px;flex:none;overflow-y:auto;min-height:40px">
-      <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 sticky top-0 z-10 flex items-center" style="background:#0d1117;">
+    <!-- Audit events (collapsed by default) -->
+    <section id="audit-pane" style="flex:none;overflow-y:auto;min-height:0">
+      <div class="collapsible-header collapsed px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700 flex items-center" style="background:#161b28;" onclick="toggleAuditPane()">
+        <span class="chevron mr-2">&#9660;</span>
         <span>Audit events</span>
+        <span class="ml-2 text-gray-600 font-normal normal-case" id="audit-count-badge"></span>
         <span class="flex-1"></span>
         <span class="text-gray-600 normal-case font-normal">policy and MCP mutations</span>
       </div>
-      <div id="audit-table" class="px-2 py-1"></div>
+      <div id="audit-table" class="px-2 py-1" style="display:none"></div>
     </section>
 
     <div class="pane-drag-v" data-pane="rules"></div>
 
     <!-- Rules section -->
     <section id="rules-pane" style="height:220px;flex:none;overflow-y:auto;min-height:40px">
-      <div class="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 sticky top-0 z-10" style="background:#0d1117;">Rules</div>
+      <div class="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700 sticky top-0 z-10" style="background:#161b28;">Rules</div>
       <div id="rules-table" class="px-2 py-1">
         <!-- rules injected by JS -->
       </div>
@@ -370,7 +376,7 @@ function renderSessions() {
 
   // Highlight "all sessions" row
   const allRow = document.getElementById('session-all-row');
-  allRow.className = 'border-t border-gray-800 session-row px-3 py-2 text-xs text-gray-400' +
+  allRow.className = 'border-t border-gray-700 session-row px-3 py-2 text-xs text-gray-400' +
     (selectedSession === null ? ' session-active' : '');
 }
 
@@ -417,7 +423,7 @@ function renderTimeline() {
     return;
   }
 
-  const header = `<div class="timeline-header px-4 py-1 sticky top-0 z-10" style="background:#161b22;border-bottom:1px solid #30363d">
+  const header = `<div class="timeline-header px-4 py-1 sticky top-0 z-10" style="background:#1a2030;border-bottom:1px solid #30363d">
     <div class="timeline-grid" id="tl-header-grid">
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Time<div class="col-resize-handle" data-col="0"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Action<div class="col-resize-handle" data-col="1"></div></span>
@@ -556,8 +562,10 @@ function renderRules() {
 
 function renderAudit() {
   const container = document.getElementById('audit-table');
+  const badge = document.getElementById('audit-count-badge');
+  if (badge) badge.textContent = auditEvents.length ? `(${auditEvents.length})` : '';
   if (!auditEvents.length) {
-    container.innerHTML = '<div class="text-xs text-gray-600 px-2 py-2">No audit events available.</div>';
+    container.innerHTML = '<div class="text-xs text-gray-600 px-2 py-2">No audit events.</div>';
     return;
   }
   container.innerHTML = auditEvents.map(ev => {
@@ -673,6 +681,13 @@ document.addEventListener('mousedown', e => {
 function escHtml(s) {
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function toggleAuditPane() {
+  const header = document.querySelector('#audit-pane .collapsible-header');
+  const table = document.getElementById('audit-table');
+  header.classList.toggle('collapsed');
+  table.style.display = header.classList.contains('collapsed') ? 'none' : 'block';
 }
 
 function renderAll() {
