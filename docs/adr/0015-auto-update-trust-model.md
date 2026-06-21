@@ -170,3 +170,15 @@ The update command is explicitly guarded against agent execution:
 - **No anonymous persistent identifier.** Not collecting one keeps the privacy
   story simple and the opt-out meaningful; the cost is that session-level
   analytics (returning vs. new installs) are not available.
+
+## Amendment: Daemon-Side Update Notifications (2026-06-21)
+
+The daemon now makes passive version-check network requests every ~6 hours
+(previously: CLI-only, on invocation, throttled to once per 24h). This changes
+the network profile but NOT the trust model: the daemon only notifies the user
+via an OS notification; it never downloads or replaces binaries automatically.
+The user must still explicitly run `agentjail update` to apply the update.
+
+The `AGENTJAIL_NO_UPDATE_CHECK` env var disables both CLI and daemon checks.
+For launchd-managed daemons, set this via the plist's `EnvironmentVariables`
+dict.

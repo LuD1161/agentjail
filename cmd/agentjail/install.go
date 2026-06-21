@@ -1177,6 +1177,15 @@ func mergeNewMCPServers(path string, mcpSeed []string) error {
 	return nil
 }
 
+// To disable daemon update checks, users may add an EnvironmentVariables
+// section to the plist:
+//
+//	<key>EnvironmentVariables</key>
+//	<dict>
+//	    <key>AGENTJAIL_NO_UPDATE_CHECK</key>
+//	    <string>1</string>
+//	</dict>
+//
 // plistTemplate is the launchd plist with placeholders for the daemon path,
 // rules directory, log path, and crash log path. Placeholders are patched at
 // install time:

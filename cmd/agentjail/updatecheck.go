@@ -109,7 +109,7 @@ func maybeRunUpdateCheck() {
 
 		// Emit heartbeat telemetry (best-effort; ignores ErrNoBackend and opt-out).
 		if tp, err := telemetry.DefaultPaths(); err == nil {
-			_ = telemetry.SendHeartbeat(ctx, tp, os.Getenv, current, latest, runtime.GOOS, newer)
+			_ = telemetry.SendHeartbeat(ctx, tp, os.Getenv, current, latest, runtime.GOOS, "cli", newer)
 		}
 	}()
 }

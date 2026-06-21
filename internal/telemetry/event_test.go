@@ -98,9 +98,9 @@ func TestNewFailOpenEvent_Fields(t *testing.T) {
 	}
 }
 
-// TestNewHeartbeatEvent_Fields verifies update_available and version fields.
+// TestNewHeartbeatEvent_Fields verifies update_available, version, and source fields.
 func TestNewHeartbeatEvent_Fields(t *testing.T) {
-	e := NewHeartbeatEvent("anon", "v1.0.0", "v1.1.0", "linux", true)
+	e := NewHeartbeatEvent("anon", "v1.0.0", "v1.1.0", "linux", "cli", true)
 	if e.Event != "heartbeat" {
 		t.Fatalf("event name=%q", e.Event)
 	}
@@ -109,6 +109,9 @@ func TestNewHeartbeatEvent_Fields(t *testing.T) {
 	}
 	if e.Properties["latest_version"] != "v1.1.0" {
 		t.Fatalf("latest_version=%v", e.Properties["latest_version"])
+	}
+	if e.Properties["source"] != "cli" {
+		t.Errorf("source = %q, want %q", e.Properties["source"], "cli")
 	}
 }
 

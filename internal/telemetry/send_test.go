@@ -125,7 +125,7 @@ func TestSendFailOpen_NoBackendReturnsSentinel(t *testing.T) {
 // TestSendHeartbeat_NoBackendReturnsSentinel verifies the no-backend path.
 func TestSendHeartbeat_NoBackendReturnsSentinel(t *testing.T) {
 	err := SendHeartbeat(context.Background(), Paths{Base: t.TempDir()},
-		func(string) string { return "" }, "v1.0.0", "v1.1.0", "darwin", true)
+		func(string) string { return "" }, "v1.0.0", "v1.1.0", "darwin", "cli", true)
 	if err != ErrNoBackend {
 		t.Fatalf("got %v want ErrNoBackend", err)
 	}

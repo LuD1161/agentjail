@@ -6,16 +6,19 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/notify"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
+	"github.com/LuD1161/agentjail/internal/telemetry"
 )
 
 const (
 	updateCheckInterval  = 6 * time.Hour
 	updateCheckMaxJitter = 30 * time.Minute
+	heartbeatThrottle    = 24 * time.Hour
 )
 
 // Fetcher abstracts the version-check call for testing.
@@ -95,6 +98,14 @@ func (uc *UpdateChecker) checkOnce(ctx context.Context) error {
 	}
 
 	uc.recordNotified(latest)
+
+	// Emit heartbeat telemetry (shared 24h throttle across CLI and daemon).
+	if uc.shouldEmitHeartbeat() {
+		if tp, terr := telemetry.DefaultPaths(); terr == nil {
+			_ = telemetry.SendHeartbeat(ctx, tp, os.Getenv, uc.Version, latest, runtime.GOOS, "daemon", selfupdate.IsNewerVersion(uc.Version, latest))
+		}
+		uc.recordHeartbeat()
+	}
 	return nil
 }
 
@@ -121,6 +132,26 @@ func (uc *UpdateChecker) recordNotified(version string) {
 		slog.Warn("rename throttle file", "err", err)
 		_ = os.Remove(tmp)
 	}
+}
+
+func (uc *UpdateChecker) shouldEmitHeartbeat() bool {
+	p := filepath.Join(uc.BasePath, "heartbeat.timestamp")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return true
+	}
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
+	if err != nil {
+		return true
+	}
+	return time.Since(ts) >= heartbeatThrottle
+}
+
+func (uc *UpdateChecker) recordHeartbeat() {
+	p := filepath.Join(uc.BasePath, "heartbeat.timestamp")
+	tmp := p + ".tmp"
+	_ = os.WriteFile(tmp, []byte(time.Now().UTC().Format(time.RFC3339)), 0o600)
+	_ = os.Rename(tmp, p)
 }
 
 // osNotifier wraps notify.Send as a Notifier interface.

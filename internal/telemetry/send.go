@@ -113,7 +113,8 @@ func SendUpdate(ctx context.Context, p Paths, getenv func(string) string, fromVe
 
 // SendHeartbeat sends a heartbeat/update_check event immediately and
 // synchronously. Respects opt-out; returns ErrNoBackend when no key is baked.
-func SendHeartbeat(ctx context.Context, p Paths, getenv func(string) string, currentVersion, latestVersion, goos string, updateAvailable bool) error {
+// source is "cli" or "daemon" — which component is emitting the heartbeat.
+func SendHeartbeat(ctx context.Context, p Paths, getenv func(string) string, currentVersion, latestVersion, goos, source string, updateAvailable bool) error {
 	client := DefaultClient()
 	if !client.HasBackend() {
 		return ErrNoBackend
@@ -125,7 +126,7 @@ func SendHeartbeat(ctx context.Context, p Paths, getenv func(string) string, cur
 	if enabled, _ := Resolve(c, getenv); !enabled {
 		return nil
 	}
-	ev := NewHeartbeatEvent(c.AnonymousID, currentVersion, latestVersion, goos, updateAvailable)
+	ev := NewHeartbeatEvent(c.AnonymousID, currentVersion, latestVersion, goos, source, updateAvailable)
 	return client.Send(ctx, []Event{ev})
 }
 

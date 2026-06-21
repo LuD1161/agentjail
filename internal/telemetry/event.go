@@ -156,11 +156,13 @@ func NewFailOpenEvent(distinctID, version, goos, reason string) Event {
 // NewHeartbeatEvent: emitted at most once per ~24h when a CLI command runs and
 // the update-check throttle allows it. Captures version currency and OS.
 // latestVersion is "" when the check failed or was not attempted.
-func NewHeartbeatEvent(distinctID, currentVersion, latestVersion, goos string, updateAvailable bool) Event {
+// source is "cli" or "daemon" — which component emitted the event.
+func NewHeartbeatEvent(distinctID, currentVersion, latestVersion, goos, source string, updateAvailable bool) Event {
 	p := base(distinctID, currentVersion)
 	p["os"] = goos
 	p["latest_version"] = latestVersion
 	p["update_available"] = updateAvailable
+	p["source"] = source
 	return Event{Event: "heartbeat", Properties: p}
 }
 

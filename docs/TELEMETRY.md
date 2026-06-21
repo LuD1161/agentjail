@@ -130,15 +130,19 @@ the action (fails open) rather than blocking your work — and reports that it d
 | `os` | `"darwin"` | |
 | `reason` | `"dial-daemon"` | A fixed enum for *why* it failed open (`dial-daemon`, `read-response`, `parse-response`, `read-stdin`, `parse-input`, `other`) — never the tool input |
 
-### `heartbeat` — best-effort, at most once per ~24h on a CLI run
-Emitted by the throttled update-check when you run a CLI command. Best-effort (it may
-not send on very short-lived invocations); version currency is also derivable from the
-`agentjail_version` on every other event.
+### `heartbeat` — best-effort, at most once per ~24h
+Emitted by the throttled update-check — from the CLI on a CLI run, or from the
+daemon's background check every ~6 hours — whichever fires first within the 24h
+window. Best-effort (it may not send on very short-lived invocations); version
+currency is also derivable from the `agentjail_version` on every other event.
+The shared throttle file `~/.agentjail/heartbeat.timestamp` ensures at most one
+heartbeat per 24h across both CLI and daemon.
 | Property | Example | Notes |
 |---|---|---|
 | `os` | `"darwin"` | |
 | `latest_version` | `"0.2.0"` | The latest release seen by the update check; `""` if the check didn't complete |
 | `update_available` | `true` | Whether a newer version is available |
+| `source` | `"cli"` / `"daemon"` | Which component emitted the heartbeat |
 
 ### `feedback` — only when you run `agentjail feedback`
 Emitted **solely** when you explicitly run the command (see below). Never automatic.
@@ -229,5 +233,6 @@ agentjail doesn't block its own telemetry — you're free to remove it.
 - `telemetry-spool.jsonl` — events queued to send
 - `telemetry-spool.dropped` — counter of dropped events (if the queue overflowed)
 - `telemetry-rollup.partial.json` — in-progress decision counts (crash-recovery checkpoint)
+- `heartbeat.timestamp` — shared throttle file; records the last heartbeat sent by either the CLI or daemon (mode 0600)
 
 Deleting these is harmless; they're recreated as needed.
