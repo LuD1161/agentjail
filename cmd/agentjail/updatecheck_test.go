@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 )
 
 // TestIsNewerVersion verifies the semver comparison helper.
@@ -28,53 +30,37 @@ func TestIsNewerVersion(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got := isNewerVersion(tc.current, tc.latest)
+		got := selfupdate.IsNewerVersion(tc.current, tc.latest)
 		if got != tc.want {
-			t.Errorf("isNewerVersion(%q, %q) = %v, want %v", tc.current, tc.latest, got, tc.want)
+			t.Errorf("IsNewerVersion(%q, %q) = %v, want %v", tc.current, tc.latest, got, tc.want)
 		}
 	}
 }
 
-// TestParseSemver verifies the semver parser handles common edge cases.
-func TestParseSemver(t *testing.T) {
-	cases := []struct {
-		input string
-		want  [3]int
-	}{
-		{"1.2.3", [3]int{1, 2, 3}},
-		{"1.2.3-beta", [3]int{1, 2, 3}}, // pre-release suffix stripped
-		{"10.20.30", [3]int{10, 20, 30}},
-		{"", [3]int{0, 0, 0}},
-		{"1", [3]int{1, 0, 0}},
-		{"1.2", [3]int{1, 2, 0}},
-	}
-	for _, tc := range cases {
-		got := parseSemver(tc.input)
-		if got != tc.want {
-			t.Errorf("parseSemver(%q) = %v, want %v", tc.input, got, tc.want)
-		}
-	}
-}
-
-// TestFetchLatestVersion_MockServer verifies that fetchLatestVersion parses the
+// TestFetchLatestVersion_MockServer verifies that FetchLatestVersion parses the
 // GitHub releases API response correctly.
 func TestFetchLatestVersion_MockServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v1.3.0"})
+		b, _ := json.Marshal(struct {
+			TagName string `json:"tag_name"`
+		}{TagName: "v1.3.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 
-	// Override the global URL for this test.
-	orig := updateCheckURL
-	updateCheckURL = srv.URL
-	defer func() { updateCheckURL = orig }()
+	// Override the checker's primary URL for this test.
+	orig := defaultChecker.PrimaryURL
+	defaultChecker.PrimaryURL = srv.URL
+	defer func() { defaultChecker.PrimaryURL = orig }()
 
-	got := fetchLatestVersion(t.Context())
+	got, err := defaultChecker.FetchLatestVersion(t.Context(), version)
+	if err != nil {
+		t.Fatalf("FetchLatestVersion error: %v", err)
+	}
 	if got != "v1.3.0" {
-		t.Fatalf("fetchLatestVersion = %q, want v1.3.0", got)
+		t.Fatalf("FetchLatestVersion = %q, want v1.3.0", got)
 	}
 }
 
@@ -84,13 +70,17 @@ func TestFetchLatestVersion_ServerError(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
-	orig := updateCheckURL
-	origFallback := updateCheckFallbackURL
-	updateCheckURL = srv.URL
-	updateCheckFallbackURL = srv.URL
-	defer func() { updateCheckURL = orig; updateCheckFallbackURL = origFallback }()
 
-	got := fetchLatestVersion(t.Context())
+	orig := defaultChecker.PrimaryURL
+	origFallback := defaultChecker.FallbackURL
+	defaultChecker.PrimaryURL = srv.URL
+	defaultChecker.FallbackURL = srv.URL
+	defer func() {
+		defaultChecker.PrimaryURL = orig
+		defaultChecker.FallbackURL = origFallback
+	}()
+
+	got, _ := defaultChecker.FetchLatestVersion(t.Context(), version)
 	if got != "" {
 		t.Fatalf("expected empty on 500, got %q", got)
 	}

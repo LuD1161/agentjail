@@ -39,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/updater"
 )
@@ -65,24 +66,6 @@ var updateBinaries = []string{
 // It is a package-level variable so tests can override it to point at a mock
 // HTTP server without hitting the real network.
 var updateURLBaseFn = updateURLBase
-
-// resolveExecutablePath returns the resolved path of the running binary and
-// whether it appears to be managed by Homebrew. It resolves symlinks so that
-// a brew-installed binary (which lives under /opt/homebrew/Cellar/ and is
-// symlinked into /opt/homebrew/bin/) is correctly identified.
-func resolveExecutablePath() (string, bool) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", false
-	}
-	resolved, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		resolved = exe
-	}
-	lower := strings.ToLower(resolved)
-	brew := strings.Contains(lower, "/homebrew/") || strings.Contains(lower, "/cellar/")
-	return resolved, brew
-}
 
 // updateURLBase is the default implementation of updateURLBaseFn.
 // It routes through the Cloudflare Worker at releases.agentjail.io first; the
@@ -155,7 +138,7 @@ func runUpdate(args []string) int {
 	// Detect path mismatch: if the running binary is not in installDir,
 	// delegate to the appropriate package manager instead of silently
 	// updating the wrong location.
-	if exePath, brew := resolveExecutablePath(); exePath != "" {
+	if exePath, brew := selfupdate.ResolveExecutablePath(); exePath != "" {
 		exeDir := filepath.Dir(exePath)
 		if exeDir != installDir {
 			if brew {
@@ -228,7 +211,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	latest := fetchLatestVersion(ctx)
+	latest, _ := defaultChecker.FetchLatestVersion(ctx, current)
 	if latest == "" {
 		fmt.Fprintln(os.Stderr, "agentjail update: could not fetch latest version (check your network).")
 		return 1
@@ -238,13 +221,13 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	// Downgrade is always refused (even with --force).
 	// Same version: proceed only with --force (reinstall/repair).
 	// Newer version: always proceed.
-	if isSemver(current) && isSemver(latest) {
-		if isNewerVersion(latest, current) {
+	if selfupdate.IsValid(current) && selfupdate.IsValid(latest) {
+		if selfupdate.IsNewerVersion(latest, current) {
 			// latest < current — downgrade
 			fmt.Fprintf(os.Stderr, "agentjail update: downgrade not supported (%s → %s); refusing.\n", current, latest)
 			return 0
 		}
-		if current == latest || (!isNewerVersion(current, latest) && !isNewerVersion(latest, current)) {
+		if current == latest || (!selfupdate.IsNewerVersion(current, latest) && !selfupdate.IsNewerVersion(latest, current)) {
 			// same version
 			if !force {
 				fmt.Printf("agentjail update: already up to date (%s).\n", current)
@@ -255,9 +238,9 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 			// latest > current — normal upgrade
 			fmt.Printf("agentjail update: %s → %s\n", current, latest)
 		}
-	} else if !isNewerVersion(current, latest) {
+	} else if !selfupdate.IsNewerVersion(current, latest) {
 		// Non-semver current (dev builds) — skip.
-		if !isSemver(current) {
+		if !selfupdate.IsValid(current) {
 			fmt.Printf("agentjail update: current build is a development version (%s); skipping update.\n", current)
 		} else {
 			fmt.Printf("agentjail update: already up to date (%s).\n", current)

@@ -49,6 +49,7 @@ import (
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
 	"github.com/LuD1161/agentjail/internal/picker"
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
@@ -540,7 +541,7 @@ func performFullUninstall(home, goos string) UninstallResult {
 
 	// Step 6: if the running binary is brew-managed, also run brew uninstall
 	// so the Homebrew copy is removed and `which agentjail` returns nothing.
-	if _, brew := resolveExecutablePath(); brew {
+	if _, brew := selfupdate.ResolveExecutablePath(); brew {
 		r.BrewUninstalled = true
 		cmd := exec.Command("brew", "uninstall", "agentjail")
 		cmd.Stdout = os.Stdout

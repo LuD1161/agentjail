@@ -14,7 +14,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 )
+
+// fakeRelease is used to build mock version-check API responses in tests.
+type fakeRelease struct {
+	TagName string `json:"tag_name"`
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +93,24 @@ func makeSHA256SumsFile(t *testing.T, destDir string, entries map[string]string)
 		t.Fatalf("write SHA256SUMS: %v", err)
 	}
 	return sumsPath
+}
+
+// setCheckerURL overrides defaultChecker.PrimaryURL for the duration of the
+// test.
+func setCheckerURL(t *testing.T, url string) {
+	t.Helper()
+	orig := defaultChecker.PrimaryURL
+	defaultChecker.PrimaryURL = url
+	t.Cleanup(func() { defaultChecker.PrimaryURL = orig })
+}
+
+// setCheckerFallbackURL overrides defaultChecker.FallbackURL for the duration
+// of the test.
+func setCheckerFallbackURL(t *testing.T, url string) {
+	t.Helper()
+	orig := defaultChecker.FallbackURL
+	defaultChecker.FallbackURL = url
+	t.Cleanup(func() { defaultChecker.FallbackURL = orig })
 }
 
 // ── verifySHA256 tests ───────────────────────────────────────────────────────
@@ -362,16 +387,14 @@ func TestRunUpdate_RefusesWithoutTTY(t *testing.T) {
 func TestPerformUpdate_AlreadyUpToDate(t *testing.T) {
 	// Serve a fake GitHub releases API with the same version as current.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v1.0.0"})
+		b, _ := json.Marshal(fakeRelease{TagName: "v1.0.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 
-	origURL := updateCheckURL
-	updateCheckURL = srv.URL
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, srv.URL)
 
 	origVersion := version
 	version = "v1.0.0"
@@ -404,16 +427,14 @@ func TestPerformUpdate_AlreadyUpToDate(t *testing.T) {
 // ("dev") skips the update without error.
 func TestPerformUpdate_DevVersionSkips(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v1.0.0"})
+		b, _ := json.Marshal(fakeRelease{TagName: "v1.0.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 
-	origURL := updateCheckURL
-	updateCheckURL = srv.URL
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, srv.URL)
 
 	origVersion := version
 	version = "dev"
@@ -448,11 +469,8 @@ func TestPerformUpdate_FetchFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origURL := updateCheckURL
-	origFallback := updateCheckFallbackURL
-	updateCheckURL = srv.URL
-	updateCheckFallbackURL = srv.URL
-	defer func() { updateCheckURL = origURL; updateCheckFallbackURL = origFallback }()
+	setCheckerURL(t, srv.URL)
+	setCheckerFallbackURL(t, srv.URL)
 
 	origVersion := version
 	version = "v1.0.0"
@@ -489,7 +507,7 @@ func TestPerformUpdate_SHA256Mismatch(t *testing.T) {
 			w.WriteHeader(200)
 			_, _ = w.Write(tarballBytes)
 		} else if strings.HasSuffix(path, "releases/latest") {
-			b, _ := json.Marshal(githubRelease{TagName: "v2.0.0"})
+			b, _ := json.Marshal(fakeRelease{TagName: "v2.0.0"})
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_, _ = w.Write(b)
@@ -500,9 +518,7 @@ func TestPerformUpdate_SHA256Mismatch(t *testing.T) {
 	defer srv.Close()
 
 	// Override the version check URL and the update URL base.
-	origURL := updateCheckURL
-	updateCheckURL = srv.URL + "/releases/latest"
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, srv.URL+"/releases/latest")
 
 	// Patch updateURLBase by overriding version so the tarball name matches.
 	origVersion := version
@@ -565,16 +581,14 @@ func TestPerformUpdate_AtomicSwap(t *testing.T) {
 
 	// Fake version server.
 	verSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v2.0.0"})
+		b, _ := json.Marshal(fakeRelease{TagName: "v2.0.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer verSrv.Close()
 
-	origURL := updateCheckURL
-	updateCheckURL = verSrv.URL
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, verSrv.URL)
 
 	origVersion := version
 	version = "v1.0.0"
@@ -681,16 +695,14 @@ func TestPerformUpdate_ForceReinstall(t *testing.T) {
 
 	// Same version reported by the fake version server.
 	verSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v1.0.0"})
+		b, _ := json.Marshal(fakeRelease{TagName: "v1.0.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer verSrv.Close()
 
-	origURL := updateCheckURL
-	updateCheckURL = verSrv.URL
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, verSrv.URL)
 
 	origVersion := version
 	version = "v1.0.0"
@@ -716,16 +728,14 @@ func TestPerformUpdate_ForceReinstall(t *testing.T) {
 func TestPerformUpdate_DowngradeRefused(t *testing.T) {
 	// Latest reported is older than current.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v1.0.0"})
+		b, _ := json.Marshal(fakeRelease{TagName: "v1.0.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 
-	origURL := updateCheckURL
-	updateCheckURL = srv.URL
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, srv.URL)
 
 	origVersion := version
 	version = "v2.0.0" // current is newer
@@ -842,16 +852,14 @@ func TestPerformUpdate_RollbackOnSwapFailure(t *testing.T) {
 	defer srv.Close()
 
 	verSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := json.Marshal(githubRelease{TagName: "v2.0.0"})
+		b, _ := json.Marshal(fakeRelease{TagName: "v2.0.0"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(b)
 	}))
 	defer verSrv.Close()
 
-	origURL := updateCheckURL
-	updateCheckURL = verSrv.URL
-	defer func() { updateCheckURL = origURL }()
+	setCheckerURL(t, verSrv.URL)
 
 	origVersion := version
 	version = "v1.0.0"
@@ -881,16 +889,16 @@ func TestPerformUpdate_RollbackOnSwapFailure(t *testing.T) {
 // ── resolveExecutablePath tests ───────────────────────────────────────────────
 
 func TestResolveExecutablePath_ReturnsNonEmpty(t *testing.T) {
-	path, _ := resolveExecutablePath()
+	path, _ := selfupdate.ResolveExecutablePath()
 	if path == "" {
-		t.Error("resolveExecutablePath returned empty path")
+		t.Error("ResolveExecutablePath returned empty path")
 	}
 }
 
 func TestResolveExecutablePath_DetectsHomebrew(t *testing.T) {
 	// The test binary runs from a temp dir, not a Homebrew Cellar, so it
 	// must NOT be detected as brew-managed.
-	_, brew := resolveExecutablePath()
+	_, brew := selfupdate.ResolveExecutablePath()
 	if brew {
 		t.Error("test binary should not be detected as brew-managed")
 	}
