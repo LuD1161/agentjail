@@ -52,6 +52,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/logrotate"
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -1198,6 +1199,22 @@ func main() {
 		} else {
 			slog.Warn("telemetry init failed; continuing without telemetry", "err", rerr)
 		}
+	}
+
+	// Start background update checker (respects AGENTJAIL_NO_UPDATE_CHECK).
+	if os.Getenv("AGENTJAIL_NO_UPDATE_CHECK") == "" {
+		checker := &selfupdate.Checker{}
+		uc := &UpdateChecker{
+			Version:     version,
+			BasePath:    filepath.Dir(*socketPath), // ~/.agentjail
+			Fetcher:     checker,
+			Notifier:    &osNotifier{},
+			ExeResolver: selfupdate.ResolveExecutablePath,
+			JitterFunc: func(max time.Duration) time.Duration {
+				return time.Duration(int64(os.Getpid()) % int64(max))
+			},
+		}
+		go uc.Run(ctx)
 	}
 
 	// Start listening before installing signal handlers so the socket is
