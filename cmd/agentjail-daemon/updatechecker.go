@@ -70,7 +70,17 @@ func (uc *UpdateChecker) checkOnce(ctx context.Context) error {
 		return fmt.Errorf("fetch latest version: %w", err)
 	}
 
-	if !selfupdate.IsNewerVersion(uc.Version, latest) {
+	newer := selfupdate.IsNewerVersion(uc.Version, latest)
+
+	// Emit heartbeat telemetry on every successful check (shared 24h throttle).
+	if uc.shouldEmitHeartbeat() {
+		if tp, terr := telemetry.DefaultPaths(); terr == nil {
+			_ = telemetry.SendHeartbeat(ctx, tp, os.Getenv, uc.Version, latest, runtime.GOOS, "daemon", newer)
+		}
+		uc.recordHeartbeat()
+	}
+
+	if !newer {
 		slog.Debug("no update available", "current", uc.Version, "latest", latest)
 		return nil
 	}
@@ -94,18 +104,10 @@ func (uc *UpdateChecker) checkOnce(ctx context.Context) error {
 	defer cancel()
 	if err := uc.Notifier.Send(notifyCtx, "agentjail", msg); err != nil {
 		slog.Warn("OS notification failed", "err", err)
-		return nil // don't write throttle file if notification failed
+		return nil
 	}
 
 	uc.recordNotified(latest)
-
-	// Emit heartbeat telemetry (shared 24h throttle across CLI and daemon).
-	if uc.shouldEmitHeartbeat() {
-		if tp, terr := telemetry.DefaultPaths(); terr == nil {
-			_ = telemetry.SendHeartbeat(ctx, tp, os.Getenv, uc.Version, latest, runtime.GOOS, "daemon", selfupdate.IsNewerVersion(uc.Version, latest))
-		}
-		uc.recordHeartbeat()
-	}
 	return nil
 }
 
