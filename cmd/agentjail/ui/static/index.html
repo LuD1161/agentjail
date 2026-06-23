@@ -207,7 +207,7 @@ let sessions = {};        // id -> {id, agent, cwd, total, allow, deny, ask, fir
 let lastEventTime = null;
 let events = [];          // ring buffer of last 500 EvalLine objects
 let selectedSession = null; // null = all
-let expandedEventIdx = null;
+let expandedEventKey = null; // "req_id|time" identity key for expanded event
 let rulesData = [];
 let sessionEvents = {};   // id -> full replay events from /api/session
 let auditEvents = [];
@@ -443,7 +443,7 @@ function renderSessions() {
 
 async function selectSession(id) {
   selectedSession = id;
-  expandedEventIdx = null;
+  expandedEventKey = null;
 
   // Update URL permalink
   const url = new URL(window.location);
@@ -509,7 +509,8 @@ function renderTimeline() {
     const actionBadgeClass = action === 'allow' ? 'badge-allow' : action === 'deny' ? 'badge-deny' : action === 'ask' ? 'badge-ask' : '';
     const tool = ev.tool || '—';
     const summary = ev.summary || '';
-    const expanded = expandedEventIdx === i;
+    const evKey = (ev.req_id || '') + '|' + (ev.time || i);
+    const expanded = expandedEventKey === evKey;
 
     const agentName = ev.agent || '';
     const sessIcon = agentName ? agentIcon(agentName).replace(/width="18"/,'width="12"').replace(/height="18"/,'height="12"') : '';
@@ -526,7 +527,7 @@ function renderTimeline() {
       return sessLabel;
     })();
 
-    return `<div class="event-row px-5 py-2" onclick="toggleExpand(${i})">
+    return `<div class="event-row px-5 py-2" onclick="toggleExpand('${evKey}')">
       <div class="timeline-grid">
         <span class="text-gray-500">${t}</span>
         <span class="badge ${actionBadgeClass}" style="text-align:center">${(ev.action||'').toUpperCase()}</span>
@@ -555,8 +556,8 @@ function renderTimeline() {
   if (atBottom) container.scrollTop = container.scrollHeight;
 }
 
-function toggleExpand(idx) {
-  expandedEventIdx = expandedEventIdx === idx ? null : idx;
+function toggleExpand(key) {
+  expandedEventKey = expandedEventKey === key ? null : key;
   renderTimeline();
 }
 
@@ -564,7 +565,7 @@ function filtersChanged() {
   filters.action = document.getElementById('filter-action').value;
   filters.tool = document.getElementById('filter-tool').value;
   filters.rule = document.getElementById('filter-rule').value.trim().toLowerCase();
-  expandedEventIdx = null;
+  expandedEventKey = null;
   renderTimeline();
   clearTimeout(filterDebounceTimer);
   filterDebounceTimer = setTimeout(() => {
