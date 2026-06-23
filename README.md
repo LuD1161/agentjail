@@ -187,7 +187,8 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 agentjail status                      # verify everything is wired
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
-agentjail replay --list               # list recorded sessions for replay
+agentjail replay --list               # list recorded sessions
+agentjail replay -session 625d86f1    # interactive TUI replay
 ```
 
 <details>
@@ -233,6 +234,30 @@ fallback and warns when the fallback may be stale or incomplete.
 
 Policy status is read-only by default. Start with `agentjail ui --edit-policy`
 only when you intentionally want enable/disable controls.
+
+</details>
+
+<details>
+<summary><b>Interactive replay TUI</b></summary>
+
+```sh
+agentjail replay --list                    # list sessions (8-char IDs)
+agentjail replay -session 625d86f1         # interactive TUI
+agentjail replay -session 625d86f1 --basic # plain text
+agentjail replay -session 625d86f1 -follow # live tail
+```
+
+The TUI provides vim-like navigation for browsing session decisions:
+
+- **j/k** or arrow keys to scroll, **g/G** to jump to top/bottom, **d/u** for half-page
+- **/** to filter -- type a substring to narrow rows (matches across time, action, tool, rule, summary)
+- **Enter** to expand a row and see reason, full rule ID, and (with **v**) redacted tool input
+- **f** to toggle follow mode -- new decisions appear in real-time
+- **q** to quit
+
+Session IDs accept short prefixes -- copy the 8-char ID from `--list` and use it directly.
+
+`--basic` forces plain text output. The TUI also falls back to plain text automatically when piped, on `TERM=dumb`, or when the terminal is too small. `NO_COLOR=1` keeps the TUI interactive but disables color.
 
 </details>
 
