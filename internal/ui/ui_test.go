@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
@@ -567,5 +568,84 @@ func TestSanitize_C1Range_TableDriven(t *testing.T) {
 		if strings.ContainsRune(out, cp) {
 			t.Errorf("sanitize: C1 code point U+%04X survived in output: %q", cp, out)
 		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: exported Sanitize method and NewNoColor constructor
+// --------------------------------------------------------------------------
+
+func TestSanitize_StripESCSequences(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("\x1b[31mred\x1b[0m")
+	if got != "red" {
+		t.Fatalf("expected %q, got %q", "red", got)
+	}
+}
+
+func TestSanitize_StripC0Controls(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("hello\x00\x01\x02world")
+	if got != "helloworld" {
+		t.Fatalf("expected %q, got %q", "helloworld", got)
+	}
+}
+
+func TestSanitize_StripC1Controls(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("hello\x80\x9fworld")
+	if got != "helloworld" {
+		t.Fatalf("expected %q, got %q", "helloworld", got)
+	}
+}
+
+func TestSanitize_TabsToSpaces(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("col1\tcol2")
+	if got != "col1 col2" {
+		t.Fatalf("expected %q, got %q", "col1 col2", got)
+	}
+}
+
+func TestSanitize_NewlinesToSpaces(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("line1\nline2\rline3")
+	if got != "line1 line2 line3" {
+		t.Fatalf("expected %q, got %q", "line1 line2 line3", got)
+	}
+}
+
+func TestSanitize_CleanStringUnchanged(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("hello world 123 unicode: Ω")
+	if got != "hello world 123 unicode: Ω" {
+		t.Fatalf("expected clean string unchanged, got %q", got)
+	}
+}
+
+func TestSanitize_OSCTitleInjection(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("\x1b]0;evil title\x07normal")
+	if strings.Contains(got, "evil") {
+		t.Fatalf("OSC title injection not stripped: %q", got)
+	}
+}
+
+func TestSanitize_CursorRepositioning(t *testing.T) {
+	u := plainUTF8UI()
+	got := u.Sanitize("\x1b[5;10Hinjected")
+	if got != "injected" {
+		t.Fatalf("cursor repositioning not stripped: %q", got)
+	}
+}
+
+func TestNewNoColor_NoEscapeSequences(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewNoColor(&buf)
+	// Render something that would normally have color.
+	style := u.r.NewStyle().Foreground(lipgloss.Color("#ff0000"))
+	result := style.Render("hello")
+	if strings.Contains(result, "\x1b") {
+		t.Fatalf("NewNoColor output contains ESC sequences: %q", result)
 	}
 }

@@ -93,8 +93,12 @@ func detectGlyphs() glyphs {
 // Sanitization
 // --------------------------------------------------------------------------
 
-// escSeqRe matches ESC followed by an optional ANSI sequence.
-var escSeqRe = regexp.MustCompile(`\x1b(\[[0-9;]*[a-zA-Z]|[^\[])`)
+// escSeqRe matches ESC followed by an optional ANSI/OSC sequence.
+// It handles:
+//   - CSI sequences: ESC [ ... <letter>
+//   - OSC sequences: ESC ] ... BEL or ST (ESC \)
+//   - All other ESC sequences: ESC <any-non-[> char
+var escSeqRe = regexp.MustCompile(`\x1b(\[[0-9;]*[a-zA-Z]|\][^\x07\x1b]*(\x07|\x1b\\)|[^\[])`)
 
 // sanitize strips C0 (0x00–0x1F) and C1 (0x80–0x9F) control characters plus
 // any ESC sequences, and replaces \r, \n, \t with single spaces.  Layout
@@ -128,6 +132,13 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// Sanitize strips terminal control sequences and control characters from s.
+// Use this for all untrusted strings (DB-sourced tool names, summaries, etc.)
+// before rendering in the TUI.
+func (u *UI) Sanitize(s string) string {
+	return sanitize(s)
 }
 
 // sanitizeLines sanitizes a renderer-composed multi-line string.  Unlike
@@ -199,6 +210,13 @@ func newWithProfile(w io.Writer, p termenv.Profile, g glyphs) *UI {
 // packages) that need deterministic color output without writing to a real TTY.
 func NewWithProfile(w io.Writer, p termenv.Profile) *UI {
 	return newWithProfile(w, p, detectGlyphs())
+}
+
+// NewNoColor creates a UI with color disabled (termenv.Ascii profile) while
+// keeping Unicode glyphs. Use when NO_COLOR is set but the TUI is still
+// interactive.
+func NewNoColor(w io.Writer) *UI {
+	return newWithProfile(w, termenv.Ascii, detectGlyphs())
 }
 
 // --------------------------------------------------------------------------
