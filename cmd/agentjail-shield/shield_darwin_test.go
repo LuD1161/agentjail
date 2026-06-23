@@ -439,28 +439,7 @@ func TestSBProfile_NoNetproxy(t *testing.T) {
 	}
 }
 
-// TestFindNetproxyBinary_NotFound verifies that findNetproxyBinary returns an
-// error when none of the search locations exist.
-func TestFindNetproxyBinary_NotFound(t *testing.T) {
-	// Clear $AGENTJAIL_NETPROXY so the env var path doesn't interfere.
-	t.Setenv("AGENTJAIL_NETPROXY", "")
-
-	// Use a fake os.Args[0] that points to a temp dir where the binary won't be.
-	// We can't easily override os.Args[0] in a test, but we can verify the
-	// general case by checking the error message.
-	_, err := findNetproxyBinary()
-	// If the binary happens to exist on the test machine (e.g. a dev installed it),
-	// we skip the "not found" check.
-	if err == nil {
-		t.Log("findNetproxyBinary found a binary — this is valid on dev machines that have it installed; skipping not-found check")
-		return
-	}
-	// Verify the error message is helpful.
-	errStr := err.Error()
-	if !strings.Contains(errStr, "agentjail-netproxy") {
-		t.Errorf("error message should mention 'agentjail-netproxy'; got: %q", errStr)
-	}
-}
+// TestFindNetproxyBinary_NotFound lives in netproxy_test.go (cross-platform).
 
 // TestStartNetproxy_NotFound verifies that startNetproxy returns a clear error
 // when the binary path is bogus.
