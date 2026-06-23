@@ -80,6 +80,7 @@ func TestParseEvalLine(t *testing.T) {
 // with and without color.
 func TestFormatEvalLine(t *testing.T) {
 	ts, _ := time.Parse(time.RFC3339Nano, "2026-05-23T16:56:55.424479-07:00")
+	localTime := ts.Local().Format("15:04:05")
 
 	cases := []struct {
 		name     string
@@ -96,7 +97,7 @@ func TestFormatEvalLine(t *testing.T) {
 				Tool: "Bash", Action: "ask", RuleID: "file_policy/default", ElapsedUs: 867,
 			},
 			color:    false,
-			contains: []string{"16:56:55", "ASK", "Bash", "file_policy/default", "867µs", "Claude", "abc123"},
+			contains: []string{localTime, "ASK", "Bash", "file_policy/default", "867µs", "Claude", "abc123"},
 			absent:   []string{"\033["},
 		},
 		{
@@ -107,7 +108,7 @@ func TestFormatEvalLine(t *testing.T) {
 				Tool: "Bash", Action: "deny", RuleID: "command_policy/no-bash-touch-sensitive-path", ElapsedUs: 4362,
 			},
 			color:    true,
-			contains: []string{"16:56:55", "DENY", "Bash", "command_policy/no-bash-touch-sensitive-path", "4362µs", "\033[31;1m", "Claude", "def456"},
+			contains: []string{localTime, "DENY", "Bash", "command_policy/no-bash-touch-sensitive-path", "4362µs", "\033[31;1m", "Claude", "def456"},
 		},
 		{
 			name: "allow_color",
@@ -117,7 +118,7 @@ func TestFormatEvalLine(t *testing.T) {
 				Tool: "Write", Action: "allow", RuleID: "file_policy/project_allow", ElapsedUs: 623,
 			},
 			color:    true,
-			contains: []string{"16:56:55", "ALLOW", "Write", "file_policy/project_allow", "623µs", "\033[32m", "Cursor", "ghi789"},
+			contains: []string{localTime, "ALLOW", "Write", "file_policy/project_allow", "623µs", "\033[32m", "Cursor", "ghi789"},
 		},
 		{
 			name: "ask_color",
