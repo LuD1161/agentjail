@@ -231,30 +231,28 @@ agentjail update
 
 Downloads the latest release, verifies SHA-256, atomically swaps binaries, restarts the daemon. Requires an interactive terminal (agents can't self-update). No-op when already current.
 
-### Daemon Update Notifications
+### Daemon Auto-Update
 
-The agentjail daemon periodically checks for new versions (every ~6 hours)
-and sends a macOS notification when an update is available. The notification
-tells you to run `agentjail update` (or `brew upgrade agentjail` for
-Homebrew installations).
+The daemon automatically checks for new versions every ~6 hours. When an
+update is available, it downloads, verifies (signature + checksum), swaps
+binaries, and restarts via launchd.
 
-To disable update checks (both CLI and daemon):
+To disable auto-update:
+
+    export AGENTJAIL_AUTO_UPDATE=false
+
+To disable all update checks (notifications and auto-update):
 
     export AGENTJAIL_NO_UPDATE_CHECK=1
 
-For launchd-managed daemons, add an `EnvironmentVariables` key to the plist
-at `~/Library/LaunchAgents/com.agentjail.daemon.plist`:
+For launchd-managed daemons, set via the plist at
+`~/Library/LaunchAgents/com.agentjail.daemon.plist`:
 
     <key>EnvironmentVariables</key>
     <dict>
-        <key>AGENTJAIL_NO_UPDATE_CHECK</key>
-        <string>1</string>
+        <key>AGENTJAIL_AUTO_UPDATE</key>
+        <string>false</string>
     </dict>
-
-Then reload:
-
-    launchctl unload ~/Library/LaunchAgents/com.agentjail.daemon.plist
-    launchctl load ~/Library/LaunchAgents/com.agentjail.daemon.plist
 
 ---
 
