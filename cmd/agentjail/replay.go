@@ -23,6 +23,7 @@ func runReplay(args []string) int {
 	follow := fs.Bool("follow", false, "follow new decisions for the session")
 	list := fs.Bool("list", false, "list sessions")
 	noColor := fs.Bool("no-color", false, "disable ANSI colors")
+	basic := fs.Bool("basic", false, "plain text output (no TUI)")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -44,7 +45,34 @@ func runReplay(args []string) int {
 	if *list {
 		return replayListSessions(ctx, st, useColor)
 	}
-	return replaySession(ctx, st, *sessionID, *verbose, *follow, useColor)
+
+	// Resolve session prefix to full ID.
+	fullID, err := resolveSessionPrefix(ctx, st, *sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail replay: %v\n", err)
+		return 1
+	}
+
+	// Load all decisions (paginated).
+	allRows, err := loadAllDecisions(ctx, st, fullID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail replay: load decisions: %v\n", err)
+		return 1
+	}
+
+	// Mode selection.
+	isDumb := os.Getenv("TERM") == "dumb"
+	fd := int(os.Stdout.Fd())
+	isTTY := term.IsTerminal(fd)
+	_, termRows, _ := term.GetSize(fd)
+	tooSmall := termRows < 10
+
+	if *basic || isDumb || !isTTY || tooSmall {
+		return replayBasic(ctx, st, fullID, allRows, *verbose, *follow, useColor)
+	}
+
+	// TUI mode -- wired when replay_tui.go is present
+	return replayBasic(ctx, st, fullID, allRows, *verbose, *follow, useColor)
 }
 
 func replayListSessions(ctx context.Context, st store.ReadOnlyStore, useColor bool) int {
@@ -91,7 +119,8 @@ func replayListSessions(ctx context.Context, st store.ReadOnlyStore, useColor bo
 	return 0
 }
 
-func replaySession(ctx context.Context, st store.ReadOnlyStore, sessionID string, verbose, follow, useColor bool) int {
+// replayBasic prints pre-loaded decisions and optionally follows for new ones.
+func replayBasic(ctx context.Context, st store.ReadOnlyStore, sessionID string, rows []store.DecisionRecord, verbose, follow, useColor bool) int {
 	if useColor {
 		fmt.Printf("%s%s%-8s    %-7s  %-18s  %-30s  %s%s\n",
 			ansiBold, ansiDim,
@@ -102,15 +131,34 @@ func replaySession(ctx context.Context, st store.ReadOnlyStore, sessionID string
 		fmt.Printf("%-8s    %-7s  %-18s  %-30s  %s\n", "TIME", "ACTION", "TOOL", "RULE", "SUMMARY")
 		fmt.Println(strings.Repeat("-", 100))
 	}
-	lastID := int64(0)
 	var total, allow, deny, ask int
+	for _, d := range rows {
+		printReplayDecision(d, verbose, useColor)
+		total++
+		switch strings.ToLower(d.Action) {
+		case "allow":
+			allow++
+		case "deny":
+			deny++
+		case "ask":
+			ask++
+		}
+	}
+	if !follow {
+		printReplaySummary(total, allow, deny, ask, useColor)
+		return 0
+	}
+	lastID := int64(0)
+	if len(rows) > 0 {
+		lastID = rows[len(rows)-1].ID
+	}
 	for {
-		rows, err := st.ListDecisions(ctx, store.Filter{SessionID: sessionID, AfterID: lastID, Limit: 1000})
+		newRows, err := st.ListDecisions(ctx, store.Filter{SessionID: sessionID, AfterID: lastID, Limit: 1000})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "agentjail replay: query session %s: %v\n", sessionID, err)
+			fmt.Fprintf(os.Stderr, "agentjail replay: query: %v\n", err)
 			return 1
 		}
-		for _, d := range rows {
+		for _, d := range newRows {
 			if d.ID > lastID {
 				lastID = d.ID
 			}
@@ -125,12 +173,11 @@ func replaySession(ctx context.Context, st store.ReadOnlyStore, sessionID string
 				ask++
 			}
 		}
-		if !follow {
-			break
-		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
 
+func printReplaySummary(total, allow, deny, ask int, useColor bool) {
 	if useColor {
 		fmt.Printf("\n%s%s%s\n", ansiDim, strings.Repeat("─", 100), ansiReset)
 		fmt.Printf("%s%d%s events  %s%d%s allow  %s%d%s deny  %s%d%s ask\n",
@@ -143,7 +190,6 @@ func replaySession(ctx context.Context, st store.ReadOnlyStore, sessionID string
 		fmt.Println(strings.Repeat("-", 100))
 		fmt.Printf("%d events  %d allow  %d deny  %d ask\n", total, allow, deny, ask)
 	}
-	return 0
 }
 
 func printReplayDecision(d store.DecisionRecord, verbose, useColor bool) {
@@ -199,4 +245,55 @@ func shortSession(sessionID string) string {
 		return sessionID
 	}
 	return sessionID[:8]
+}
+
+func resolveSessionPrefix(ctx context.Context, st store.ReadOnlyStore, prefix string) (string, error) {
+	sessions, err := st.ListSessions(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list sessions: %w", err)
+	}
+	for _, s := range sessions {
+		if s.SessionID == prefix {
+			return s.SessionID, nil
+		}
+	}
+	var matches []store.Session
+	for _, s := range sessions {
+		if strings.HasPrefix(s.SessionID, prefix) {
+			matches = append(matches, s)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no session matching '%s'", prefix)
+	case 1:
+		return matches[0].SessionID, nil
+	default:
+		var ids []string
+		for _, m := range matches {
+			ids = append(ids, shortSession(m.SessionID))
+		}
+		return "", fmt.Errorf("ambiguous prefix '%s' matches %d sessions: %s", prefix, len(matches), strings.Join(ids, ", "))
+	}
+}
+
+func loadAllDecisions(ctx context.Context, st store.ReadOnlyStore, sessionID string) ([]store.DecisionRecord, error) {
+	var all []store.DecisionRecord
+	afterID := int64(0)
+	for {
+		page, err := st.ListDecisions(ctx, store.Filter{
+			SessionID: sessionID,
+			AfterID:   afterID,
+			Limit:     1000,
+		})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if len(page) < 1000 {
+			break
+		}
+		afterID = page[len(page)-1].ID
+	}
+	return all, nil
 }
