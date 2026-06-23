@@ -77,6 +77,16 @@ type MCPServerConfig struct {
 	// AllowedTools is a list of tool names that may be called on this server.
 	// When empty (or the key is absent from Servers), all tools are allowed.
 	AllowedTools []string `yaml:"allowed_tools"`
+
+	// BlockedTools is a list of tool names that are always denied on this server,
+	// even if the server itself is allowed. BlockedTools takes precedence over
+	// AllowedTools and the default allow-all behaviour.
+	BlockedTools []string `yaml:"blocked_tools"`
+
+	// AskTools is a list of tool names that require user confirmation before
+	// execution on this server. AskTools fires after BlockedTools (a tool in
+	// both lists is denied, not asked) and after AllowedTools filtering.
+	AskTools []string `yaml:"ask_tools"`
 }
 
 // FileConfig supplements the built-in macOS sensitive-path deny list.
@@ -524,7 +534,7 @@ func Save(cfg *PolicyConfig, path string) error {
 //	  "mcp": {
 //	    "allowed": [...],
 //	    "blocked": [...],
-//	    "servers": { "<name>": {"allowed_tools": [...]} }
+//	    "servers": { "<name>": {"allowed_tools": [...], "blocked_tools": [...], "ask_tools": [...]} }
 //	  },
 //	  "file": {
 //	    "extra_deny":  [...],
@@ -553,6 +563,8 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 	for name, sc := range c.MCP.Servers {
 		servers[name] = map[string]interface{}{
 			"allowed_tools": sliceOrEmpty(sc.AllowedTools),
+			"blocked_tools": sliceOrEmpty(sc.BlockedTools),
+			"ask_tools":     sliceOrEmpty(sc.AskTools),
 		}
 	}
 

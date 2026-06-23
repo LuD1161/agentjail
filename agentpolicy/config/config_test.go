@@ -854,3 +854,221 @@ func TestToOPADataAWSEmpty(t *testing.T) {
 		t.Errorf("aws.resources must be a non-nil map: %#v", aws["resources"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// MCPServerConfig.BlockedTools / AskTools (AGE-34)
+// ---------------------------------------------------------------------------
+
+// TestLoadMCPServerBlockedAndAskTools verifies that blocked_tools and ask_tools
+// round-trip through YAML decode correctly.
+func TestLoadMCPServerBlockedAndAskTools(t *testing.T) {
+	src := `
+mcp:
+  allowed:
+    - "filesystem"
+  blocked: []
+  servers:
+    filesystem:
+      allowed_tools: ["read_file", "list_directory"]
+      blocked_tools: ["delete_file"]
+      ask_tools: ["write_file", "create_directory"]
+`
+	cfg, err := decode(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fs, ok := cfg.MCP.Servers["filesystem"]
+	if !ok {
+		t.Fatal("expected 'filesystem' server config to be present")
+	}
+	if len(fs.AllowedTools) != 2 {
+		t.Errorf("expected 2 allowed_tools, got %d", len(fs.AllowedTools))
+	}
+	if len(fs.BlockedTools) != 1 || fs.BlockedTools[0] != "delete_file" {
+		t.Errorf("expected blocked_tools=[delete_file], got %v", fs.BlockedTools)
+	}
+	if len(fs.AskTools) != 2 || fs.AskTools[0] != "write_file" || fs.AskTools[1] != "create_directory" {
+		t.Errorf("expected ask_tools=[write_file, create_directory], got %v", fs.AskTools)
+	}
+}
+
+// TestMCPServerBlockedAskToolsAbsent verifies that absent blocked_tools/ask_tools
+// decode as nil slices (backwards compatible).
+func TestMCPServerBlockedAskToolsAbsent(t *testing.T) {
+	src := `
+mcp:
+  allowed:
+    - "filesystem"
+  blocked: []
+  servers:
+    filesystem:
+      allowed_tools: ["read_file"]
+`
+	cfg, err := decode(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	fs := cfg.MCP.Servers["filesystem"]
+	if len(fs.BlockedTools) != 0 {
+		t.Errorf("expected empty BlockedTools, got %v", fs.BlockedTools)
+	}
+	if len(fs.AskTools) != 0 {
+		t.Errorf("expected empty AskTools, got %v", fs.AskTools)
+	}
+}
+
+// TestToOPADataMCPServerBlockedAskTools verifies that blocked_tools and ask_tools
+// are projected into the OPA data document.
+func TestToOPADataMCPServerBlockedAskTools(t *testing.T) {
+	cfg := Default()
+	cfg.MCP.Servers = map[string]MCPServerConfig{
+		"filesystem": {
+			AllowedTools: []string{"read_file"},
+			BlockedTools: []string{"delete_file"},
+			AskTools:     []string{"write_file"},
+		},
+	}
+
+	data := cfg.ToOPAData()
+	mcp, ok := data["mcp"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data[mcp] to be map, got %T", data["mcp"])
+	}
+	servers, ok := mcp["servers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data.mcp.servers to be map, got %T", mcp["servers"])
+	}
+	fs, ok := servers["filesystem"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected filesystem server config map, got %T", servers["filesystem"])
+	}
+
+	blocked, ok := fs["blocked_tools"].([]string)
+	if !ok {
+		t.Fatalf("expected blocked_tools to be []string, got %T", fs["blocked_tools"])
+	}
+	if len(blocked) != 1 || blocked[0] != "delete_file" {
+		t.Errorf("expected blocked_tools=[delete_file], got %v", blocked)
+	}
+
+	ask, ok := fs["ask_tools"].([]string)
+	if !ok {
+		t.Fatalf("expected ask_tools to be []string, got %T", fs["ask_tools"])
+	}
+	if len(ask) != 1 || ask[0] != "write_file" {
+		t.Errorf("expected ask_tools=[write_file], got %v", ask)
+	}
+}
+
+// TestToOPADataMCPServerEmptyBlockedAskTools verifies that nil blocked_tools and
+// ask_tools are serialised as empty slices (not null) in OPA data.
+func TestToOPADataMCPServerEmptyBlockedAskTools(t *testing.T) {
+	cfg := Default()
+	cfg.MCP.Servers = map[string]MCPServerConfig{
+		"filesystem": {
+			AllowedTools: []string{"read_file"},
+			// BlockedTools and AskTools are nil
+		},
+	}
+
+	data := cfg.ToOPAData()
+	mcp := data["mcp"].(map[string]interface{})
+	servers := mcp["servers"].(map[string]interface{})
+	fs := servers["filesystem"].(map[string]interface{})
+
+	blocked, ok := fs["blocked_tools"].([]string)
+	if !ok {
+		t.Fatalf("expected blocked_tools to be []string, got %T", fs["blocked_tools"])
+	}
+	if len(blocked) != 0 {
+		t.Errorf("expected empty blocked_tools, got %v", blocked)
+	}
+
+	ask, ok := fs["ask_tools"].([]string)
+	if !ok {
+		t.Fatalf("expected ask_tools to be []string, got %T", fs["ask_tools"])
+	}
+	if len(ask) != 0 {
+		t.Errorf("expected empty ask_tools, got %v", ask)
+	}
+}
+
+// TestMergeServersBlockedAskTools verifies that Merge unions server configs
+// including the new BlockedTools and AskTools fields.
+func TestMergeServersBlockedAskTools(t *testing.T) {
+	base := &PolicyConfig{
+		MCP: MCPConfig{
+			Allowed: []string{"filesystem"},
+			Blocked: []string{},
+			Servers: map[string]MCPServerConfig{
+				"filesystem": {
+					AllowedTools: []string{"read_file"},
+					BlockedTools: []string{"delete_file"},
+					AskTools:     []string{"write_file"},
+				},
+			},
+		},
+	}
+	overlay := &PolicyConfig{
+		MCP: MCPConfig{
+			Servers: map[string]MCPServerConfig{
+				"filesystem": {
+					AllowedTools: []string{"read_file", "write_file"},
+					BlockedTools: []string{"rm_rf"},
+					AskTools:     []string{"create_directory"},
+				},
+			},
+		},
+	}
+	result := Merge(base, overlay)
+	fs, ok := result.MCP.Servers["filesystem"]
+	if !ok {
+		t.Fatal("expected 'filesystem' in merged result")
+	}
+	// Overlay replaces the whole MCPServerConfig for a key.
+	if len(fs.BlockedTools) != 1 || fs.BlockedTools[0] != "rm_rf" {
+		t.Errorf("expected overlay blocked_tools=[rm_rf], got %v", fs.BlockedTools)
+	}
+	if len(fs.AskTools) != 1 || fs.AskTools[0] != "create_directory" {
+		t.Errorf("expected overlay ask_tools=[create_directory], got %v", fs.AskTools)
+	}
+}
+
+// TestMCPServerBlockedAskToolsYAMLRoundTrip verifies full YAML encode/decode
+// round-trip with the new fields.
+func TestMCPServerBlockedAskToolsYAMLRoundTrip(t *testing.T) {
+	orig := Default()
+	orig.MCP.Servers = map[string]MCPServerConfig{
+		"filesystem": {
+			AllowedTools: []string{"read_file"},
+			BlockedTools: []string{"delete_file"},
+			AskTools:     []string{"write_file"},
+		},
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(orig); err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("close encoder failed: %v", err)
+	}
+
+	decoded, err := decode(&buf)
+	if err != nil {
+		t.Fatalf("unmarshal round-trip failed: %v", err)
+	}
+
+	fs := decoded.MCP.Servers["filesystem"]
+	if !reflect.DeepEqual(fs.AllowedTools, []string{"read_file"}) {
+		t.Errorf("round-trip allowed_tools mismatch: %v", fs.AllowedTools)
+	}
+	if !reflect.DeepEqual(fs.BlockedTools, []string{"delete_file"}) {
+		t.Errorf("round-trip blocked_tools mismatch: %v", fs.BlockedTools)
+	}
+	if !reflect.DeepEqual(fs.AskTools, []string{"write_file"}) {
+		t.Errorf("round-trip ask_tools mismatch: %v", fs.AskTools)
+	}
+}

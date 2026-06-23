@@ -8,6 +8,12 @@
 #   5. Empty allowlist → deny all MCP (fail-closed default)
 #   6. Multiple blocked patterns — all fire correctly
 #   7. Blocked takes precedence over allowlist
+#  19. Tool in blocked_tools → deny (mcp_policy/tool_blocked)
+#  20. Tool in ask_tools → ask (mcp_policy/tool_ask)
+#  21. Tool in both blocked_tools and ask_tools → deny wins
+#  22. Tool in allowed_tools AND ask_tools → ask
+#  23. Tool not in any list on allowed server → allow (backwards compatible)
+#  24. Empty blocked_tools/ask_tools → no effect (backwards compatible)
 #   8. Default blocked patterns fire when config is absent
 #   9. Exact server name in allowlist (no glob wildcard needed)
 #  10. Wildcard in allowlist pattern
@@ -690,4 +696,209 @@ test_multiple_servers_independent_allowlists_fetch if {
 
     d.action == "allow"
     d.rule_id == "mcp_policy/allowed"
+}
+
+# ---------------------------------------------------------------------------
+# 19. Tool in blocked_tools → deny (mcp_policy/tool_blocked)
+# ---------------------------------------------------------------------------
+
+test_tool_in_blocked_tools_denied if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__delete_file",
+        "tool_input": {"path": "/tmp/foo"},
+        "session_id": "sess-T34-1",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": [],
+                    "blocked_tools": ["delete_file"],
+                    "ask_tools": [],
+                },
+            },
+        },
+    }
+
+    d.action == "deny"
+    d.rule_id == "mcp_policy/tool_blocked"
+    contains(d.reason, "delete_file")
+    contains(d.reason, "filesystem")
+}
+
+# ---------------------------------------------------------------------------
+# 20. Tool in ask_tools → ask (mcp_policy/tool_ask)
+# ---------------------------------------------------------------------------
+
+test_tool_in_ask_tools_ask if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__write_file",
+        "tool_input": {"path": "/tmp/out.txt", "content": "data"},
+        "session_id": "sess-T34-2",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": [],
+                    "blocked_tools": [],
+                    "ask_tools": ["write_file"],
+                },
+            },
+        },
+    }
+
+    d.action == "ask"
+    d.rule_id == "mcp_policy/tool_ask"
+    contains(d.reason, "write_file")
+    contains(d.reason, "filesystem")
+}
+
+# ---------------------------------------------------------------------------
+# 21. Tool in both blocked_tools and ask_tools → deny wins (resolver priority)
+# ---------------------------------------------------------------------------
+
+test_tool_in_blocked_and_ask_deny_wins if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__dangerous_tool",
+        "tool_input": {},
+        "session_id": "sess-T34-3",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": [],
+                    "blocked_tools": ["dangerous_tool"],
+                    "ask_tools": ["dangerous_tool"],
+                },
+            },
+        },
+    }
+
+    d.action == "deny"
+    d.rule_id == "mcp_policy/tool_blocked"
+}
+
+# ---------------------------------------------------------------------------
+# 22. Tool in allowed_tools AND ask_tools → ask (ask_tools takes precedence
+#     for listed tools over the generic allow).
+# ---------------------------------------------------------------------------
+
+test_tool_in_allowed_and_ask_tools_ask_wins if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__write_file",
+        "tool_input": {},
+        "session_id": "sess-T34-4",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": ["read_file", "write_file"],
+                    "blocked_tools": [],
+                    "ask_tools": ["write_file"],
+                },
+            },
+        },
+    }
+
+    d.action == "ask"
+    d.rule_id == "mcp_policy/tool_ask"
+}
+
+# ---------------------------------------------------------------------------
+# 23. Tool NOT in any list on an allowed server → allow (backwards compatible)
+# ---------------------------------------------------------------------------
+
+test_tool_not_in_any_list_allowed if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__read_file",
+        "tool_input": {"path": "/tmp/foo"},
+        "session_id": "sess-T34-5",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": [],
+                    "blocked_tools": [],
+                    "ask_tools": [],
+                },
+            },
+        },
+    }
+
+    d.action == "allow"
+    d.rule_id == "mcp_policy/allowed"
+}
+
+# ---------------------------------------------------------------------------
+# 24. Empty blocked_tools/ask_tools → no effect (backwards compatible)
+# ---------------------------------------------------------------------------
+
+test_empty_blocked_ask_tools_no_effect if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__read_file",
+        "tool_input": {},
+        "session_id": "sess-T34-6",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": ["read_file"],
+                    "blocked_tools": [],
+                    "ask_tools": [],
+                },
+            },
+        },
+    }
+
+    d.action == "allow"
+    d.rule_id == "mcp_policy/allowed"
+}
+
+# Tool in blocked_tools also blocks when allowed_tools is set and includes it.
+test_blocked_tools_overrides_allowed_tools if {
+    d := decision with input as {
+        "hook_event": "PreToolUse",
+        "tool_name": "mcp__filesystem__delete_file",
+        "tool_input": {},
+        "session_id": "sess-T34-7",
+        "cwd": "/Users/dev/project",
+    } with data.agentjail.config as {
+        "mcp": {
+            "allowed": ["filesystem"],
+            "blocked": [],
+            "servers": {
+                "filesystem": {
+                    "allowed_tools": ["read_file", "delete_file"],
+                    "blocked_tools": ["delete_file"],
+                    "ask_tools": [],
+                },
+            },
+        },
+    }
+
+    d.action == "deny"
+    d.rule_id == "mcp_policy/tool_blocked"
 }
