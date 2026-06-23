@@ -132,12 +132,13 @@
   <!-- Sidebar: sessions -->
   <aside id="sidebar-pane" style="width:208px;flex:none" class="border-r border-gray-700 flex flex-col overflow-hidden">
     <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-700">Sessions</div>
+    <div id="session-back-row" class="border-b border-gray-700 px-3 py-2 text-xs hidden" style="background:#1a2030">
+      <div class="flex items-center gap-2 cursor-pointer text-blue-400 hover:text-blue-300" onclick="selectSession(null)">
+        <span style="font-size:14px">←</span> <span class="font-semibold">All Sessions</span>
+      </div>
+    </div>
     <div class="overflow-y-auto flex-1" id="sessions-list">
       <!-- sessions injected by JS -->
-    </div>
-    <div class="border-t border-gray-700 session-row px-3 py-2 text-xs text-gray-400"
-         id="session-all-row" onclick="selectSession(null)">
-      &#9654; all sessions
     </div>
     <div class="border-t border-gray-700 px-3 py-2 text-xs text-gray-600 text-center">{{VERSION}}</div>
   </aside>
@@ -389,17 +390,16 @@ function renderSessionItem(s) {
   const label = sessionLabel(s);
   const active = selectedSession === s.id;
   const icon = agentIcon(s.agent);
-  const agentName = s.agent ? `<span class="text-gray-600">${s.agent}</span>` : '';
-  const timeAgo = s.last_event ? `<span class="text-gray-600 ml-1">${relativeTime(s.last_event)}</span>` : '';
+  const timeAgo = s.last_event ? `<span class="text-gray-600">${relativeTime(s.last_event)}</span>` : '';
   const cwdDir = s.cwd ? `<div class="text-xs text-gray-600 truncate" title="${escHtml(s.cwd)}">&#128193; ${escHtml(cwdBasename(s.cwd))}</div>` : '';
-  return `<div class="session-row px-3 py-2 ${active ? 'session-active' : ''}" onclick="selectSession('${s.id}')">
+  return `<div class="session-row px-3 py-2 ${active ? 'session-active' : ''}" onclick="selectSession('${s.id}')" title="${escHtml(s.agent || '')}">
     <div class="flex items-center gap-2 min-w-0">
       ${icon}
       <div class="min-w-0 flex-1">
         <div class="text-xs text-gray-300 font-semibold truncate" title="${escHtml(sessionLabel(s, {includeAgent: true}))}">${escHtml(label)}</div>
         <div class="text-xs text-gray-500">${s.total} events
           ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
-          ${agentName}${timeAgo}
+          ${timeAgo}
         </div>
         ${cwdDir}
       </div>
@@ -437,15 +437,20 @@ function renderSessions() {
   }
   list.innerHTML = html;
 
-  // Highlight "all sessions" row
-  const allRow = document.getElementById('session-all-row');
-  allRow.className = 'border-t border-gray-700 session-row px-3 py-2 text-xs text-gray-400' +
-    (selectedSession === null ? ' session-active' : '');
+  // Show/hide back button
+  document.getElementById('session-back-row').classList.toggle('hidden', selectedSession === null);
 }
 
 async function selectSession(id) {
   selectedSession = id;
   expandedEventIdx = null;
+
+  // Update URL permalink
+  const url = new URL(window.location);
+  if (id) { url.searchParams.set('session', id); }
+  else { url.searchParams.delete('session'); }
+  history.pushState(null, '', url);
+
   renderSessions();
   renderTimeline();
 
@@ -786,10 +791,22 @@ function renderSource() {
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
-loadState();
+// Restore session from URL permalink (?session=ID)
+const urlSession = new URLSearchParams(window.location.search).get('session');
+if (urlSession) selectedSession = urlSession;
+
+loadState().then(() => {
+  if (urlSession) selectSession(urlSession);
+});
 loadRules();
 loadAudit();
 connectSSE();
+
+// Handle browser back/forward
+window.addEventListener('popstate', () => {
+  const s = new URLSearchParams(window.location.search).get('session');
+  selectSession(s || null);
+});
 setInterval(() => {
   const el = document.getElementById('last-event-ago');
   if (!el) return;
