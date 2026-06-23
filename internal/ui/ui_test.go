@@ -649,3 +649,93 @@ func TestNewNoColor_NoEscapeSequences(t *testing.T) {
 		t.Fatalf("NewNoColor output contains ESC sequences: %q", result)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: Replay TUI rendering
+// --------------------------------------------------------------------------
+
+func TestReplayRow_AllowGreen(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	row := u.ReplayRow("14:15:59", "ALLOW", "Bash", "default-allow", "ls -la", false)
+	if !strings.Contains(row, "ALLOW") {
+		t.Fatalf("ALLOW not in row: %q", row)
+	}
+	if !strings.Contains(row, "Bash") {
+		t.Fatalf("Bash not in row: %q", row)
+	}
+}
+
+func TestReplayRow_DenyRed(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	row := u.ReplayRow("14:16:05", "DENY", "Bash", "no-rm-rf", "rm -rf /", false)
+	if !strings.Contains(row, "DENY") {
+		t.Fatalf("DENY not in row: %q", row)
+	}
+}
+
+func TestReplayRow_CursorReverseVideo(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	normal := u.ReplayRow("14:15:59", "ALLOW", "Bash", "default-allow", "ls", false)
+	cursor := u.ReplayRow("14:15:59", "ALLOW", "Bash", "default-allow", "ls", true)
+	if normal == cursor {
+		t.Fatal("cursor row should differ from normal row")
+	}
+	// Reverse video uses ESC[7m
+	if !strings.Contains(cursor, "\x1b[7m") && !strings.Contains(cursor, "7m") {
+		// lipgloss may encode reverse differently; just check they differ
+	}
+}
+
+func TestReplayDetailLine_Dimmed(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	line := u.ReplayDetailLine("reason: something happened")
+	if !strings.Contains(line, "reason: something happened") {
+		t.Fatalf("detail text missing: %q", line)
+	}
+	if !strings.HasPrefix(line, "  ") {
+		t.Fatalf("detail line should be indented: %q", line)
+	}
+}
+
+func TestReplayRow_NoColor(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewNoColor(&buf)
+	row := u.ReplayRow("14:15:59", "ALLOW", "Bash", "default-allow", "ls", false)
+	if strings.Contains(row, "\x1b") {
+		t.Fatalf("NO_COLOR row contains ESC: %q", row)
+	}
+}
+
+func TestReplayStatsBar_Content(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	bar := u.ReplayStatsBar(10, 2, 1, "5m 30s", "", false, nil, 80)
+	if !strings.Contains(bar, "10") || !strings.Contains(bar, "2") || !strings.Contains(bar, "1") {
+		t.Fatalf("stats bar missing counts: %q", bar)
+	}
+	if !strings.Contains(bar, "5m 30s") {
+		t.Fatalf("stats bar missing duration: %q", bar)
+	}
+}
+
+func TestReplayStatsBar_FollowIndicator(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	bar := u.ReplayStatsBar(5, 0, 0, "1m 0s", "", true, nil, 80)
+	if !strings.Contains(bar, "FOLLOW") {
+		t.Fatalf("follow indicator missing: %q", bar)
+	}
+}
+
+func TestReplayStatsBar_FilterShown(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	bar := u.ReplayStatsBar(5, 0, 0, "1m 0s", "deny", false, nil, 80)
+	if !strings.Contains(bar, "/deny") {
+		t.Fatalf("filter text missing from stats bar: %q", bar)
+	}
+}

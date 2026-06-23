@@ -497,3 +497,89 @@ func (u *UI) Option(label, detail string, checked, highlighted bool) string {
 
 	return cursor + checkbox + " " + lbl + det
 }
+
+// --------------------------------------------------------------------------
+// Replay TUI rendering
+// --------------------------------------------------------------------------
+
+// ReplayRow renders one decision row for the replay TUI. The action column
+// is colored green (ALLOW), red (DENY), or yellow (ASK). When isCursor is
+// true the entire row is rendered with reverse video.
+func (u *UI) ReplayRow(timeStr, action, tool, rule, summary string, isCursor bool) string {
+	timeStr = sanitize(timeStr)
+	action = sanitize(action)
+	tool = sanitize(tool)
+	rule = sanitize(rule)
+	summary = sanitize(summary)
+
+	var actionColor string
+	switch strings.ToUpper(action) {
+	case "ALLOW":
+		actionColor = colorGreen
+	case "DENY":
+		actionColor = colorRed
+	case "ASK":
+		actionColor = colorYellow
+	default:
+		actionColor = colorDim
+	}
+
+	actStyled := u.r.NewStyle().Foreground(lipgloss.Color(actionColor)).Render(fmt.Sprintf("%-5s", action))
+	row := fmt.Sprintf("%-8s  %s  %-18s  %-36s  %s", timeStr, actStyled, tool, rule, summary)
+
+	if isCursor {
+		return u.r.NewStyle().Reverse(true).Render(row)
+	}
+	return row
+}
+
+// ReplayDetailLine renders an indented, dimmed detail line for expanded rows.
+func (u *UI) ReplayDetailLine(text string) string {
+	text = sanitize(text)
+	return "  " + u.r.NewStyle().Foreground(lipgloss.Color(colorDim)).Render(text)
+}
+
+// ReplayHeader renders the column header for the replay TUI.
+func (u *UI) ReplayHeader(width int) string {
+	header := fmt.Sprintf("%-8s  %-5s  %-18s  %-36s  %s", "TIME", "ACT", "TOOL", "RULE", "SUMMARY")
+	styled := u.r.NewStyle().Bold(true).Foreground(lipgloss.Color(colorDim)).Render(header)
+	sep := u.r.NewStyle().Foreground(lipgloss.Color(colorDim)).Render(strings.Repeat("─", width))
+	return styled + "\n" + sep
+}
+
+// ReplayStatsBar renders the stats line at the bottom of the replay TUI.
+// It shows allow/deny/ask counts, duration, optional filter, follow mode, and errors.
+func (u *UI) ReplayStatsBar(allow, deny, ask int, duration, filter string, follow bool, displayErr error, width int) string {
+	sep := u.r.NewStyle().Foreground(lipgloss.Color(colorDim)).Render(strings.Repeat("─", width))
+
+	allowStr := u.r.NewStyle().Foreground(lipgloss.Color(colorGreen)).Render(fmt.Sprintf("%d allow", allow))
+	denyStr := u.r.NewStyle().Foreground(lipgloss.Color(colorRed)).Render(fmt.Sprintf("%d deny", deny))
+	askStr := u.r.NewStyle().Foreground(lipgloss.Color(colorYellow)).Render(fmt.Sprintf("%d ask", ask))
+	durStr := u.r.NewStyle().Foreground(lipgloss.Color(colorDim)).Render(duration)
+
+	parts := []string{allowStr, denyStr, askStr, durStr}
+
+	if filter != "" {
+		filterStr := u.r.NewStyle().Foreground(lipgloss.Color(colorYellow)).Render("/" + sanitize(filter))
+		parts = append([]string{filterStr}, parts...)
+	}
+	if follow {
+		followStr := u.r.NewStyle().Bold(true).Foreground(lipgloss.Color(colorAccent)).Render("FOLLOW")
+		parts = append(parts, followStr)
+	}
+	if displayErr != nil {
+		errStr := u.r.NewStyle().Foreground(lipgloss.Color(colorRed)).Render(displayErr.Error())
+		parts = append(parts, errStr)
+	}
+
+	return sep + "\n" + strings.Join(parts, " | ")
+}
+
+// ReplayHelpBar renders the keybinding hints line at the bottom of the replay TUI.
+func (u *UI) ReplayHelpBar(filtering bool, width int) string {
+	dim := u.r.NewStyle().Foreground(lipgloss.Color(colorDim))
+	if filtering {
+		return dim.Render("Enter:apply  Esc:clear  type to filter")
+	}
+	return dim.Render("j/k:scroll  /:filter  Enter:detail  v:verbose  f:follow  q:quit")
+}
