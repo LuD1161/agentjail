@@ -250,10 +250,10 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 				fmt.Printf("agentjail update: already up to date (%s).\n", current)
 				return 0
 			}
-			fmt.Printf("agentjail update: reinstalling %s (--force).\n", current)
+			fmt.Printf("\n⬆  reinstalling %s (--force)\n\n", current)
 		} else {
 			// latest > current — normal upgrade
-			fmt.Printf("agentjail update: %s → %s\n", current, latest)
+			fmt.Printf("\n⬆  %s → %s\n\n", current, latest)
 		}
 	} else if !selfupdate.IsNewerVersion(current, latest) {
 		// Non-semver current (dev builds) — skip.
@@ -278,7 +278,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	tarball := updateTarballName(latest, goos, goarch)
 	urlBase := updateURLBaseFn(latest)
 
-	fmt.Printf("  downloading %s …\n", tarball)
+	fmt.Printf("📥  downloading %s …\n", tarball)
 	tarballPath := filepath.Join(tmpDir, tarball)
 
 	// Try primary (Worker) URL; fall back to GitHub direct on failure.
@@ -310,7 +310,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 			fmt.Fprintf(os.Stderr, "agentjail update: signature verification failed: %v\n", err)
 			return 1
 		}
-		fmt.Println("  signature verified")
+		fmt.Println("🔏  signature verified")
 	}
 
 	// Step 4: verify SHA256 — mirrors install.sh exactly.
@@ -318,7 +318,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 		fmt.Fprintf(os.Stderr, "agentjail update: %v\n", err)
 		return 1
 	}
-	fmt.Println("  checksum verified")
+	fmt.Println("🔐  checksum verified")
 
 	// Step 5: extract tarball.
 	if err := extractTarGz(tarballPath, tmpDir); err != nil {
@@ -427,13 +427,13 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 			}
 			_ = launchctlLoad(plistPath)
 		} else {
-			fmt.Println("  daemon restarted")
+			fmt.Println("🔄  daemon restarted")
 		}
 	} else if goos != "darwin" {
-		fmt.Println("  note: restart the agentjail daemon manually (non-macOS).")
+		fmt.Println("⚠️   restart the agentjail daemon manually (non-macOS)")
 	}
 
-	fmt.Printf("agentjail update: updated %d binaries  %s → %s\n", installed, current, latest)
+	fmt.Printf("✅  updated %d binaries  %s → %s\n", installed, current, latest)
 
 	if cl := releaseInfo.Changelog; cl != "" {
 		bullets := formatChangelogBullets(cl, 0)
