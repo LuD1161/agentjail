@@ -410,7 +410,7 @@ function renderSessionItem(s) {
 function renderSessions() {
   const list = document.getElementById('sessions-list');
   const now = Date.now();
-  const ACTIVE_MS = 15 * 60 * 1000;
+  const ACTIVE_MS = 5 * 60 * 1000;
   const sorted = Object.values(sessions).sort((a, b) => {
     const ta = a.last_event ? new Date(a.last_event).getTime() : new Date(a.last_seen).getTime();
     const tb = b.last_event ? new Date(b.last_event).getTime() : new Date(b.last_seen).getTime();
