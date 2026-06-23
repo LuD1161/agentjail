@@ -758,7 +758,7 @@ func renderEvalLine(line evalLine, opts logsOpts, rich *richState) error {
 	}
 
 	// Format time as HH:MM:SS.
-	timeStr := line.Time.Format("15:04:05")
+	timeStr := line.Time.Local().Format("15:04:05")
 
 	// ── SOURCE cell construction ────────────────────────────────────────────
 	//
@@ -984,7 +984,7 @@ func renderWarnErrorLine(line evalLine, opts logsOpts, isError bool) error {
 	if line.Err != "" {
 		msg = fmt.Sprintf("%s: %s", msg, line.Err)
 	}
-	timeStr := line.Time.Format("15:04:05")
+	timeStr := line.Time.Local().Format("15:04:05")
 
 	if opts.useColor {
 		fmt.Printf("%s  %s%s%s  %s\n", timeStr, color, label, ansiReset, msg)
@@ -996,7 +996,7 @@ func renderWarnErrorLine(line evalLine, opts logsOpts, isError bool) error {
 
 // renderInfoLine prints a non-eval INFO line in dim text (--all mode).
 func renderInfoLine(line evalLine, opts logsOpts) {
-	timeStr := line.Time.Format("15:04:05")
+	timeStr := line.Time.Local().Format("15:04:05")
 	if opts.useColor {
 		fmt.Printf("%s%s  %s%s\n", ansiDim, timeStr, line.Msg, ansiReset)
 	} else {
