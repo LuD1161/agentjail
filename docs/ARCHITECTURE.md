@@ -151,7 +151,10 @@ branch (`main`/`master`) is denied, force-pushing a topic/feature branch is
 allowed (normal rebase / PR-update flow), and a bare `git push -f` (implicit
 current branch) asks. An always-on, locked `command_policy/no-policy-mutation` rule
 blocks an agent from running `agentjail policy disable`/`mcp` or writing into
-`~/.agentjail/`.
+`~/.agentjail/`. The mutation guard uses specific subcommand patterns (e.g.
+`agentjail\s+update\b`) rather than broad keyword matching, to avoid false
+positives when "agentjail" or "update" appears as a path component or in prompt
+text.
 
 ### Tuning, disabling, and custom rules (ADR 0014)
 
@@ -159,11 +162,13 @@ blocks an agent from running `agentjail policy disable`/`mcp` or writing into
   `disabled_rules` in `policy.yaml`, or via `agentjail policy disable <rule_id>`.
   `resolver.rego` drops disabled candidates from `effective_candidate`.
 - **Locked self-protection set** — a hardcoded constant in `resolver.rego`
-  (`file_policy/agentjail_self`, `library/no-daemon-kill`,
-  `library/no-hook-self-disable`, `command_policy/no-policy-mutation`,
-  `resolver/*`) can **never** be suppressed by `disabled_rules`, so no
-  `policy.yaml` edit unlocks it. The CLI also requires `--force` + an interactive
-  TTY confirm to disable a core rule, and logs mutations to `~/.agentjail/audit.log`.
+  (`file_policy/agentjail_self`, `library/no-hook-self-disable`,
+  `command_policy/no-policy-mutation`, `resolver/*`) can **never** be suppressed
+  by `disabled_rules`, so no `policy.yaml` edit unlocks it. The CLI also requires
+  `--force` + an interactive TTY confirm to disable a core rule, and logs mutations
+  to `~/.agentjail/audit.log`. `library/no-daemon-kill` is on by default but
+  disableable with `--force` — the daemon runs under launchd/systemd with
+  `KeepAlive=true`, so a kill is a speed bump, not a permanent disable.
 - **Custom rules** — `agentjail policy add <file.rego>` validates the authoring
   contract (`package agentjail`, `candidate`-only, reserved `custom/<name>/<rule>`
   ids) by compiling the full bundle, then installs it. The daemon load path is a
@@ -174,6 +179,25 @@ blocks an agent from running `agentjail policy disable`/`mcp` or writing into
 See ADRs [0012](adr/0012-daemon-config-overlay.md),
 [0013](adr/0013-file-policy-temp-and-project-posture.md), and
 [0014](adr/0014-user-tunable-policy-surface.md) for the decisions behind these.
+
+### Self-protection model (ADR 0025)
+
+agentjail's self-protection uses a layered enforcement model inspired by EDR
+architecture — enforcement at the point of effect, not the point of intent:
+
+- **Regex rules (Tier 1)** are the UX/signals layer: they produce clear deny
+  messages ("you are trying to disable agentjail policy") and catch obvious
+  attempts early. They are defense-in-depth, not the primary guarantee.
+  Write/Edit to hook config files (`~/.claude/settings.json`, etc.) produce
+  **ask** (user can approve legitimate edits); Bash-based writes **deny**.
+- **Shield (Tier 1.5)** is the enforcement layer: Seatbelt/Landlock deny
+  writes to `~/.agentjail/` at the kernel level, regardless of how the write
+  is attempted (`python -c`, `node -e`, `eval`, etc.).
+- **Tier 2 (microVM)** makes self-protection structural: the agent runs in a
+  VM, agentjail runs on the host, and the attack surface doesn't exist.
+
+See [ADR 0025](adr/0025-layered-self-protection.md) for the full mutation
+surface analysis and design rationale.
 
 ---
 
