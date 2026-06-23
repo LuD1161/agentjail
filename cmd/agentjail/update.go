@@ -612,20 +612,42 @@ func extractTarGzReader(r io.Reader, destDir string) error {
 	return nil
 }
 
-// formatChangelogBullets extracts markdown bullet lines from a changelog body,
-// strips markdown formatting (bold, backticks), and returns them as
-// unicode-formatted lines with the given indent. Returns at most 8 lines.
+// formatChangelogBullets extracts the TL;DR bullet lines from a release body,
+// strips markdown formatting, truncates for terminal display, and returns
+// unicode-formatted lines. Stops at the first ### heading (detailed sections)
+// so only the concise summary bullets are shown.
 func formatChangelogBullets(body string, indent int) []string {
+	const maxBullets = 5
+	const maxWidth = 68 // content width after indent + "• "
 	prefix := strings.Repeat(" ", indent)
 	var out []string
+	inTLDR := false
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## TL;DR") {
+			inTLDR = true
+			continue
+		}
+		// Stop at the first ### heading (detailed changelog sections).
+		if inTLDR && strings.HasPrefix(trimmed, "###") {
+			break
+		}
+		if !inTLDR {
+			// If there's no TL;DR section, fall back to collecting all bullets
+			// but still stop at ### headings.
+			if strings.HasPrefix(trimmed, "###") {
+				// Once we have some bullets, stop; otherwise skip section headers.
+				if len(out) > 0 {
+					break
+				}
+				continue
+			}
+		}
 		if !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "* ") {
 			continue
 		}
-		// Strip leading bullet marker
 		trimmed = strings.TrimLeft(trimmed[2:], " ")
-		// Strip **bold** markers
+		// Strip **bold** markers.
 		for strings.Contains(trimmed, "**") {
 			start := strings.Index(trimmed, "**")
 			end := strings.Index(trimmed[start+2:], "**")
@@ -634,10 +656,13 @@ func formatChangelogBullets(body string, indent int) []string {
 			}
 			trimmed = trimmed[:start] + trimmed[start+2:start+2+end] + trimmed[start+2+end+2:]
 		}
-		// Strip `backtick` markers
 		trimmed = strings.ReplaceAll(trimmed, "`", "")
+		// Truncate long lines with ellipsis.
+		if len(trimmed) > maxWidth {
+			trimmed = trimmed[:maxWidth-1] + "…"
+		}
 		out = append(out, prefix+"• "+trimmed)
-		if len(out) >= 8 {
+		if len(out) >= maxBullets {
 			break
 		}
 	}
