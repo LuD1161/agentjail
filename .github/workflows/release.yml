@@ -49,7 +49,7 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          LDFLAGS="-X main.version=${VERSION} -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=${POSTHOG_KEY} -X github.com/LuD1161/agentjail/internal/telemetry.commit=${GITHUB_SHA} -s -w"
+          LDFLAGS="-X main.version=${VERSION} -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=${POSTHOG_KEY} -X github.com/LuD1161/agentjail/internal/selfupdate.SigningPubKey=RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ -s -w"
           mkdir -p dist
           for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
             echo "building ${bin}..."

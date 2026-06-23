@@ -1249,25 +1249,17 @@ func installPlist(daemonBin, rulesDir, logPath, crashLogPath, dst string) error 
 }
 
 // launchctlLoad unloads (if loaded) then loads the given plist.
+// Thin wrapper around selfupdate.LaunchctlLoad for backward compatibility
+// within this package.
 func launchctlLoad(plistPath string) error {
-	_ = exec.Command("launchctl", "unload", plistPath).Run()
-	out, err := exec.Command("launchctl", "load", plistPath).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl load: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return selfupdate.LaunchctlLoad(plistPath)
 }
 
 // launchctlUnload unloads the given plist.
+// Thin wrapper around selfupdate.LaunchctlUnload for backward compatibility
+// within this package.
 func launchctlUnload(plistPath string) error {
-	if !fileExists(plistPath) {
-		return nil
-	}
-	out, err := exec.Command("launchctl", "unload", plistPath).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl unload: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return selfupdate.LaunchctlUnload(plistPath)
 }
 
 // isDaemonRunning asks launchctl whether the daemon service is loaded.
