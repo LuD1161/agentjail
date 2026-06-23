@@ -109,6 +109,9 @@ func VerifyManifest(sumsPath, sigPath string) error {
 // Only regular files are extracted, and file names are stripped to their base
 // component to prevent path-traversal attacks.
 func ExtractTarball(tarballPath, destDir string) error {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", destDir, err)
+	}
 	f, err := os.Open(tarballPath)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
