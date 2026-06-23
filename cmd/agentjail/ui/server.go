@@ -537,6 +537,9 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 		if !ss.LastSeen.IsZero() {
 			ss.LastEvent = ss.LastSeen.UTC().Format(time.RFC3339)
 		}
+		if ss.CWD != "" {
+			ss.Branch, ss.RepoName = gitInfo(ss.CWD)
+		}
 		sessionByID[sess.SessionID] = ss
 		snap.Sessions = append(snap.Sessions, ss)
 	}

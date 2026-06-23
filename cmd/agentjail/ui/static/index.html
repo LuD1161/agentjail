@@ -32,7 +32,7 @@
     .event-row:hover { background: #1c2333; }
     .timeline-grid {
       display: grid;
-      grid-template-columns: var(--tl-cols, 76px 70px 64px 250px 200px minmax(100px,1fr));
+      grid-template-columns: var(--tl-cols, 76px 70px 64px 250px 120px 200px minmax(100px,1fr));
       gap: 16px;
       align-items: center;
     }
@@ -111,6 +111,7 @@
       <span class="text-xs" id="count-allow"><span class="text-green-400 font-bold" id="n-allow">0</span> <span class="text-gray-500">allow</span></span>
       <span class="text-xs" id="count-deny"><span class="text-red-400 font-bold" id="n-deny">0</span> <span class="text-gray-500">deny</span></span>
       <span class="text-xs" id="count-ask"><span class="text-yellow-400 font-bold" id="n-ask">0</span> <span class="text-gray-500">ask</span></span>
+      <span id="last-event-ago" class="text-gray-600 text-xs ml-3"></span>
     </div>
     <div class="flex items-center gap-3">
       <a href="https://github.com/LuD1161/agentjail" target="_blank" title="Star on GitHub" class="flex items-center gap-1 px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500" style="text-decoration:none;font-size:11px">
@@ -202,6 +203,7 @@
 // State
 // ---------------------------------------------------------------------------
 let sessions = {};        // id -> {id, agent, cwd, total, allow, deny, ask, first_seen, last_seen}
+let lastEventTime = null;
 let events = [];          // ring buffer of last 500 EvalLine objects
 let selectedSession = null; // null = all
 let expandedEventIdx = null;
@@ -289,6 +291,7 @@ function connectSSE() {
 }
 
 function ingestEvent(line) {
+  lastEventTime = Date.now();
   // Update session
   if (line.session_id) {
     if (!sessions[line.session_id]) {
@@ -299,6 +302,8 @@ function ingestEvent(line) {
         last_event: line.time,
         cwd: line.cwd || '',
         agent: line.agent || '',
+        branch: line.branch || '',
+        repo_name: line.repo_name || '',
         total: 0, allow: 0, deny: 0, ask: 0
       };
     }
@@ -351,6 +356,11 @@ function agentIcon(agent) {
 }
 
 function sessionLabel(s) {
+  const agent = s.agent || '';
+  const repo = s.repo_name || cwdBasename(s.cwd);
+  const branch = s.branch || '';
+  const parts = [agent, branch, repo].filter(Boolean);
+  if (parts.length) return parts.join(' · ');
   const name = s.id || '';
   if (name.length <= 20) return name;
   return name.substring(0, 18) + '…';
@@ -482,7 +492,8 @@ function renderTimeline() {
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Action<div class="col-resize-handle" data-col="1"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Tool<div class="col-resize-handle" data-col="2"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Summary<div class="col-resize-handle" data-col="3"></div></span>
-      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Session<div class="col-resize-handle" data-col="4"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">CWD<div class="col-resize-handle" data-col="4"></div></span>
+      <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Session<div class="col-resize-handle" data-col="5"></div></span>
       <span class="text-gray-500 text-xs font-semibold uppercase tracking-wide">Rule</span>
     </div>
   </div>`;
@@ -498,6 +509,14 @@ function renderTimeline() {
     const agentName = ev.agent || '';
     const sessIcon = agentName ? agentIcon(agentName).replace(/width="18"/,'width="12"').replace(/height="18"/,'height="12"') : '';
     const ruleShort = (ev.rule_id || '').split('/').pop() || '';
+    const sessLabel = (() => {
+      const sess = sessions[ev.session_id];
+      if (sess) return sessionLabel(sess);
+      const a = ev.agent || '';
+      const c = ev.cwd ? ev.cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() : '';
+      if (a && c) return `${a} · ${c}`;
+      return a || c || ev.session_id || '';
+    })();
 
     return `<div class="event-row px-5 py-2" onclick="toggleExpand(${i})">
       <div class="timeline-grid">
@@ -505,7 +524,8 @@ function renderTimeline() {
         <span class="badge ${actionBadgeClass}" style="text-align:center">${(ev.action||'').toUpperCase()}</span>
         <span class="text-gray-300 truncate" title="${tool}">${tool}</span>
         <span class="text-gray-500 truncate">${escHtml(summary)}</span>
-        <span class="text-gray-500 text-xs flex items-center gap-1 overflow-hidden" title="${ev.session_id || ''}">${sessIcon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ev.session_id || ''}</span></span>
+        <span class="text-gray-500 text-xs truncate" title="${escHtml(ev.cwd || '')}">${escHtml(ev.cwd ? ev.cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() : '—')}</span>
+        <span class="text-gray-500 text-xs flex items-center gap-1 overflow-hidden" title="${ev.session_id || ''}">${sessIcon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(sessLabel)}</span></span>
         <span class="text-gray-600 text-xs truncate" title="${ev.rule_id || ''}">${escHtml(ruleShort)}</span>
       </div>
       ${expanded ? `<div class="expand-details" style="margin-left:124px">
@@ -700,7 +720,7 @@ document.addEventListener('mousedown', e => {
 });
 
 // Column resize drag logic
-let tlColWidths = [76, 70, 64, 250, 200, null]; // null = flex (1fr), rule fills remaining
+let tlColWidths = [76, 70, 64, 250, 120, 200, null]; // null = flex (1fr), rule fills remaining
 function applyColWidths() {
   const cols = tlColWidths.map(w => w == null ? '1fr' : w + 'px').join(' ');
   document.documentElement.style.setProperty('--tl-cols', cols);
@@ -767,6 +787,14 @@ loadState();
 loadRules();
 loadAudit();
 connectSSE();
+setInterval(() => {
+  const el = document.getElementById('last-event-ago');
+  if (!el) return;
+  if (!lastEventTime) { el.textContent = ''; return; }
+  const ago = Math.floor((Date.now() - lastEventTime) / 1000);
+  if (ago < 2) el.textContent = 'last event: just now';
+  else el.textContent = `last event: ${ago}s ago`;
+}, 1000);
 </script>
 
 </body>

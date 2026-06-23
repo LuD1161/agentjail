@@ -6,6 +6,9 @@ package ui
 
 import (
 	"encoding/json"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,6 +42,8 @@ type SessionState struct {
 	ID        string    `json:"id"`
 	Agent     string    `json:"agent,omitempty"`
 	CWD       string    `json:"cwd,omitempty"`
+	Branch    string    `json:"branch,omitempty"`
+	RepoName  string    `json:"repo_name,omitempty"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
 	Total     int       `json:"total"`
@@ -119,6 +124,15 @@ func (s *Store) Ingest(raw []byte) (EvalLine, bool) {
 		case "ask":
 			sess.Ask++
 		}
+		if line.Agent != "" {
+			sess.Agent = line.Agent
+		}
+		if line.CWD != "" {
+			sess.CWD = line.CWD
+			if sess.Branch == "" {
+				sess.Branch, sess.RepoName = gitInfo(line.CWD)
+			}
+		}
 	}
 
 	// Append to ring buffer — drop oldest when full.
@@ -153,4 +167,21 @@ func (s *Store) Snapshot() StateSnapshot {
 	snap.TotalDecisions = snap.TotalAllow + snap.TotalDeny + snap.TotalAsk
 
 	return snap
+}
+
+// gitInfo runs git to get the branch name and repo basename for a directory.
+// Returns ("", "") on any failure — never blocks the ingest path.
+func gitInfo(cwd string) (branch, repoName string) {
+	b, err := exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return "", ""
+	}
+	branch = strings.TrimSpace(string(b))
+
+	t, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return branch, ""
+	}
+	repoName = filepath.Base(strings.TrimSpace(string(t)))
+	return branch, repoName
 }
