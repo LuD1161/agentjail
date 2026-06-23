@@ -480,6 +480,7 @@ let filterDebounceTimer = null;
 // Policy state
 let policyConfig = null;       // current PolicyConfig object from server
 let mcpToolsSeen = {};         // server -> [tool1, tool2, ...] from audit history
+let mcpServerMeta = {};        // server -> {status, source, scope, trust, pkg}
 let policyConfigDirty = false; // true if user has made unsaved changes
 let activeTab = 'monitor';
 
@@ -505,7 +506,7 @@ function switchTab(tab) {
 
   if (tab === 'policies' && !policyConfig) {
     loadPolicyConfig();
-    loadMCPTools();
+    loadMCPTools(true);
   }
 }
 
@@ -578,11 +579,23 @@ async function loadPolicyConfig() {
   } catch(e) { console.error('loadPolicyConfig', e); showToast('Failed to load config', 'error'); }
 }
 
-async function loadMCPTools() {
+async function loadMCPTools(discover) {
   try {
-    const r = await fetch('/api/policy/mcp-tools');
+    const url = '/api/policy/mcp-tools' + (discover ? '?discover=true' : '');
+    const r = await fetch(url);
     if (!r.ok) return;
-    mcpToolsSeen = await r.json();
+    const data = await r.json();
+    const servers = data.servers || data;
+    mcpToolsSeen = {};
+    mcpServerMeta = {};
+    for (const [name, info] of Object.entries(servers)) {
+      if (Array.isArray(info)) {
+        mcpToolsSeen[name] = info;
+      } else {
+        mcpToolsSeen[name] = (info.tools || []).map(t => typeof t === 'string' ? t : t.name);
+        mcpServerMeta[name] = { status: info.status, source: info.source, scope: info.scope, trust: info.trust, pkg: info.package };
+      }
+    }
     renderMCPMatrix();
   } catch(e) { console.error('loadMCPTools', e); }
 }
@@ -1194,7 +1207,7 @@ function renderMCPMatrix() {
           else { chipClass = 'mcp-tool-inherit'; title = 'Inherited (follows server default)'; }
           const seenClass = isSeen ? 'mcp-tool-seen' : '';
           const seenDot = isSeen ? '<span style="width:5px;height:5px;border-radius:50%;background:#be5b3a;display:inline-block" title="Seen in audit history"></span>' : '';
-          return `<span class="mcp-tool-chip ${chipClass} ${seenClass}" onclick="cycleMCPToolPolicy('${escHtml(serverName)}','${escHtml(tool)}')" title="${title}${isSeen ? ' · seen in audit log' : ''} · click to cycle">${seenDot}${escHtml(tool)}</span>`;
+          return `<span class="mcp-tool-chip ${chipClass} ${seenClass}" data-action="cycle" data-server="${escHtml(serverName)}" data-tool="${escHtml(tool)}" title="${title}${isSeen ? ' · seen in audit log' : ''} · click to cycle">${seenDot}${escHtml(tool)}</span>`;
         }).join('')
       : '<span class="text-xs text-gray-600">No tools configured or observed. All tools are allowed by default when allowed_tools is empty.</span>';
 
@@ -1207,14 +1220,26 @@ function renderMCPMatrix() {
           <span class="text-xs text-gray-600">${allTools.length} tool${allTools.length !== 1 ? 's' : ''}</span>
         </div>
         <div class="flex items-center gap-2">
-          <button class="btn-sm btn-enable" onclick="mcpAllowAllTools('${escHtml(serverName)}')" title="Set allowed_tools to all seen tools">Allow All</button>
-          <button class="btn-sm btn-disable" onclick="mcpClearTools('${escHtml(serverName)}')" title="Clear allowed_tools (allows all by default)">Clear List</button>
+          <button class="btn-sm btn-enable" data-action="allow-all" data-server="${escHtml(serverName)}" title="Set allowed_tools to all seen tools">Allow All</button>
+          <button class="btn-sm btn-disable" data-action="clear" data-server="${escHtml(serverName)}" title="Clear allowed_tools (allows all by default)">Clear List</button>
         </div>
       </div>
       <div class="px-4 py-3 flex flex-wrap gap-2">${toolChips}</div>
     </div>`;
   }).join('');
 }
+
+// Delegated event handler for MCP matrix to avoid inline onclick XSS
+document.getElementById('mcp-servers-matrix').addEventListener('click', function(e) {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const server = el.dataset.server;
+  const tool = el.dataset.tool;
+  if (action === 'cycle' && server && tool) cycleMCPToolPolicy(server, tool);
+  else if (action === 'allow-all' && server) mcpAllowAllTools(server);
+  else if (action === 'clear' && server) mcpClearTools(server);
+});
 
 // Cycle: inherit → allow → ask → deny → inherit
 function cycleMCPToolPolicy(server, tool) {
@@ -1305,7 +1330,7 @@ function mcpClearTools(server) {
 function renderChipList(arr, onRemove) {
   if (!arr || arr.length === 0) return '<span class="text-xs text-gray-600">None configured</span>';
   return '<div class="flex flex-wrap gap-2">' + arr.map((val, i) =>
-    `<span class="policy-chip">${escHtml(val)}<span class="chip-x" onclick="event.stopPropagation();(${onRemove.toString()})('${escHtml(val)}')">&times;</span></span>`
+    `<span class="policy-chip">${escHtml(val)}<span class="chip-x" onclick="event.stopPropagation();(${onRemove.toString()})('${escJS(val)}')">&times;</span></span>`
   ).join('') + '</div>';
 }
 
@@ -1317,7 +1342,7 @@ function renderPolicyChips(containerId, arr, section, fieldKey) {
     return;
   }
   el.innerHTML = arr.map(val =>
-    `<span class="policy-chip">${escHtml(val)}<span class="chip-x" onclick="event.stopPropagation();removeChip('${section}','${fieldKey}','${escHtml(val.replace(/'/g, "\\'"))}')">&times;</span></span>`
+    `<span class="policy-chip">${escHtml(val)}<span class="chip-x" onclick="event.stopPropagation();removeChip('${escJS(section)}','${escJS(fieldKey)}','${escJS(val)}')">&times;</span></span>`
   ).join('');
 }
 
@@ -1519,6 +1544,11 @@ document.addEventListener('mousedown', e => {
 function escHtml(s) {
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escJS(s) {
+  if (!s) return '';
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/</g, '\\x3c');
 }
 
 function toggleAuditPane() {

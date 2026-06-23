@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,6 +41,36 @@ var ErrAuthRequired = errors.New("mcpclient: authentication required")
 
 // ErrTimeout is returned when a server does not respond within the deadline.
 var ErrTimeout = errors.New("mcpclient: server timed out")
+
+// sensitiveEnvVars is the set of environment variable names stripped before
+// spawning MCP server processes during discovery.
+var sensitiveEnvVars = []string{
+	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+	"GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN",
+	"ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+	"PGPASSWORD", "DATABASE_URL",
+	"HOMEBREW_GITHUB_API_TOKEN",
+}
+
+// sanitizedEnv returns a copy of the current process environment with
+// sensitive credential variables removed.
+func sanitizedEnv() []string {
+	env := os.Environ()
+	clean := make([]string, 0, len(env))
+	for _, e := range env {
+		skip := false
+		for _, s := range sensitiveEnvVars {
+			if strings.HasPrefix(e, s+"=") {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			clean = append(clean, e)
+		}
+	}
+	return clean
+}
 
 // ListTools connects to the MCP server described by cfg and returns its
 // available tools. The context should carry a deadline; if none is set, a
@@ -73,13 +106,14 @@ type scanResult struct {
 func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error) {
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 
-	// Build env from current process env + overrides.
-	if len(cfg.Env) > 0 {
-		env := cmd.Environ()
-		for k, v := range cfg.Env {
-			env = append(env, k+"="+v)
-		}
-		cmd.Env = env
+	// Security: strip sensitive environment variables before spawning MCP
+	// server processes.  Discovery runs outside the agent sandbox, so we
+	// must not leak ambient credentials to third-party server binaries.
+	cmd.Env = sanitizedEnv()
+
+	// Apply server-specific env overrides on top of the sanitized env.
+	for k, v := range cfg.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -218,7 +252,7 @@ func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error)
 			return nil, fmt.Errorf("mcpclient: HTTP %d", resp.StatusCode)
 		}
 
-		data, err := io.ReadAll(resp.Body)
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB max
 		if err != nil {
 			return nil, err
 		}
@@ -380,11 +414,23 @@ type cachedResult struct {
 }
 
 var (
-	cacheMu    sync.Mutex
-	cacheData  map[string]cachedResult
-	cacheStamp time.Time
-	cacheTTL   = 60 * time.Second
+	cacheMu          sync.Mutex
+	cacheData        map[string]cachedResult
+	cacheStamp       time.Time
+	cacheFingerprint string
+	cacheTTL         = 60 * time.Second
 )
+
+// configFingerprint builds a deterministic string from the server list so the
+// cache can be invalidated when the configured servers change.
+func configFingerprint(servers []MCPServerConfig) string {
+	parts := make([]string, len(servers))
+	for i, s := range servers {
+		parts[i] = s.Name + "|" + s.Type + "|" + s.Command + "|" + s.URL
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\n")
+}
 
 // ServerToolResult is the external result for one server after live discovery.
 type ServerToolResult struct {
@@ -395,8 +441,10 @@ type ServerToolResult struct {
 // ListAllTools connects to all provided servers concurrently, returning a map
 // of server name to result. Results are cached for 60 seconds.
 func ListAllTools(ctx context.Context, servers []MCPServerConfig) map[string]ServerToolResult {
+	fp := configFingerprint(servers)
+
 	cacheMu.Lock()
-	if cacheData != nil && time.Since(cacheStamp) < cacheTTL {
+	if cacheData != nil && time.Since(cacheStamp) < cacheTTL && cacheFingerprint == fp {
 		result := make(map[string]ServerToolResult, len(cacheData))
 		for k, v := range cacheData {
 			result[k] = ServerToolResult{Tools: v.Tools, Status: v.Status}
@@ -441,6 +489,7 @@ func ListAllTools(ctx context.Context, servers []MCPServerConfig) map[string]Ser
 	cacheMu.Lock()
 	cacheData = results
 	cacheStamp = time.Now()
+	cacheFingerprint = fp
 	cacheMu.Unlock()
 
 	out := make(map[string]ServerToolResult, len(results))

@@ -341,6 +341,9 @@ func (s *Server) handlePolicyEnable(
 		writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
 		return
 	}
+	if !checkCSRFOrigin(w, r) {
+		return
+	}
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		writeJSONError(w, "missing ?name=", http.StatusBadRequest)
@@ -398,6 +401,9 @@ func (s *Server) handlePolicyDisable(
 		writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
 		return
 	}
+	if !checkCSRFOrigin(w, r) {
+		return
+	}
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		writeJSONError(w, "missing ?name=", http.StatusBadRequest)
@@ -440,6 +446,9 @@ func (s *Server) handlePolicyReload(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
 		return
 	}
+	if !checkCSRFOrigin(w, r) {
+		return
+	}
 	sighupDaemonFn()
 	writeJSON(w, map[string]string{"status": "sighup_sent"})
 }
@@ -475,9 +484,18 @@ func (s *Server) handlePolicyConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
 			return
 		}
+		if !checkCSRFJSON(w, r) {
+			return
+		}
 		var cfg config.PolicyConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20)) // 1MB max
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
 			writeJSONError(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+		if errs := config.Validate(&cfg); len(errs) > 0 {
+			writeJSONError(w, fmt.Sprintf("validation errors: %s", strings.Join(errs, "; ")), http.StatusBadRequest)
 			return
 		}
 		dir := filepath.Dir(cfgPath)
@@ -526,39 +544,46 @@ func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
 
 	result := make(map[string]*mcpServerInfo)
 
-	// --- Phase 1: live discovery ---
-	home, err := os.UserHomeDir()
-	if err == nil {
-		entries := mcpclient.DiscoverServersWithConfig(home)
-		configs := make([]mcpclient.MCPServerConfig, 0, len(entries))
-		metaMap := make(map[string]mcpclient.MCPServerEntry)
-		for _, e := range entries {
-			configs = append(configs, e.Config)
-			metaMap[e.Name] = e
-		}
+	// Live discovery is opt-in: spawning MCP servers inherits the parent
+	// process environment (even after sanitization) and should only run
+	// when explicitly requested.
+	discover := r.URL.Query().Get("discover") == "true"
 
-		if len(configs) > 0 {
-			live := mcpclient.ListAllTools(r.Context(), configs)
-			for name, res := range live {
-				meta := metaMap[name]
-				info := &mcpServerInfo{
-					Status:  res.Status,
-					Source:  meta.Source,
-					Scope:   meta.Scope,
-					Trust:   meta.Trust,
-					Package: meta.Package,
+	// --- Phase 1: live discovery ---
+	if discover {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			entries := mcpclient.DiscoverServersWithConfig(home)
+			configs := make([]mcpclient.MCPServerConfig, 0, len(entries))
+			metaMap := make(map[string]mcpclient.MCPServerEntry)
+			for _, e := range entries {
+				configs = append(configs, e.Config)
+				metaMap[e.Name] = e
+			}
+
+			if len(configs) > 0 {
+				live := mcpclient.ListAllTools(r.Context(), configs)
+				for name, res := range live {
+					meta := metaMap[name]
+					info := &mcpServerInfo{
+						Status:  res.Status,
+						Source:  meta.Source,
+						Scope:   meta.Scope,
+						Trust:   meta.Trust,
+						Package: meta.Package,
+					}
+					for _, t := range res.Tools {
+						info.Tools = append(info.Tools, mcpToolEntry{
+							Name:        t.Name,
+							Description: t.Description,
+							Source:      "live",
+						})
+					}
+					if info.Tools == nil {
+						info.Tools = []mcpToolEntry{}
+					}
+					result[name] = info
 				}
-				for _, t := range res.Tools {
-					info.Tools = append(info.Tools, mcpToolEntry{
-						Name:        t.Name,
-						Description: t.Description,
-						Source:      "live",
-					})
-				}
-				if info.Tools == nil {
-					info.Tools = []mcpToolEntry{}
-				}
-				result[name] = info
 			}
 		}
 	}
@@ -919,6 +944,31 @@ func safeFilename(s string) string {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// checkCSRFJSON rejects cross-origin POST requests that carry a JSON body.
+// Requiring application/json Content-Type triggers a CORS preflight in
+// browsers, which the server does not allow.  Sec-Fetch-Site further
+// confirms same-origin for browser clients; non-browser clients (curl)
+// send no header, which is fine.
+func checkCSRFJSON(w http.ResponseWriter, r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		writeJSONError(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	return checkCSRFOrigin(w, r)
+}
+
+// checkCSRFOrigin rejects cross-origin requests using the Sec-Fetch-Site header.
+// Non-browser clients (curl, etc.) that send no Sec-Fetch-Site header are allowed.
+func checkCSRFOrigin(w http.ResponseWriter, r *http.Request) bool {
+	fetchSite := r.Header.Get("Sec-Fetch-Site")
+	if fetchSite != "" && fetchSite != "same-origin" {
+		writeJSONError(w, "cross-origin requests not allowed", http.StatusForbidden)
+		return false
+	}
+	return true
+}
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
