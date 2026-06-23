@@ -142,17 +142,25 @@ func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error
 
 	// Single scanner goroutine feeding a shared channel. This avoids the bug
 	// where multiple readResponse calls each spawn their own goroutine and
-	// race over scanner.Scan().
+	// race over scanner.Scan().  The goroutine checks ctx.Done() so it can
+	// exit early if the caller returns before stdout closes.
 	lineCh := make(chan scanResult, 4)
+	done := ctx.Done()
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 		for {
 			ok := scanner.Scan()
-			lineCh <- scanResult{
+			sr := scanResult{
 				line: append([]byte(nil), scanner.Bytes()...),
 				ok:   ok,
 				err:  scanner.Err(),
+			}
+			select {
+			case lineCh <- sr:
+			case <-done:
+				close(lineCh)
+				return
 			}
 			if !ok {
 				close(lineCh)
@@ -422,11 +430,32 @@ var (
 )
 
 // configFingerprint builds a deterministic string from the server list so the
-// cache can be invalidated when the configured servers change.
+// cache can be invalidated when the configured servers change.  It includes
+// Args, Env, and Headers so that changes to these fields also bust the cache.
 func configFingerprint(servers []MCPServerConfig) string {
-	parts := make([]string, len(servers))
-	for i, s := range servers {
-		parts[i] = s.Name + "|" + s.Type + "|" + s.Command + "|" + s.URL
+	var parts []string
+	for _, s := range servers {
+		part := s.Name + "|" + s.Type + "|" + s.Command + "|" + s.URL
+		part += "|args:" + strings.Join(s.Args, ",")
+		// Sort env keys for determinism.
+		var envKeys []string
+		for k := range s.Env {
+			envKeys = append(envKeys, k)
+		}
+		sort.Strings(envKeys)
+		for _, k := range envKeys {
+			part += "|env:" + k + "=" + s.Env[k]
+		}
+		// Sort header keys for determinism.
+		var hdrKeys []string
+		for k := range s.Headers {
+			hdrKeys = append(hdrKeys, k)
+		}
+		sort.Strings(hdrKeys)
+		for _, k := range hdrKeys {
+			part += "|hdr:" + k + "=" + s.Headers[k]
+		}
+		parts = append(parts, part)
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "\n")

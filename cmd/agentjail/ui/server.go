@@ -488,16 +488,19 @@ func (s *Server) handlePolicyConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var cfg config.PolicyConfig
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20)) // 1MB max
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB max
+		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&cfg); err != nil {
 			writeJSONError(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
 			return
 		}
-		if errs := config.Validate(&cfg); len(errs) > 0 {
-			writeJSONError(w, fmt.Sprintf("validation errors: %s", strings.Join(errs, "; ")), http.StatusBadRequest)
+		if dec.More() {
+			writeJSONError(w, "unexpected trailing data in request body", http.StatusBadRequest)
 			return
 		}
+		// Advisory warnings: returned alongside success, not blocking the save.
+		warns := config.Validate(&cfg)
 		dir := filepath.Dir(cfgPath)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			writeJSONError(w, fmt.Sprintf("mkdir: %v", err), http.StatusInternalServerError)
@@ -508,7 +511,11 @@ func (s *Server) handlePolicyConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sighupDaemonFn()
-		writeJSON(w, map[string]string{"status": "saved"})
+		resp := map[string]any{"status": "saved"}
+		if len(warns) > 0 {
+			resp["warnings"] = warns
+		}
+		writeJSON(w, resp)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

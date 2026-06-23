@@ -288,6 +288,7 @@
       <svg viewBox="0 0 16 16" fill="currentColor" style="width:16px;height:16px" class="text-gray-400"><path d="M8.5 1.75a.75.75 0 0 0-1.5 0V5h-3a.75.75 0 0 0 0 1.5h3v3a.75.75 0 0 0 1.5 0v-3h3a.75.75 0 0 0 0-1.5h-3V1.75z"/><path d="M1.5 9.5a.75.75 0 0 0 0 1.5h13a.75.75 0 0 0 0-1.5h-13zM.75 13a.75.75 0 0 1 .75-.75h13a.75.75 0 0 1 0 1.5h-13A.75.75 0 0 1 .75 13z"/></svg>
       <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider">MCP Servers &amp; Tools</h3>
       <span class="text-xs text-gray-600">Click a tool to cycle: ALLOW / DENY / ASK / INHERITED</span>
+      <button class="policy-add-btn" id="discover-tools-btn" title="Spawn MCP servers to discover their tools (runs third-party processes)">Discover Tools</button>
     </div>
 
     <!-- MCP Allowed / Blocked patterns -->
@@ -506,7 +507,7 @@ function switchTab(tab) {
 
   if (tab === 'policies' && !policyConfig) {
     loadPolicyConfig();
-    loadMCPTools(true);
+    loadMCPTools(false);
   }
 }
 
@@ -1104,17 +1105,43 @@ function renderMCPAllowedBlocked() {
   const allowedBody = document.getElementById('mcp-allowed-body');
   const blockedBody = document.getElementById('mcp-blocked-body');
 
-  allowedBody.innerHTML = renderChipList(allowed, (val) => removeMCPPattern('allowed', val)) +
-    `<div class="flex items-center gap-2 mt-2">
-      <input class="policy-add-input flex-1" id="mcp-allowed-input" placeholder="server-name or glob *" onkeydown="if(event.key==='Enter')addMCPPattern('allowed',this)">
-      <button class="policy-add-btn" onclick="addMCPPattern('allowed',document.getElementById('mcp-allowed-input'))">Add</button>
-    </div>`;
+  allowedBody.innerHTML = '';
+  const allowedChips = renderChipList(allowed, (val) => removeMCPPattern('allowed', val));
+  if (allowedChips instanceof HTMLElement) allowedBody.appendChild(allowedChips);
+  else allowedBody.innerHTML = allowedChips;
+  const allowedAddRow = document.createElement('div');
+  allowedAddRow.className = 'flex items-center gap-2 mt-2';
+  const allowedInput = document.createElement('input');
+  allowedInput.className = 'policy-add-input flex-1';
+  allowedInput.id = 'mcp-allowed-input';
+  allowedInput.placeholder = 'server-name or glob *';
+  allowedInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMCPPattern('allowed', allowedInput); });
+  const allowedBtn = document.createElement('button');
+  allowedBtn.className = 'policy-add-btn';
+  allowedBtn.textContent = 'Add';
+  allowedBtn.addEventListener('click', () => addMCPPattern('allowed', document.getElementById('mcp-allowed-input')));
+  allowedAddRow.appendChild(allowedInput);
+  allowedAddRow.appendChild(allowedBtn);
+  allowedBody.appendChild(allowedAddRow);
 
-  blockedBody.innerHTML = renderChipList(blocked, (val) => removeMCPPattern('blocked', val)) +
-    `<div class="flex items-center gap-2 mt-2">
-      <input class="policy-add-input flex-1" id="mcp-blocked-input" placeholder="*payment* or glob" onkeydown="if(event.key==='Enter')addMCPPattern('blocked',this)">
-      <button class="policy-add-btn" onclick="addMCPPattern('blocked',document.getElementById('mcp-blocked-input'))">Add</button>
-    </div>`;
+  blockedBody.innerHTML = '';
+  const blockedChips = renderChipList(blocked, (val) => removeMCPPattern('blocked', val));
+  if (blockedChips instanceof HTMLElement) blockedBody.appendChild(blockedChips);
+  else blockedBody.innerHTML = blockedChips;
+  const blockedAddRow = document.createElement('div');
+  blockedAddRow.className = 'flex items-center gap-2 mt-2';
+  const blockedInput = document.createElement('input');
+  blockedInput.className = 'policy-add-input flex-1';
+  blockedInput.id = 'mcp-blocked-input';
+  blockedInput.placeholder = '*payment* or glob';
+  blockedInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMCPPattern('blocked', blockedInput); });
+  const blockedBtn = document.createElement('button');
+  blockedBtn.className = 'policy-add-btn';
+  blockedBtn.textContent = 'Add';
+  blockedBtn.addEventListener('click', () => addMCPPattern('blocked', document.getElementById('mcp-blocked-input')));
+  blockedAddRow.appendChild(blockedInput);
+  blockedAddRow.appendChild(blockedBtn);
+  blockedBody.appendChild(blockedAddRow);
 }
 
 function addMCPPattern(listName, inputEl) {
@@ -1241,6 +1268,16 @@ document.getElementById('mcp-servers-matrix').addEventListener('click', function
   else if (action === 'clear' && server) mcpClearTools(server);
 });
 
+// Discover Tools button: explicitly triggers live MCP server discovery
+document.getElementById('discover-tools-btn').addEventListener('click', function() {
+  this.disabled = true;
+  this.textContent = 'Discovering...';
+  loadMCPTools(true).finally(() => {
+    this.disabled = false;
+    this.textContent = 'Discover Tools';
+  });
+});
+
 // Cycle: inherit → allow → ask → deny → inherit
 function cycleMCPToolPolicy(server, tool) {
   if (!policyConfig) return;
@@ -1329,9 +1366,20 @@ function mcpClearTools(server) {
 // ---------------------------------------------------------------------------
 function renderChipList(arr, onRemove) {
   if (!arr || arr.length === 0) return '<span class="text-xs text-gray-600">None configured</span>';
-  return '<div class="flex flex-wrap gap-2">' + arr.map((val, i) =>
-    `<span class="policy-chip">${escHtml(val)}<span class="chip-x" onclick="event.stopPropagation();(${onRemove.toString()})('${escJS(val)}')">&times;</span></span>`
-  ).join('') + '</div>';
+  const container = document.createElement('div');
+  container.className = 'flex flex-wrap gap-2';
+  arr.forEach(val => {
+    const chip = document.createElement('span');
+    chip.className = 'policy-chip';
+    chip.textContent = val;
+    const x = document.createElement('span');
+    x.className = 'chip-x';
+    x.innerHTML = '&times;';
+    x.addEventListener('click', e => { e.stopPropagation(); onRemove(val); });
+    chip.appendChild(x);
+    container.appendChild(chip);
+  });
+  return container;
 }
 
 function renderPolicyChips(containerId, arr, section, fieldKey) {
@@ -1341,9 +1389,18 @@ function renderPolicyChips(containerId, arr, section, fieldKey) {
     el.innerHTML = '<span class="text-xs text-gray-600">None configured</span>';
     return;
   }
-  el.innerHTML = arr.map(val =>
-    `<span class="policy-chip">${escHtml(val)}<span class="chip-x" onclick="event.stopPropagation();removeChip('${escJS(section)}','${escJS(fieldKey)}','${escJS(val)}')">&times;</span></span>`
-  ).join('');
+  el.innerHTML = '';
+  arr.forEach(val => {
+    const chip = document.createElement('span');
+    chip.className = 'policy-chip';
+    chip.textContent = val;
+    const x = document.createElement('span');
+    x.className = 'chip-x';
+    x.innerHTML = '&times;';
+    x.addEventListener('click', e => { e.stopPropagation(); removeChip(section, fieldKey, val); });
+    chip.appendChild(x);
+    el.appendChild(chip);
+  });
 }
 
 function addChipFromInput(section, fieldKey, inputEl) {
