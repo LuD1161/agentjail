@@ -20,3 +20,13 @@ func SystemdRestart(unit string) error {
 func RestartDaemon(unit string) error {
 	return SystemdRestart(unit)
 }
+
+// LaunchctlLoad is a no-op stub on Linux (launchd is macOS-only).
+func LaunchctlLoad(_ string) error {
+	return fmt.Errorf("launchctl: not available on Linux, use systemctl")
+}
+
+// LaunchctlUnload is a no-op stub on Linux (launchd is macOS-only).
+func LaunchctlUnload(_ string) error {
+	return fmt.Errorf("launchctl: not available on Linux, use systemctl")
+}
