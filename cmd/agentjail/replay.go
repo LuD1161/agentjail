@@ -68,12 +68,19 @@ func replayListSessions(ctx context.Context, st store.ReadOnlyStore, useColor bo
 			end = s.EndTs.Local().Format("2006-01-02 15:04:05")
 		}
 		if useColor {
-			fmt.Printf("%-8s  %s%-19s%s  %s%-19s%s  %-8d  %s%-10s%s  %s%s%s\n",
+			u8 := detectLogsUTF8()
+			glyph := agentGlyphFor(s.Agent, u8)
+			info, ok := agentRegistry[s.Agent]
+			glyphColor := ansiDim
+			if ok && info.Color != "" {
+				glyphColor = info.Color
+			}
+			fmt.Printf("%-8s  %s%-19s%s  %s%-19s%s  %-8d  %s%s%s %s%-10s%s  %s%s%s\n",
 				shortSession(s.SessionID),
 				ansiDim, s.StartTs.Local().Format("2006-01-02 15:04:05"), ansiReset,
 				ansiDim, end, ansiReset,
 				s.DecisionCount,
-				ansiBold, s.Agent, ansiReset,
+				glyphColor, glyph, ansiReset, ansiBold, s.Agent, ansiReset,
 				ansiDim, s.CWD, ansiReset)
 		} else {
 			fmt.Printf("%-8s  %-19s  %-19s  %-8d  %-10s  %s\n",
