@@ -11,8 +11,12 @@ Changelog shown during install/update, so users see what shipped at a glance.
 - **Install-time changelog** — `curl | sh` installer now displays a compact
   "What's new" section with unicode-formatted bullet points extracted from the
   GitHub release notes
+- **Update-time changelog** — `agentjail update` shows the same "What's new"
+  section after a successful self-update, using the release body from the
+  `/v1/latest` API
 - **Releases Worker changelog field** — `/v1/latest` API response includes
-  the release body so the installer can display it without an extra network call
+  the release body so both the installer and the update command can display it
+  without an extra network call
 
 ### Changed
 

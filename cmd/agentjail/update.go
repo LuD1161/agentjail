@@ -211,7 +211,8 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	latest, _ := defaultChecker.FetchLatestVersion(ctx, current)
+	releaseInfo, _ := defaultChecker.FetchLatestRelease(ctx, current)
+	latest := releaseInfo.Version
 	if latest == "" {
 		fmt.Fprintln(os.Stderr, "agentjail update: could not fetch latest version (check your network).")
 		return 1
@@ -418,6 +419,15 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 
 	fmt.Printf("agentjail update: updated %d binaries  %s → %s\n", installed, current, latest)
 
+	if cl := releaseInfo.Changelog; cl != "" {
+		fmt.Println()
+		fmt.Println("  📋  What's new:")
+		for _, line := range formatChangelogBullets(cl, 8) {
+			fmt.Println(line)
+		}
+		fmt.Printf("  → Full changelog: https://github.com/LuD1161/agentjail/releases/tag/%s\n", latest)
+	}
+
 	// Step 10: emit update telemetry (best-effort; respects opt-out).
 	if tp, err := telemetry.DefaultPaths(); err == nil {
 		tCtx, tCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -584,6 +594,38 @@ func extractTarGzReader(r io.Reader, destDir string) error {
 		}
 	}
 	return nil
+}
+
+// formatChangelogBullets extracts markdown bullet lines from a changelog body,
+// strips markdown formatting (bold, backticks), and returns them as
+// unicode-formatted lines with the given indent. Returns at most 8 lines.
+func formatChangelogBullets(body string, indent int) []string {
+	prefix := strings.Repeat(" ", indent)
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "* ") {
+			continue
+		}
+		// Strip leading bullet marker
+		trimmed = strings.TrimLeft(trimmed[2:], " ")
+		// Strip **bold** markers
+		for strings.Contains(trimmed, "**") {
+			start := strings.Index(trimmed, "**")
+			end := strings.Index(trimmed[start+2:], "**")
+			if end < 0 {
+				break
+			}
+			trimmed = trimmed[:start] + trimmed[start+2:start+2+end] + trimmed[start+2+end+2:]
+		}
+		// Strip `backtick` markers
+		trimmed = strings.ReplaceAll(trimmed, "`", "")
+		out = append(out, prefix+"• "+trimmed)
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out
 }
 
 // atomicReplaceBinary copies src to a temp file in the same directory as dst,
