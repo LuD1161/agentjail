@@ -4,8 +4,16 @@ Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for
 
 ## v0.2.5 — 2026-06-23
 
-Telemetry overhaul — PostHog now builds real user profiles, heartbeats actually
-arrive, and install counts are accurate.
+Telemetry overhaul and UI polish — PostHog now builds real user profiles,
+heartbeats actually arrive, and the web UI gets session permalinks, a proper
+back button, scroll stability, and a wider sidebar.
+
+### Added
+
+- **Session URL permalinks** — selecting a session updates the URL with
+  `?session=ID`; the session is restored on page load and browser back/forward
+- **"← All Sessions" back button** — visible at the top of the sidebar when a
+  session is selected; replaces the hidden bottom toggle
 
 ### Fixed
 
@@ -24,9 +32,23 @@ arrive, and install counts are accurate.
 - **`session_start` reliability** — sent immediately at daemon startup instead
   of waiting for the 2-minute spool flush, so it's captured even if the daemon
   exits quickly
+- **Worktree repo name** — git `--git-common-dir` resolves the real repo name
+  inside worktrees instead of showing the worktree folder name
+- **Timeline scroll stability** — scroll position is preserved during SSE
+  updates; expanded event cards no longer jump to the top
+- **Expanded event identity** — expanded cards track by `req_id|time` instead
+  of array index, so new SSE events don't shift the card to a different row
+- **Timeline grid layout** — Summary column is now the flexible column; Rule
+  has a fixed width, eliminating the empty space on the right
 
 ### Changed
 
+- **Sidebar width** — default increased from 208px to 280px for better
+  readability of session labels
+- **Agent text removed from labels** — the agent icon is sufficient; agent name
+  appears on hover tooltip only
+- **Releases Worker cache TTL** — reduced from 5 minutes to 1 minute so new
+  releases are visible immediately after publish
 - **TELEMETRY.md** — documented person properties (`$set`/`$set_once`),
   `is_fresh_install`, version fallback, and updated delivery semantics
 
