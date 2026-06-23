@@ -52,6 +52,12 @@ type HookInput struct {
 	// input.aws_account to apply per-account posture (aws_policy/*). Omitted
 	// from the JSON when empty so Rego sees it as undefined for non-AWS calls.
 	AWSAccount string `json:"aws_account,omitempty"`
+	// CommandBinaries is the list of command binary basenames extracted from
+	// a Bash tool_input.command by the daemon's shell parser. For example,
+	// "git status && /usr/local/bin/agentjail policy list | grep foo" yields
+	// ["git", "agentjail", "grep"]. Empty for non-Bash tools.
+	// Rego reads this as input.command_binaries.
+	CommandBinaries []string `json:"command_binaries,omitempty"`
 }
 
 // Engine is the abstraction new callers depend on. The concrete

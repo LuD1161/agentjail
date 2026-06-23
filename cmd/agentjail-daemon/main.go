@@ -53,6 +53,7 @@ import (
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
+	"github.com/LuD1161/agentjail/internal/shellparse"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -238,6 +239,16 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 	if req.ToolName == "Bash" {
 		if cmd, ok := normalizedInput["command"].(string); ok && isAWSCLICommand(cmd) {
 			input.AWSAccount = s.resolveAWSAccount(cmd)
+		}
+	}
+
+	// Shell command parsing (ADR 0025): for Bash tool calls, parse the
+	// command string into structured components so Rego rules can check
+	// command binaries without regex matching on the raw string.
+	if req.ToolName == "Bash" {
+		if cmd, ok := normalizedInput["command"].(string); ok {
+			parsed := shellparse.Parse(cmd)
+			input.CommandBinaries = parsed.Binaries
 		}
 	}
 
@@ -1216,6 +1227,13 @@ func main() {
 		}
 		go uc.Run(ctx)
 	}
+
+	// Start hook-config watchdog: polls agent settings files every 5 s and
+	// re-injects the agentjail-hook entry if it is removed (ADR 0026).
+	hookWatchdog := newHookWatcher(logger, func(action, detail string) {
+		slog.Info("hookwatch audit", "action", action, "detail", detail)
+	})
+	go hookWatchdog.Run(ctx)
 
 	// Start listening before installing signal handlers so the socket is
 	// ready as soon as we log "listening".
