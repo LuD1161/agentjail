@@ -21,6 +21,18 @@ bash_input(cmd) := {
 	"cwd":         "/Users/dev/project",
 }
 
+# bash_input_with_binaries includes the structured command_binaries field
+# populated by the daemon's shell parser. Use this for mutation guard tests
+# where _mentions_agentjail must fire (or explicitly not fire).
+bash_input_with_binaries(cmd, binaries) := {
+	"hook_event":        "PreToolUse",
+	"tool_name":         "Bash",
+	"tool_input":        {"command": cmd, "description": ""},
+	"session_id":        "test-session",
+	"cwd":               "/Users/dev/project",
+	"command_binaries":  binaries,
+}
+
 deny_verdict(rule_id) := {"action": "deny", "rule_id": rule_id, "reason": r} if {
 	r := agentjail.decision.reason with input as bash_input("placeholder")
 }
@@ -626,141 +638,208 @@ test_npm_install_publish_substring_not_ask if {
 
 # POSITIVE: agentjail policy disable → deny
 test_mutation_guard_policy_disable_deny if {
-	d := agentjail.decision with input as bash_input("agentjail policy disable file_policy/sensitive_credential")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail policy disable file_policy/sensitive_credential",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail policy enable → deny
 test_mutation_guard_policy_enable_deny if {
-	d := agentjail.decision with input as bash_input("agentjail policy enable file_policy/sensitive_credential")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail policy enable file_policy/sensitive_credential",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail policy add → deny
 test_mutation_guard_policy_add_deny if {
-	d := agentjail.decision with input as bash_input("agentjail policy add /tmp/custom_rule.rego")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail policy add /tmp/custom_rule.rego",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail policy remove → deny
 test_mutation_guard_policy_remove_deny if {
-	d := agentjail.decision with input as bash_input("agentjail policy remove my_rule")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail policy remove my_rule",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail mcp allow → deny
 test_mutation_guard_mcp_allow_deny if {
-	d := agentjail.decision with input as bash_input("agentjail mcp allow filesystem")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail mcp allow filesystem",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail mcp block → deny
 test_mutation_guard_mcp_block_deny if {
-	d := agentjail.decision with input as bash_input("agentjail mcp block stripe")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail mcp block stripe",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
-# POSITIVE (evasion): quoted binary path — a `"` sits where the old regex
-# required whitespace. This is the demonstrated real-world bypass.
+# POSITIVE (evasion): quoted binary path — daemon shell parser extracts "agentjail"
+# as the command binary regardless of quoting or path prefix.
 test_mutation_guard_mcp_allow_quoted_path_deny if {
-	d := agentjail.decision with input as bash_input("\"$HOME/.agentjail/bin/agentjail\" mcp allow filesystem")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"\"$HOME/.agentjail/bin/agentjail\" mcp allow filesystem",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE (evasion): absolute path prefix to the binary.
 test_mutation_guard_mcp_allow_abs_path_deny if {
-	d := agentjail.decision with input as bash_input("/usr/local/bin/agentjail mcp allow filesystem")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"/usr/local/bin/agentjail mcp allow filesystem",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE (evasion): command substitution to resolve the binary.
 test_mutation_guard_mcp_allow_cmdsubst_deny if {
-	d := agentjail.decision with input as bash_input("$(which agentjail) mcp allow evil-server")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"$(which agentjail) mcp allow evil-server",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE (evasion): quoted path for a policy mutation, too.
 test_mutation_guard_policy_disable_quoted_path_deny if {
-	d := agentjail.decision with input as bash_input("\"$HOME/.agentjail/bin/agentjail\" policy disable command_policy/no-sudo")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"\"$HOME/.agentjail/bin/agentjail\" policy disable command_policy/no-sudo",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
-# POSITIVE: redirect into ~/.agentjail/ → deny
+# POSITIVE: redirect into ~/.agentjail/ → deny (redirect clause, not _mentions_agentjail)
 test_mutation_guard_redirect_to_agentjail_deny if {
 	d := agentjail.decision with input as bash_input("echo disabled > ~/.agentjail/policy.yaml")
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
-# POSITIVE: tee into ~/.agentjail/ → deny
+# POSITIVE: tee into ~/.agentjail/ → deny (redirect clause, not _mentions_agentjail)
 test_mutation_guard_tee_to_agentjail_deny if {
 	d := agentjail.decision with input as bash_input("cat /tmp/policy.yaml | tee ~/.agentjail/policy.yaml")
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
-# POSITIVE: redirect into $HOME/.agentjail/ → deny
+# POSITIVE: redirect into $HOME/.agentjail/ → deny (redirect clause, not _mentions_agentjail)
 test_mutation_guard_redirect_home_env_deny if {
 	d := agentjail.decision with input as bash_input("cat /dev/stdin > $HOME/.agentjail/rules/custom.rego")
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
-# NEGATIVE: agentjail policy list → must NOT trigger mutation guard (read-only)
+# NEGATIVE: agentjail policy list → must NOT trigger mutation guard (read-only).
+# Uses command_binaries: ["agentjail"] to prove the negative — agentjail IS the
+# binary, but "list" is not a mutation verb.
 test_mutation_guard_policy_list_not_denied if {
-	# policy list is read-only — must not match the mutation guard.
-	# It might still hit another rule (contains "agentjail" in bash → check
-	# no-policy-mutation specifically doesn't fire).
-	d := agentjail.decision with input as bash_input("agentjail policy list")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail policy list",
+		["agentjail"])
 	d.rule_id != "command_policy/no-policy-mutation"
 }
 
 # NEGATIVE: agentjail mcp list → must NOT trigger mutation guard (read-only)
 test_mutation_guard_mcp_list_not_denied if {
-	d := agentjail.decision with input as bash_input("agentjail mcp list")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail mcp list",
+		["agentjail"])
 	d.rule_id != "command_policy/no-policy-mutation"
 }
 
 # NEGATIVE: agentjail status → must NOT trigger mutation guard (read-only)
 test_mutation_guard_status_not_denied if {
-	d := agentjail.decision with input as bash_input("agentjail status")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail status",
+		["agentjail"])
 	d.rule_id != "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail update → deny (defense-in-depth alongside TTY gate)
 test_mutation_guard_update_deny if {
-	d := agentjail.decision with input as bash_input("agentjail update")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail update",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE: agentjail update --force → deny
 test_mutation_guard_update_force_deny if {
-	d := agentjail.decision with input as bash_input("agentjail update --force")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail update --force",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # POSITIVE (evasion): quoted path to agentjail update → deny
 test_mutation_guard_update_quoted_path_deny if {
-	d := agentjail.decision with input as bash_input("\"$HOME/.agentjail/bin/agentjail\" update")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"\"$HOME/.agentjail/bin/agentjail\" update",
+		["agentjail"])
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
 }
 
 # NEGATIVE: agentjail logs → must NOT trigger mutation guard (read-only)
 test_mutation_guard_logs_not_denied if {
-	d := agentjail.decision with input as bash_input("agentjail logs")
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail logs",
+		["agentjail"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+# NEGATIVE: git add with agentjail in path and update in filename → must NOT trigger.
+# command_binaries: ["git"] proves the daemon correctly identifies git as the binary,
+# not agentjail (which only appears as a path component).
+test_mutation_guard_git_add_update_go_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"git add cmd/agentjail/update.go",
+		["git"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+# NEGATIVE: git add with agentjail path and updatecheck in filename → must NOT trigger
+test_mutation_guard_git_add_updatecheck_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"git add cmd/agentjail/updatecheck.go cmd/agentjail/updatecheck_test.go",
+		["git"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+# NEGATIVE: go build in agentjail project → must NOT trigger
+test_mutation_guard_go_build_agentjail_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"go build ./cmd/agentjail/...",
+		["go"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+# NEGATIVE: grep in agentjail codebase mentioning update → must NOT trigger
+test_mutation_guard_grep_update_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"grep -rn update /Users/dev/project/cmd/agentjail/",
+		["grep"])
 	d.rule_id != "command_policy/no-policy-mutation"
 }
 

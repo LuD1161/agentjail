@@ -10,6 +10,17 @@ import data.agentjail
 
 hook_disable_rule_id := "library/no-hook-self-disable"
 
+# has_ask_candidate returns true iff effective_candidate contains an entry
+# with action=="ask" and rule_id==hook_disable_rule_id.
+# Used for Write/Edit tests: the resolver may pick a different "ask" candidate
+# as decision (e.g. file_policy/default is lexicographically smaller) but we
+# want to confirm the no-hook-self-disable candidate fires.
+has_ask_candidate(inp) if {
+	some c in agentjail.effective_candidate with input as inp
+	c.action == "ask"
+	c.rule_id == hook_disable_rule_id
+}
+
 write_hook(fp) := {
 	"hook_event": "PreToolUse",
 	"tool_name":  "Write",
@@ -35,68 +46,68 @@ bash_hook(cmd) := {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Write to ~/.claude/settings.json
+# Ask: Write to ~/.claude/settings.json
 # ---------------------------------------------------------------------------
 
 test_no_hook_write_claude_settings if {
-	agentjail.decision.action == "deny" with input as write_hook("/Users/dev/.claude/settings.json")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/Users/dev/.claude/settings.json")
+	agentjail.decision.action == "ask" with input as write_hook("/Users/dev/.claude/settings.json")
+	has_ask_candidate(write_hook("/Users/dev/.claude/settings.json"))
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Write to ~/.claude/settings.local.json (glob: settings*.json)
+# Ask: Write to ~/.claude/settings.local.json (glob: settings*.json)
 # ---------------------------------------------------------------------------
 
 test_no_hook_write_claude_settings_local if {
-	agentjail.decision.action == "deny" with input as write_hook("/Users/dev/.claude/settings.local.json")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/Users/dev/.claude/settings.local.json")
+	agentjail.decision.action == "ask" with input as write_hook("/Users/dev/.claude/settings.local.json")
+	has_ask_candidate(write_hook("/Users/dev/.claude/settings.local.json"))
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Write to ~/.codex/ directory
+# Ask: Write to ~/.codex/ directory
 # ---------------------------------------------------------------------------
 
 test_no_hook_write_codex if {
-	agentjail.decision.action == "deny" with input as write_hook("/Users/dev/.codex/config.json")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/Users/dev/.codex/config.json")
+	agentjail.decision.action == "ask" with input as write_hook("/Users/dev/.codex/config.json")
+	has_ask_candidate(write_hook("/Users/dev/.codex/config.json"))
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Write to ~/.cursor/ directory
+# Ask: Write to ~/.cursor/ directory
 # ---------------------------------------------------------------------------
 
 test_no_hook_write_cursor if {
-	agentjail.decision.action == "deny" with input as write_hook("/Users/dev/.cursor/extensions.json")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/Users/dev/.cursor/extensions.json")
+	agentjail.decision.action == "ask" with input as write_hook("/Users/dev/.cursor/extensions.json")
+	has_ask_candidate(write_hook("/Users/dev/.cursor/extensions.json"))
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Write to ~/Library/LaunchAgents/com.agentjail.daemon.plist
+# Ask: Write to ~/Library/LaunchAgents/com.agentjail.daemon.plist
 # (replaces the ~/.agentjail/rules/ case which is already covered by core
 #  file_policy/sensitive_credential and would cause eval_conflict_error here)
 # ---------------------------------------------------------------------------
 
 test_no_hook_write_launchagents_rules if {
-	agentjail.decision.action == "deny" with input as write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.shield.plist")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.shield.plist")
+	agentjail.decision.action == "ask" with input as write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.shield.plist")
+	has_ask_candidate(write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.shield.plist"))
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Write to ~/Library/LaunchAgents/com.agentjail.daemon.plist
+# Ask: Write to ~/Library/LaunchAgents/com.agentjail.daemon.plist
 # ---------------------------------------------------------------------------
 
 test_no_hook_write_launchagents_plist if {
-	agentjail.decision.action == "deny" with input as write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.daemon.plist")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.daemon.plist")
+	agentjail.decision.action == "ask" with input as write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.daemon.plist")
+	has_ask_candidate(write_hook("/Users/dev/Library/LaunchAgents/com.agentjail.daemon.plist"))
 }
 
 # ---------------------------------------------------------------------------
-# Deny: Edit to ~/.claude/settings.json
+# Ask: Edit to ~/.claude/settings.json
 # ---------------------------------------------------------------------------
 
 test_no_hook_edit_claude_settings if {
-	agentjail.decision.action == "deny" with input as edit_hook("/Users/dev/.claude/settings.json")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as edit_hook("/Users/dev/.claude/settings.json")
+	agentjail.decision.action == "ask" with input as edit_hook("/Users/dev/.claude/settings.json")
+	has_ask_candidate(edit_hook("/Users/dev/.claude/settings.json"))
 }
 
 # ---------------------------------------------------------------------------
@@ -128,9 +139,9 @@ test_no_hook_project_settings_not_denied if {
 # Linux home path coverage (plan 002)
 # ---------------------------------------------------------------------------
 
-test_no_hook_linux_home_claude_settings_denied if {
-	agentjail.decision.action == "deny" with input as write_hook("/home/dev/.claude/settings.json")
-	agentjail.decision.rule_id == hook_disable_rule_id with input as write_hook("/home/dev/.claude/settings.json")
+test_no_hook_linux_home_claude_settings_ask if {
+	agentjail.decision.action == "ask" with input as write_hook("/home/dev/.claude/settings.json")
+	has_ask_candidate(write_hook("/home/dev/.claude/settings.json"))
 }
 
 # ---------------------------------------------------------------------------
@@ -145,6 +156,16 @@ test_bash_cat_codex_rtk_allows if {
 # ls on .claude dir → allow (read-only)
 test_bash_ls_claude_allows if {
 	not agentjail.decision.action == "deny" with input as bash_hook("ls /Users/dev/.claude/")
+}
+
+# ls with stderr redirect (2>/dev/null) → allow (the > is an fd redirect, not a file write)
+test_bash_ls_claude_stderr_redirect_allows if {
+	not agentjail.decision.action == "deny" with input as bash_hook("ls /Users/dev/.claude/skills/ 2>/dev/null")
+}
+
+# find with stderr redirect → allow (read-only traversal)
+test_bash_find_claude_stderr_redirect_allows if {
+	not agentjail.decision.action == "deny" with input as bash_hook("find /Users/dev/.claude -name '*.md' 2>/dev/null | head -5")
 }
 
 # grep on .claude dir → allow (read-only)

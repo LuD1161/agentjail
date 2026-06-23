@@ -46,6 +46,15 @@ bash_input_r(cmd) := {
 	"cwd": "/Users/dev/myproject",
 }
 
+bash_input_r_with_binaries(cmd, binaries) := {
+	"hook_event":       "PreToolUse",
+	"tool_name":        "Bash",
+	"tool_input":       {"command": cmd, "description": ""},
+	"session_id":       "s-resolver-test",
+	"cwd":              "/Users/dev/myproject",
+	"command_binaries": binaries,
+}
+
 unknown_tool_input := {
 	"hook_event": "PreToolUse",
 	"tool_name":  "UnknownTool",
@@ -133,17 +142,21 @@ test_resolver_agentjail_self_in_effective_candidate_even_when_listed_disabled if
 	count(cands) > 0
 }
 
-# B3: library/no-daemon-kill is LOCKED — cannot be disabled.
-test_resolver_no_daemon_kill_locked_cannot_be_disabled if {
+# B3: library/no-daemon-kill is UNLOCKED — can be disabled with --force.
+# The daemon has launchd KeepAlive=true so this is a UX speed bump, not a
+# hard guarantee. When disabled, the pkill command must NOT be denied by
+# no-daemon-kill (falls through to default ask or another candidate).
+test_resolver_no_daemon_kill_can_be_disabled if {
 	d := agentjail.decision with input as bash_input_r("pkill -f agentjail-daemon")
-	               with data.agentjail.config as cfg_disable_all_locked
-	d.action == "deny"
-	d.rule_id == "library/no-daemon-kill"
+	               with data.agentjail.config as {"disabled_rules": ["library/no-daemon-kill"]}
+	d.rule_id != "library/no-daemon-kill"
 }
 
 # B4: command_policy/no-policy-mutation is LOCKED — cannot be disabled.
 test_resolver_no_policy_mutation_locked_cannot_be_disabled if {
-	d := agentjail.decision with input as bash_input_r("agentjail policy disable file_policy/sensitive_credential")
+	d := agentjail.decision with input as bash_input_r_with_binaries(
+		"agentjail policy disable file_policy/sensitive_credential",
+		["agentjail"])
 	               with data.agentjail.config as cfg_disable_all_locked
 	d.action == "deny"
 	d.rule_id == "command_policy/no-policy-mutation"
@@ -239,7 +252,6 @@ test_resolver_no_disabled_rules_effective_contains_default_allow if {
 test_resolver_locked_rules_constant if {
 	agentjail.locked_rules == {
 		"file_policy/agentjail_self",
-		"library/no-daemon-kill",
 		"library/no-hook-self-disable",
 		"command_policy/no-policy-mutation",
 		"resolver/default",

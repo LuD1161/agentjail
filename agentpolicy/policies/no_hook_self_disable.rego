@@ -36,6 +36,10 @@
 # This rule is active in every agentjail install without any configuration.
 # It is locked in resolver.rego and cannot be disabled via policy.yaml or the CLI.
 #
+# Write/Edit to hook config files produce "ask" (user can approve legitimate
+# edits). Bash-based writes remain "deny" (more likely malicious). A future
+# daemon watchdog will verify hook integrity post-edit (ADR NNNN).
+#
 # EXAMPLE triggering input
 # -------------------------
 #   {"hook_event":"PreToolUse","tool_name":"Write",
@@ -98,16 +102,16 @@ _is_hook_config(p) if {
 # ~/.agentjail/ coverage.
 
 # ---------------------------------------------------------------------------
-# Candidate: deny Write / Edit to hook config paths
+# Candidate: ask (not deny) for Write / Edit to hook config paths
 # ---------------------------------------------------------------------------
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit"}
 	p := _lib_hook_path
 	_is_hook_config(p)
-	msg := sprintf("write to hook/policy configuration %q is denied (library/no-hook-self-disable); self-disable risk", [p])
+	msg := sprintf("write to hook/policy configuration %q requires confirmation (library/no-hook-self-disable); verify agentjail hook is preserved", [p])
 	r := {
-		"action":  "deny",
+		"action":  "ask",
 		"rule_id": "library/no-hook-self-disable",
 		"reason":  msg,
 	}
@@ -125,7 +129,7 @@ _is_hook_config_write_bash if {
 	input.tool_name == "Bash"
 	c := input.tool_input.command
 	regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.(claude|codex|cursor)\b`, c)
-	regex.match(`(>|>>|\btee\b|\bcp\b|\bmv\b|\bsed\s+(-[^i]*)?-i|\bperl\s+(-[^i]*)?-i|\bchmod\b|\brm\b|\bmkdir\b|\binstall\b|\bln\b|\btouch\b|\bdd\b|\brsync\b|\btruncate\b)`, c)
+	regex.match(`([^0-9]>|^>|>>|\btee\b|\bcp\b|\bmv\b|\bsed\s+(-[^i]*)?-i|\bperl\s+(-[^i]*)?-i|\bchmod\b|\brm\b|\bmkdir\b|\binstall\b|\bln\b|\btouch\b|\bdd\b|\brsync\b|\btruncate\b)`, c)
 }
 
 candidate contains r if {

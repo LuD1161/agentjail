@@ -231,14 +231,15 @@ var ruleRegistry = []RuleEntry{
 	// ------------------------------------------------------------------ //
 	// Core — self-protection (promoted from library; rule_id prefix is historical)
 	// ------------------------------------------------------------------ //
-	// Locked: protects agentjail from being killed by the agent.
-	// Note: rule_id retains "library/" prefix for historical reasons; the rule
-	// is now always-on locked core — it is never opt-in.
+	// Disableable (with --force): the daemon has launchd KeepAlive=true, so
+	// this is a UX speed bump rather than an absolute guarantee. Users who
+	// genuinely need to stop the daemon can opt out via disabled_rules.
+	// Note: rule_id retains "library/" prefix for historical reasons.
 	{
 		ID:          "library/no-daemon-kill",
 		Source:      RuleSourceCore,
 		Description: "Block attempts to stop agentjail-daemon",
-		Locked:      true,
+		Locked:      false,
 	},
 	// Locked: protects agentjail hooks from being removed.
 	// Note: rule_id retains "library/" prefix for historical reasons; the rule

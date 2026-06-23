@@ -36,6 +36,10 @@ import future.keywords.in
 # cmd is the raw shell command string from the Bash tool_input.
 cmd := input.tool_input.command
 
+# command_binaries is the list of command binary basenames extracted by the
+# daemon's shell parser. For "git status && agentjail policy list | grep foo",
+# this is ["git", "agentjail", "grep"]. Available only for Bash tool calls.
+
 # is_bash returns true when this is a Bash tool PreToolUse event.
 is_bash if {
 	input.hook_event == "PreToolUse"
@@ -299,19 +303,20 @@ candidate contains r if {
 #
 # This rule_id is in locked_rules (resolver.rego), so it can NEVER be
 # suppressed via disabled_rules.
+#
+# _mentions_agentjail now uses the structured input.command_binaries field
+# populated by the daemon's shell parser, which correctly distinguishes
+# "agentjail" as a command binary vs. as a path component (e.g.,
+# cmd/agentjail/update.go). is_bash gates all callers of _mentions_agentjail,
+# so command_binaries is always populated when this code is reached.
 # ---------------------------------------------------------------------------
 
-# _mentions_agentjail is true when the command references the agentjail binary in
-# ANY form: bare `agentjail`, an absolute/relative path ending in /agentjail, a
-# quoted path ("…/agentjail"), or `$(which agentjail)`. Matching the binary token
-# SEPARATELY from the subcommand verb is deliberate: a single
-# `agentjail\s+<verb>` pattern is trivially evaded by a closing quote or path
-# prefix right after the word (e.g. `"$HOME/.agentjail/bin/agentjail" mcp allow`,
-# which has a `"` where the old regex required whitespace). The regex layer is a
-# best-effort second line — the authoritative guard is the interactive-TTY
-# confirmation enforced inside the agentjail binary itself.
+# _mentions_agentjail is true when "agentjail" is one of the command binaries
+# in the pipeline. Uses the structured command_binaries field populated by the
+# daemon's shell parser, which correctly distinguishes "agentjail" as a command
+# vs as a path component (e.g., cmd/agentjail/update.go).
 _mentions_agentjail if {
-	regex.match(`agentjail\b`, cmd)
+	input.command_binaries[_] == "agentjail"
 }
 
 # _is_policy_mutation returns true when the command invokes a config-mutating
@@ -330,7 +335,10 @@ _is_policy_mutation if {
 }
 
 _is_policy_mutation if {
-	# agentjail … update [--force] — binary self-modification
+	# agentjail update [--force] — binary self-modification.
+	# _mentions_agentjail uses command_binaries to confirm "agentjail" is the
+	# actual command binary (not a path component like cmd/agentjail/update.go).
+	# \bupdate\b then ensures the update subcommand is present.
 	_mentions_agentjail
 	regex.match(`\bupdate\b`, cmd)
 }
@@ -340,11 +348,6 @@ _is_policy_mutation if {
 	# Covers: > ~/.agentjail/..., >> ~/.agentjail/..., tee ~/.agentjail/...
 	# Also matches $HOME/.agentjail and /Users/<u>/.agentjail
 	regex.match(`(>|>>|\btee\b)\s*(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.agentjail\b`, cmd)
-}
-
-_is_policy_mutation if {
-	# In-place editing tools targeting agentjail paths (sed -i, perl -i, etc.)
-	regex.match(`\b(sed|awk|perl|python3?)\b[^\n]*(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.agentjail\b`, cmd)
 }
 
 candidate contains r if {

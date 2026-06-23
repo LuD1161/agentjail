@@ -50,7 +50,6 @@ import future.keywords.contains
 
 locked_rules := {
 	"file_policy/agentjail_self",
-	"library/no-daemon-kill",
 	"library/no-hook-self-disable",
 	"command_policy/no-policy-mutation",
 	"resolver/default",

@@ -192,17 +192,19 @@ func TestMirrorPolicyDecisions(t *testing.T) {
 			want:      "deny",
 		},
 		// ----- no_hook_self_disable (locked self-protection) -----
+		// Write/Edit to hook config files now produce "ask" (user can approve
+		// legitimate edits); Bash-based writes stay "deny".
 		{
-			name:      "Write ~/.claude/settings.json → deny (no_hook_self_disable)",
+			name:      "Write ~/.claude/settings.json → ask (no_hook_self_disable)",
 			toolName:  "Write",
 			toolInput: map[string]interface{}{"file_path": "/Users/dev/.claude/settings.json"},
-			want:      "deny",
+			want:      "ask",
 		},
 		{
-			name:      "Write ~/.codex/config → deny (no_hook_self_disable)",
+			name:      "Write ~/.codex/config → ask (no_hook_self_disable)",
 			toolName:  "Write",
 			toolInput: map[string]interface{}{"file_path": "/Users/dev/.codex/config.toml"},
-			want:      "deny",
+			want:      "ask",
 		},
 	}
 
