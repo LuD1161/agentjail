@@ -50,13 +50,13 @@ func replayListSessions(ctx context.Context, st store.ReadOnlyStore) int {
 		fmt.Fprintf(os.Stderr, "agentjail replay: list sessions: %v\n", err)
 		return 1
 	}
-	fmt.Printf("%-22s  %-19s  %-19s  %-8s  %-10s  %s\n", "SESSION", "START", "END", "COUNT", "AGENT", "CWD")
+	fmt.Printf("%-8s  %-19s  %-19s  %-8s  %-10s  %s\n", "SESSION", "START", "END", "COUNT", "AGENT", "CWD")
 	for _, s := range sessions {
 		end := ""
 		if !s.EndTs.IsZero() {
 			end = s.EndTs.Local().Format("2006-01-02 15:04:05")
 		}
-		fmt.Printf("%-22s  %-19s  %-19s  %-8d  %-10s  %s\n",
+		fmt.Printf("%-8s  %-19s  %-19s  %-8d  %-10s  %s\n",
 			shortSession(s.SessionID), s.StartTs.Local().Format("2006-01-02 15:04:05"), end, s.DecisionCount, s.Agent, s.CWD)
 	}
 	return 0
@@ -96,8 +96,8 @@ func printReplayDecision(d store.DecisionRecord, verbose bool) {
 }
 
 func shortSession(sessionID string) string {
-	if len(sessionID) <= 22 {
+	if len(sessionID) <= 8 {
 		return sessionID
 	}
-	return sessionID[:19] + "..."
+	return sessionID[:8]
 }
