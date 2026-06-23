@@ -1,6 +1,5 @@
 // ui_subcommand.go — `agentjail ui` entry point.
 //
-// NOT in v0.1.0-alpha release. Local dev tool / demo prop only.
 // This subcommand launches a small local web server that shows all sessions,
 // their event traces, and optionally allows one-click rule enable/disable.
 package main
@@ -65,7 +64,7 @@ func runUI(args []string) int {
 		return 2
 	}
 
-	fmt.Fprintln(os.Stderr, "agentjail ui — local dev tool (NOT in v0.1.0-alpha release)")
+	fmt.Fprintf(os.Stderr, "agentjail ui — %s\n", version)
 	fmt.Fprintf(os.Stderr, "serving on http://%s\n", addr)
 	fmt.Fprintln(os.Stderr, "press Ctrl-C to stop")
 
