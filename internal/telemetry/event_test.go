@@ -40,7 +40,7 @@ func TestNewFeedbackEvent_OmitsEmptyContact(t *testing.T) {
 // TestNewInstallEvent_FieldsAndOptionals verifies that NewInstallEvent populates
 // required fields and omits install_method when empty.
 func TestNewInstallEvent_FieldsAndOptionals(t *testing.T) {
-	e := NewInstallEvent("anon", "0.1.0", "darwin", "arm64", "curl", []string{"claude-code"}, 2)
+	e := NewInstallEvent("anon", "0.1.0", "darwin", "arm64", "curl", []string{"claude-code"}, 2, true)
 	if e.Event != "install" {
 		t.Fatalf("event name=%q", e.Event)
 	}
@@ -53,11 +53,12 @@ func TestNewInstallEvent_FieldsAndOptionals(t *testing.T) {
 	if e.Properties["agents_detected"] != 2 {
 		t.Fatalf("agents_detected=%v", e.Properties["agents_detected"])
 	}
-	// $set must carry os, arch, and version for person profile.
+	if e.Properties["is_fresh_install"] != true {
+		t.Fatalf("is_fresh_install=%v", e.Properties["is_fresh_install"])
+	}
 	if e.Set["os"] != "darwin" || e.Set["arch"] != "arm64" || e.Set["agentjail_version"] != "0.1.0" {
 		t.Fatalf("$set missing os/arch/version: %+v", e.Set)
 	}
-	// $set_once must record install_method and first_installed_version.
 	if e.SetOnce["install_method"] != "curl" {
 		t.Fatalf("$set_once install_method=%v", e.SetOnce["install_method"])
 	}
@@ -65,13 +66,15 @@ func TestNewInstallEvent_FieldsAndOptionals(t *testing.T) {
 		t.Fatalf("$set_once first_installed_version=%v", e.SetOnce["first_installed_version"])
 	}
 
-	// Empty install_method must be omitted from properties and $set_once.
-	e2 := NewInstallEvent("anon", "0.1.0", "linux", "amd64", "", nil, 0)
+	e2 := NewInstallEvent("anon", "0.1.0", "linux", "amd64", "", nil, 0, false)
 	if _, ok := e2.Properties["install_method"]; ok {
 		t.Fatal("empty install_method must be omitted from properties")
 	}
 	if _, ok := e2.SetOnce["install_method"]; ok {
 		t.Fatal("empty install_method must be omitted from $set_once")
+	}
+	if e2.Properties["is_fresh_install"] != false {
+		t.Fatalf("is_fresh_install should be false for reinstall: %v", e2.Properties["is_fresh_install"])
 	}
 }
 

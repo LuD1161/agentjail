@@ -115,6 +115,16 @@ func runInstallCmd(args []string) {
 		os.Exit(1)
 	}
 
+	// Detect fresh vs. reinstall before any telemetry state is created.
+	// A fresh install is one where telemetry.json did not exist yet; a
+	// reinstall (binary/daemon refresh) already has the file.
+	isFreshInstall := false
+	if tp, tpErr := telemetry.DefaultPaths(); tpErr == nil {
+		if _, statErr := os.Stat(tp.Consent()); os.IsNotExist(statErr) {
+			isFreshInstall = true
+		}
+	}
+
 	// Print the header banner.
 	v := version
 	if v == "" {
@@ -154,7 +164,7 @@ func runInstallCmd(args []string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = telemetry.SendInstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH,
-					os.Getenv("AGENTJAIL_INSTALL_METHOD"), []string{ag.ID()}, 1)
+					os.Getenv("AGENTJAIL_INSTALL_METHOD"), []string{ag.ID()}, 1, isFreshInstall)
 			}()
 		}
 		return
@@ -297,7 +307,7 @@ func runInstallCmd(args []string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = telemetry.SendInstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH,
-				os.Getenv("AGENTJAIL_INSTALL_METHOD"), wiredAgents, len(detected))
+				os.Getenv("AGENTJAIL_INSTALL_METHOD"), wiredAgents, len(detected), isFreshInstall)
 		}()
 	}
 

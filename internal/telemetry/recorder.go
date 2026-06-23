@@ -47,7 +47,14 @@ func New(p Paths, getenv func(string) string, version, goos, goarch string, clie
 		return r, nil
 	}
 	r.recoverCheckpoint()
-	_ = r.spool.Append(NewEnvEvent(c.AnonymousID, version, goos, goarch, r.getenv("AGENTJAIL_INSTALL_METHOD")))
+	// Send session_start immediately so it is not lost if the daemon exits
+	// before the first spool flush (2 min). Fire-and-forget is safe here
+	// because the daemon is long-lived.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = r.client.Send(ctx, []Event{NewEnvEvent(c.AnonymousID, version, goos, goarch, r.getenv("AGENTJAIL_INSTALL_METHOD"))})
+	}()
 	return r, nil
 }
 

@@ -141,8 +141,10 @@ func NewFeedbackEvent(distinctID, version, goos, message, contact string) Event 
 // installMethod is an enum: "curl" | "brew" | "" (unknown). agents is the
 // list of agent enum IDs that were wired (e.g. ["claude-code", "cursor"]).
 // agentsDetected is the count of agents found on the machine (may be larger
-// than len(agents) when some were not selected).
-func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, agents []string, agentsDetected int) Event {
+// than len(agents) when some were not selected). isFreshInstall is true when
+// ~/.agentjail/telemetry.json did not exist before this run (first-ever install
+// vs. a binary/daemon refresh).
+func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, agents []string, agentsDetected int, isFreshInstall bool) Event {
 	p := base(distinctID, version)
 	p["os"] = goos
 	p["arch"] = goarch
@@ -153,6 +155,7 @@ func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, ag
 		p["agents"] = agents
 	}
 	p["agents_detected"] = agentsDetected
+	p["is_fresh_install"] = isFreshInstall
 	ev := Event{Event: "install", Properties: p, Set: personSet(version, goos, goarch)}
 	so := map[string]interface{}{"first_installed_version": version}
 	if installMethod != "" {
