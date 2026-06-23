@@ -204,11 +204,11 @@ func TestReplayList(t *testing.T) {
 	if !strings.Contains(out, "SESSION") {
 		t.Errorf("output missing SESSION header: %q", out)
 	}
-	if !strings.Contains(out, "sess-alpha") {
-		t.Errorf("output missing sess-alpha: %q", out)
+	if !strings.Contains(out, "sess-alp") {
+		t.Errorf("output missing sess-alp (truncated sess-alpha): %q", out)
 	}
-	if !strings.Contains(out, "sess-beta") {
-		t.Errorf("output missing sess-beta: %q", out)
+	if !strings.Contains(out, "sess-bet") {
+		t.Errorf("output missing sess-bet (truncated sess-beta): %q", out)
 	}
 }
 
