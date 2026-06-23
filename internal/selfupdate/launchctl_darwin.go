@@ -30,3 +30,8 @@ func LaunchctlUnload(plistPath string) error {
 	}
 	return nil
 }
+
+// RestartDaemon reloads the daemon via launchd on macOS.
+func RestartDaemon(servicePath string) error {
+	return LaunchctlLoad(servicePath)
+}

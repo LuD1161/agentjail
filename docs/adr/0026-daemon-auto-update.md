@@ -15,21 +15,22 @@ no rollback daemon, no helper process.
 ## Decision
 
 The daemon automatically downloads, verifies (minisign + SHA256), and swaps
-binaries when a newer version is available. After swapping, it exits and
-launchd restarts it from the new binary (KeepAlive: true).
+binaries when a newer version is available. After swapping, it exits and the
+service manager restarts it from the new binary.
 
 - Opt-out via AGENTJAIL_AUTO_UPDATE=false or AGENTJAIL_NO_UPDATE_CHECK=1
 - Same signature verification as manual `agentjail update`
 - Dev builds (empty signing key) skip auto-update
 - Homebrew installations skip auto-update (notification only)
-- macOS only (launchd); Linux support deferred
+- macOS (launchd, KeepAlive: true) and Linux (systemd user service, Restart=always)
+- Linux uses `systemctl --user restart agentjail-daemon.service` on rollback
 - On swap failure: rollback from backup, send notification, continue running
 
 ## Consequences
 
 - Users receive updates within ~6 hours of release
 - No additional binaries or daemons needed
-- If a new version crashes on start, launchd will retry and eventually
+- If a new version crashes on start, the service manager will retry and eventually
   back off. User can reinstall via curl|sh or brew reinstall
 - The brief interruption during binary swap (~seconds) matches manual
   agentjail update behavior

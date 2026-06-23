@@ -223,7 +223,35 @@ func TestUpdateChecker_AutoUpdate_SkipsBrew(t *testing.T) {
 	}
 }
 
-func TestUpdateChecker_AutoUpdate_SkipsNonDarwin(t *testing.T) {
+func TestUpdateChecker_AutoUpdate_SkipsUnsupportedPlatform(t *testing.T) {
+	origKey := selfupdate.SigningPubKey
+	selfupdate.SigningPubKey = "RWQfakekeyfortest"
+	t.Cleanup(func() { selfupdate.SigningPubKey = origKey })
+
+	uc, notifier := newAutoUpdateChecker(t, false, "windows")
+
+	exitCalled := false
+	origExit := osExitFn
+	osExitFn = func(code int) { exitCalled = true }
+	t.Cleanup(func() { osExitFn = origExit })
+
+	if err := uc.checkOnce(context.Background()); err != nil {
+		t.Fatalf("checkOnce returned error: %v", err)
+	}
+	if exitCalled {
+		t.Fatal("osExitFn was called on unsupported platform; auto-update should be skipped")
+	}
+	if notifier.called && strings.Contains(notifier.message, "Auto-update failed") {
+		t.Errorf("unexpected auto-update failure message: %q", notifier.message)
+	}
+}
+
+func TestUpdateChecker_AutoUpdate_AllowedOnLinux(t *testing.T) {
+	// On linux with AutoUpdate=true and a signing key, the gate should NOT be
+	// skipped at the platform check — the checker must proceed past it. We
+	// verify this by confirming that performAutoUpdate is entered (it will
+	// attempt a download and fail, triggering the failure notifier) rather than
+	// silently skipping.
 	origKey := selfupdate.SigningPubKey
 	selfupdate.SigningPubKey = "RWQfakekeyfortest"
 	t.Cleanup(func() { selfupdate.SigningPubKey = origKey })
@@ -235,15 +263,23 @@ func TestUpdateChecker_AutoUpdate_SkipsNonDarwin(t *testing.T) {
 	osExitFn = func(code int) { exitCalled = true }
 	t.Cleanup(func() { osExitFn = origExit })
 
-	if err := uc.checkOnce(context.Background()); err != nil {
-		t.Fatalf("checkOnce returned error: %v", err)
+	// checkOnce will enter performAutoUpdate, which will fail on download
+	// (no real network / staging dir). The notifier will receive the failure.
+	_ = uc.checkOnce(context.Background())
+
+	// We just confirm the platform gate did NOT block it — either exit was
+	// called (unlikely in test) or the notifier received a failure message.
+	// Both prove performAutoUpdate was reached.
+	if !exitCalled && notifier.called && strings.Contains(notifier.message, "Auto-update failed") {
+		// Reached performAutoUpdate as expected.
+		return
 	}
 	if exitCalled {
-		t.Fatal("osExitFn was called on non-darwin; auto-update should be skipped")
+		// Binary swap succeeded somehow (e.g. no binaries to swap) — also fine.
+		return
 	}
-	if notifier.called && strings.Contains(notifier.message, "Auto-update failed") {
-		t.Errorf("unexpected auto-update failure message: %q", notifier.message)
-	}
+	// Neither happened: the platform gate silently skipped linux, which is wrong.
+	t.Error("auto-update was silently skipped on linux; expected it to be attempted")
 }
 
 func TestUpdateChecker_ThrottleFilePermissions(t *testing.T) {

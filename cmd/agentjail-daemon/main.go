@@ -1223,8 +1223,15 @@ func main() {
 			installDir = filepath.Dir(exePath)
 		}
 
-		homeDir, _ := os.UserHomeDir()
-		plistPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.agentjail.daemon.plist")
+		// servicePath is passed to RestartDaemon on rollback. On macOS it is
+		// the launchd plist path; on Linux it is the systemd user unit name.
+		var servicePath string
+		if runtime.GOOS == "darwin" {
+			homeDir, _ := os.UserHomeDir()
+			servicePath = filepath.Join(homeDir, "Library", "LaunchAgents", "com.agentjail.daemon.plist")
+		} else if runtime.GOOS == "linux" {
+			servicePath = "agentjail-daemon.service"
+		}
 
 		checker := &selfupdate.Checker{}
 		uc := &UpdateChecker{
@@ -1238,7 +1245,7 @@ func main() {
 			},
 			AutoUpdate: autoUpdate,
 			InstallDir: installDir,
-			PlistPath:  plistPath,
+			PlistPath:  servicePath,
 			GOOS:       runtime.GOOS,
 			GOARCH:     runtime.GOARCH,
 		}

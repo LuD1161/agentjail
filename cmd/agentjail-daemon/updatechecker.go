@@ -127,8 +127,8 @@ func (uc *UpdateChecker) checkOnce(ctx context.Context) error {
 		slog.Debug("auto-update: skipped (dev build, no signing key)")
 		return nil
 	}
-	if uc.GOOS != "darwin" {
-		slog.Debug("auto-update: skipped (not macOS)")
+	if uc.GOOS != "darwin" && uc.GOOS != "linux" {
+		slog.Debug("auto-update: skipped (unsupported platform)")
 		return nil
 	}
 	if isBrew {
@@ -141,8 +141,9 @@ func (uc *UpdateChecker) checkOnce(ctx context.Context) error {
 }
 
 // performAutoUpdate downloads, verifies, and atomically swaps in the new
-// binaries, then exits. launchd KeepAlive restarts the daemon at the new
-// version. Called only on darwin, non-Homebrew, with AutoUpdate=true.
+// binaries, then exits. The service manager (launchd on macOS, systemd on
+// Linux) restarts the daemon at the new version. Called only on supported
+// platforms, non-Homebrew, with AutoUpdate=true.
 func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 	slog.Info("auto-update: starting", "from", uc.Version, "to", latest)
 
@@ -252,7 +253,7 @@ func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 				_ = selfupdate.AtomicReplaceBinary(backup, dst)
 			}
 		}
-		selfupdate.LaunchctlLoad(uc.PlistPath) //nolint:errcheck
+		selfupdate.RestartDaemon(uc.PlistPath) //nolint:errcheck
 		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", swapErr)) //nolint:errcheck
 		return
 	}

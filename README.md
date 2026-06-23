@@ -235,7 +235,8 @@ Downloads the latest release, verifies SHA-256, atomically swaps binaries, resta
 
 The daemon automatically checks for new versions every ~6 hours. When an
 update is available, it downloads, verifies (signature + checksum), swaps
-binaries, and restarts via launchd.
+binaries, and restarts via the platform service manager (launchd on macOS,
+systemd on Linux).
 
 To disable auto-update:
 
@@ -245,7 +246,7 @@ To disable all update checks (notifications and auto-update):
 
     export AGENTJAIL_NO_UPDATE_CHECK=1
 
-For launchd-managed daemons, set via the plist at
+For launchd-managed daemons (macOS), set via the plist at
 `~/Library/LaunchAgents/com.agentjail.daemon.plist`:
 
     <key>EnvironmentVariables</key>
@@ -253,6 +254,12 @@ For launchd-managed daemons, set via the plist at
         <key>AGENTJAIL_AUTO_UPDATE</key>
         <string>false</string>
     </dict>
+
+For systemd-managed daemons (Linux), set via an environment override file:
+
+    systemctl --user edit agentjail-daemon.service
+    # Add under [Service]:
+    # Environment=AGENTJAIL_AUTO_UPDATE=false
 
 ---
 
