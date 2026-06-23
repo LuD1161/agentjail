@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/store"
+	"github.com/LuD1161/agentjail/internal/ui"
+	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 )
 
@@ -71,8 +73,23 @@ func runReplay(args []string) int {
 		return replayBasic(ctx, st, fullID, allRows, *verbose, *follow, useColor)
 	}
 
-	// TUI mode -- wired when replay_tui.go is present
-	return replayBasic(ctx, st, fullID, allRows, *verbose, *follow, useColor)
+	// TUI mode
+	var u *ui.UI
+	if os.Getenv("NO_COLOR") != "" || *noColor {
+		u = ui.NewNoColor(os.Stdout)
+	} else {
+		u = ui.New(os.Stdout)
+	}
+	p := tea.NewProgram(
+		newReplayModel(allRows, st, fullID, u, *verbose, *follow),
+		tea.WithAltScreen(),
+		tea.WithInputTTY(),
+	)
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail replay: TUI error: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func replayListSessions(ctx context.Context, st store.ReadOnlyStore, useColor bool) int {
