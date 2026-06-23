@@ -10,6 +10,9 @@
 //	GET  /api/session            redacted chronological replay or downloadable bundle
 //	GET  /api/audit              recent policy-mutation audit events
 //	GET  /api/rules              JSON list of all rules with enabled status
+//	GET  /api/policy/config      current PolicyConfig as JSON
+//	POST /api/policy/config      edit mode only: save PolicyConfig + SIGHUP
+//	GET  /api/policy/mcp-tools   server->tools map from audit history
 //	POST /api/policy/enable      edit mode only: enable a library rule
 //	POST /api/policy/disable     edit mode only: disable a library rule
 //	POST /api/policy/reload      edit mode only: send SIGHUP to daemon
@@ -18,6 +21,7 @@ package ui
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +36,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LuD1161/agentjail/agentpolicy/config"
 	localstore "github.com/LuD1161/agentjail/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 // Server is the local web UI HTTP server.
@@ -92,6 +98,8 @@ func (s *Server) Start(
 	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRules(w, r, coreRuleNames, libraryRuleNames)
 	})
+	mux.HandleFunc("/api/policy/config", s.handlePolicyConfig)
+	mux.HandleFunc("/api/policy/mcp-tools", s.handlePolicyMCPTools)
 	mux.HandleFunc("/api/policy/enable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePolicyEnable(w, r, libraryRuleNames, libraryRuleContent)
 	})
@@ -433,6 +441,118 @@ func (s *Server) handlePolicyReload(w http.ResponseWriter, r *http.Request) {
 	}
 	sighupDaemonFn()
 	writeJSON(w, map[string]string{"status": "sighup_sent"})
+}
+
+// policyConfigPath returns ~/.agentjail/policy.yaml.
+func policyConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, ".agentjail", "policy.yaml"), nil
+}
+
+// handlePolicyConfig serves GET (read) and POST (write) for the full PolicyConfig.
+func (s *Server) handlePolicyConfig(w http.ResponseWriter, r *http.Request) {
+	cfgPath, err := policyConfigPath()
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("config path: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg, err := config.LoadOrDefault(cfgPath)
+		if err != nil {
+			writeJSONError(w, fmt.Sprintf("load config: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, cfg)
+
+	case http.MethodPost:
+		if !s.editPolicy {
+			writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
+			return
+		}
+		var cfg config.PolicyConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			writeJSONError(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+		dir := filepath.Dir(cfgPath)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			writeJSONError(w, fmt.Sprintf("mkdir: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := config.Save(&cfg, cfgPath); err != nil {
+			writeJSONError(w, fmt.Sprintf("save config: %v", err), http.StatusInternalServerError)
+			return
+		}
+		sighupDaemonFn()
+		writeJSON(w, map[string]string{"status": "saved"})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handlePolicyMCPTools returns a map of MCP server name to tool names seen in
+// the audit history. Tools are identified by the "mcp__" prefix convention in
+// the decisions table tool_name column (e.g. "mcp__github__create_issue").
+func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	if s.dbPath == "" {
+		writeJSON(w, map[string][]string{})
+		return
+	}
+
+	// Open a lightweight read-only connection for the raw query. We cannot use
+	// the ReadOnlyStore interface because it does not expose a DISTINCT
+	// tool_name query; opening a second RO connection is harmless under WAL.
+	db, err := sql.Open("sqlite", fmt.Sprintf(
+		"file:%s?mode=ro&_pragma=busy_timeout(3000)",
+		strings.NewReplacer("?", "%3f", "#", "%23").Replace(s.dbPath),
+	))
+	if err != nil {
+		writeJSON(w, map[string][]string{})
+		return
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(r.Context(),
+		`SELECT DISTINCT tool_name FROM decisions WHERE tool_name LIKE 'mcp__%' ORDER BY tool_name`)
+	if err != nil {
+		writeJSON(w, map[string][]string{})
+		return
+	}
+	defer rows.Close()
+
+	result := make(map[string][]string)
+	for rows.Next() {
+		var toolName string
+		if err := rows.Scan(&toolName); err != nil {
+			continue
+		}
+		// Convention: mcp__<server>__<tool>  (double-underscore separators).
+		// Extract server name as everything between the first and second "__".
+		rest := strings.TrimPrefix(toolName, "mcp__")
+		idx := strings.Index(rest, "__")
+		var server, tool string
+		if idx > 0 {
+			server = rest[:idx]
+			tool = rest[idx+2:]
+		} else {
+			server = rest
+			tool = rest
+		}
+		result[server] = append(result[server], tool)
+	}
+	writeJSON(w, result)
 }
 
 // ---------------------------------------------------------------------------
