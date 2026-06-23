@@ -17,6 +17,7 @@ foot-gun **before it fires** - no changes to how you use your agent.
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
+&nbsp;[![GitHub downloads](https://img.shields.io/github/downloads/LuD1161/agentjail/total.svg?style=flat)](https://github.com/LuD1161/agentjail/releases)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
@@ -33,9 +34,6 @@ brew install LuD1161/tap/agentjail
 </a>
 
 <sub><i>A coding agent gets blocked before it fires. <a href="assets/agentjail-demo.mp4">▶ Watch the 36-second demo with sound</a> &middot; source in <a href="video/">video/</a>.</i></sub>
-
-[![GitHub Stars](https://img.shields.io/github/stars/LuD1161/agentjail?style=flat)](https://github.com/LuD1161/agentjail/stargazers)
-[![GitHub downloads](https://img.shields.io/github/downloads/LuD1161/agentjail/total.svg?style=flat)](https://github.com/LuD1161/agentjail/releases)
 
 </div>
 
