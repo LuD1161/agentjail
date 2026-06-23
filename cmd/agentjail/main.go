@@ -25,7 +25,7 @@ func main() {
 		recordFeatureUsed(args[0])
 		// Fire the throttled update check + heartbeat asynchronously. Never
 		// adds latency; all network/file errors are silently discarded.
-		maybeRunUpdateCheck()
+		defer maybeRunUpdateCheck()()
 	}
 
 	switch args[0] {

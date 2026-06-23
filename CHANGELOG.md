@@ -2,6 +2,34 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.2.5 — 2026-06-23
+
+Telemetry overhaul — PostHog now builds real user profiles, heartbeats actually
+arrive, and install counts are accurate.
+
+### Fixed
+
+- **Person properties** — every telemetry event now sends `$set` (mutable:
+  `agentjail_version`, `os`, `arch`) and `$set_once` (immutable:
+  `install_method`, `first_installed_version`) so PostHog builds person profiles
+  instead of showing anonymous hashes with no metadata
+- **Heartbeat reliability** — CLI now waits for the heartbeat HTTP POST to
+  complete before exiting; previously the goroutine was fire-and-forget and most
+  heartbeats were silently lost
+- **Install inflation** — install events now carry `is_fresh_install` to
+  distinguish first-ever installs from binary/daemon refreshes (`curl | sh` on
+  an already-installed machine)
+- **Empty version on dev builds** — non-release builds now report
+  `"dev-<sha7>"` instead of an empty string, via a `commit` ldflags variable
+- **`session_start` reliability** — sent immediately at daemon startup instead
+  of waiting for the 2-minute spool flush, so it's captured even if the daemon
+  exits quickly
+
+### Changed
+
+- **TELEMETRY.md** — documented person properties (`$set`/`$set_once`),
+  `is_fresh_install`, version fallback, and updated delivery semantics
+
 ## v0.2.4 — 2026-06-23
 
 Smarter session labels, live event ticker, and CWD column in the web UI.

@@ -67,7 +67,7 @@ func TestSend_ServerErrorReturnsErr(t *testing.T) {
 // TestSendInstall_NoBackendReturnsSentinel verifies the no-backend path.
 func TestSendInstall_NoBackendReturnsSentinel(t *testing.T) {
 	err := SendInstall(context.Background(), Paths{Base: t.TempDir()},
-		func(string) string { return "" }, "0.1.0", "darwin", "arm64", "curl", []string{"claude-code"}, 1)
+		func(string) string { return "" }, "0.1.0", "darwin", "arm64", "curl", []string{"claude-code"}, 1, true)
 	if err != ErrNoBackend {
 		t.Fatalf("got %v want ErrNoBackend", err)
 	}
@@ -96,7 +96,7 @@ func TestSendInstall_OptOutSkipsSend(t *testing.T) {
 		}
 		return ""
 	}
-	if err := SendInstall(context.Background(), p, getenv, "0.1.0", "darwin", "arm64", "", nil, 0); err != nil {
+	if err := SendInstall(context.Background(), p, getenv, "0.1.0", "darwin", "arm64", "", nil, 0, false); err != nil {
 		t.Fatalf("expected nil (opt-out), got %v", err)
 	}
 	if sent {

@@ -2,20 +2,44 @@ package telemetry
 
 import "github.com/google/uuid"
 
+var commit = "" // injected via -ldflags at release build time
+
 // Event is one PostHog capture event. Properties keys are set ONLY by the
 // constructors below — never by serializing caller-supplied maps — so no
 // path/command/repo payload can leak. This file IS the field allowlist.
 type Event struct {
 	Event      string                 `json:"event"`
 	Properties map[string]interface{} `json:"properties"`
+	Set        map[string]interface{} `json:"$set,omitempty"`
+	SetOnce    map[string]interface{} `json:"$set_once,omitempty"`
 }
 
 func base(distinctID, version string) map[string]interface{} {
+	if version == "" {
+		if len(commit) >= 7 {
+			version = "dev-" + commit[:7]
+		} else if commit != "" {
+			version = "dev-" + commit
+		} else {
+			version = "dev"
+		}
+	}
 	return map[string]interface{}{
 		"distinct_id":       distinctID,
 		"$insert_id":        uuid.NewString(), // PostHog dedupes replays on this
 		"agentjail_version": version,
 	}
+}
+
+func personSet(version, goos, goarch string) map[string]interface{} {
+	m := map[string]interface{}{"agentjail_version": version}
+	if goos != "" {
+		m["os"] = goos
+	}
+	if goarch != "" {
+		m["arch"] = goarch
+	}
+	return m
 }
 
 // NewEnvEvent: environment basics, emitted at daemon start.
@@ -26,7 +50,11 @@ func NewEnvEvent(distinctID, version, goos, goarch, installMethod string) Event 
 	if installMethod != "" {
 		p["install_method"] = installMethod // "curl" | "brew" | "" (omitted)
 	}
-	return Event{Event: "session_start", Properties: p}
+	ev := Event{Event: "session_start", Properties: p, Set: personSet(version, goos, goarch)}
+	if installMethod != "" {
+		ev.SetOnce = map[string]interface{}{"install_method": installMethod}
+	}
+	return ev
 }
 
 // NewFeatureEvent: a CLI command was run. command is an enum; agents are enums.
@@ -36,7 +64,7 @@ func NewFeatureEvent(distinctID, version, command string, agents []string) Event
 	if len(agents) > 0 {
 		p["agents"] = agents
 	}
-	return Event{Event: "feature_used", Properties: p}
+	return Event{Event: "feature_used", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewDecisionRollup: aggregated decision counts for one window. ruleCounts keys
@@ -50,7 +78,7 @@ func NewDecisionRollup(distinctID, version string, actionCounts, ruleCounts map[
 	if dropped > 0 {
 		p["spool_dropped"] = dropped
 	}
-	return Event{Event: "decision_rollup", Properties: p}
+	return Event{Event: "decision_rollup", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewDecisionRollupWithDetails is NewDecisionRollup extended with combined
@@ -73,7 +101,7 @@ func NewDecisionRollupWithDetails(distinctID, version string, w DecisionWindow, 
 	if dropped > 0 {
 		p["spool_dropped"] = dropped
 	}
-	return Event{Event: "decision_rollup", Properties: p}
+	return Event{Event: "decision_rollup", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewPerfRollup: aggregated daemon performance for one window.
@@ -82,7 +110,7 @@ func NewPerfRollup(distinctID, version string, p50ms, p95ms float64, restarts in
 	p["eval_p50_ms"] = p50ms
 	p["eval_p95_ms"] = p95ms
 	p["restarts"] = restarts
-	return Event{Event: "perf_rollup", Properties: p}
+	return Event{Event: "perf_rollup", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewPolicyConfigEvent: a snapshot of the user's policy configuration, emitted by
@@ -93,7 +121,7 @@ func NewPolicyConfigEvent(distinctID, version string, customRuleCount int, disab
 	p := base(distinctID, version)
 	p["custom_rule_count"] = customRuleCount
 	p["disabled_rules"] = disabledRules
-	return Event{Event: "policy_config", Properties: p}
+	return Event{Event: "policy_config", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewFeedbackEvent: a user-initiated feedback message. message and contact are
@@ -106,15 +134,17 @@ func NewFeedbackEvent(distinctID, version, goos, message, contact string) Event 
 	if contact != "" {
 		p["contact"] = contact
 	}
-	return Event{Event: "feedback", Properties: p}
+	return Event{Event: "feedback", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewInstallEvent: fired immediately after a successful agentjail install.
 // installMethod is an enum: "curl" | "brew" | "" (unknown). agents is the
 // list of agent enum IDs that were wired (e.g. ["claude-code", "cursor"]).
 // agentsDetected is the count of agents found on the machine (may be larger
-// than len(agents) when some were not selected).
-func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, agents []string, agentsDetected int) Event {
+// than len(agents) when some were not selected). isFreshInstall is true when
+// ~/.agentjail/telemetry.json did not exist before this run (first-ever install
+// vs. a binary/daemon refresh).
+func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, agents []string, agentsDetected int, isFreshInstall bool) Event {
 	p := base(distinctID, version)
 	p["os"] = goos
 	p["arch"] = goarch
@@ -125,7 +155,14 @@ func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, ag
 		p["agents"] = agents
 	}
 	p["agents_detected"] = agentsDetected
-	return Event{Event: "install", Properties: p}
+	p["is_fresh_install"] = isFreshInstall
+	ev := Event{Event: "install", Properties: p, Set: personSet(version, goos, goarch)}
+	so := map[string]interface{}{"first_installed_version": version}
+	if installMethod != "" {
+		so["install_method"] = installMethod
+	}
+	ev.SetOnce = so
+	return ev
 }
 
 // NewUninstallEvent: fired immediately before agentjail teardown so churn is
@@ -140,7 +177,7 @@ func NewUninstallEvent(distinctID, version, goos, goarch string, agents []string
 	if len(agents) > 0 {
 		p["agents"] = agents
 	}
-	return Event{Event: "uninstall", Properties: p}
+	return Event{Event: "uninstall", Properties: p, Set: personSet(version, goos, goarch)}
 }
 
 // NewFailOpenEvent: fired when the hook falls open due to a daemon fault.
@@ -150,7 +187,7 @@ func NewFailOpenEvent(distinctID, version, goos, reason string) Event {
 	p := base(distinctID, version)
 	p["os"] = goos
 	p["reason"] = reason // enum; see failOpenMarker categories in agentjail-hook
-	return Event{Event: "fail_open", Properties: p}
+	return Event{Event: "fail_open", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
 }
 
 // NewHeartbeatEvent: emitted at most once per ~24h when a CLI command runs and
@@ -163,7 +200,7 @@ func NewHeartbeatEvent(distinctID, currentVersion, latestVersion, goos, source s
 	p["latest_version"] = latestVersion
 	p["update_available"] = updateAvailable
 	p["source"] = source
-	return Event{Event: "heartbeat", Properties: p}
+	return Event{Event: "heartbeat", Properties: p, Set: map[string]interface{}{"agentjail_version": currentVersion, "os": goos}}
 }
 
 // NewUpdateEvent: fired immediately after a successful `agentjail update`.
@@ -175,5 +212,5 @@ func NewUpdateEvent(distinctID, fromVersion, toVersion, goos, goarch string) Eve
 	p["to_version"] = toVersion
 	p["os"] = goos
 	p["arch"] = goarch
-	return Event{Event: "update", Properties: p}
+	return Event{Event: "update", Properties: p, Set: personSet(toVersion, goos, goarch)}
 }

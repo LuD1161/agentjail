@@ -36,7 +36,7 @@ func SendFeedback(ctx context.Context, p Paths, getenv func(string) string, vers
 // long enough to flush its spool (uninstall minutes later, reboot, etc.).
 // Respects opt-out: returns nil (no-op) when telemetry is disabled. Returns
 // ErrNoBackend when no API key is baked into the binary.
-func SendInstall(ctx context.Context, p Paths, getenv func(string) string, version, goos, goarch, installMethod string, agents []string, agentsDetected int) error {
+func SendInstall(ctx context.Context, p Paths, getenv func(string) string, version, goos, goarch, installMethod string, agents []string, agentsDetected int, isFreshInstall bool) error {
 	client := DefaultClient()
 	if !client.HasBackend() {
 		return ErrNoBackend
@@ -48,7 +48,7 @@ func SendInstall(ctx context.Context, p Paths, getenv func(string) string, versi
 	if enabled, _ := Resolve(c, getenv); !enabled {
 		return nil // opt-out respected
 	}
-	ev := NewInstallEvent(c.AnonymousID, version, goos, goarch, installMethod, agents, agentsDetected)
+	ev := NewInstallEvent(c.AnonymousID, version, goos, goarch, installMethod, agents, agentsDetected, isFreshInstall)
 	return client.Send(ctx, []Event{ev})
 }
 

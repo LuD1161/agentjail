@@ -73,18 +73,24 @@ func recordUpdateCheckTimestamp() {
 // throttle allows it. The goroutine has a hard 10 s deadline and all errors are
 // silently discarded. Any update notice is printed to stderr; a heartbeat event
 // is emitted via SendHeartbeat (respects opt-out).
-func maybeRunUpdateCheck() {
+//
+// The returned function must be deferred by the caller; it blocks until the
+// goroutine finishes (or 12 s elapses) so the process does not exit before the
+// heartbeat POST completes.
+func maybeRunUpdateCheck() func() {
 	if os.Getenv("AGENTJAIL_NO_UPDATE_CHECK") != "" {
-		return
+		return func() {}
 	}
 	if !shouldRunUpdateCheck() {
-		return
+		return func() {}
 	}
 	// Record the timestamp immediately (before the goroutine) so that parallel
 	// invocations don't all fire at once.
 	recordUpdateCheckTimestamp()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -112,4 +118,11 @@ func maybeRunUpdateCheck() {
 			_ = telemetry.SendHeartbeat(ctx, tp, os.Getenv, current, latest, runtime.GOOS, "cli", newer)
 		}
 	}()
+
+	return func() {
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+		}
+	}
 }
