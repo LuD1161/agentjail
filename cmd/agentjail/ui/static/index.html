@@ -355,8 +355,8 @@ function agentIcon(agent) {
   return `<svg ${sz} viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4b5563" stroke-width="1.5" fill="#4b556322"/><text x="8" y="11.5" text-anchor="middle" fill="#4b5563" font-size="9" font-weight="bold" font-family="monospace">A</text></svg>`;
 }
 
-function sessionLabel(s) {
-  const agent = s.agent || '';
+function sessionLabel(s, {includeAgent = false} = {}) {
+  const agent = includeAgent ? (s.agent || '') : '';
   const repo = s.repo_name || cwdBasename(s.cwd);
   const branch = s.branch || '';
   const parts = [agent, branch, repo].filter(Boolean);
@@ -396,7 +396,7 @@ function renderSessionItem(s) {
     <div class="flex items-center gap-2 min-w-0">
       ${icon}
       <div class="min-w-0 flex-1">
-        <div class="text-xs text-gray-300 font-semibold truncate" title="${s.id}">${escHtml(label)}</div>
+        <div class="text-xs text-gray-300 font-semibold truncate" title="${escHtml(sessionLabel(s, {includeAgent: true}))}">${escHtml(label)}</div>
         <div class="text-xs text-gray-500">${s.total} events
           ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
           ${agentName}${timeAgo}
@@ -512,10 +512,13 @@ function renderTimeline() {
     const sessLabel = (() => {
       const sess = sessions[ev.session_id];
       if (sess) return sessionLabel(sess);
-      const a = ev.agent || '';
       const c = ev.cwd ? ev.cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() : '';
-      if (a && c) return `${a} · ${c}`;
-      return a || c || ev.session_id || '';
+      return c || ev.session_id || '';
+    })();
+    const sessTooltip = (() => {
+      const sess = sessions[ev.session_id];
+      if (sess) return sessionLabel(sess, {includeAgent: true});
+      return sessLabel;
     })();
 
     return `<div class="event-row px-5 py-2" onclick="toggleExpand(${i})">
@@ -525,7 +528,7 @@ function renderTimeline() {
         <span class="text-gray-300 truncate" title="${tool}">${tool}</span>
         <span class="text-gray-500 truncate">${escHtml(summary)}</span>
         <span class="text-gray-500 text-xs truncate" title="${escHtml(ev.cwd || '')}">${escHtml(ev.cwd ? ev.cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() : '—')}</span>
-        <span class="text-gray-500 text-xs flex items-center gap-1 overflow-hidden" title="${ev.session_id || ''}">${sessIcon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(sessLabel)}</span></span>
+        <span class="text-gray-500 text-xs flex items-center gap-1 overflow-hidden" title="${escHtml(sessTooltip)}">${sessIcon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(sessLabel)}</span></span>
         <span class="text-gray-600 text-xs truncate" title="${ev.rule_id || ''}">${escHtml(ruleShort)}</span>
       </div>
       ${expanded ? `<div class="expand-details" style="margin-left:124px">

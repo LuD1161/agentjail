@@ -170,7 +170,8 @@ func (s *Store) Snapshot() StateSnapshot {
 }
 
 // gitInfo runs git to get the branch name and repo basename for a directory.
-// Returns ("", "") on any failure — never blocks the ingest path.
+// Uses --git-common-dir so worktrees resolve to the real repo, not the
+// worktree directory. Returns ("", "") on any failure.
 func gitInfo(cwd string) (branch, repoName string) {
 	b, err := exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
@@ -178,10 +179,11 @@ func gitInfo(cwd string) (branch, repoName string) {
 	}
 	branch = strings.TrimSpace(string(b))
 
-	t, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	g, err := exec.Command("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
 	if err != nil {
 		return branch, ""
 	}
-	repoName = filepath.Base(strings.TrimSpace(string(t)))
+	gitDir := strings.TrimSpace(string(g))
+	repoName = filepath.Base(filepath.Dir(gitDir))
 	return branch, repoName
 }
