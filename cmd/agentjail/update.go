@@ -436,7 +436,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 
 	fmt.Printf("✅  updated %d binaries  %s → %s\n", installed, current, latest)
 
-	displayChangelogs(ctx, current, latest)
+	displayChangelogs(ctx, current, latest, releaseInfo.Changelog)
 
 	// Step 10: emit update telemetry (best-effort; respects opt-out).
 	if tp, err := telemetry.DefaultPaths(); err == nil {
@@ -672,7 +672,7 @@ type changelogEntry struct {
 // displayChangelogs fetches changelogs for all releases between from and to,
 // then prints them in a single "What's new" block. Falls back to the single
 // releaseInfo changelog if the endpoint is unavailable.
-func displayChangelogs(ctx context.Context, from, to string) {
+func displayChangelogs(ctx context.Context, from, to, fallbackChangelog string) {
 	url := fmt.Sprintf("https://releases.agentjail.io/v1/changelog?from=%s", from)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -689,7 +689,12 @@ func displayChangelogs(ctx context.Context, from, to string) {
 
 	var cr changelogResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil || len(cr.Releases) == 0 {
-		return
+		// No intermediate releases (e.g. --force reinstall). Show the current version's changelog.
+		if fallbackChangelog != "" {
+			cr.Releases = []changelogEntry{{Version: to, Changelog: fallbackChangelog}}
+		} else {
+			return
+		}
 	}
 
 	fmt.Println()
