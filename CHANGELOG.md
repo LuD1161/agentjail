@@ -2,6 +2,25 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.2.4 — 2026-06-23
+
+Smarter session labels, live event ticker, and CWD column in the web UI.
+
+### Added
+
+- **Git-aware session labels** — sessions now display as `agent · branch ·
+  repo` (e.g. "claude-code · main · agentjail") instead of opaque UUIDs; git
+  branch and repo name are looked up once per session on first event
+- **CWD column in timeline** — the event timeline table shows the working
+  directory basename for each event
+- **Live event ticker** — the header bar shows "last event: Xs ago" updated
+  every second, so it is clear the SSE connection is alive
+
+### Fixed
+
+- **`agentjail ui` version label** — showed stale "NOT in v0.1.0-alpha
+  release" text; now displays the actual binary version
+
 ## v0.2.3 — 2026-06-23
 
 Changelog shown during install/update, so users see what shipped at a glance.
