@@ -4,12 +4,15 @@ Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for
 
 ## v0.2.5 — 2026-06-23
 
-Telemetry overhaul and UI polish — PostHog now builds real user profiles,
-heartbeats actually arrive, and the web UI gets session permalinks, a proper
-back button, scroll stability, and a wider sidebar.
+Combined changelogs on update, UI polish, TUI local time fix, and telemetry
+overhaul — PostHog now builds real user profiles, heartbeats actually arrive,
+and the web UI gets session permalinks, scroll stability, and a wider sidebar.
 
 ### Added
 
+- **Combined changelogs on update** — `agentjail update` now shows what shipped
+  in every release you skipped, not just the latest; backed by a new Worker
+  endpoint `/v1/changelog?from=vX.Y.Z`
 - **Session URL permalinks** — selecting a session updates the URL with
   `?session=ID`; the session is restored on page load and browser back/forward
 - **"← All Sessions" back button** — visible at the top of the sidebar when a
@@ -40,6 +43,8 @@ back button, scroll stability, and a wider sidebar.
   of array index, so new SSE events don't shift the card to a different row
 - **Timeline grid layout** — Summary column is now the flexible column; Rule
   has a fixed width, eliminating the empty space on the right
+- **Logs TUI local time** — `agentjail logs` now displays timestamps in local
+  time instead of UTC
 
 ### Changed
 
