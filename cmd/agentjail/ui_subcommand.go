@@ -70,7 +70,7 @@ func runUI(args []string) int {
 	fmt.Fprintln(os.Stderr, "press Ctrl-C to stop")
 
 	store := ui.NewStore()
-	srv := ui.NewServer(addr, logPath, dbPath, editPolicy, store)
+	srv := ui.NewServer(addr, logPath, dbPath, editPolicy, store, version)
 
 	// Graceful shutdown on SIGINT / SIGTERM.
 	sigCh := make(chan os.Signal, 1)

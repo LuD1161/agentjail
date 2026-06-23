@@ -138,7 +138,7 @@
          id="session-all-row" onclick="selectSession(null)">
       &#9654; all sessions
     </div>
-    <div class="border-t border-gray-700 px-3 py-2 text-xs text-gray-600 text-center">v0.1.2</div>
+    <div class="border-t border-gray-700 px-3 py-2 text-xs text-gray-600 text-center">{{VERSION}}</div>
   </aside>
 
   <div class="pane-drag-h" data-pane="sidebar"></div>
@@ -296,11 +296,17 @@ function ingestEvent(line) {
         id: line.session_id,
         first_seen: line.time,
         last_seen: line.time,
+        last_event: line.time,
+        cwd: line.cwd || '',
+        agent: line.agent || '',
         total: 0, allow: 0, deny: 0, ask: 0
       };
     }
     const s = sessions[line.session_id];
     s.last_seen = line.time;
+    s.last_event = line.time;
+    if (line.cwd) s.cwd = line.cwd;
+    if (line.agent) s.agent = line.agent;
     s.total++;
     if (line.action === 'allow') s.allow++;
     else if (line.action === 'deny') s.deny++;
@@ -350,29 +356,76 @@ function sessionLabel(s) {
   return name.substring(0, 18) + '…';
 }
 
+function relativeTime(isoStr) {
+  if (!isoStr) return '';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  if (diff < 0) return 'just now';
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+function cwdBasename(cwd) {
+  if (!cwd) return '';
+  // Return last path component
+  return cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() || cwd;
+}
+
+function renderSessionItem(s) {
+  const label = sessionLabel(s);
+  const active = selectedSession === s.id;
+  const icon = agentIcon(s.agent);
+  const agentName = s.agent ? `<span class="text-gray-600">${s.agent}</span>` : '';
+  const timeAgo = s.last_event ? `<span class="text-gray-600 ml-1">${relativeTime(s.last_event)}</span>` : '';
+  const cwdDir = s.cwd ? `<div class="text-xs text-gray-600 truncate" title="${escHtml(s.cwd)}">&#128193; ${escHtml(cwdBasename(s.cwd))}</div>` : '';
+  return `<div class="session-row px-3 py-2 ${active ? 'session-active' : ''}" onclick="selectSession('${s.id}')">
+    <div class="flex items-center gap-2 min-w-0">
+      ${icon}
+      <div class="min-w-0 flex-1">
+        <div class="text-xs text-gray-300 font-semibold truncate" title="${s.id}">${escHtml(label)}</div>
+        <div class="text-xs text-gray-500">${s.total} events
+          ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
+          ${agentName}${timeAgo}
+        </div>
+        ${cwdDir}
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderSessions() {
   const list = document.getElementById('sessions-list');
-  const sorted = Object.values(sessions).sort((a,b) =>
-    new Date(b.last_seen) - new Date(a.last_seen));
+  const now = Date.now();
+  const ACTIVE_MS = 15 * 60 * 1000;
+  const sorted = Object.values(sessions).sort((a, b) => {
+    const ta = a.last_event ? new Date(a.last_event).getTime() : new Date(a.last_seen).getTime();
+    const tb = b.last_event ? new Date(b.last_event).getTime() : new Date(b.last_seen).getTime();
+    return tb - ta;
+  });
 
-  list.innerHTML = sorted.map(s => {
-    const label = sessionLabel(s);
-    const active = selectedSession === s.id;
-    const icon = agentIcon(s.agent);
-    const agentName = s.agent ? `<span class="text-gray-600">${s.agent}</span>` : '';
-    return `<div class="session-row px-3 py-2 ${active ? 'session-active' : ''}" onclick="selectSession('${s.id}')">
-      <div class="flex items-center gap-2 min-w-0">
-        ${icon}
-        <div class="min-w-0 flex-1">
-          <div class="text-xs text-gray-300 font-semibold truncate" title="${s.id}">${escHtml(label)}</div>
-          <div class="text-xs text-gray-500">${s.total} events
-            ${s.deny > 0 ? `<span class="text-red-400 font-bold"> · ${s.deny} deny</span>` : ''}
-            ${agentName}
-          </div>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
+  const activeSessions = sorted.filter(s => {
+    const t = s.last_event ? new Date(s.last_event).getTime() : (s.last_seen ? new Date(s.last_seen).getTime() : 0);
+    return t > 0 && (now - t) < ACTIVE_MS;
+  });
+  const inactiveSessions = sorted.filter(s => {
+    const t = s.last_event ? new Date(s.last_event).getTime() : (s.last_seen ? new Date(s.last_seen).getTime() : 0);
+    return t === 0 || (now - t) >= ACTIVE_MS;
+  });
+
+  let html = '';
+  if (activeSessions.length > 0) {
+    html += '<div class="px-3 py-1 text-xs font-semibold text-green-500 uppercase tracking-wider">Active</div>';
+    html += activeSessions.map(renderSessionItem).join('');
+  }
+  if (inactiveSessions.length > 0) {
+    html += `<div class="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider${activeSessions.length > 0 ? ' mt-1' : ''}">Recent</div>`;
+    html += inactiveSessions.map(renderSessionItem).join('');
+  }
+  list.innerHTML = html;
 
   // Highlight "all sessions" row
   const allRow = document.getElementById('session-all-row');

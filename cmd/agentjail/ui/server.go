@@ -41,6 +41,7 @@ type Server struct {
 	logPath    string
 	dbPath     string
 	editPolicy bool
+	version    string
 
 	store *Store
 
@@ -62,12 +63,13 @@ type RuleInfo struct {
 }
 
 // NewServer constructs (but does not start) the web UI server.
-func NewServer(addr, logPath, dbPath string, editPolicy bool, store *Store) *Server {
+func NewServer(addr, logPath, dbPath string, editPolicy bool, store *Store, version string) *Server {
 	return &Server{
 		addr:       addr,
 		logPath:    logPath,
 		dbPath:     dbPath,
 		editPolicy: editPolicy,
+		version:    version,
 		store:      store,
 		subs:       make(map[chan string]struct{}),
 	}
@@ -123,7 +125,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "index.html not found", http.StatusInternalServerError)
 		return
 	}
-	w.Write(content)
+	// Inject runtime version into the HTML template.
+	v := s.version
+	if v == "" {
+		v = "dev"
+	}
+	html := strings.Replace(string(content), "{{VERSION}}", v, 1)
+	w.Write([]byte(html))
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +200,8 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	f := parseFilterParams(r)
 	if snap, err := s.sqliteSnapshot(r.Context(), f); err == nil {
 		snap.Source = s.sqliteSourceStatus()
@@ -208,6 +218,8 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	sessionID := r.URL.Query().Get("id")
 	if sessionID == "" {
 		writeJSONError(w, "missing ?id=", http.StatusBadRequest)
@@ -247,6 +259,8 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	st, err := s.openSQLite()
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("open db: %v", err), http.StatusServiceUnavailable)
@@ -520,6 +534,9 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 		if ss.LastSeen.IsZero() {
 			ss.LastSeen = sess.StartTs
 		}
+		if !ss.LastSeen.IsZero() {
+			ss.LastEvent = ss.LastSeen.UTC().Format(time.RFC3339)
+		}
 		sessionByID[sess.SessionID] = ss
 		snap.Sessions = append(snap.Sessions, ss)
 	}
@@ -566,6 +583,26 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 	}
 	snap.RecentEvents = decisionsToEvalLines(recent, false)
 	snap.FilteredCount = len(recent)
+
+	// Populate CWD and last event time from recent events for sessions that
+	// don't already have them (e.g. sessions only found via CountActionsBySession).
+	for _, ev := range recent {
+		if ev.SessionID == "" {
+			continue
+		}
+		ss, ok := sessionByID[ev.SessionID]
+		if !ok {
+			continue
+		}
+		if ss.CWD == "" && ev.CWD != "" {
+			ss.CWD = ev.CWD
+		}
+		evTime := ev.Ts.UTC().Format(time.RFC3339)
+		if ss.LastEvent == "" || evTime > ss.LastEvent {
+			ss.LastEvent = evTime
+		}
+	}
+
 	return snap, nil
 }
 

@@ -28,7 +28,7 @@ import (
 
 func TestSSEFormat(t *testing.T) {
 	store := NewStore()
-	srv := NewServer("127.0.0.1:0", "/dev/null", "", false, store)
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", false, store, "")
 
 	// Minimal inline mux for the test.
 	mux := http.NewServeMux()
@@ -156,7 +156,7 @@ func TestPolicyEnableEndpoint(t *testing.T) {
 	}
 
 	store := NewStore()
-	srv := NewServer("127.0.0.1:0", "/dev/null", "", true, store)
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", true, store, "")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/policy/enable", func(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +193,7 @@ func TestPolicyEnableEndpoint(t *testing.T) {
 
 func TestPolicyEnableUnknownRule(t *testing.T) {
 	store := NewStore()
-	srv := NewServer("127.0.0.1:0", "/dev/null", "", true, store)
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", true, store, "")
 
 	libNames := func() []string { return []string{"known_rule"} }
 	libContent := func(name string) []byte { return nil }
@@ -224,7 +224,7 @@ func TestPolicyEnableUnknownRule(t *testing.T) {
 }
 
 func TestPolicyEditingDisabledByDefault(t *testing.T) {
-	srv := NewServer("127.0.0.1:0", "/dev/null", "", false, NewStore())
+	srv := NewServer("127.0.0.1:0", "/dev/null", "", false, NewStore(), "")
 	libNames := func() []string { return []string{"known_rule"} }
 	libContent := func(string) []byte { return []byte("package agentjail") }
 
@@ -326,7 +326,7 @@ func TestSQLiteStateEndpoint(t *testing.T) {
 		t.Fatalf("record decision: %v", err)
 	}
 
-	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore())
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore(), "")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/state", srv.handleState)
 	ts := httptest.NewServer(mux)
@@ -378,7 +378,7 @@ func TestSQLiteSessionEndpoint(t *testing.T) {
 		t.Fatalf("record decision: %v", err)
 	}
 
-	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore())
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore(), "")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/session", srv.handleSession)
 	ts := httptest.NewServer(mux)
@@ -424,7 +424,7 @@ func TestAuditEndpoint(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore())
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore(), "")
 	req := httptest.NewRequest(http.MethodGet, "/api/audit", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAudit(rec, req)
@@ -445,7 +445,7 @@ func TestAuditEndpoint(t *testing.T) {
 func TestStateFallsBackToLogWithWarning(t *testing.T) {
 	store := NewStore()
 	store.Ingest([]byte(`{"time":"2026-05-24T03:00:00Z","level":"INFO","msg":"eval","tool":"Bash","session_id":"s1","action":"allow"}`))
-	srv := NewServer("127.0.0.1:0", "/tmp/daemon.log", filepath.Join(t.TempDir(), "missing.db"), false, store)
+	srv := NewServer("127.0.0.1:0", "/tmp/daemon.log", filepath.Join(t.TempDir(), "missing.db"), false, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
 	rec := httptest.NewRecorder()

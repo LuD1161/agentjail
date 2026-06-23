@@ -45,6 +45,7 @@ type SessionState struct {
 	Allow     int       `json:"allow"`
 	Deny      int       `json:"deny"`
 	Ask       int       `json:"ask"`
+	LastEvent string    `json:"last_event,omitempty"` // ISO timestamp of most recent evaluation
 }
 
 // SourceStatus describes where the snapshot came from.
