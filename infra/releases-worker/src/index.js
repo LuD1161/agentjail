@@ -121,7 +121,7 @@ async function handleLatest(request, env) {
     status: 200,
     headers: {
       "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=300", // 5 minutes
+      "Cache-Control": "public, max-age=60", // 1 minute
     },
   });
 
