@@ -477,6 +477,7 @@ async function selectSession(id) {
 // ---------------------------------------------------------------------------
 function renderTimeline() {
   const container = document.getElementById('timeline');
+  const scrollTop = container.scrollTop;
   const base = selectedSession
     ? (sessionEvents[selectedSession] || events.filter(e => e.session_id === selectedSession))
     : events;
@@ -549,11 +550,17 @@ function renderTimeline() {
     </div>`;
   }).join('');
 
+  // Check if user was near bottom BEFORE replacing content.
+  const wasAtBottom = scrollTop + container.clientHeight >= container.scrollHeight - 40;
+
   container.innerHTML = header + rows;
 
-  // Auto-scroll to bottom if near bottom already.
-  const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 40;
-  if (atBottom) container.scrollTop = container.scrollHeight;
+  // If user was at bottom, auto-scroll to new bottom; otherwise restore position.
+  if (wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    container.scrollTop = scrollTop;
+  }
 }
 
 function toggleExpand(key) {
