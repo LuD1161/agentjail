@@ -53,11 +53,25 @@ func TestNewInstallEvent_FieldsAndOptionals(t *testing.T) {
 	if e.Properties["agents_detected"] != 2 {
 		t.Fatalf("agents_detected=%v", e.Properties["agents_detected"])
 	}
+	// $set must carry os, arch, and version for person profile.
+	if e.Set["os"] != "darwin" || e.Set["arch"] != "arm64" || e.Set["agentjail_version"] != "0.1.0" {
+		t.Fatalf("$set missing os/arch/version: %+v", e.Set)
+	}
+	// $set_once must record install_method and first_installed_version.
+	if e.SetOnce["install_method"] != "curl" {
+		t.Fatalf("$set_once install_method=%v", e.SetOnce["install_method"])
+	}
+	if e.SetOnce["first_installed_version"] != "0.1.0" {
+		t.Fatalf("$set_once first_installed_version=%v", e.SetOnce["first_installed_version"])
+	}
 
-	// Empty install_method must be omitted.
+	// Empty install_method must be omitted from properties and $set_once.
 	e2 := NewInstallEvent("anon", "0.1.0", "linux", "amd64", "", nil, 0)
 	if _, ok := e2.Properties["install_method"]; ok {
-		t.Fatal("empty install_method must be omitted")
+		t.Fatal("empty install_method must be omitted from properties")
+	}
+	if _, ok := e2.SetOnce["install_method"]; ok {
+		t.Fatal("empty install_method must be omitted from $set_once")
 	}
 }
 
@@ -112,6 +126,9 @@ func TestNewHeartbeatEvent_Fields(t *testing.T) {
 	}
 	if e.Properties["source"] != "cli" {
 		t.Errorf("source = %q, want %q", e.Properties["source"], "cli")
+	}
+	if e.Set["agentjail_version"] != "v1.0.0" {
+		t.Errorf("$set agentjail_version=%v", e.Set["agentjail_version"])
 	}
 }
 
@@ -182,5 +199,30 @@ func TestEvents_NoPayloadLeak(t *testing.T) {
 				t.Errorf("event %q leaked %q: %s", ev.Event, s, b)
 			}
 		}
+	}
+}
+
+// TestBase_VersionFallback verifies the dev version fallback logic when version
+// is empty. commit is a package-level var injected via -ldflags.
+func TestBase_VersionFallback(t *testing.T) {
+	orig := commit
+	defer func() { commit = orig }()
+
+	commit = "abc1234def"
+	e := NewFeatureEvent("anon", "", "policy", nil)
+	if e.Properties["agentjail_version"] != "dev-abc1234" {
+		t.Errorf("version=%v, want dev-abc1234", e.Properties["agentjail_version"])
+	}
+
+	commit = "abc"
+	e = NewFeatureEvent("anon", "", "policy", nil)
+	if e.Properties["agentjail_version"] != "dev-abc" {
+		t.Errorf("version=%v, want dev-abc", e.Properties["agentjail_version"])
+	}
+
+	commit = ""
+	e = NewFeatureEvent("anon", "", "policy", nil)
+	if e.Properties["agentjail_version"] != "dev" {
+		t.Errorf("version=%v, want dev", e.Properties["agentjail_version"])
 	}
 }
