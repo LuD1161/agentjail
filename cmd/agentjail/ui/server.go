@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/mcpclient"
 	localstore "github.com/LuD1161/agentjail/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -496,9 +497,26 @@ func (s *Server) handlePolicyConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePolicyMCPTools returns a map of MCP server name to tool names seen in
-// the audit history. Tools are identified by the "mcp__" prefix convention in
-// the decisions table tool_name column (e.g. "mcp__github__create_issue").
+// mcpToolEntry is the JSON shape for one tool in the /api/policy/mcp-tools response.
+type mcpToolEntry struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source"` // "live" or "audit"
+}
+
+// mcpServerInfo is the JSON shape for one server in the response.
+type mcpServerInfo struct {
+	Tools   []mcpToolEntry `json:"tools"`
+	Status  string         `json:"status"`  // "connected", "auth_required", "unreachable", "timeout", "audit_only"
+	Source  string         `json:"source"`  // "claude", "cursor", "plugin", "audit"
+	Scope   string         `json:"scope"`   // "global", "project"
+	Trust   string         `json:"trust"`   // "official-marketplace", "third-party-marketplace", "user-installed", "project-local"
+	Package string         `json:"package"` // package identifier or binary path
+}
+
+// handlePolicyMCPTools returns a map of MCP servers with their tools, merging
+// live discovery (tools/list protocol) with tools seen in audit history.
+// Each server includes provenance metadata: scope, trust level, and package source.
 func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -506,29 +524,94 @@ func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
-	if s.dbPath == "" {
-		writeJSON(w, map[string][]string{})
-		return
+	result := make(map[string]*mcpServerInfo)
+
+	// --- Phase 1: live discovery ---
+	home, err := os.UserHomeDir()
+	if err == nil {
+		entries := mcpclient.DiscoverServersWithConfig(home)
+		configs := make([]mcpclient.MCPServerConfig, 0, len(entries))
+		metaMap := make(map[string]mcpclient.MCPServerEntry)
+		for _, e := range entries {
+			configs = append(configs, e.Config)
+			metaMap[e.Name] = e
+		}
+
+		if len(configs) > 0 {
+			live := mcpclient.ListAllTools(r.Context(), configs)
+			for name, res := range live {
+				meta := metaMap[name]
+				info := &mcpServerInfo{
+					Status:  res.Status,
+					Source:  meta.Source,
+					Scope:   meta.Scope,
+					Trust:   meta.Trust,
+					Package: meta.Package,
+				}
+				for _, t := range res.Tools {
+					info.Tools = append(info.Tools, mcpToolEntry{
+						Name:        t.Name,
+						Description: t.Description,
+						Source:      "live",
+					})
+				}
+				if info.Tools == nil {
+					info.Tools = []mcpToolEntry{}
+				}
+				result[name] = info
+			}
+		}
 	}
 
-	// Open a lightweight read-only connection for the raw query. We cannot use
-	// the ReadOnlyStore interface because it does not expose a DISTINCT
-	// tool_name query; opening a second RO connection is harmless under WAL.
+	// --- Phase 2: merge audit history ---
+	auditTools := s.mcpToolsFromAudit(r.Context())
+	for server, tools := range auditTools {
+		info, exists := result[server]
+		if !exists {
+			info = &mcpServerInfo{
+				Status: "audit_only",
+				Source: "audit",
+				Scope:  "unknown",
+				Trust:  "unknown",
+				Tools:  []mcpToolEntry{},
+			}
+			result[server] = info
+		}
+		liveSet := make(map[string]struct{})
+		for _, t := range info.Tools {
+			liveSet[t.Name] = struct{}{}
+		}
+		for _, tool := range tools {
+			if _, found := liveSet[tool]; !found {
+				info.Tools = append(info.Tools, mcpToolEntry{
+					Name:   tool,
+					Source: "audit",
+				})
+			}
+		}
+	}
+
+	writeJSON(w, map[string]any{"servers": result})
+}
+
+// mcpToolsFromAudit queries the decisions table for distinct MCP tool names.
+func (s *Server) mcpToolsFromAudit(ctx context.Context) map[string][]string {
+	if s.dbPath == "" {
+		return nil
+	}
 	db, err := sql.Open("sqlite", fmt.Sprintf(
 		"file:%s?mode=ro&_pragma=busy_timeout(3000)",
 		strings.NewReplacer("?", "%3f", "#", "%23").Replace(s.dbPath),
 	))
 	if err != nil {
-		writeJSON(w, map[string][]string{})
-		return
+		return nil
 	}
 	defer db.Close()
 
-	rows, err := db.QueryContext(r.Context(),
+	rows, err := db.QueryContext(ctx,
 		`SELECT DISTINCT tool_name FROM decisions WHERE tool_name LIKE 'mcp__%' ORDER BY tool_name`)
 	if err != nil {
-		writeJSON(w, map[string][]string{})
-		return
+		return nil
 	}
 	defer rows.Close()
 
@@ -538,8 +621,6 @@ func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&toolName); err != nil {
 			continue
 		}
-		// Convention: mcp__<server>__<tool>  (double-underscore separators).
-		// Extract server name as everything between the first and second "__".
 		rest := strings.TrimPrefix(toolName, "mcp__")
 		idx := strings.Index(rest, "__")
 		var server, tool string
@@ -552,7 +633,7 @@ func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
 		}
 		result[server] = append(result[server], tool)
 	}
-	writeJSON(w, result)
+	return result
 }
 
 // ---------------------------------------------------------------------------
