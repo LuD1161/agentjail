@@ -4,12 +4,21 @@ Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for
 
 ## v0.2.7 — 2026-06-23
 
-Replay session labels and docs polish.
+Replay gets colors, agent glyphs, and cleaner session labels.
 
 ## TL;DR
 
+- **Replay gets color** - colored action badges, dim metadata, bold headers with proper alignment.
+- **Agent glyphs** - replay reuses the same colored glyphs from `agentjail logs` (Claude ✳, Codex ◆, Cursor ▸).
 - **Replay session prefix** - 8-char session prefix instead of truncated UUID with ellipsis.
-- **Docs cleanup** - README updated for v0.2.6, duplicate badge removed.
+
+### Added
+
+- **Replay ANSI colors** - `agentjail replay` now shows colored action badges
+  (green ALLOW, red DENY, yellow ASK), dim rule/reason metadata, bold headers
+  with separator lines, and a `--no-color` flag for piped output
+- **Agent glyphs in replay** - session list and replay rows show the same
+  colored agent glyphs as `agentjail logs`, reusing `agentRegistry`
 
 ### Fixed
 
