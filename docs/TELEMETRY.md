@@ -48,9 +48,21 @@ Every event carries three common properties:
 
 | Property | Example | Meaning |
 |---|---|---|
-| `distinct_id` | `"3f9c…"` | Your random anonymous ID (from `~/.agentjail/telemetry.json`) |
+| `distinct_id` | `"3f9c…"` | Your machine-derived anonymous ID (from `~/.agentjail/telemetry.json`) |
 | `$insert_id` | `"a1b2…"` | A per-event UUID used only to de-duplicate retried sends |
-| `agentjail_version` | `"0.1.0"` | The agentjail version |
+| `agentjail_version` | `"0.1.0"` | The agentjail version (`"dev-<sha7>"` for non-release builds) |
+
+Events also carry **person properties** (`$set` / `$set_once`) so PostHog can build
+a profile for your anonymous ID. `$set` updates on every event (e.g. your current
+version); `$set_once` is locked on first occurrence (e.g. how you originally installed).
+
+| Person property | Mutable | Set by | Meaning |
+|---|---|---|---|
+| `agentjail_version` | `$set` | all events | Your current version |
+| `os` | `$set` | install, uninstall, heartbeat, session_start, update | `"darwin"` / `"linux"` |
+| `arch` | `$set` | install, uninstall, session_start, update | `"arm64"` / `"amd64"` |
+| `install_method` | `$set_once` | install, session_start | `"curl"` / `"brew"` (locked at first occurrence) |
+| `first_installed_version` | `$set_once` | install | The version of your first install |
 
 The event types are grouped below. **Lifecycle events** (`install`, `uninstall`,
 `update`) are sent **immediately and synchronously** the moment they happen — they
@@ -58,7 +70,7 @@ do not wait for the daemon's batched flush — so they're captured even if the d
 never runs or you uninstall moments later. Everything else is spooled locally and
 delivered by the daemon (see [How it's delivered](#how-its-delivered)).
 
-### `install` — emitted once, immediately after a successful install
+### `install` — emitted immediately after a successful install or reinstall
 | Property | Example | Notes |
 |---|---|---|
 | `os` | `"darwin"` / `"linux"` | |
@@ -66,6 +78,7 @@ delivered by the daemon (see [How it's delivered](#how-its-delivered)).
 | `install_method` | `"curl"` / `"brew"` | Optional; how agentjail was installed; omitted if unknown |
 | `agents` | `["claude-code","cursor"]` | Optional; the agent enums whose hooks were wired |
 | `agents_detected` | `3` | How many supported agents were found on the machine (a count) |
+| `is_fresh_install` | `true` / `false` | `true` on first-ever install; `false` on binary/daemon refreshes |
 
 ### `uninstall` — emitted immediately on teardown (full or single-agent)
 Sent **before** any state is removed, so we can see churn. A full
@@ -208,16 +221,20 @@ backend configured, it prints a GitHub issue link instead.
 ## How it's delivered
 
 Most events are aggregated/queued locally and delivered by the daemon in a single
-batched HTTPS request. The daemon flushes shortly after it starts (a couple of
-minutes, so short-lived daemons still report) and then roughly every 6 hours, plus
-on graceful shutdown. CLI commands only write a local event to
+batched HTTPS request. The daemon flushes roughly every 6 hours and on graceful
+shutdown. CLI commands only write a local event to
 `~/.agentjail/telemetry-spool.jsonl`, which the daemon picks up on its next flush.
 
-The exception is the **lifecycle events** (`install`, `uninstall`, `update`) and
-`feedback`: because they describe one-off moments that may happen when no daemon is
-running (or right before teardown), the CLI sends them **immediately and
-synchronously** over a single HTTPS request, rather than waiting for the daemon
-flush. If you're offline or a send fails, spooled events stay queued and are retried
+The exceptions are:
+- **Lifecycle events** (`install`, `uninstall`, `update`) and `feedback` — sent
+  **immediately and synchronously** because they describe one-off moments that may
+  happen when no daemon is running.
+- **`session_start`** — sent immediately at daemon startup (not spooled) so it's
+  captured even if the daemon exits quickly.
+- **`heartbeat`** — the CLI waits for the HTTP POST to complete before exiting, so
+  heartbeats are no longer lost on short-lived invocations.
+
+If you're offline or a send fails, spooled events stay queued and are retried
 later; the local queue is capped so it can't grow without bound.
 
 ## Backend
