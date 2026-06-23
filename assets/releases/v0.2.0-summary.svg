@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 340" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="800" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#fb923c"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="340" rx="12" fill="url(#bg)" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Header -->
+  <text x="40" y="44" font-family="system-ui,-apple-system,sans-serif" font-size="24" font-weight="700" fill="#f0f6fc">v0.2.0</text>
+  <text x="120" y="44" font-family="system-ui,-apple-system,sans-serif" font-size="24" font-weight="400" fill="#8b949e">Layered Self-Protection</text>
+
+  <!-- Divider -->
+  <line x1="40" y1="60" x2="760" y2="60" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Layer 1: Regex / UX -->
+  <rect x="40" y="80" width="220" height="100" rx="8" fill="#1c2128" stroke="#f97316" stroke-width="2"/>
+  <text x="150" y="105" font-family="system-ui,sans-serif" font-size="13" font-weight="600" fill="#f97316" text-anchor="middle">TIER 1 — REGEX / UX</text>
+  <text x="150" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">Structured command_binaries</text>
+  <text x="150" y="142" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">No more false positives</text>
+  <text x="150" y="159" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">Hook edits: ask, not deny</text>
+  <text x="150" y="173" font-family="system-ui,sans-serif" font-size="10" fill="#3fb950" text-anchor="middle">signals layer</text>
+
+  <!-- Arrow -->
+  <path d="M270 130 L290 130" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#484f58"/></marker></defs>
+
+  <!-- Layer 2: Shield -->
+  <rect x="290" y="80" width="220" height="100" rx="8" fill="#1c2128" stroke="#3fb950" stroke-width="2"/>
+  <text x="400" y="105" font-family="system-ui,sans-serif" font-size="13" font-weight="600" fill="#3fb950" text-anchor="middle">TIER 1.5 — SHIELD</text>
+  <text x="400" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">Seatbelt / Landlock kernel deny</text>
+  <text x="400" y="142" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">~/.claude, ~/.codex, ~/.cursor</text>
+  <text x="400" y="159" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">EPERM regardless of method</text>
+  <text x="400" y="173" font-family="system-ui,sans-serif" font-size="10" fill="#f97316" text-anchor="middle">enforcement layer</text>
+
+  <!-- Arrow -->
+  <path d="M520 130 L540 130" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 3: Watchdog -->
+  <rect x="540" y="80" width="220" height="100" rx="8" fill="#1c2128" stroke="#58a6ff" stroke-width="2"/>
+  <text x="650" y="105" font-family="system-ui,sans-serif" font-size="13" font-weight="600" fill="#58a6ff" text-anchor="middle">WATCHDOG</text>
+  <text x="650" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">Polls hook configs every 5s</text>
+  <text x="650" y="142" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">Re-injects if removed</text>
+  <text x="650" y="159" font-family="system-ui,sans-serif" font-size="11" fill="#8b949e" text-anchor="middle">Audit log + notification</text>
+  <text x="650" y="173" font-family="system-ui,sans-serif" font-size="10" fill="#58a6ff" text-anchor="middle">self-healing layer</text>
+
+  <!-- Before/After -->
+  <rect x="40" y="200" width="350" height="56" rx="6" fill="#1c2128" stroke="#f8514966" stroke-width="1"/>
+  <text x="55" y="220" font-family="monospace" font-size="11" fill="#f85149">BEFORE</text>
+  <text x="55" y="240" font-family="monospace" font-size="12" fill="#8b949e">git add cmd/agentjail/update.go</text>
+  <text x="340" y="240" font-family="monospace" font-size="11" fill="#f85149" text-anchor="end">DENIED</text>
+
+  <rect x="40" y="266" width="350" height="56" rx="6" fill="#1c2128" stroke="#3fb95066" stroke-width="1"/>
+  <text x="55" y="286" font-family="monospace" font-size="11" fill="#3fb950">AFTER</text>
+  <text x="55" y="306" font-family="monospace" font-size="12" fill="#8b949e">git add cmd/agentjail/update.go</text>
+  <text x="340" y="306" font-family="monospace" font-size="11" fill="#3fb950" text-anchor="end">ALLOWED</text>
+
+  <!-- Key stats -->
+  <rect x="420" y="200" width="340" height="122" rx="6" fill="#1c2128" stroke="#30363d" stroke-width="1"/>
+  <text x="440" y="224" font-family="system-ui,sans-serif" font-size="12" fill="#8b949e">New package</text>
+  <text x="720" y="224" font-family="system-ui,sans-serif" font-size="12" font-weight="600" fill="#f0f6fc" text-anchor="end">internal/shellparse</text>
+  <text x="440" y="248" font-family="system-ui,sans-serif" font-size="12" fill="#8b949e">OPA input field</text>
+  <text x="720" y="248" font-family="system-ui,sans-serif" font-size="12" font-weight="600" fill="#f0f6fc" text-anchor="end">command_binaries</text>
+  <text x="440" y="272" font-family="system-ui,sans-serif" font-size="12" fill="#8b949e">Files changed</text>
+  <text x="720" y="272" font-family="system-ui,sans-serif" font-size="12" font-weight="600" fill="#f0f6fc" text-anchor="end">20 files, +500 -130</text>
+  <text x="440" y="296" font-family="system-ui,sans-serif" font-size="12" fill="#8b949e">ADR</text>
+  <text x="720" y="296" font-family="system-ui,sans-serif" font-size="12" font-weight="600" fill="#f0f6fc" text-anchor="end">0025 — Layered Self-Protection</text>
+</svg>
