@@ -116,7 +116,7 @@ async function handleLatest(request, env) {
     });
   }
 
-  const body = JSON.stringify({ version, published_at, assets });
+  const body = JSON.stringify({ version, published_at, changelog: release.body || "", assets });
   const response = new Response(body, {
     status: 200,
     headers: {
