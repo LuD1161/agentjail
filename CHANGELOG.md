@@ -2,6 +2,89 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.2.3 — 2026-06-23
+
+Changelog shown during install/update, so users see what shipped at a glance.
+
+### Added
+
+- **Install-time changelog** — `curl | sh` installer now displays a compact
+  "What's new" section with unicode-formatted bullet points extracted from the
+  GitHub release notes
+- **Releases Worker changelog field** — `/v1/latest` API response includes
+  the release body so the installer can display it without an extra network call
+
+### Changed
+
+- **CHANGELOG.md backfill** — added entries for v0.2.0, v0.2.1, and v0.2.2
+
+## v0.2.2 — 2026-06-23
+
+Reduced daemon memory usage and safer self-update behaviour.
+
+### Added
+
+- **Cross-process update lock** — a file-based lock prevents concurrent update
+  attempts across multiple daemon instances or rapid restarts from racing each
+  other during a self-update
+
+### Fixed
+
+- **SQLite memory footprint** — reduced per-connection cache and WAL settings so
+  the daemon consumes significantly less resident memory under normal operation
+- **daemon.log fallback** — when the SQLite store is unavailable, log queries
+  fall back to `daemon.log` and emit a clear warning instead of silently
+  returning empty results
+
+## v0.2.1 — 2026-06-23
+
+Web UI polish: live version display, session tracking, and layout fixes.
+
+### Fixed
+
+- **Dynamic version display** — the UI header now shows the running daemon
+  version rather than a hardcoded placeholder
+- **Cache-busting** — static assets include a version-derived query string so
+  browsers pick up UI changes after a daemon upgrade without a manual cache clear
+- **CWD display** — the current working directory is shown correctly in session
+  context panels
+- **Active session count** — the session list now reflects only currently active
+  sessions rather than all historical sessions
+
+## v0.2.0 — 2026-06-22
+
+Layered self-protection, enriched Bash policy input, OS notifications for
+pending updates, and a hook-config watchdog for self-healing.
+
+### Added
+
+- **Self-update package** — `internal/selfupdate` centralises version-check
+  logic; the CLI and daemon both use it, and a background goroutine in the daemon
+  fires OS-native notifications when a new release is available
+- **OS notification package** — `internal/notify` delivers desktop alerts on
+  macOS and Linux without a GUI dependency
+- **Structured Bash input** — the daemon enriches every Bash `PreToolUse` event
+  with `command_binaries` (a parsed list of the distinct executables in the
+  command) via `internal/shellparse`, giving Rego policies fine-grained access to
+  what will actually run
+- **Layered self-protection** (ADR 0025) — policy evaluation now uses structured
+  input to enforce agentjail's own protection rules in multiple independent
+  layers, closing gaps that string-only matching left open
+- **Shield hook-config protection** — `agentjail-shield` now blocks agent writes
+  to hook-configuration directories, preventing an agent from removing its own
+  guardrails through the filesystem
+- **Hook-config watchdog** — the daemon monitors hook-config directories and
+  automatically restores any entry that an agent removes, giving the installation
+  self-healing capability
+- **Shared 24-hour daemon ID** — telemetry heartbeats carry a stable 24-hour
+  rotating daemon identifier and a `source` field so server-side analytics can
+  distinguish CLI-initiated checks from daemon background checks
+
+### Fixed
+
+- **Heartbeat on every version check** — the daemon now emits a telemetry
+  heartbeat on each scheduled version check, not only at startup
+
 ## v0.1.2 — 2026-06-20
 
 SQLite decision store, AWS policy pack, shield hardening, web UI with
