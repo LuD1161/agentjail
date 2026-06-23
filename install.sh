@@ -148,7 +148,7 @@ if [ -n "${LATEST_JSON:-}" ]; then
             | sed 's/^[[:space:]]*[-*][[:space:]]*//' \
             | sed 's/\*\*\([^*]*\)\*\*/\1/g' \
             | sed 's/`\([^`]*\)`/\1/g' \
-            | cut -c1-64)
+            )
         if [ -n "$_cl_bullets" ]; then
             printf '\n    ┌─ 📋 What'\''s new ────────────────────────────────────────────┐\n'
             printf '%s\n' "$_cl_bullets" \

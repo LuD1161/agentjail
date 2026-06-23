@@ -623,7 +623,6 @@ func extractTarGzReader(r io.Reader, destDir string) error {
 // so only the concise summary bullets are shown.
 func formatChangelogBullets(body string, indent int) []string {
 	const maxBullets = 5
-	const maxWidth = 68 // content width after indent + "• "
 	prefix := strings.Repeat(" ", indent)
 	var out []string
 	inTLDR := false
@@ -662,10 +661,6 @@ func formatChangelogBullets(body string, indent int) []string {
 			trimmed = trimmed[:start] + trimmed[start+2:start+2+end] + trimmed[start+2+end+2:]
 		}
 		trimmed = strings.ReplaceAll(trimmed, "`", "")
-		// Truncate long lines with ellipsis.
-		if len(trimmed) > maxWidth {
-			trimmed = trimmed[:maxWidth-1] + "…"
-		}
 		out = append(out, prefix+"• "+trimmed)
 		if len(out) >= maxBullets {
 			break
