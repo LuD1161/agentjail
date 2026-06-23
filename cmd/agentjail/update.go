@@ -672,9 +672,11 @@ type changelogEntry struct {
 // displayChangelogs fetches changelogs for all releases between from and to,
 // then prints them in a single "What's new" block. Falls back to the single
 // releaseInfo changelog if the endpoint is unavailable.
-func displayChangelogs(ctx context.Context, from, to, fallbackChangelog string) {
+func displayChangelogs(_ context.Context, from, to, fallbackChangelog string) {
+	clCtx, clCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer clCancel()
 	url := fmt.Sprintf("https://releases.agentjail.io/v1/changelog?from=%s", from)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(clCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return
 	}
