@@ -304,7 +304,7 @@ agentjail policy disable file_policy/sensitive_in_project   # stop asking on in-
 agentjail policy enable  file_policy/sensitive_in_project   # turn it back on
 ```
 
-Disabling a **core** rule requires `--force` + interactive confirmation. A **locked self-protection set** can never be disabled.
+Disabling a **core** rule requires `--force` + interactive confirmation. A **locked self-protection set** (`file_policy/agentjail_self`, `library/no-hook-self-disable`, `command_policy/no-policy-mutation`, `resolver/default`) can never be disabled. `library/no-daemon-kill` is on by default but disableable with `--force` (the daemon auto-restarts via launchd).
 
 **Managing MCP servers:**
 ```sh
