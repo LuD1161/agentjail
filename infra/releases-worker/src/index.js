@@ -132,6 +132,74 @@ async function handleLatest(request, env) {
 }
 
 /**
+ * Simple semver compare: returns -1, 0, or 1.
+ * Handles "vX.Y.Z" format only (no pre-release tags).
+ */
+function semverCompare(a, b) {
+  const pa = a.replace(/^v/, "").split(".").map(Number);
+  const pb = b.replace(/^v/, "").split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+  }
+  return 0;
+}
+
+/**
+ * Handle GET /v1/changelog?from=vX.Y.Z
+ * Returns changelogs for all releases newer than `from`, newest first.
+ */
+async function handleChangelog(request, env) {
+  const url = new URL(request.url);
+  const from = url.searchParams.get("from");
+  if (!from || !VERSION_RE.test(from)) {
+    return new Response(
+      JSON.stringify({ error: "missing or invalid 'from' query param (e.g. ?from=v0.2.2)" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  const apiURL = `${GITHUB_API_BASE}/repos/${GITHUB_REPO}/releases?per_page=20`;
+  const ghResp = await fetch(apiURL, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "agentjail-releases-worker/1",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!ghResp.ok) {
+    return new Response(
+      JSON.stringify({ error: "upstream error", status: ghResp.status }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  const releases = await ghResp.json();
+  const entries = [];
+  for (const rel of releases) {
+    const tag = rel.tag_name;
+    if (!VERSION_RE.test(tag)) continue;
+    if (semverCompare(tag, from) <= 0) continue;
+    entries.push({
+      version: tag,
+      published_at: rel.published_at,
+      changelog: rel.body || "",
+    });
+  }
+
+  entries.sort((a, b) => semverCompare(a.version, b.version));
+
+  return new Response(JSON.stringify({ from, releases: entries }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=60",
+    },
+  });
+}
+
+/**
  * Handle GET /download/{version}/{filename}
  * Validates inputs, then 302 redirects to GitHub releases.
  */
@@ -212,6 +280,17 @@ export default {
         });
       }
       return handleLatest(request, env);
+    }
+
+    // Route: /v1/changelog?from=vX.Y.Z
+    if (pathname === "/v1/changelog") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response(JSON.stringify({ error: "method not allowed" }), {
+          status: 405,
+          headers: { "Content-Type": "application/json", Allow: "GET, HEAD" },
+        });
+      }
+      return handleChangelog(request, env);
     }
 
     // Route: /download/{version}/{filename}

@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -435,21 +436,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 
 	fmt.Printf("✅  updated %d binaries  %s → %s\n", installed, current, latest)
 
-	if cl := releaseInfo.Changelog; cl != "" {
-		bullets := formatChangelogBullets(cl, 0)
-		if len(bullets) > 0 {
-			fmt.Println()
-			fmt.Println("  ── 📋 What's new ─────────────────────────────────────────────────")
-			fmt.Println()
-			for _, b := range bullets {
-				fmt.Printf("     %s\n", b)
-			}
-			fmt.Println()
-			fmt.Printf("     → https://github.com/LuD1161/agentjail/releases/tag/%s\n", latest)
-			fmt.Println()
-			fmt.Println("  ─────────────────────────────────────────────────────────────────")
-		}
-	}
+	displayChangelogs(ctx, current, latest)
 
 	// Step 10: emit update telemetry (best-effort; respects opt-out).
 	if tp, err := telemetry.DefaultPaths(); err == nil {
@@ -669,6 +656,61 @@ func formatChangelogBullets(body string, indent int) []string {
 		}
 	}
 	return out
+}
+
+// changelogResponse mirrors the Worker's /v1/changelog JSON shape.
+type changelogResponse struct {
+	From     string           `json:"from"`
+	Releases []changelogEntry `json:"releases"`
+}
+
+type changelogEntry struct {
+	Version   string `json:"version"`
+	Changelog string `json:"changelog"`
+}
+
+// displayChangelogs fetches changelogs for all releases between from and to,
+// then prints them in a single "What's new" block. Falls back to the single
+// releaseInfo changelog if the endpoint is unavailable.
+func displayChangelogs(ctx context.Context, from, to string) {
+	url := fmt.Sprintf("https://releases.agentjail.io/v1/changelog?from=%s", from)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("User-Agent", "agentjail/"+from)
+
+	hc := &http.Client{Timeout: 10 * time.Second}
+	resp, err := hc.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return
+	}
+	defer resp.Body.Close()
+
+	var cr changelogResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil || len(cr.Releases) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("  ── 📋 What's new ─────────────────────────────────────────────────")
+
+	for _, rel := range cr.Releases {
+		bullets := formatChangelogBullets(rel.Changelog, 0)
+		if len(bullets) == 0 {
+			continue
+		}
+		fmt.Println()
+		fmt.Printf("     %s\n", rel.Version)
+		for _, b := range bullets {
+			fmt.Printf("     %s\n", b)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("     → https://github.com/LuD1161/agentjail/releases\n")
+	fmt.Println()
+	fmt.Println("  ─────────────────────────────────────────────────────────────────")
 }
 
 // atomicReplaceBinary copies src to a temp file in the same directory as dst,
