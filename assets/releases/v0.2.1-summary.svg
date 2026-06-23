@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" fill="none">
+  <rect width="720" height="160" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Title bar -->
+  <rect x="0" y="0" width="720" height="48" rx="12" fill="#161b22"/>
+  <rect x="0" y="12" width="720" height="36" fill="#161b22"/>
+  <circle cx="24" cy="24" r="6" fill="#58a6ff"/>
+  <text x="44" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v0.2.1</text>
+  <text x="210" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Web UI improvements</text>
+
+  <!-- Four items in a row -->
+  <rect x="32" y="64" width="156" height="76" rx="8" fill="#1c2128" stroke="#3fb95044" stroke-width="1"/>
+  <text x="110" y="88" font-family="system-ui,sans-serif" font-size="20" fill="#3fb950" text-anchor="middle">v0.2.1</text>
+  <text x="110" y="106" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">Dynamic version</text>
+  <text x="110" y="120" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">not hardcoded</text>
+
+  <rect x="204" y="64" width="156" height="76" rx="8" fill="#1c2128" stroke="#58a6ff44" stroke-width="1"/>
+  <text x="282" y="88" font-family="system-ui,sans-serif" font-size="20" fill="#58a6ff" text-anchor="middle">~</text>
+  <text x="282" y="106" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">CWD per session</text>
+  <text x="282" y="120" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">in sidebar</text>
+
+  <rect x="376" y="64" width="156" height="76" rx="8" fill="#1c2128" stroke="#3fb95044" stroke-width="1"/>
+  <text x="454" y="88" font-family="system-ui,sans-serif" font-size="16" fill="#3fb950" text-anchor="middle">Active</text>
+  <text x="454" y="106" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">Session grouping</text>
+  <text x="454" y="120" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">with timestamps</text>
+
+  <rect x="548" y="64" width="140" height="76" rx="8" fill="#1c2128" stroke="#f8514944" stroke-width="1"/>
+  <text x="618" y="88" font-family="system-ui,sans-serif" font-size="14" fill="#f85149" text-anchor="middle">no-cache</text>
+  <text x="618" y="106" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">Counters refresh</text>
+  <text x="618" y="120" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e" text-anchor="middle">on page reload</text>
+</svg>

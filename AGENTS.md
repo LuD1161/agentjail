@@ -102,6 +102,24 @@ This goes in the same commit as the code change, not a follow-up.
 3. Updated `README.md` / `docs/adr/` per the cadence rule
 4. Conventional commit message with sign-off
 
+### Before cutting a release
+
+Every tagged release must include:
+
+1. **Release summary SVG** — create `assets/releases/vX.Y.Z-summary.svg` with a
+   visual summary of the release. Keep it simple: dark background (#0d1117),
+   title bar with version + one-liner, then the key changes as labeled cards
+   or before/after comparisons. See existing SVGs in `assets/releases/` for
+   the style. Commit and push before tagging so the raw URL works in the
+   release notes.
+2. **TL;DR bullets** — the GitHub release body starts with the SVG image, then
+   a `## TL;DR` section with 2-4 bullet points (not a wall of text). Each
+   bullet is one sentence starting with an action word.
+3. **Detailed changelog** — below the TL;DR, use `### Added / Changed / Fixed /
+   Security` sections with one entry per change.
+4. **agentjail.io changelog** — add the release to
+   `agentjail.io/src/data/releases.ts` (same format as existing entries).
+
 ### When in doubt
 - About scope: ask the user before expanding scope
 - About a library choice: check the standard libraries list above; write an ADR if you need to add one
