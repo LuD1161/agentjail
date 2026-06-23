@@ -357,7 +357,12 @@ func runLogs(args []string) int {
 	defer signal.Stop(winchCh)
 
 	if opts.useDB {
-		return streamStoredLogs(opts, doneCh)
+		code := streamStoredLogs(opts, doneCh)
+		if code != 0 {
+			fmt.Fprintf(os.Stderr, "agentjail logs: falling back to daemon.log\n")
+			return streamLogs(opts, doneCh, winchCh)
+		}
+		return code
 	}
 	return streamLogs(opts, doneCh, winchCh)
 }

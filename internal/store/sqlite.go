@@ -438,14 +438,14 @@ func OpenReadOnly(path string) (ReadOnlyStore, error) {
 		return nil, fmt.Errorf("store: read-only open %s: %w", path, err)
 	}
 	dsn := fmt.Sprintf(
-		"file:%s?mode=ro&_pragma=busy_timeout(5000)",
+		"file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=cache_size(-1000)&_pragma=mmap_size(0)",
 		dsnPathReplacer.Replace(path),
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: read-only open: %w", err)
 	}
-	db.SetMaxOpenConns(4)
+	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: read-only ping: %w", err)
