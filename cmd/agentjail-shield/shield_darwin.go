@@ -27,6 +27,9 @@ func sensitiveWritePaths(home string) []string {
 		home + "/.gnupg",
 		home + "/.config",
 		home + "/.agentjail",
+		home + "/.claude",
+		home + "/.codex",
+		home + "/.cursor",
 		home + "/.docker",
 		home + "/.kube",
 		home + "/.cargo",
@@ -63,6 +66,8 @@ func sensitiveWriteRegexes() []string {
 		`/Users/[^/]+/\.npmrc$`,
 		`/Users/[^/]+/\.pypirc$`,
 		`/Users/[^/]+/\.git-credentials$`,
+		// Protect agentjail daemon/shield plists from being overwritten
+		`/Users/[^/]+/Library/LaunchAgents/com\.agentjail\.`,
 	}
 }
 
