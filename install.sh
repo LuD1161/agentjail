@@ -117,7 +117,8 @@ spin() {
 
 if [ "${LOCAL_TARBALL:-}" = "" ] && [ "$VERSION" = "latest" ]; then
     echo "    resolving latest release…"
-    VERSION=$(curl -fsSL "https://releases.agentjail.io/v1/latest" \
+    LATEST_JSON=$(curl -fsSL "https://releases.agentjail.io/v1/latest")
+    VERSION=$(printf '%s' "$LATEST_JSON" \
               | grep '"version"' \
               | head -1 \
               | sed -E 's/.*"version":[ ]*"([^"]+)".*/\1/')
@@ -129,6 +130,28 @@ if [ "${LOCAL_TARBALL:-}" = "" ] && [ "$VERSION" = "latest" ]; then
 fi
 
 echo "    version  ${VERSION}"
+
+# --- Display changelog (best-effort, non-blocking) ---
+# Extract changelog from the cached /v1/latest response.
+# Uses simple grep/sed since jq may not be installed. The changelog field
+# contains \n-escaped newlines; we convert the first few bullet points.
+if [ -n "${LATEST_JSON:-}" ]; then
+    _cl_raw=$(printf '%s' "$LATEST_JSON" | sed -n 's/.*"changelog":"\([^"]*\)".*/\1/p')
+    if [ -n "$_cl_raw" ] && [ "$_cl_raw" != "null" ]; then
+        printf '\n    📋  What'\''s new:\n'
+        printf '%s' "$_cl_raw" \
+            | sed 's/\\n/\
+/g' \
+            | grep -E '^[[:space:]]*[-*]' \
+            | head -8 \
+            | sed 's/^[[:space:]]*[-*][[:space:]]*//' \
+            | sed 's/\*\*\([^*]*\)\*\*/\1/g' \
+            | sed 's/`\([^`]*\)`/\1/g' \
+            | sed 's/^/        • /' \
+            | while IFS= read -r _line; do printf '%s\n' "$_line"; done
+        printf '        → Full changelog: https://github.com/%s/releases/tag/%s\n\n' "${REPO}" "${VERSION}"
+    fi
+fi
 
 # --- Set up temp dir with cleanup trap ---
 
