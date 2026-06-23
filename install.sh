@@ -138,10 +138,8 @@ echo "    version  ${VERSION}"
 if [ -n "${LATEST_JSON:-}" ]; then
     _cl_raw=$(printf '%s' "$LATEST_JSON" | sed -n 's/.*"changelog":"\([^"]*\)".*/\1/p')
     if [ -n "$_cl_raw" ] && [ "$_cl_raw" != "null" ]; then
-        printf '\n    📋  What'\''s new:\n'
         # Extract only TL;DR bullets (between "## TL;DR" and first "###").
-        # Falls back to first 5 bullets if no TL;DR section exists.
-        printf '%s' "$_cl_raw" \
+        _cl_bullets=$(printf '%s' "$_cl_raw" \
             | sed 's/\\n/\
 /g' \
             | sed -n '/^## TL;DR/,/^###/p' \
@@ -150,10 +148,15 @@ if [ -n "${LATEST_JSON:-}" ]; then
             | sed 's/^[[:space:]]*[-*][[:space:]]*//' \
             | sed 's/\*\*\([^*]*\)\*\*/\1/g' \
             | sed 's/`\([^`]*\)`/\1/g' \
-            | cut -c1-68 \
-            | sed 's/^/        • /' \
-            | while IFS= read -r _line; do printf '%s\n' "$_line"; done
-        printf '        → https://github.com/%s/releases/tag/%s\n\n' "${REPO}" "${VERSION}"
+            | cut -c1-64)
+        if [ -n "$_cl_bullets" ]; then
+            printf '\n    ┌─ 📋 What'\''s new ────────────────────────────────────────────┐\n'
+            printf '%s\n' "$_cl_bullets" \
+                | while IFS= read -r _line; do printf '    │  • %s\n' "$_line"; done
+            printf '    │\n'
+            printf '    │  → https://github.com/%s/releases/tag/%s\n' "${REPO}" "${VERSION}"
+            printf '    └──────────────────────────────────────────────────────────────┘\n\n'
+        fi
     fi
 fi
 

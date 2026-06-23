@@ -436,12 +436,17 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	fmt.Printf("agentjail update: updated %d binaries  %s → %s\n", installed, current, latest)
 
 	if cl := releaseInfo.Changelog; cl != "" {
-		fmt.Println()
-		fmt.Println("  📋  What's new:")
-		for _, line := range formatChangelogBullets(cl, 8) {
-			fmt.Println(line)
+		bullets := formatChangelogBullets(cl, 0)
+		if len(bullets) > 0 {
+			fmt.Println()
+			fmt.Println("  ┌─ 📋 What's new ────────────────────────────────────────────────┐")
+			for _, b := range bullets {
+				fmt.Printf("  │  %s\n", b)
+			}
+			fmt.Println("  │")
+			fmt.Printf("  │  → https://github.com/LuD1161/agentjail/releases/tag/%s\n", latest)
+			fmt.Println("  └────────────────────────────────────────────────────────────────┘")
 		}
-		fmt.Printf("  → Full changelog: https://github.com/LuD1161/agentjail/releases/tag/%s\n", latest)
 	}
 
 	// Step 10: emit update telemetry (best-effort; respects opt-out).
