@@ -93,15 +93,17 @@ func replayListSessions(ctx context.Context, st store.ReadOnlyStore, useColor bo
 
 func replaySession(ctx context.Context, st store.ReadOnlyStore, sessionID string, verbose, follow, useColor bool) int {
 	if useColor {
-		fmt.Printf("%s%s%-8s  %-7s  %-18s  %-36s  %s%s\n",
+		fmt.Printf("%s%s%-8s    %-7s  %-18s  %-30s  %s%s\n",
 			ansiBold, ansiDim,
 			"TIME", "ACTION", "TOOL", "RULE", "SUMMARY",
 			ansiReset)
 		fmt.Printf("%s%s%s\n", ansiDim, strings.Repeat("─", 100), ansiReset)
 	} else {
-		fmt.Printf("%-8s  %-7s  %-18s  %-36s  %s\n", "TIME", "ACTION", "TOOL", "RULE", "SUMMARY")
+		fmt.Printf("%-8s    %-7s  %-18s  %-30s  %s\n", "TIME", "ACTION", "TOOL", "RULE", "SUMMARY")
+		fmt.Println(strings.Repeat("-", 100))
 	}
 	lastID := int64(0)
+	var total, allow, deny, ask int
 	for {
 		rows, err := st.ListDecisions(ctx, store.Filter{SessionID: sessionID, AfterID: lastID, Limit: 1000})
 		if err != nil {
@@ -113,12 +115,35 @@ func replaySession(ctx context.Context, st store.ReadOnlyStore, sessionID string
 				lastID = d.ID
 			}
 			printReplayDecision(d, verbose, useColor)
+			total++
+			switch strings.ToLower(d.Action) {
+			case "allow":
+				allow++
+			case "deny":
+				deny++
+			case "ask":
+				ask++
+			}
 		}
 		if !follow {
-			return 0
+			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	if useColor {
+		fmt.Printf("\n%s%s%s\n", ansiDim, strings.Repeat("─", 100), ansiReset)
+		fmt.Printf("%s%d%s events  %s%d%s allow  %s%d%s deny  %s%d%s ask\n",
+			ansiBold, total, ansiReset,
+			ansiGreen, allow, ansiReset,
+			ansiRedBold, deny, ansiReset,
+			ansiYellow, ask, ansiReset)
+	} else {
+		fmt.Println()
+		fmt.Println(strings.Repeat("-", 100))
+		fmt.Printf("%d events  %d allow  %d deny  %d ask\n", total, allow, deny, ask)
+	}
+	return 0
 }
 
 func printReplayDecision(d store.DecisionRecord, verbose, useColor bool) {
@@ -132,30 +157,39 @@ func printReplayDecision(d store.DecisionRecord, verbose, useColor bool) {
 		rule = "-"
 	}
 	summary := d.Summary
+	glyph := agentGlyphFor(d.Agent, detectLogsUTF8())
+	isDeny := strings.ToLower(d.Action) == "deny"
+	isAsk := strings.ToLower(d.Action) == "ask"
 
 	if useColor {
+		info, ok := agentRegistry[d.Agent]
+		glyphColor := ansiDim
+		if ok && info.Color != "" {
+			glyphColor = info.Color
+		}
 		actionColor := actionANSI(d.Action)
-		fmt.Printf("%s  %s%-7s%s  %-18s  %s%-36s%s  %s\n",
+		fmt.Printf("%s  %s%s%s %s%-7s%s  %-18s  %s%-30s%s  %s\n",
 			d.Ts.Local().Format("15:04:05"),
+			glyphColor, glyph, ansiReset,
 			actionColor, action, ansiReset,
 			tool,
 			ansiDim, rule, ansiReset,
 			summary)
-		if d.Reason != "" {
-			fmt.Printf("          %sreason: %s%s\n", ansiDim, d.Reason, ansiReset)
+		if (isDeny || isAsk) && d.Reason != "" {
+			fmt.Printf("            %sreason: %s%s\n", ansiDim, d.Reason, ansiReset)
 		}
 	} else {
-		fmt.Printf("%-8s  %-7s  %-18s  %-36s  %s\n",
-			d.Ts.Local().Format("15:04:05"), action, tool, rule, summary)
-		if d.Reason != "" {
-			fmt.Printf("          reason: %s\n", d.Reason)
+		fmt.Printf("%-8s  %s %-7s  %-18s  %-30s  %s\n",
+			d.Ts.Local().Format("15:04:05"), glyph, action, tool, rule, summary)
+		if (isDeny || isAsk) && d.Reason != "" {
+			fmt.Printf("            reason: %s\n", d.Reason)
 		}
 	}
 	if verbose && d.ToolInputRedacted != "" {
 		if useColor {
-			fmt.Printf("          %stool_input: %s%s\n", ansiDim, d.ToolInputRedacted, ansiReset)
+			fmt.Printf("            %stool_input: %s%s\n", ansiDim, d.ToolInputRedacted, ansiReset)
 		} else {
-			fmt.Printf("          tool_input: %s\n", d.ToolInputRedacted)
+			fmt.Printf("            tool_input: %s\n", d.ToolInputRedacted)
 		}
 	}
 }
