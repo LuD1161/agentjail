@@ -439,13 +439,15 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 		bullets := formatChangelogBullets(cl, 0)
 		if len(bullets) > 0 {
 			fmt.Println()
-			fmt.Println("  ┌─ 📋 What's new ────────────────────────────────────────────────┐")
+			fmt.Println("  ── 📋 What's new ─────────────────────────────────────────────────")
+			fmt.Println()
 			for _, b := range bullets {
-				fmt.Printf("  │  %s\n", b)
+				fmt.Printf("     %s\n", b)
 			}
-			fmt.Println("  │")
-			fmt.Printf("  │  → https://github.com/LuD1161/agentjail/releases/tag/%s\n", latest)
-			fmt.Println("  └────────────────────────────────────────────────────────────────┘")
+			fmt.Println()
+			fmt.Printf("     → https://github.com/LuD1161/agentjail/releases/tag/%s\n", latest)
+			fmt.Println()
+			fmt.Println("  ─────────────────────────────────────────────────────────────────")
 		}
 	}
 

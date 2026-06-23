@@ -150,12 +150,11 @@ if [ -n "${LATEST_JSON:-}" ]; then
             | sed 's/`\([^`]*\)`/\1/g' \
             )
         if [ -n "$_cl_bullets" ]; then
-            printf '\n    ┌─ 📋 What'\''s new ────────────────────────────────────────────┐\n'
+            printf '\n    ── 📋 What'\''s new ───────────────────────────────────────────\n\n'
             printf '%s\n' "$_cl_bullets" \
-                | while IFS= read -r _line; do printf '    │  • %s\n' "$_line"; done
-            printf '    │\n'
-            printf '    │  → https://github.com/%s/releases/tag/%s\n' "${REPO}" "${VERSION}"
-            printf '    └──────────────────────────────────────────────────────────────┘\n\n'
+                | while IFS= read -r _line; do printf '       • %s\n' "$_line"; done
+            printf '\n       → https://github.com/%s/releases/tag/%s\n' "${REPO}" "${VERSION}"
+            printf '\n    ────────────────────────────────────────────────────────────\n\n'
         fi
     fi
 fi
