@@ -1214,6 +1214,18 @@ func main() {
 
 	// Start background update checker (respects AGENTJAIL_NO_UPDATE_CHECK).
 	if os.Getenv("AGENTJAIL_NO_UPDATE_CHECK") == "" {
+		// InstallDir: the directory containing the running binary.
+		// os.Executable() returns e.g. ~/.agentjail/bin/agentjail-daemon.
+		autoUpdate := os.Getenv("AGENTJAIL_AUTO_UPDATE") != "false"
+
+		installDir := ""
+		if exePath, exeErr := os.Executable(); exeErr == nil {
+			installDir = filepath.Dir(exePath)
+		}
+
+		homeDir, _ := os.UserHomeDir()
+		plistPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.agentjail.daemon.plist")
+
 		checker := &selfupdate.Checker{}
 		uc := &UpdateChecker{
 			Version:     version,
@@ -1224,6 +1236,11 @@ func main() {
 			JitterFunc: func(max time.Duration) time.Duration {
 				return time.Duration(int64(os.Getpid()) % int64(max))
 			},
+			AutoUpdate: autoUpdate,
+			InstallDir: installDir,
+			PlistPath:  plistPath,
+			GOOS:       runtime.GOOS,
+			GOARCH:     runtime.GOARCH,
 		}
 		go uc.Run(ctx)
 	}

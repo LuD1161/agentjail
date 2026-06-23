@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 )
 
 type mockFetcher struct {
@@ -139,6 +141,108 @@ func TestUpdateChecker_ShutdownOnContextCancel(t *testing.T) {
 		// good
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return within 2s after context cancellation")
+	}
+}
+
+// newAutoUpdateChecker builds an UpdateChecker with AutoUpdate=true and a
+// signing key set so the gate conditions can be tested without a real network.
+func newAutoUpdateChecker(t *testing.T, isBrew bool, goos string) (*UpdateChecker, *mockNotifier) {
+	t.Helper()
+	dir := t.TempDir()
+	notifier := &mockNotifier{}
+	uc := &UpdateChecker{
+		Version:  "v0.1.0",
+		BasePath: dir,
+		Fetcher:  &mockFetcher{version: "v0.2.0"},
+		Notifier: notifier,
+		ExeResolver: func() (string, bool) {
+			return "/usr/local/bin/agentjail", isBrew
+		},
+		JitterFunc: func(_ time.Duration) time.Duration { return 0 },
+		AutoUpdate: true,
+		InstallDir: dir,
+		PlistPath:  filepath.Join(dir, "com.agentjail.daemon.plist"),
+		GOOS:       goos,
+		GOARCH:     "arm64",
+	}
+	return uc, notifier
+}
+
+func TestUpdateChecker_AutoUpdate_SkipsWhenDisabled(t *testing.T) {
+	// AutoUpdate=false: performAutoUpdate should never be called.
+	// We verify this indirectly: with a real signing key set and darwin GOOS,
+	// if performAutoUpdate were called it would attempt a download and either
+	// panic or return an error via the notifier. With AutoUpdate=false checkOnce
+	// must return nil and the notifier must not receive an auto-update failure.
+
+	origKey := selfupdate.SigningPubKey
+	selfupdate.SigningPubKey = "RWQfakekeyfortest"
+	t.Cleanup(func() { selfupdate.SigningPubKey = origKey })
+
+	uc, notifier := newAutoUpdateChecker(t, false, "darwin")
+	uc.AutoUpdate = false
+
+	exitCalled := false
+	origExit := osExitFn
+	osExitFn = func(code int) { exitCalled = true }
+	t.Cleanup(func() { osExitFn = origExit })
+
+	if err := uc.checkOnce(context.Background()); err != nil {
+		t.Fatalf("checkOnce returned error: %v", err)
+	}
+	if exitCalled {
+		t.Fatal("osExitFn was called but AutoUpdate=false; performAutoUpdate should have been skipped")
+	}
+	// Notifier may be called for the regular update notification, but not for an
+	// auto-update failure message.
+	if notifier.called && strings.Contains(notifier.message, "Auto-update failed") {
+		t.Errorf("unexpected auto-update failure message: %q", notifier.message)
+	}
+}
+
+func TestUpdateChecker_AutoUpdate_SkipsBrew(t *testing.T) {
+	origKey := selfupdate.SigningPubKey
+	selfupdate.SigningPubKey = "RWQfakekeyfortest"
+	t.Cleanup(func() { selfupdate.SigningPubKey = origKey })
+
+	uc, notifier := newAutoUpdateChecker(t, true /* isBrew */, "darwin")
+
+	exitCalled := false
+	origExit := osExitFn
+	osExitFn = func(code int) { exitCalled = true }
+	t.Cleanup(func() { osExitFn = origExit })
+
+	if err := uc.checkOnce(context.Background()); err != nil {
+		t.Fatalf("checkOnce returned error: %v", err)
+	}
+	if exitCalled {
+		t.Fatal("osExitFn was called for a Homebrew installation; auto-update should be skipped")
+	}
+	if notifier.called && strings.Contains(notifier.message, "Auto-update failed") {
+		t.Errorf("unexpected auto-update failure message: %q", notifier.message)
+	}
+}
+
+func TestUpdateChecker_AutoUpdate_SkipsNonDarwin(t *testing.T) {
+	origKey := selfupdate.SigningPubKey
+	selfupdate.SigningPubKey = "RWQfakekeyfortest"
+	t.Cleanup(func() { selfupdate.SigningPubKey = origKey })
+
+	uc, notifier := newAutoUpdateChecker(t, false, "linux")
+
+	exitCalled := false
+	origExit := osExitFn
+	osExitFn = func(code int) { exitCalled = true }
+	t.Cleanup(func() { osExitFn = origExit })
+
+	if err := uc.checkOnce(context.Background()); err != nil {
+		t.Fatalf("checkOnce returned error: %v", err)
+	}
+	if exitCalled {
+		t.Fatal("osExitFn was called on non-darwin; auto-update should be skipped")
+	}
+	if notifier.called && strings.Contains(notifier.message, "Auto-update failed") {
+		t.Errorf("unexpected auto-update failure message: %q", notifier.message)
 	}
 }
 

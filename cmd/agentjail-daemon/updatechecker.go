@@ -15,6 +15,9 @@ import (
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
 
+// osExitFn is the function used to exit the process. Overridden in tests.
+var osExitFn = os.Exit
+
 const (
 	updateCheckInterval  = 6 * time.Hour
 	updateCheckMaxJitter = 30 * time.Minute
@@ -40,6 +43,13 @@ type UpdateChecker struct {
 	Notifier    Notifier
 	ExeResolver func() (path string, isBrew bool)
 	JitterFunc  func(max time.Duration) time.Duration
+
+	// Auto-update fields
+	AutoUpdate bool
+	InstallDir string // ~/.agentjail/bin/
+	PlistPath  string // path to launchd plist
+	GOOS       string
+	GOARCH     string
 }
 
 // Run starts the update-check loop with jittered initial delay, then 6h interval.
@@ -108,7 +118,149 @@ func (uc *UpdateChecker) checkOnce(ctx context.Context) error {
 	}
 
 	uc.recordNotified(latest)
+
+	// Auto-update: download, verify, swap, exit.
+	if !uc.AutoUpdate {
+		return nil
+	}
+	if selfupdate.SigningPubKey == "" {
+		slog.Debug("auto-update: skipped (dev build, no signing key)")
+		return nil
+	}
+	if uc.GOOS != "darwin" {
+		slog.Debug("auto-update: skipped (not macOS)")
+		return nil
+	}
+	if isBrew {
+		slog.Debug("auto-update: skipped (Homebrew installation)")
+		return nil
+	}
+
+	uc.performAutoUpdate(ctx, latest)
 	return nil
+}
+
+// performAutoUpdate downloads, verifies, and atomically swaps in the new
+// binaries, then exits. launchd KeepAlive restarts the daemon at the new
+// version. Called only on darwin, non-Homebrew, with AutoUpdate=true.
+func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
+	slog.Info("auto-update: starting", "from", uc.Version, "to", latest)
+
+	// 1. Download to temp dir.
+	stagingDir, err := os.MkdirTemp("", "agentjail-update-*")
+	if err != nil {
+		slog.Error("auto-update: mktemp staging", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+	defer os.RemoveAll(stagingDir)
+
+	tarballName := selfupdate.TarballName(latest, uc.GOOS, uc.GOARCH)
+	baseURL := selfupdate.UpdateURLBaseFn(latest)
+
+	tarballPath := filepath.Join(stagingDir, tarballName)
+	if err := selfupdate.DownloadFile(ctx, baseURL+"/"+tarballName, tarballPath, selfupdate.MaxDownloadBytes); err != nil {
+		slog.Error("auto-update: download tarball", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+
+	sumsPath := filepath.Join(stagingDir, "SHA256SUMS")
+	if err := selfupdate.DownloadFile(ctx, baseURL+"/SHA256SUMS", sumsPath, 1024*1024); err != nil {
+		slog.Error("auto-update: download SHA256SUMS", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+
+	sigPath := filepath.Join(stagingDir, "SHA256SUMS.minisig")
+	if err := selfupdate.DownloadFile(ctx, baseURL+"/SHA256SUMS.minisig", sigPath, 1024*1024); err != nil {
+		slog.Error("auto-update: download minisig", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+
+	// 2. Verify signature.
+	if selfupdate.SigningPubKey != "" {
+		if err := selfupdate.VerifyManifest(sumsPath, sigPath); err != nil {
+			slog.Error("auto-update: signature verification failed", "err", err)
+			uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+			return
+		}
+	}
+
+	// 3. Verify tarball hash.
+	if err := selfupdate.VerifyTarball(tarballPath, tarballName, sumsPath); err != nil {
+		slog.Error("auto-update: hash verification failed", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+
+	// 4. Extract.
+	extractDir := filepath.Join(stagingDir, "extract")
+	if err := os.MkdirAll(extractDir, 0o700); err != nil {
+		slog.Error("auto-update: mkdir extract", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+	if err := selfupdate.ExtractTarball(tarballPath, extractDir); err != nil {
+		slog.Error("auto-update: extract tarball", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+
+	// 5. Backup existing binaries.
+	backupDir, err := os.MkdirTemp("", "agentjail-backup-*")
+	if err != nil {
+		slog.Error("auto-update: mktemp backup", "err", err)
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", err)) //nolint:errcheck
+		return
+	}
+	defer os.RemoveAll(backupDir)
+
+	for _, bin := range selfupdate.UpdateBinaries {
+		src := filepath.Join(uc.InstallDir, bin)
+		dst := filepath.Join(backupDir, bin)
+		if err := selfupdate.CopyFile(src, dst); err != nil {
+			if !os.IsNotExist(err) {
+				slog.Warn("auto-update: backup failed", "bin", bin, "err", err)
+			}
+		}
+	}
+
+	// 6. Swap binaries.
+	var swapErr error
+	swappedCount := 0
+	for _, bin := range selfupdate.UpdateBinaries {
+		src := filepath.Join(extractDir, bin)
+		dst := filepath.Join(uc.InstallDir, bin)
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue // binary not in this release
+		}
+		if err := selfupdate.AtomicReplaceBinary(src, dst); err != nil {
+			swapErr = fmt.Errorf("swap %s: %w", bin, err)
+			break
+		}
+		swappedCount++
+	}
+
+	if swapErr != nil {
+		slog.Error("auto-update: swap failed, rolling back", "err", swapErr)
+		for _, bin := range selfupdate.UpdateBinaries[:swappedCount] {
+			backup := filepath.Join(backupDir, bin)
+			dst := filepath.Join(uc.InstallDir, bin)
+			if _, statErr := os.Stat(backup); statErr == nil {
+				_ = selfupdate.AtomicReplaceBinary(backup, dst)
+			}
+		}
+		selfupdate.LaunchctlLoad(uc.PlistPath) //nolint:errcheck
+		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", swapErr)) //nolint:errcheck
+		return
+	}
+
+	slog.Info("auto-update: binaries swapped, exiting for restart", "version", latest, "swapped", swappedCount)
+
+	// 7. Exit — launchd KeepAlive restarts the new daemon.
+	osExitFn(0)
 }
 
 func (uc *UpdateChecker) throttlePath() string {
