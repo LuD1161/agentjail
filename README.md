@@ -7,13 +7,13 @@
   </picture>
 </p>
 
-### Policy guardrails for coding agents — _your agent literally can't do that_
+### Policy guardrails for coding agents - _your agent literally can't do that_
 
 A safety rail for Claude Code, Codex, and Cursor. It catches the accidental
-foot-gun **before it fires** — no changes to how you use your agent.
+foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v0.1.0-alpha](https://img.shields.io/badge/v0.1.0--alpha-released-orange)
+&nbsp;![v0.2.6](https://img.shields.io/badge/v0.2.6-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -41,13 +41,30 @@ brew install LuD1161/tap/agentjail
 
 ---
 
+## Recent updates
+
+| Version | Date | Highlights |
+|---------|------|------------|
+| **v0.2.6** | Jun 23, 2026 | Daemon auto-update (download, verify, swap, restart). Linux systemd support. Shared `internal/selfupdate/` package. |
+| **v0.2.5** | Jun 23, 2026 | Combined changelogs when skipping versions. UI polish (wider sidebar, scroll preservation, back button). Telemetry fixes. |
+| **v0.2.4** | Jun 23, 2026 | Git-aware session labels (`agent . branch . repo`). CWD column in timeline. Live event ticker. |
+| **v0.2.3** | Jun 23, 2026 | Press Enter to update (no more typing 'y'). Release highlights shown on install/update. |
+| **v0.2.2** | Jun 23, 2026 | MCP credential broker. Encrypted secret injection. Per-server scoping. |
+| **v0.2.0** | Jun 23, 2026 | Structured command parsing. Hook-config watchdog. Shield protects hook configs at kernel level. |
+| **v0.1.2** | Jun 20, 2026 | Network allowlist policy. `agentjail-netproxy` transparent proxy. |
+| **v0.1.0** | Jun 13, 2026 | Initial release. Hook + OPA daemon + core policies + `agentjail-shield` sandbox. |
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for full details, or check the [releases page](https://github.com/LuD1161/agentjail/releases).
+
+---
+
 ## How it works
 
 Every tool call your agent makes is checked against a policy in **~8 ms** before it runs:
 
 ```
 Claude Code / Codex / Cursor
-    │  (PreToolUse hook — every tool call)
+    │  (PreToolUse hook - every tool call)
     ▼
 agentjail-hook ── Unix socket ──▶ agentjail-daemon ──▶ OPA Rego rules
     │                                                      │
@@ -64,11 +81,11 @@ agentjail-hook ── Unix socket ──▶ agentjail-daemon ──▶ OPA Rego 
 
 You keep working exactly as before. The only difference: the dumb stuff quietly never happens.
 
-- 🪝 **Zero-config** — one install command auto-detects your agents and wires the hook
-- ⚡ **~8 ms median** — persistent OPA daemon + decision cache. You won't feel it
-- 🛡️ **Defense in depth** — hook-level policy + optional kernel sandbox (`agentjail-shield`)
-- 📜 **Real policy engine** — [OPA](https://www.openpolicyagent.org/) Rego rules, not regex hacks
-- 🔒 **Fail-closed** — when in doubt, deny
+- 🪝 **Zero-config** - one install command auto-detects your agents and wires the hook
+- ⚡ **~8 ms median** - persistent OPA daemon + decision cache. You won't feel it
+- 🛡️ **Defense in depth** - hook-level policy + optional kernel sandbox (`agentjail-shield`)
+- 📜 **Real policy engine** - [OPA](https://www.openpolicyagent.org/) Rego rules, not regex hacks
+- 🔒 **Fail-closed** - when in doubt, deny
 
 ---
 
@@ -89,7 +106,7 @@ You keep working exactly as before. The only difference: the dumb stuff quietly 
 <details>
 <summary><b>Read the longer story for each scenario</b></summary>
 
-### 🧹 "Help me clean up disk space — my Downloads is huge"
+### 🧹 "Help me clean up disk space - my Downloads is huge"
 
 ```sh
 rm -rf ~/Downloads/*
@@ -143,7 +160,7 @@ Publishing to a registry can't be undone. Escalates to user instead of just doin
 echo 'alias deploy="git push origin main --force"' >> ~/.zshrc
 ```
 
-Writing to `~/.zshrc` is how an agent leaves landmines that fire weeks later in a different session. Opt-in library rule — enable with `agentjail policy enable no_shell_init_write`.
+Writing to `~/.zshrc` is how an agent leaves landmines that fire weeks later in a different session. Opt-in library rule - enable with `agentjail policy enable no_shell_init_write`.
 
 ### 🌐 "Sync this codebase to a code-review AI"
 
@@ -151,7 +168,7 @@ Writing to `~/.zshrc` is how an agent leaves landmines that fire weeks later in 
 tar czf - . | curl -X POST https://code-review-ai.io/analyze --data-binary @-
 ```
 
-You may genuinely want this service — but only after you've made an explicit decision and added it to `network.allowed_hosts`. Default-deny means surprise data-egress doesn't happen by accident.
+You may genuinely want this service - but only after you've made an explicit decision and added it to `network.allowed_hosts`. Default-deny means surprise data-egress doesn't happen by accident.
 
 </details>
 
@@ -184,9 +201,9 @@ agentjail install --for claude-code   # wire a single agent
 agentjail install --all               # non-interactive, install all detected
 ```
 
-**Agent discovery + picker:** the installer presents a styled interactive multi-select — all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
+**Agent discovery + picker:** the installer presents a styled interactive multi-select - all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
 
-**Linux note:** detection runs cross-platform, but the daemon (launchd) is macOS-only in this release. On Linux, detected agents are reported but hook wiring is skipped with a clear message.
+**Linux note:** fully supported since v0.2.6. The daemon runs under systemd user services (`systemctl --user`). Auto-update, hook wiring, and all policies work on both macOS (launchd) and Linux (systemd).
 
 **From source:**
 ```sh
@@ -273,12 +290,15 @@ For systemd-managed daemons (Linux), set via an environment override file:
 | `mcp_policy` | unknown MCP servers; default-blocked: `*stripe*`, `*payment*`, `*billing*` |
 | `command_policy` | `rm -rf`, `curl\|bash`, `sudo`, `git push --force`, `env\|curl`, `chmod 777`, and more |
 
-**2 self-protection rules** (locked, cannot be disabled):
+**5 locked self-protection rules** (can never be disabled):
 
 | Rule | Blocks |
 |--|--|
-| `no_daemon_kill` | `kill` / `pkill` targeting `agentjail-daemon` |
-| `no_hook_self_disable` | writes to agent settings (removing its own hook) |
+| `file_policy/agentjail_self` | reads/writes to agentjail's own config and binaries |
+| `library/no-hook-self-disable` | writes to agent settings (removing its own hook) |
+| `library/no-daemon-kill` | `kill` / `pkill` targeting `agentjail-daemon` |
+| `command_policy/no-policy-mutation` | CLI commands that would mutate policy non-interactively |
+| `resolver/default` | the default deny resolver (fail-closed fallback) |
 
 <details>
 <summary><b>7 opt-in library rules</b></summary>
@@ -309,7 +329,7 @@ agentjail policy disable file_policy/sensitive_in_project   # stop asking on in-
 agentjail policy enable  file_policy/sensitive_in_project   # turn it back on
 ```
 
-Disabling a **core** rule requires `--force` + interactive confirmation. A **locked self-protection set** (`file_policy/agentjail_self`, `library/no-hook-self-disable`, `command_policy/no-policy-mutation`, `resolver/default`) can never be disabled. `library/no-daemon-kill` is on by default but disableable with `--force` (the daemon auto-restarts via launchd).
+Disabling a **core** rule requires `--force` + interactive confirmation (agents are refused even with `--force`). The **locked self-protection set** (`file_policy/agentjail_self`, `library/no-hook-self-disable`, `library/no-daemon-kill`, `command_policy/no-policy-mutation`, `resolver/default`) can never be disabled.
 
 **Managing MCP servers:**
 ```sh
@@ -344,9 +364,9 @@ agentjail policy list
 **Bad rules are quarantined:** if a custom rule breaks the bundle at daemon startup, the daemon skips it with a WARN log. The baseline always loads.
 
 **[`samples/`](./samples/) ships with 5 example policies + 3 config templates:**
-- `policies/mcp_filesystem_readonly.rego` — lock filesystem MCP to read-only
-- `policies/custom_no_kubectl_prod.rego` — deny `kubectl --context=prod*`
-- `configs/policy-strict.yaml` — zero-trust default
+- `policies/mcp_filesystem_readonly.rego` - lock filesystem MCP to read-only
+- `policies/custom_no_kubectl_prod.rego` - deny `kubectl --context=prod*`
+- `configs/policy-strict.yaml` - zero-trust default
 - See [`samples/README.md`](./samples/README.md) for the full authoring guide
 
 </details>
@@ -370,18 +390,18 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 
 | Tier | What | Status |
 |------|------|--------|
-| **1 — Hook** | PreToolUse hook + OPA daemon + core policies | ✅ shipped |
-| **1.5 — Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` + env-stripping + secrets broker | ✅ shipped |
-| **1.5 — Observability** | SQLite decision store, replay CLI, local web UI with server-side filters | ✅ shipped |
-| **2 — MicroVM** | Microsandbox (laptop, all OSes) + Firecracker (fleet) VM-boundary enforcement | 📋 proposed ([ADR 0016](./docs/adr/0016-tier2-microsandbox-substrate.md)); spikes done |
-| **3 — Kernel module** | eBPF LSM / macOS SystemExtension | 📋 planned |
+| **1 - Hook** | PreToolUse hook + OPA daemon + core policies | ✅ shipped |
+| **1.5 - Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` + env-stripping + secrets broker | ✅ shipped |
+| **1.5 - Observability** | SQLite decision store, replay CLI, local web UI with server-side filters | ✅ shipped |
+| **2 - MicroVM** | Microsandbox (laptop, all OSes) + Firecracker (fleet) VM-boundary enforcement | 📋 proposed ([ADR 0016](./docs/adr/0016-tier2-microsandbox-substrate.md)); spikes done |
+| **3 - Kernel module** | eBPF LSM / macOS SystemExtension | 📋 planned |
 
 <details>
 <summary><b>What's next</b></summary>
 
-**Platform support:** macOS + Linux today. Windows deferred — WSL works in the meantime. ([ADR 0007](./docs/adr/0007-windows-support-deferred.md))
+**Platform support:** macOS + Linux today. Windows deferred - WSL works in the meantime. ([ADR 0007](./docs/adr/0007-windows-support-deferred.md))
 
-**Tier 2 — MicroVM:** microsandbox Go SDK integration for hardware-isolated agent execution on macOS (HVF), Linux (KVM), and Windows (WSL2).
+**Tier 2 - MicroVM:** microsandbox Go SDK integration for hardware-isolated agent execution on macOS (HVF), Linux (KVM), and Windows (WSL2).
 
 </details>
 
@@ -389,12 +409,12 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 
 ## Docs
 
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — architecture overview
-- [`docs/SANDBOX.md`](./docs/SANDBOX.md) — sandbox (`agentjail-shield`) user guide
-- [`docs/adr/`](./docs/adr/) — architecture decision records
-- [`docs/TELEMETRY.md`](./docs/TELEMETRY.md) — telemetry details
-- [`samples/README.md`](./samples/README.md) — example policies + configs
-- [`CHANGELOG.md`](./CHANGELOG.md) — release notes
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) - architecture overview
+- [`docs/SANDBOX.md`](./docs/SANDBOX.md) - sandbox (`agentjail-shield`) user guide
+- [`docs/adr/`](./docs/adr/) - architecture decision records
+- [`docs/TELEMETRY.md`](./docs/TELEMETRY.md) - telemetry details
+- [`samples/README.md`](./samples/README.md) - example policies + configs
+- [`CHANGELOG.md`](./CHANGELOG.md) - release notes
 
 ## Contributing
 
@@ -402,4 +422,4 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md). All commits are signed off (DCO) and
 
 ## License
 
-[Apache-2.0](./LICENSE) — explicit defensive patent grant.
+[Apache-2.0](./LICENSE) - explicit defensive patent grant.
