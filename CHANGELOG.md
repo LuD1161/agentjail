@@ -20,6 +20,9 @@ Changelog shown during install/update, so users see what shipped at a glance.
 
 ### Changed
 
+- **Update confirmation** — `agentjail update` now accepts Enter to proceed
+  (previously required typing 'y'); the stricter confirmation remains for
+  `policy disable` and `mcp allow/block`
 - **CHANGELOG.md backfill** — added entries for v0.2.0, v0.2.1, and v0.2.2
 
 ## v0.2.2 — 2026-06-23
