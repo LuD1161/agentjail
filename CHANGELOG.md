@@ -2,6 +2,47 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.2.7 — 2026-06-23
+
+Replay session labels and docs polish.
+
+## TL;DR
+
+- **Replay session prefix** -- 8-char session prefix instead of truncated UUID with ellipsis.
+- **Docs cleanup** -- README updated for v0.2.6, duplicate badge removed.
+
+### Fixed
+
+- **Replay session label** -- `agentjail replay` now shows an 8-char session
+  prefix instead of a truncated UUID with ellipsis
+- **Duplicate badge** -- removed duplicate GitHub downloads badge from README
+
+### Changed
+
+- **README** -- updated for v0.2.6, added recent updates timeline
+
+## v0.2.6 — 2026-06-23
+
+Daemon auto-update -- the daemon can now update itself without human
+intervention.
+
+## TL;DR
+
+- **Daemon auto-update** -- download, verify, swap binaries, and restart automatically.
+- **Linux systemd support** -- auto-update works on Linux via systemd in addition to macOS launchd.
+
+### Added
+
+- **Daemon auto-update** -- the daemon can download the latest release, verify
+  its SHA256 checksum, atomically swap binaries, and exit for launchd/systemd
+  to restart it (ADR 0026)
+- **Linux systemd support** -- auto-update daemon restart works on Linux via
+  systemd in addition to macOS launchd
+
+### Fixed
+
+- **ExtractTarball** -- create destination directory if it does not exist
+
 ## v0.2.5 — 2026-06-23
 
 Combined changelogs on update, UI polish, TUI local time fix, and telemetry
