@@ -89,6 +89,12 @@ func runMCP(args []string) int {
 		return runMCPList()
 	case "scan":
 		return runMCPScan(args[1:])
+	case "where":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: agentjail mcp where <server>")
+			return 2
+		}
+		return runMCPWhere(args[1:])
 	case "help", "-h", "--help":
 		printMCPUsage(os.Stdout)
 		return 0
@@ -465,6 +471,124 @@ func filterConfigured(entries []mcpclient.PackageEntry) []mcpclient.PackageEntry
 	return out
 }
 
+// runMCPWhere shows which projects use a given MCP server.
+func runMCPWhere(args []string) int {
+	jsonMode := false
+	var server string
+	for _, a := range args {
+		if a == "--json" {
+			jsonMode = true
+		} else {
+			server = a
+		}
+	}
+	if server == "" {
+		fmt.Fprintln(os.Stderr, "usage: agentjail mcp where <server> [--json]")
+		return 2
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp where: %v\n", err)
+		return 1
+	}
+	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+	projectDirs := mcpclient.KnownProjectDirs(dbPath)
+	idx := mcpclient.BuildReverseIndex(home, projectDirs)
+
+	if jsonMode {
+		result := map[string]any{
+			"server":       server,
+			"found":        idx[server] != nil,
+			"locations":    idx[server],
+			"project_dirs": projectDirs,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(result)
+		return 0
+	}
+
+	entries := idx[server]
+	u := ui.New(os.Stdout)
+
+	fmt.Println()
+	if len(entries) == 0 {
+		fmt.Printf("  MCP server %q was not found in any known config.\n\n", server)
+		fmt.Printf("  Searched %d known project(s) plus global configs.\n", len(projectDirs))
+		fmt.Println()
+		return 0
+	}
+
+	fmt.Println(u.Section(fmt.Sprintf("%sMCP server %q is used in:", u.Emoji("\U0001f50d  "), server)))
+	fmt.Println()
+
+	// Separate global entries from project entries.
+	var globals, projects []mcpclient.ProjectMCPInfo
+	for _, e := range entries {
+		if e.Source == "global" {
+			globals = append(globals, e)
+		} else {
+			projects = append(projects, e)
+		}
+	}
+
+	if len(globals) > 0 {
+		fmt.Println("  " + u.Section("Global Config"))
+		for _, g := range globals {
+			home, _ := os.UserHomeDir()
+			path := tildeHome(g.ProjectDir, home)
+			fmt.Printf("  %s %s\n", u.Badge("ok", path), "(user-installed)")
+		}
+		fmt.Println()
+	}
+
+	if len(projects) > 0 {
+		fmt.Println("  " + u.Section("Projects"))
+		for _, p := range projects {
+			home, _ := os.UserHomeDir()
+			dir := tildeHome(p.ProjectDir, home)
+			sourceLabel := p.Source
+			switch p.Source {
+			case "claude-project":
+				sourceLabel = ".claude/settings.json"
+			case "claude-local":
+				sourceLabel = ".claude/settings.local.json"
+			}
+			fmt.Printf("  %s %-40s  (%s)\n", u.Emoji("\U0001f4c1"), dir, sourceLabel)
+		}
+		fmt.Println()
+	}
+
+	// Count how many known projects do NOT use this server.
+	usedSet := make(map[string]struct{})
+	for _, e := range entries {
+		if e.Source != "global" {
+			usedSet[e.ProjectDir] = struct{}{}
+		}
+	}
+	notUsed := 0
+	for _, d := range projectDirs {
+		if _, ok := usedSet[d]; !ok {
+			notUsed++
+		}
+	}
+	if notUsed > 0 {
+		fmt.Printf("  Not found in: %d other known project(s)\n", notUsed)
+		fmt.Println()
+	}
+
+	return 0
+}
+
+// tildeHome replaces a home directory prefix with ~ for display.
+func tildeHome(path, home string) string {
+	if home != "" && strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
 func printMCPUsage(w io.Writer) {
 	u := ui.New(w)
 	const bodyIndent = "  "
@@ -484,6 +608,8 @@ func printMCPUsage(w io.Writer) {
 		{"list", "Show current allowed and blocked MCP servers"},
 		{"scan", "Discover all MCP servers: configs, npm, pip, Docker, audit history"},
 		{"scan --json", "Machine-readable scan output"},
+		{"where <server>", "Show which projects use this MCP server"},
+		{"where <server> --json", "Machine-readable reverse-index output"},
 		{"help", "Show MCP help"},
 	}
 	for _, c := range cmds {
