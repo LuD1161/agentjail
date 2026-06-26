@@ -151,6 +151,22 @@
     /* Policy section collapse animation */
     .policy-card-body { max-height: 2000px; transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease; opacity: 1; }
     .policy-card-body.collapsed { max-height: 0; padding: 0 16px; opacity: 0; overflow: hidden; }
+
+    /* Project scope selector */
+    .scope-selector { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+    .scope-option { display: flex; align-items: center; gap: 10px; padding: 8px 16px; cursor: pointer;
+      transition: background 0.15s; font-size: 12px; color: #c9d1d9; border-left: 3px solid transparent; }
+    .scope-option:hover { background: #1c2333; }
+    .scope-option.active { background: #1c2333; border-left-color: #be5b3a; }
+    .scope-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+    .scope-dot-green { background: #56d364; }
+    .scope-dot-gray { background: #484f58; }
+    .scope-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;
+      background: #122d1f; color: #56d364; border: 1px solid #1f4d2e; margin-left: 6px; }
+    .scope-current-bar { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 16px;
+      display: flex; align-items: center; gap: 10px; font-size: 12px; color: #c9d1d9; }
+    .inherited-overlay { opacity: 0.45; pointer-events: none; }
+    .inherited-label { font-size: 10px; color: #8b949e; font-style: italic; }
   </style>
 </head>
 <body class="font-mono text-sm h-screen flex flex-col overflow-hidden">
@@ -269,11 +285,35 @@
 <!-- ===== TAB: Policies ===== -->
 <div id="tab-policies" class="flex-1 overflow-y-auto hidden" style="padding:24px 32px">
 
+  <!-- Project Scope Selector -->
+  <div class="mb-6" id="project-scope-section">
+    <div class="flex items-center gap-3 mb-3">
+      <svg viewBox="0 0 16 16" fill="currentColor" style="width:14px;height:14px" class="text-gray-400"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
+      <span class="text-xs font-bold text-gray-300 uppercase tracking-wider">Policy Scope</span>
+      <span class="text-xs text-gray-600">Select global or a project to view/edit its policy</span>
+    </div>
+    <div class="scope-selector mb-3" id="scope-selector-list">
+      <!-- populated by renderProjectSelector() -->
+    </div>
+    <!-- Current scope indicator bar -->
+    <div class="scope-current-bar" id="scope-current-bar">
+      <span class="scope-dot scope-dot-green"></span>
+      <span id="scope-current-label">Editing: Global (~/.agentjail/policy.yaml)</span>
+    </div>
+    <!-- Override button shown when viewing inherited project config -->
+    <div id="scope-override-section" class="hidden mt-3">
+      <div class="flex items-center gap-3 p-3 rounded-lg" style="background:#1c212844;border:1px dashed #30363d">
+        <span class="text-xs text-gray-500">This project has no local policy. All settings are inherited from global.</span>
+        <button class="policy-add-btn" onclick="createProjectOverride()" style="white-space:nowrap">Create project override</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Policies header bar -->
   <div class="flex items-center justify-between mb-6">
     <div>
       <h2 class="text-lg font-bold text-gray-200" style="letter-spacing:0.05em">Policy Configuration</h2>
-      <p class="text-xs text-gray-500 mt-1">Manage MCP servers, file paths, commands, network, and secrets policy. Changes are written to ~/.agentjail/policy.yaml and reload the daemon.</p>
+      <p class="text-xs text-gray-500 mt-1" id="policy-config-subtitle">Manage MCP servers, file paths, commands, network, and secrets policy. Changes are written to ~/.agentjail/policy.yaml and reload the daemon.</p>
     </div>
     <div class="flex items-center gap-3">
       <button class="policy-add-btn" onclick="exportPolicyYaml()" title="Export policy.yaml as text">Export YAML</button>
@@ -480,10 +520,16 @@ let filterDebounceTimer = null;
 
 // Policy state
 let policyConfig = null;       // current PolicyConfig object from server
+let globalPolicyConfig = null; // cached global config for inheritance display
 let mcpToolsSeen = {};         // server -> [tool1, tool2, ...] from audit history
 let mcpServerMeta = {};        // server -> {status, source, scope, trust, pkg}
 let policyConfigDirty = false; // true if user has made unsaved changes
 let activeTab = 'monitor';
+
+// Project scope state
+let currentPolicyScope = 'global'; // 'global' or an absolute dir path
+let projectList = [];              // [{dir, hasPolicy, mcpServers}]
+let projectPolicyIsInherited = false; // true when viewing a project with no local policy
 
 const MAX_EVENTS = 500;
 
@@ -508,6 +554,7 @@ function switchTab(tab) {
   if (tab === 'policies' && !policyConfig) {
     loadPolicyConfig();
     loadMCPTools(false);
+    loadProjects();
   }
 }
 
@@ -572,12 +619,46 @@ async function loadRules() {
 // ---------------------------------------------------------------------------
 async function loadPolicyConfig() {
   try {
+    // Always load global config (cached for inheritance display).
     const r = await fetch('/api/policy/config');
     if (!r.ok) { showToast('Failed to load policy config', 'error'); return; }
-    policyConfig = await r.json();
+    globalPolicyConfig = await r.json();
+
+    if (currentPolicyScope === 'global') {
+      policyConfig = globalPolicyConfig;
+      projectPolicyIsInherited = false;
+    } else {
+      await loadProjectPolicyConfig(currentPolicyScope);
+    }
     policyConfigDirty = false;
     renderPolicyTab();
+    updateScopeUI();
   } catch(e) { console.error('loadPolicyConfig', e); showToast('Failed to load config', 'error'); }
+}
+
+async function loadProjectPolicyConfig(dir) {
+  try {
+    const r = await fetch('/api/policy/project-config?dir=' + encodeURIComponent(dir));
+    if (!r.ok) {
+      // Fallback to showing global as inherited
+      policyConfig = globalPolicyConfig;
+      projectPolicyIsInherited = true;
+      return;
+    }
+    const data = await r.json();
+    if (data === null || data === undefined) {
+      // No project policy exists; show global as inherited
+      policyConfig = globalPolicyConfig;
+      projectPolicyIsInherited = true;
+    } else {
+      policyConfig = data;
+      projectPolicyIsInherited = false;
+    }
+  } catch(e) {
+    console.error('loadProjectPolicyConfig', e);
+    policyConfig = globalPolicyConfig;
+    projectPolicyIsInherited = true;
+  }
 }
 
 async function loadMCPTools(discover) {
@@ -603,8 +684,23 @@ async function loadMCPTools(discover) {
 
 async function savePolicyConfig() {
   if (!policyConfig) return;
+
+  // Cannot save when viewing inherited config; must create override first.
+  if (projectPolicyIsInherited) {
+    showToast('Create a project override before saving', 'error');
+    return;
+  }
+
   try {
-    const r = await fetch('/api/policy/config', {
+    let url, successMsg;
+    if (currentPolicyScope === 'global') {
+      url = '/api/policy/config';
+      successMsg = 'Global policy saved and daemon reloaded';
+    } else {
+      url = '/api/policy/project-config?dir=' + encodeURIComponent(currentPolicyScope);
+      successMsg = 'Project policy saved and daemon reloaded';
+    }
+    const r = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(policyConfig)
@@ -612,8 +708,144 @@ async function savePolicyConfig() {
     const data = await r.json();
     if (data.error) { showToast('Error: ' + data.error, 'error'); return; }
     policyConfigDirty = false;
-    showToast('Policy saved and daemon reloaded', 'success');
+    showToast(successMsg, 'success');
+    // Refresh project list to update hasPolicy badges
+    if (currentPolicyScope !== 'global') loadProjects();
   } catch(e) { showToast('Save failed: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------------------
+// Project scope management
+// ---------------------------------------------------------------------------
+async function loadProjects() {
+  try {
+    const r = await fetch('/api/policy/projects');
+    if (!r.ok) { projectList = []; renderProjectSelector(); return; }
+    projectList = await r.json();
+    renderProjectSelector();
+  } catch(e) { console.error('loadProjects', e); projectList = []; renderProjectSelector(); }
+}
+
+function shortenPath(dir) {
+  const home = projectList.length > 0 ? null : null; // can't know home, use heuristic
+  // Try to abbreviate with ~ if starts with /home/username or /Users/username
+  const m = dir.match(/^(\/home\/[^/]+|\/Users\/[^/]+)(\/.*)?$/);
+  if (m) return '~' + (m[2] || '');
+  return dir;
+}
+
+function renderProjectSelector() {
+  const container = document.getElementById('scope-selector-list');
+  if (!container) return;
+
+  let html = '';
+
+  // Global option
+  const globalActive = currentPolicyScope === 'global' ? 'active' : '';
+  html += `<div class="scope-option ${globalActive}" onclick="switchPolicyScope('global')">
+    <span class="scope-dot scope-dot-green"></span>
+    <span class="text-gray-300 font-semibold">Global</span>
+    <span class="text-gray-600 text-xs">~/.agentjail/policy.yaml</span>
+  </div>`;
+
+  // Project options
+  for (const p of projectList) {
+    const isActive = currentPolicyScope === p.dir ? 'active' : '';
+    const dotClass = p.hasPolicy ? 'scope-dot-green' : 'scope-dot-gray';
+    const badge = p.hasPolicy ? '<span class="scope-badge">has policy</span>' : '';
+    const mcpInfo = p.mcpServers.length > 0
+      ? `<span class="text-gray-600 text-xs">${p.mcpServers.length} MCP server${p.mcpServers.length !== 1 ? 's' : ''}</span>`
+      : '';
+    const shortDir = shortenPath(p.dir);
+    html += `<div class="scope-option ${isActive}" onclick="switchPolicyScope('${escJS(p.dir)}')">
+      <span class="scope-dot ${dotClass}"></span>
+      <span class="text-gray-300 truncate" style="max-width:400px" title="${escHtml(p.dir)}">${escHtml(shortDir)}</span>
+      ${badge}
+      ${mcpInfo}
+    </div>`;
+  }
+
+  if (projectList.length === 0) {
+    html += `<div class="scope-option" style="cursor:default;opacity:0.5">
+      <span class="scope-dot scope-dot-gray"></span>
+      <span class="text-gray-500 text-xs">No projects found. Start agent sessions to discover projects.</span>
+    </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+function updateScopeUI() {
+  const bar = document.getElementById('scope-current-bar');
+  const label = document.getElementById('scope-current-label');
+  const overrideSection = document.getElementById('scope-override-section');
+  const subtitle = document.getElementById('policy-config-subtitle');
+  const policySections = document.getElementById('policy-sections');
+  const mcpSection = document.getElementById('mcp-servers-matrix')?.closest('.mb-8');
+
+  if (currentPolicyScope === 'global') {
+    label.textContent = 'Editing: Global (~/.agentjail/policy.yaml)';
+    bar.querySelector('.scope-dot').className = 'scope-dot scope-dot-green';
+    overrideSection.classList.add('hidden');
+    subtitle.textContent = 'Manage MCP servers, file paths, commands, network, and secrets policy. Changes are written to ~/.agentjail/policy.yaml and reload the daemon.';
+    // Remove inherited styling
+    if (policySections) policySections.classList.remove('inherited-overlay');
+    if (mcpSection) mcpSection.classList.remove('inherited-overlay');
+  } else {
+    const shortDir = shortenPath(currentPolicyScope);
+    if (projectPolicyIsInherited) {
+      label.textContent = 'Viewing: ' + shortDir + ' (inheriting global)';
+      bar.querySelector('.scope-dot').className = 'scope-dot scope-dot-gray';
+      overrideSection.classList.remove('hidden');
+      subtitle.textContent = 'Showing inherited global policy. Create a project override to customize.';
+      // Add inherited styling
+      if (policySections) policySections.classList.add('inherited-overlay');
+      if (mcpSection) mcpSection.classList.add('inherited-overlay');
+    } else {
+      label.textContent = 'Editing: ' + shortDir + ' (.agentjail/policy.yaml)';
+      bar.querySelector('.scope-dot').className = 'scope-dot scope-dot-green';
+      overrideSection.classList.add('hidden');
+      subtitle.textContent = 'Editing project-level policy at ' + currentPolicyScope + '/.agentjail/policy.yaml. Changes override global config.';
+      if (policySections) policySections.classList.remove('inherited-overlay');
+      if (mcpSection) mcpSection.classList.remove('inherited-overlay');
+    }
+  }
+
+  renderProjectSelector();
+}
+
+async function switchPolicyScope(scope) {
+  if (scope === currentPolicyScope) return;
+
+  // Warn about unsaved changes
+  if (policyConfigDirty) {
+    if (!confirm('You have unsaved policy changes. Switch scope and discard them?')) return;
+  }
+
+  currentPolicyScope = scope;
+  policyConfigDirty = false;
+
+  if (scope === 'global') {
+    policyConfig = globalPolicyConfig;
+    projectPolicyIsInherited = false;
+  } else {
+    await loadProjectPolicyConfig(scope);
+  }
+
+  renderPolicyTab();
+  updateScopeUI();
+}
+
+async function createProjectOverride() {
+  if (currentPolicyScope === 'global') return;
+
+  // Clone the global config as a starting point for the project
+  policyConfig = JSON.parse(JSON.stringify(globalPolicyConfig));
+  projectPolicyIsInherited = false;
+  policyConfigDirty = true;
+  renderPolicyTab();
+  updateScopeUI();
+  showToast('Project override created from global config. Click Save & Reload to write it.', 'success');
 }
 
 // ---------------------------------------------------------------------------
