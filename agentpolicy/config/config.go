@@ -39,6 +39,7 @@ type PolicyConfig struct {
 	Web      WebConfig     `yaml:"web"`
 	AWS      AWSConfig     `yaml:"aws"`
 	Secrets  SecretsConfig `yaml:"secrets"`
+	Skills   SkillsConfig  `yaml:"skills"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -87,6 +88,20 @@ type MCPServerConfig struct {
 	// execution on this server. AskTools fires after BlockedTools (a tool in
 	// both lists is denied, not asked) and after AllowedTools filtering.
 	AskTools []string `yaml:"ask_tools"`
+}
+
+// SkillsConfig controls which skills the agent may invoke.
+type SkillsConfig struct {
+	// Allowed is a list of skill name patterns that are permitted.
+	// When empty, all skills are allowed (backwards-compatible default).
+	Allowed []string `yaml:"allowed"`
+
+	// Blocked is a list of skill name patterns that are always denied.
+	// Blocked takes precedence over Allowed.
+	Blocked []string `yaml:"blocked"`
+
+	// Ask is a list of skill name patterns that require user confirmation.
+	Ask []string `yaml:"ask"`
 }
 
 // FileConfig supplements the built-in macOS sensitive-path deny list.
@@ -329,6 +344,13 @@ func Default() *PolicyConfig {
 			},
 			StripOnLaunch: boolPtr(true),
 		},
+		// Skills: empty lists = allow all skills (backwards-compatible default).
+		// Populate allowed/blocked/ask in policy.yaml for granular control.
+		Skills: SkillsConfig{
+			Allowed: []string{},
+			Blocked: []string{},
+			Ask:     []string{},
+		},
 	}
 }
 
@@ -470,6 +492,25 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.DisabledRules = append([]string(nil), base.DisabledRules...)
 	}
 
+	// Skills.Allowed
+	if len(overlay.Skills.Allowed) > 0 {
+		result.Skills.Allowed = append([]string(nil), overlay.Skills.Allowed...)
+	} else {
+		result.Skills.Allowed = append([]string(nil), base.Skills.Allowed...)
+	}
+	// Skills.Blocked
+	if len(overlay.Skills.Blocked) > 0 {
+		result.Skills.Blocked = append([]string(nil), overlay.Skills.Blocked...)
+	} else {
+		result.Skills.Blocked = append([]string(nil), base.Skills.Blocked...)
+	}
+	// Skills.Ask
+	if len(overlay.Skills.Ask) > 0 {
+		result.Skills.Ask = append([]string(nil), overlay.Skills.Ask...)
+	} else {
+		result.Skills.Ask = append([]string(nil), base.Skills.Ask...)
+	}
+
 	return result
 }
 
@@ -534,7 +575,7 @@ func Save(cfg *PolicyConfig, path string) error {
 //	  "mcp": {
 //	    "allowed": [...],
 //	    "blocked": [...],
-//	    "servers": { "<name>": {"allowed_tools": [...], "blocked_tools": [...], "ask_tools": [...]} }
+//	    "servers": { "<name>": {"allowed_tools": [...]} }
 //	  },
 //	  "file": {
 //	    "extra_deny":  [...],
@@ -563,8 +604,6 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 	for name, sc := range c.MCP.Servers {
 		servers[name] = map[string]interface{}{
 			"allowed_tools": sliceOrEmpty(sc.AllowedTools),
-			"blocked_tools": sliceOrEmpty(sc.BlockedTools),
-			"ask_tools":     sliceOrEmpty(sc.AskTools),
 		}
 	}
 
@@ -621,6 +660,13 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 			"env_blocklist":   sliceOrEmpty(c.Secrets.EnvBlocklist),
 			"strip_on_launch": c.Secrets.StripOnLaunch != nil && *c.Secrets.StripOnLaunch,
 			"grants":          grantsToOPA(c.Secrets.Grants),
+		},
+		// skills controls which Skill tool invocations are permitted.
+		// Rego reads it as data.agentjail.config.skills.{allowed,blocked,ask}.
+		"skills": map[string]interface{}{
+			"allowed": sliceOrEmpty(c.Skills.Allowed),
+			"blocked": sliceOrEmpty(c.Skills.Blocked),
+			"ask":     sliceOrEmpty(c.Skills.Ask),
 		},
 		// disabled_rules is read by resolver.rego to suppress non-locked candidates.
 		// Rego reads it as data.agentjail.config.disabled_rules.
