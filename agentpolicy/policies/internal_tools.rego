@@ -18,9 +18,10 @@
 # side effect: Glob (read-only path enumeration), BashOutput / KillShell
 # (in-session lifecycle of an already-approved background shell), Task / Agent /
 # Workflow (subagent dispatch — the subagent's own tool calls fire this same
-# hook), Skill (loads instructions; anything it executes is hooked just the
-# same), and EnterWorktree / ExitWorktree (worktree lifecycle — tool calls
+# hook), and EnterWorktree / ExitWorktree (worktree lifecycle — tool calls
 # within the worktree are independently hooked).
+# NOTE: Skill is NOT in benign_tools. Per-skill allow/block/ask is governed by
+# skill_policy.rego, which reads data.agentjail.config.skills.
 #
 # Deliberately NOT included (these keep their normal governance because they have
 # real, ungoverned side effects): Bash, Read, Write, Edit, NotebookEdit,
@@ -84,21 +85,19 @@ candidate contains r if {
 #   - KillShell:       terminates an agent-spawned background shell by id.
 #   - Task/Agent:      dispatches a subagent — whose own tool calls fire this same
 #                      PreToolUse hook, so they remain independently governed.
-#   - Skill:           loads a skill's instructions — anything it then executes
-#                      (Bash, Read/Write, bundled scripts) fires this hook too, so
-#                      the invocation itself has no ungoverned side effect.
 #   - Workflow:        orchestrates multi-agent workflows — like Agent, subagent
 #                      calls are independently hooked.
 #   - EnterWorktree:   creates a git worktree for isolated work — tool calls
 #                      within the worktree are independently hooked.
 #   - ExitWorktree:    exits/cleans up an agent-owned worktree.
+# NOTE: Skill is NOT in this set. Per-skill allow/block/ask is governed by
+# skill_policy.rego (data.agentjail.config.skills).
 benign_tools := {
 	"Glob",
 	"BashOutput",
 	"KillShell",
 	"Task",
 	"Agent",
-	"Skill",
 	"Workflow",
 	"EnterWorktree",
 	"ExitWorktree",

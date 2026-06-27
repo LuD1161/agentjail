@@ -111,10 +111,23 @@ test_subagent_dispatch_allowed if {
 }
 
 test_skill_allowed if {
-	decision == benign_allow with input as {
+	# Skill is now governed by skill_policy.rego (not benign_tools).
+	# With an empty skills.allowed list (default), all skills are permitted.
+	skill_allow := {
+		"action":  "allow",
+		"rule_id": "skill_policy/allowed",
+		"reason":  "skill \"some-skill\" is permitted",
+	}
+	decision == skill_allow with input as {
 		"hook_event": "PreToolUse",
-		"tool_name": "Skill",
-		"tool_input": {"command": "some-skill"},
+		"tool_name":  "Skill",
+		"tool_input": {"skill": "some-skill"},
+	} with data.agentjail.config as {
+		"skills": {
+			"allowed": [],
+			"blocked": [],
+			"ask":     [],
+		},
 	}
 }
 
