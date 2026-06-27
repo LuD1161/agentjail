@@ -7,14 +7,19 @@ import (
 	"sync"
 )
 
-// activeTracker maintains a refcounted set of session IDs that have at least
-// one open daemon socket connection. On every change it atomically rewrites
-// ~/.agentjail/active-sessions.json so the CLI and macOS app can read it
-// without querying the daemon over the socket.
+// activeEntry is one entry in the active-sessions.json file.
+type activeEntry struct {
+	SessionID string `json:"session_id"`
+	PID       int    `json:"pid"`
+}
+
+// activeTracker maintains a map of session IDs to their agent PIDs.
+// On every update it atomically rewrites ~/.agentjail/active-sessions.json
+// so the CLI can read it and check if the PID is still alive.
 type activeTracker struct {
 	mu       sync.Mutex
-	sessions map[string]int // sessionID → connection count
-	path     string         // path to active-sessions.json
+	sessions map[string]int // sessionID → agent PID
+	path     string
 }
 
 func newActiveTracker(agentjailDir string) *activeTracker {
@@ -24,51 +29,35 @@ func newActiveTracker(agentjailDir string) *activeTracker {
 	}
 }
 
-// register marks a session as having an active connection. Call once per
-// connection when the first request reveals the session ID.
-func (t *activeTracker) register(sessionID string) {
-	if sessionID == "" {
+// update records or refreshes the PID for a session.
+func (t *activeTracker) update(sessionID string, pid int) {
+	if sessionID == "" || pid <= 0 {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.sessions[sessionID]++
+	t.sessions[sessionID] = pid
 	t.flush()
 }
 
-// unregister decrements the refcount for a session. When it reaches zero
-// the session is removed from the active set.
-func (t *activeTracker) unregister(sessionID string) {
-	if sessionID == "" {
-		return
-	}
+// list returns a snapshot of currently tracked sessions.
+func (t *activeTracker) list() []activeEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.sessions[sessionID]--
-	if t.sessions[sessionID] <= 0 {
-		delete(t.sessions, sessionID)
-	}
-	t.flush()
-}
-
-// list returns a snapshot of currently active session IDs.
-func (t *activeTracker) list() []string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := make([]string, 0, len(t.sessions))
-	for sid := range t.sessions {
-		out = append(out, sid)
+	out := make([]activeEntry, 0, len(t.sessions))
+	for sid, pid := range t.sessions {
+		out = append(out, activeEntry{SessionID: sid, PID: pid})
 	}
 	return out
 }
 
-// flush writes the current active set to disk. Caller must hold t.mu.
+// flush writes the current session→PID map to disk. Caller must hold t.mu.
 func (t *activeTracker) flush() {
-	ids := make([]string, 0, len(t.sessions))
-	for sid := range t.sessions {
-		ids = append(ids, sid)
+	entries := make([]activeEntry, 0, len(t.sessions))
+	for sid, pid := range t.sessions {
+		entries = append(entries, activeEntry{SessionID: sid, PID: pid})
 	}
-	data, _ := json.Marshal(ids)
+	data, _ := json.Marshal(entries)
 
 	tmp := t.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {

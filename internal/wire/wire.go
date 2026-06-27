@@ -34,6 +34,7 @@ type Request struct {
 	SessionID string                 `json:"session_id"`
 	CWD       string                 `json:"cwd"`
 	Agent     string                 `json:"agent,omitempty"`
+	AgentPID  int                    `json:"agent_pid,omitempty"`
 }
 
 // Response is the wire shape the daemon returns over the Unix socket.

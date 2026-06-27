@@ -71,6 +71,7 @@ type Request struct {
 	SessionID string                 `json:"session_id"`
 	CWD       string                 `json:"cwd"`
 	Agent     string                 `json:"agent,omitempty"`
+	AgentPID  int                    `json:"agent_pid,omitempty"`
 }
 
 // Response is the newline-delimited JSON record written back to the caller.
@@ -760,12 +761,6 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
 
-	var connSessionID string
-	defer func() {
-		if connSessionID != "" && s.activeSessions != nil {
-			s.activeSessions.unregister(connSessionID)
-		}
-	}()
 
 	scanner := bufio.NewScanner(conn)
 	// 1 MB line buffer — large enough for realistic tool_input payloads.
@@ -794,9 +789,8 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		if req.SessionID != "" && connSessionID == "" && s.activeSessions != nil {
-			connSessionID = req.SessionID
-			s.activeSessions.register(connSessionID)
+		if req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
+			s.activeSessions.update(req.SessionID, req.AgentPID)
 		}
 
 		start := time.Now()

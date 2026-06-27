@@ -384,6 +384,7 @@ func runClaude(agent string) {
 		SessionID: input.SessionID,
 		CWD:       input.CWD,
 		Agent:     agent,
+		AgentPID:  findAgentPID(),
 	}
 
 	resp, err := sendAndReceive(conn, req)
