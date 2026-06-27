@@ -10,61 +10,7 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		usage(os.Stderr)
-		os.Exit(2)
-	}
-
-	args, _ := parseTopLevelFlags(os.Args[1:])
-	if len(args) == 0 {
-		usage(os.Stderr)
-		os.Exit(2)
-	}
-
-	if args[0] != "telemetry" {
-		recordFeatureUsed(args[0])
-		// Fire the throttled update check + heartbeat asynchronously. Never
-		// adds latency; all network/file errors are silently discarded.
-		defer maybeRunUpdateCheck()()
-	}
-
-	switch args[0] {
-	case "install":
-		runInstallCmd(args[1:])
-	case "uninstall":
-		runUninstallCmd(args[1:])
-	case "status":
-		runStatusCmd()
-	case "version":
-		runVersionCmd()
-	case "try":
-		os.Exit(runTry(args[1:]))
-	case "logs":
-		os.Exit(runLogs(args[1:]))
-	case "replay":
-		os.Exit(runReplay(args[1:]))
-	case "policy":
-		os.Exit(runPolicy(args[1:]))
-	case "mcp":
-		os.Exit(runMCP(args[1:]))
-	case "secret":
-		os.Exit(runSecret(args[1:]))
-	case "ui":
-		os.Exit(runUI(args[1:]))
-	case "telemetry":
-		os.Exit(runTelemetry(args[1:]))
-	case "feedback":
-		os.Exit(runFeedback(args[1:]))
-	case "update":
-		os.Exit(runUpdate(args[1:]))
-	case "help", "-h", "--help":
-		// Explicit help request: write to stdout, exit 0 (success).
-		usage(os.Stdout)
-	default:
-		fmt.Fprintf(os.Stderr, "agentjail: unknown command %q\n\n", args[0])
-		usage(os.Stderr)
-		os.Exit(2)
-	}
+	Execute()
 }
 
 // parseTopLevelFlags pulls long-form wrapper options out of the raw

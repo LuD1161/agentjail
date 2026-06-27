@@ -47,6 +47,14 @@ func (m *mockReadOnlyStore) CountActionsBySession(_ context.Context) ([]store.Ac
 	return nil, nil
 }
 
+func (m *mockReadOnlyStore) ListDiscoveredTools(_ context.Context, _ string) ([]store.DiscoveredTool, error) {
+	return nil, nil
+}
+
+func (m *mockReadOnlyStore) ListDiscoveredSkills(_ context.Context) ([]store.DiscoveredSkill, error) {
+	return nil, nil
+}
+
 func (m *mockReadOnlyStore) Close() error { return nil }
 
 func TestResolveSessionPrefix_ExactMatch(t *testing.T) {
@@ -107,7 +115,6 @@ func TestResolveSessionPrefix_NoMatch(t *testing.T) {
 }
 
 func TestResolveSessionPrefix_ExactWinsOverPrefix(t *testing.T) {
-	// Edge case: one session ID is a prefix of another, but we pass the shorter one as exact
 	st := &mockReadOnlyStore{
 		sessions: []store.Session{
 			{SessionID: "bench"},
@@ -141,7 +148,6 @@ func TestLoadAllDecisions_SinglePage(t *testing.T) {
 }
 
 func TestLoadAllDecisions_MultiPage(t *testing.T) {
-	// Create 2500 decisions -- should take 3 pages at 1000/page
 	var decs []store.DecisionRecord
 	for i := 1; i <= 2500; i++ {
 		decs = append(decs, store.DecisionRecord{

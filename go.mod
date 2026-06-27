@@ -10,6 +10,7 @@ require (
 	github.com/jedisct1/go-minisign v0.0.0-20260527172527-a09352b57a22
 	github.com/muesli/termenv v0.16.0
 	github.com/open-policy-agent/opa v1.16.2
+	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.37.0
 	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.43.0
@@ -35,6 +36,7 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
 	github.com/lestrrat-go/dsig v1.2.1 // indirect
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
@@ -54,6 +56,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tchap/go-patricia/v2 v2.3.3 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.32 // indirect
