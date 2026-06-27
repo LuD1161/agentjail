@@ -16,6 +16,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/mcpclient"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -85,6 +87,8 @@ func runMCP(args []string) int {
 		return runMCPBlock(args[1])
 	case "list":
 		return runMCPList()
+	case "scan":
+		return runMCPScan(args[1:])
 	case "help", "-h", "--help":
 		printMCPUsage(os.Stdout)
 		return 0
@@ -312,6 +316,155 @@ func runMCPListOutput(out, errOut io.Writer) int {
 	return 0
 }
 
+// runMCPScan discovers all MCP servers on the machine from configs, package
+// managers, Docker, and audit history, then prints a formatted report.
+func runMCPScan(args []string) int {
+	jsonMode := false
+	for _, a := range args {
+		if a == "--json" {
+			jsonMode = true
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp scan: %v\n", err)
+		return 1
+	}
+	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+
+	result := mcpclient.FullScan(home, dbPath)
+
+	if jsonMode {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(result)
+		return 0
+	}
+
+	return renderMCPScan(os.Stdout, result)
+}
+
+// renderMCPScan prints the scan result in a human-readable format.
+func renderMCPScan(out io.Writer, result *mcpclient.ScanResult) int {
+	u := ui.New(out)
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, u.Section(u.Emoji("\U0001f50d  ")+"MCP Server Scan"))
+	fmt.Fprintln(out)
+
+	// --- Configured servers ---
+	fmt.Fprintln(out, u.Section("Configured Servers (from agent configs)"))
+	if len(result.Configured) == 0 {
+		fmt.Fprintln(out, "  (none detected)")
+	} else {
+		width := 0
+		for _, e := range result.Configured {
+			if len(e.Name) > width {
+				width = len(e.Name)
+			}
+		}
+		for _, e := range result.Configured {
+			pad := strings.Repeat(" ", width-len(e.Name)+2)
+			detail := fmt.Sprintf("%-6s  %-8s  %-22s  %s",
+				e.Config.Type, e.Scope, e.Trust, e.Package)
+			fmt.Fprintln(out, "  "+u.Badge("ok", e.Name+pad+detail))
+		}
+	}
+	fmt.Fprintln(out)
+
+	// --- Installed packages (not yet configured) ---
+	unconfiguredNPM := filterUnconfigured(result.NPM)
+	unconfiguredPip := filterUnconfigured(result.Pip)
+	if len(unconfiguredNPM) > 0 || len(unconfiguredPip) > 0 {
+		fmt.Fprintln(out, u.Section("Installed Packages (not yet configured)"))
+		for _, pkg := range unconfiguredNPM {
+			fmt.Fprintf(out, "  %s  %-40s  %-5s  %s\n",
+				u.Emoji("\U0001f4e6"), pkg.Name, pkg.Source, pkg.Version)
+		}
+		for _, pkg := range unconfiguredPip {
+			fmt.Fprintf(out, "  %s  %-40s  %-5s  %s\n",
+				u.Emoji("\U0001f4e6"), pkg.Name, pkg.Source, pkg.Version)
+		}
+		fmt.Fprintln(out)
+	}
+
+	// --- Configured packages (already wired up) ---
+	configuredNPM := filterConfigured(result.NPM)
+	configuredPip := filterConfigured(result.Pip)
+	if len(configuredNPM) > 0 || len(configuredPip) > 0 {
+		fmt.Fprintln(out, u.Section("Installed Packages (already configured)"))
+		for _, pkg := range configuredNPM {
+			fmt.Fprintf(out, "  %s  %-40s  %-5s  %s\n",
+				u.Badge("ok", ""), pkg.Name, pkg.Source, pkg.Version)
+		}
+		for _, pkg := range configuredPip {
+			fmt.Fprintf(out, "  %s  %-40s  %-5s  %s\n",
+				u.Badge("ok", ""), pkg.Name, pkg.Source, pkg.Version)
+		}
+		fmt.Fprintln(out)
+	}
+
+	// --- Docker ---
+	if len(result.Docker) > 0 {
+		fmt.Fprintln(out, u.Section("Docker MCP Servers"))
+		for _, d := range result.Docker {
+			ports := d.Ports
+			if ports == "" {
+				ports = "-"
+			}
+			fmt.Fprintf(out, "  %s  %-30s  %-10s  %s\n",
+				u.Emoji("\U0001f433"), d.Name, d.Status, ports)
+		}
+		fmt.Fprintln(out)
+	}
+
+	// --- Audit history ---
+	if len(result.Audit) > 0 {
+		fmt.Fprintln(out, u.Section("Audit History (seen in traces)"))
+		for server, tools := range result.Audit {
+			toolList := strings.Join(tools, ", ")
+			if len(toolList) > 60 {
+				toolList = toolList[:57] + "..."
+			}
+			fmt.Fprintf(out, "  %s  %-20s  %d tool(s)  (%s)\n",
+				u.Emoji("\U0001f4cb"), server, len(tools), toolList)
+		}
+		fmt.Fprintln(out)
+	}
+
+	// --- Summary ---
+	nDocker := len(result.Docker)
+	nAudit := len(result.Audit)
+	fmt.Fprintf(out, "  Summary: %d configured, %d installed (not configured), %d docker, %d audit-only\n",
+		len(result.Configured), len(unconfiguredNPM)+len(unconfiguredPip), nDocker, nAudit)
+	fmt.Fprintln(out)
+
+	return 0
+}
+
+// filterUnconfigured returns only PackageEntry items with status "installed-not-configured".
+func filterUnconfigured(entries []mcpclient.PackageEntry) []mcpclient.PackageEntry {
+	var out []mcpclient.PackageEntry
+	for _, e := range entries {
+		if e.Status == "installed-not-configured" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// filterConfigured returns only PackageEntry items with status "configured".
+func filterConfigured(entries []mcpclient.PackageEntry) []mcpclient.PackageEntry {
+	var out []mcpclient.PackageEntry
+	for _, e := range entries {
+		if e.Status == "configured" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func printMCPUsage(w io.Writer) {
 	u := ui.New(w)
 	const bodyIndent = "  "
@@ -329,6 +482,8 @@ func printMCPUsage(w io.Writer) {
 		{"allow <server>", "Add a server to the MCP allowed list"},
 		{"block <server>", "Add a server to the MCP blocked list (and remove from allowed)"},
 		{"list", "Show current allowed and blocked MCP servers"},
+		{"scan", "Discover all MCP servers: configs, npm, pip, Docker, audit history"},
+		{"scan --json", "Machine-readable scan output"},
 		{"help", "Show MCP help"},
 	}
 	for _, c := range cmds {

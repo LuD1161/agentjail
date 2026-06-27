@@ -16,6 +16,7 @@
 //	POST /api/policy/enable      edit mode only: enable a library rule
 //	POST /api/policy/disable     edit mode only: disable a library rule
 //	POST /api/policy/reload      edit mode only: send SIGHUP to daemon
+//	GET  /api/policy/mcp-scan   full MCP server scan (read-only)
 package ui
 
 import (
@@ -108,6 +109,7 @@ func (s *Server) Start(
 		s.handlePolicyDisable(w, r, libraryRuleNames)
 	})
 	mux.HandleFunc("/api/policy/reload", s.handlePolicyReload)
+	mux.HandleFunc("/api/policy/mcp-scan", s.handlePolicyMCPScan)
 
 	go s.tailLog()
 
@@ -666,6 +668,25 @@ func (s *Server) mcpToolsFromAudit(ctx context.Context) map[string][]string {
 		result[server] = append(result[server], tool)
 	}
 	return result
+}
+
+// handlePolicyMCPScan performs a full MCP scan and returns the JSON result.
+// This is always read-only, no --edit-policy gate needed.
+func (s *Server) handlePolicyMCPScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("home dir: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	result := mcpclient.FullScan(home, s.dbPath)
+	writeJSON(w, result)
 }
 
 // ---------------------------------------------------------------------------
