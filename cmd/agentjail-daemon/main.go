@@ -135,6 +135,9 @@ type server struct {
 	eventStore store.EventStore
 	decCh      chan store.DecisionRecord
 	decWg      sync.WaitGroup
+
+	// activeSessions tracks which session IDs have open connections.
+	activeSessions *activeTracker
 }
 
 // projectEngine holds a compiled OPA engine for a specific project's merged
@@ -757,6 +760,13 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
 
+	var connSessionID string
+	defer func() {
+		if connSessionID != "" && s.activeSessions != nil {
+			s.activeSessions.unregister(connSessionID)
+		}
+	}()
+
 	scanner := bufio.NewScanner(conn)
 	// 1 MB line buffer — large enough for realistic tool_input payloads.
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -782,6 +792,11 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			})
 			slog.Warn("malformed request", "err", err)
 			continue
+		}
+
+		if req.SessionID != "" && connSessionID == "" && s.activeSessions != nil {
+			connSessionID = req.SessionID
+			s.activeSessions.register(connSessionID)
 		}
 
 		start := time.Now()
@@ -1298,8 +1313,9 @@ func main() {
 	}
 
 	srv := &server{
-		engine: eng,
-		cache:  policy.NewLRUCache(policy.DefaultCacheSize),
+		engine:         eng,
+		cache:          policy.NewLRUCache(policy.DefaultCacheSize),
+		activeSessions: newActiveTracker(filepath.Dir(*policyPath)),
 	}
 
 	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
@@ -1493,6 +1509,7 @@ func main() {
 			}
 			// Remove the socket file so a fresh start won't see a stale one.
 			_ = os.Remove(*socketPath)
+			srv.activeSessions.cleanup()
 			return
 		}
 	}

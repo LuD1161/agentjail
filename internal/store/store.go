@@ -70,6 +70,12 @@ type Filter struct {
 	OrderDesc bool          // order by id DESC (newest first); default ASC (chronological)
 }
 
+// SessionFilter selects sessions for ListSessionsFiltered.
+type SessionFilter struct {
+	Since time.Duration // only sessions with end_ts newer than now-Since; 0 = no filter
+	Limit int          // 0 = no limit
+}
+
 // ActionCount is one row from the per-session action aggregate query.
 type ActionCount struct {
 	SessionID string
@@ -112,6 +118,7 @@ type EventStore interface {
 	ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error)
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)
+	ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error)
 	Cleanup(ctx context.Context, maxAge time.Duration) error
 	UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error
 	UpsertDiscoveredSkill(ctx context.Context, name, source string) error
@@ -127,6 +134,7 @@ type ReadOnlyStore interface {
 	ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error)
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)
+	ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error)
 	CountActionsBySession(ctx context.Context) ([]ActionCount, error)
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
