@@ -1,16 +1,21 @@
 // scan.go -- package manager + Docker scanner for MCP server discovery.
 //
 // ScanNPMGlobal, ScanPipPackages, and ScanDocker probe the local machine for
-// MCP-related packages and containers. FullScan orchestrates all scanners
-// concurrently and cross-references results against configured servers.
+// MCP-related packages and containers. ScanSessionLogs discovers remote
+// connectors from Claude Code session JSONL logs. FullScan orchestrates all
+// scanners concurrently and cross-references results against configured servers.
 package mcpclient
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,11 +25,12 @@ import (
 
 // ScanResult is the full inventory of MCP servers found on the machine.
 type ScanResult struct {
-	Configured []MCPServerEntry    `json:"configured"`      // from config files
-	NPM        []PackageEntry      `json:"npm"`             // from npm ls -g
-	Pip        []PackageEntry      `json:"pip"`             // from pip list
-	Docker     []DockerEntry       `json:"docker"`          // from docker ps + docker images
-	Audit      map[string][]string `json:"audit,omitempty"` // server -> [tools]
+	Configured       []MCPServerEntry    `json:"configured"`                 // from config files
+	NPM              []PackageEntry      `json:"npm"`                        // from npm ls -g
+	Pip              []PackageEntry      `json:"pip"`                        // from pip list
+	Docker           []DockerEntry       `json:"docker"`                     // from docker ps + docker images
+	Audit            map[string][]string `json:"audit,omitempty"`            // server -> [tools]
+	RemoteConnectors map[string][]string `json:"remote_connectors,omitempty"` // claude.ai remote connectors
 }
 
 // PackageEntry represents an MCP-related package found by a package manager.
@@ -242,6 +248,12 @@ func ScanDocker() []DockerEntry {
 	return entries
 }
 
+// AuditToolsFromDB is the exported version of auditToolsFromDB for use by
+// the CLI `mcp tools` command. Returns nil if the DB is unavailable.
+func AuditToolsFromDB(dbPath string) map[string][]string {
+	return auditToolsFromDB(dbPath)
+}
+
 // auditToolsFromDB queries the decisions table for distinct MCP tool names
 // grouped by server. Returns nil if the database is unavailable.
 func auditToolsFromDB(dbPath string) map[string][]string {
@@ -293,20 +305,125 @@ func auditToolsFromDB(dbPath string) map[string][]string {
 	return result
 }
 
+// ScanSessionLogs scans Claude Code session JSONL logs at
+// ~/.claude/projects/*/*.jsonl to discover claude.ai remote connectors.
+//
+// It looks for attachment entries with type "deferred_tools_delta" and filters
+// tool names matching the prefix "mcp__claude_ai_". Server name and tool name
+// are extracted from the tool name: "mcp__claude_ai_Gmail__authenticate" yields
+// server="claude_ai_Gmail", tool="authenticate".
+//
+// Returns a map of server name to sorted, deduplicated tool list.
+// Missing or unreadable files are silently skipped. A 5-second timeout is
+// applied; the first deferred_tools_delta entry in each file is used (it
+// contains the full list).
+func ScanSessionLogs(home string) map[string][]string {
+	pattern := filepath.Join(home, ".claude", "projects", "*", "*.jsonl")
+	files, err := filepath.Glob(pattern)
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+
+	// server -> set of tools seen
+	seen := make(map[string]map[string]struct{})
+
+	type attachmentMsg struct {
+		Type       string `json:"type"`
+		Attachment struct {
+			Type       string   `json:"type"`
+			AddedNames []string `json:"addedNames"`
+		} `json:"attachment"`
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for _, fpath := range files {
+		if time.Now().After(deadline) {
+			break
+		}
+
+		f, err := os.Open(fpath)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		foundDelta := false
+		for scanner.Scan() {
+			if time.Now().After(deadline) {
+				break
+			}
+			line := scanner.Bytes()
+			var msg attachmentMsg
+			if err := json.Unmarshal(line, &msg); err != nil {
+				continue
+			}
+			if msg.Type != "attachment" {
+				continue
+			}
+			if msg.Attachment.Type != "deferred_tools_delta" {
+				continue
+			}
+			// Found the delta - process it and stop reading this file.
+			foundDelta = true
+			for _, toolName := range msg.Attachment.AddedNames {
+				if !strings.HasPrefix(toolName, "mcp__claude_ai_") {
+					continue
+				}
+				// Parse: mcp__claude_ai_Gmail__authenticate
+				rest := strings.TrimPrefix(toolName, "mcp__")
+				idx := strings.Index(rest, "__")
+				if idx <= 0 {
+					continue
+				}
+				server := rest[:idx]
+				tool := rest[idx+2:]
+				if _, ok := seen[server]; !ok {
+					seen[server] = make(map[string]struct{})
+				}
+				seen[server][tool] = struct{}{}
+			}
+			break // first delta has the full list; no need to read more
+		}
+		f.Close()
+
+		if foundDelta {
+			// We found the delta in this file; no need to continue for this file.
+			_ = foundDelta
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	result := make(map[string][]string, len(seen))
+	for server, toolSet := range seen {
+		tools := make([]string, 0, len(toolSet))
+		for t := range toolSet {
+			tools = append(tools, t)
+		}
+		sort.Strings(tools)
+		result[server] = tools
+	}
+	return result
+}
+
 // FullScan orchestrates all scanners concurrently and cross-references results.
 // home is the user's home directory; dbPath is the path to the agentjail SQLite
 // database (empty string to skip audit history).
 func FullScan(home string, dbPath string) *ScanResult {
 	var (
-		configured []MCPServerEntry
-		npmPkgs    []PackageEntry
-		pipPkgs    []PackageEntry
-		dockerEnts []DockerEntry
-		auditTools map[string][]string
-		wg         sync.WaitGroup
+		configured       []MCPServerEntry
+		npmPkgs          []PackageEntry
+		pipPkgs          []PackageEntry
+		dockerEnts       []DockerEntry
+		auditTools       map[string][]string
+		remoteConnectors map[string][]string
+		wg               sync.WaitGroup
 	)
 
-	wg.Add(5)
+	wg.Add(6)
 
 	go func() {
 		defer wg.Done()
@@ -331,6 +448,11 @@ func FullScan(home string, dbPath string) *ScanResult {
 	go func() {
 		defer wg.Done()
 		auditTools = auditToolsFromDB(dbPath)
+	}()
+
+	go func() {
+		defer wg.Done()
+		remoteConnectors = ScanSessionLogs(home)
 	}()
 
 	wg.Wait()
@@ -378,10 +500,11 @@ func FullScan(home string, dbPath string) *ScanResult {
 	}
 
 	return &ScanResult{
-		Configured: configured,
-		NPM:        npmPkgs,
-		Pip:        pipPkgs,
-		Docker:     dockerEnts,
-		Audit:      auditTools,
+		Configured:       configured,
+		NPM:              npmPkgs,
+		Pip:              pipPkgs,
+		Docker:           dockerEnts,
+		Audit:            auditTools,
+		RemoteConnectors: remoteConnectors,
 	}
 }
