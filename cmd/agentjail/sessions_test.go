@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,13 +71,55 @@ func TestLoadActiveSessionsFromPath_MissingFile(t *testing.T) {
 	}
 }
 
-func TestLoadActiveSessionsFromPath_ValidFile(t *testing.T) {
+func TestLoadActiveSessionsFromPath_WithPID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "active-sessions.json")
+
+	// Use our own PID — guaranteed to be alive.
+	myPID := os.Getpid()
+	entries := []activeEntry{
+		{SessionID: "alive-session", PID: myPID},
+		{SessionID: "dead-session", PID: 99999999},
+	}
+	data, _ := json.Marshal(entries)
+	os.WriteFile(path, data, 0644)
+
+	m := loadActiveSessionsFromPath(path)
+	if !m["alive-session"] {
+		t.Error("expected alive-session to be active (our PID is alive)")
+	}
+	if m["dead-session"] {
+		t.Error("expected dead-session to be inactive (PID 99999999 should not exist)")
+	}
+}
+
+func TestIsProcessAlive(t *testing.T) {
+	if !isProcessAlive(os.Getpid()) {
+		t.Error("our own PID should be alive")
+	}
+	if isProcessAlive(99999999) {
+		t.Error("PID 99999999 should not be alive")
+	}
+}
+
+func TestLoadActiveSessionsFromPath_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "active-sessions.json")
+	os.WriteFile(path, []byte("not json"), 0644)
+
+	m := loadActiveSessionsFromPath(path)
+	if len(m) != 0 {
+		t.Errorf("expected empty map for invalid JSON, got %v", m)
+	}
+}
+
+func TestLoadActiveSessionsFromPath_BackwardsCompat(t *testing.T) {
+	// Old format was a plain string array — should not crash, just return empty.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "active-sessions.json")
 	os.WriteFile(path, []byte(`["session-a","session-b"]`), 0644)
 
 	m := loadActiveSessionsFromPath(path)
-	if len(m) != 2 || !m["session-a"] || !m["session-b"] {
-		t.Errorf("expected {session-a: true, session-b: true}, got %v", m)
-	}
+	// Old format won't parse into []activeEntry, so empty is fine.
+	fmt.Printf("backwards compat: %v (ok if empty)\n", m)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/store"
@@ -21,9 +22,13 @@ func activeSessionsPath() string {
 	return filepath.Join(home, ".agentjail", "active-sessions.json")
 }
 
-// loadActiveSessions reads the daemon's active-sessions.json and returns
-// the set of currently active session IDs. Returns an empty set on any error
-// (file missing = daemon not running = no active sessions).
+type activeEntry struct {
+	SessionID string `json:"session_id"`
+	PID       int    `json:"pid"`
+}
+
+// loadActiveSessions reads the daemon's active-sessions.json, checks which
+// PIDs are still alive, and returns the set of truly active session IDs.
 func loadActiveSessions() map[string]bool {
 	return loadActiveSessionsFromPath(activeSessionsPath())
 }
@@ -36,15 +41,27 @@ func loadActiveSessionsFromPath(path string) map[string]bool {
 	if err != nil {
 		return nil
 	}
-	var ids []string
-	if err := json.Unmarshal(data, &ids); err != nil {
+	var entries []activeEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
 		return nil
 	}
-	m := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		m[id] = true
+	m := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.PID > 0 && isProcessAlive(e.PID) {
+			m[e.SessionID] = true
+		}
 	}
 	return m
+}
+
+// isProcessAlive checks if a process with the given PID exists.
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil
 }
 
 type sessionOutput struct {

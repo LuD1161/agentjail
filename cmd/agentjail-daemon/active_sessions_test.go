@@ -8,51 +8,36 @@ import (
 	"testing"
 )
 
-func TestActiveTracker_RegisterUnregister(t *testing.T) {
+func TestActiveTracker_Update(t *testing.T) {
 	dir := t.TempDir()
 	at := newActiveTracker(dir)
 
-	at.register("session-1")
-	at.register("session-2")
+	at.update("session-1", 1000)
+	at.update("session-2", 2000)
 
 	got := at.list()
-	sort.Strings(got)
-	if len(got) != 2 || got[0] != "session-1" || got[1] != "session-2" {
-		t.Errorf("after register: got %v, want [session-1 session-2]", got)
+	sort.Slice(got, func(i, j int) bool { return got[i].SessionID < got[j].SessionID })
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(got))
 	}
-
-	at.unregister("session-1")
-	got = at.list()
-	if len(got) != 1 || got[0] != "session-2" {
-		t.Errorf("after unregister session-1: got %v, want [session-2]", got)
+	if got[0].SessionID != "session-1" || got[0].PID != 1000 {
+		t.Errorf("entry 0: got %+v, want {session-1, 1000}", got[0])
 	}
-
-	at.unregister("session-2")
-	got = at.list()
-	if len(got) != 0 {
-		t.Errorf("after unregister all: got %v, want []", got)
+	if got[1].SessionID != "session-2" || got[1].PID != 2000 {
+		t.Errorf("entry 1: got %+v, want {session-2, 2000}", got[1])
 	}
 }
 
-func TestActiveTracker_Refcount(t *testing.T) {
+func TestActiveTracker_UpdateRefreshesPID(t *testing.T) {
 	dir := t.TempDir()
 	at := newActiveTracker(dir)
 
-	at.register("session-1")
-	at.register("session-1")
-	at.register("session-1")
+	at.update("session-1", 1000)
+	at.update("session-1", 2000)
 
-	at.unregister("session-1")
 	got := at.list()
-	if len(got) != 1 {
-		t.Errorf("after 3 register + 1 unregister: got %v, want [session-1]", got)
-	}
-
-	at.unregister("session-1")
-	at.unregister("session-1")
-	got = at.list()
-	if len(got) != 0 {
-		t.Errorf("after full unregister: got %v, want []", got)
+	if len(got) != 1 || got[0].PID != 2000 {
+		t.Errorf("expected PID updated to 2000, got %+v", got)
 	}
 }
 
@@ -60,34 +45,23 @@ func TestActiveTracker_FlushToDisk(t *testing.T) {
 	dir := t.TempDir()
 	at := newActiveTracker(dir)
 
-	at.register("abc-123")
-	at.register("def-456")
+	at.update("abc-123", 1234)
+	at.update("def-456", 5678)
 
 	data, err := os.ReadFile(filepath.Join(dir, "active-sessions.json"))
 	if err != nil {
 		t.Fatalf("read active-sessions.json: %v", err)
 	}
-	var ids []string
-	if err := json.Unmarshal(data, &ids); err != nil {
+	var entries []activeEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	sort.Strings(ids)
-	if len(ids) != 2 || ids[0] != "abc-123" || ids[1] != "def-456" {
-		t.Errorf("on-disk: got %v, want [abc-123 def-456]", ids)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].SessionID < entries[j].SessionID })
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries on disk, got %d", len(entries))
 	}
-
-	at.unregister("abc-123")
-	at.unregister("def-456")
-
-	data, err = os.ReadFile(filepath.Join(dir, "active-sessions.json"))
-	if err != nil {
-		t.Fatalf("read after unregister: %v", err)
-	}
-	if err := json.Unmarshal(data, &ids); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(ids) != 0 {
-		t.Errorf("on-disk after unregister: got %v, want []", ids)
+	if entries[0].PID != 1234 || entries[1].PID != 5678 {
+		t.Errorf("unexpected PIDs: %+v", entries)
 	}
 }
 
@@ -95,10 +69,10 @@ func TestActiveTracker_Cleanup(t *testing.T) {
 	dir := t.TempDir()
 	at := newActiveTracker(dir)
 
-	at.register("session-1")
+	at.update("session-1", 1000)
 	path := filepath.Join(dir, "active-sessions.json")
 	if _, err := os.Stat(path); err != nil {
-		t.Fatal("expected file to exist after register")
+		t.Fatal("expected file to exist after update")
 	}
 
 	at.cleanup()
@@ -111,11 +85,12 @@ func TestActiveTracker_EmptySessionID(t *testing.T) {
 	dir := t.TempDir()
 	at := newActiveTracker(dir)
 
-	at.register("")
-	at.unregister("")
+	at.update("", 1000)
+	at.update("session-1", 0)
+	at.update("session-2", -1)
 
 	got := at.list()
 	if len(got) != 0 {
-		t.Errorf("empty session ID should be ignored: got %v", got)
+		t.Errorf("empty/invalid entries should be ignored: got %v", got)
 	}
 }
