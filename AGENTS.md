@@ -39,6 +39,13 @@ New libraries require an ADR justifying the addition. After adding or removing
 any dependency, regenerate the attribution file with `make licenses` (CI fails
 the release if `THIRD_PARTY_LICENSES` is stale).
 
+## Platform-specific code must use build tags
+
+Define the interface or shared logic in a plain `.go` file. Put each OS
+implementation in `_linux.go`, `_darwin.go`, etc. with `//go:build` constraints.
+Never put `/proc` reads, `sysctl` calls, or other OS-specific APIs in an
+unconstrained file — the compiler selects the right file at build time.
+
 ## Small atomic commits
 
 - Conventional Commits: `type(scope): description`
