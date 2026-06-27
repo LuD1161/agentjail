@@ -112,6 +112,16 @@ type server struct {
 	sessionAskMu   sync.RWMutex
 	sessionAskSeen map[string]map[string]bool // sessionID → set of ruleID
 
+	// Per-project policy engine cache. Key is repo root path.
+	// Each entry holds a compiled OPA engine with the project-merged config.
+	projectEngMu   sync.RWMutex
+	projectEngines map[string]*projectEngine
+
+	// cfg holds the current global PolicyConfig (under engineMu) so
+	// resolveProjectEngine can merge project overlays on top of it.
+	cfg     *agentconfig.PolicyConfig
+	modules [][2]string
+
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
 
@@ -125,6 +135,15 @@ type server struct {
 	eventStore store.EventStore
 	decCh      chan store.DecisionRecord
 	decWg      sync.WaitGroup
+}
+
+// projectEngine holds a compiled OPA engine for a specific project's merged
+// config. The configHash allows cheap invalidation when the project's
+// policy.yaml changes on disk.
+type projectEngine struct {
+	eng        policy.HookEngine
+	cache      policy.Cache
+	configHash string // hex SHA-256 of project policy.yaml content
 }
 
 // recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
@@ -257,11 +276,18 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 	// R1/R7: cwd is now part of the static key.
 	cacheKey := hookCacheKey(input)
 
-	s.engineMu.RLock()
-	eng := s.engine
-	cache := s.cache
-	genAtStart := s.gen.Load()
-	s.engineMu.RUnlock()
+	// Per-project policy: check <RepoRoot>/.agentjail/policy.yaml
+	eng, cache := s.resolveProjectEngine(ctx, input.RepoRoot)
+	isProjectEng := eng != nil
+	var genAtStart uint64
+	if !isProjectEng {
+		// No project config — use global engine.
+		s.engineMu.RLock()
+		eng = s.engine
+		cache = s.cache
+		genAtStart = s.gen.Load()
+		s.engineMu.RUnlock()
+	}
 
 	if d, ok := cache.Get(cacheKey); ok {
 		return Response{
@@ -297,8 +323,14 @@ func (s *server) eval(ctx context.Context, req Request) (Response, error) {
 		}, nil
 	}
 
-	if s.gen.Load() == genAtStart && d.Action != "ask" {
-		cache.Set(cacheKey, d)
+	// Only cache non-ask decisions. For the global engine, guard against
+	// stale cache writes during reload via the generation counter.
+	// Project engines use hash-based invalidation (resolveProjectEngine
+	// replaces the cache when the file hash changes), so always cache.
+	if d.Action != "ask" {
+		if isProjectEng || s.gen.Load() == genAtStart {
+			cache.Set(cacheKey, d)
+		}
 	}
 
 	return Response{
@@ -868,6 +900,89 @@ func dedupAppend(slice []string, s string) []string {
 	return append(slice, s)
 }
 
+// resolveProjectEngine checks for a per-project policy file at
+// <repoRoot>/.agentjail/policy.yaml. If found, it returns a compiled OPA
+// engine with the project config merged over the global config, plus a
+// per-project LRU cache. Results are cached by repo root and invalidated
+// when the file content changes (SHA-256 hash check). Returns (nil, nil)
+// when no project policy exists or on any error (fail-open to global).
+func (s *server) resolveProjectEngine(ctx context.Context, repoRoot string) (policy.HookEngine, policy.Cache) {
+	if repoRoot == "" {
+		return nil, nil
+	}
+
+	projectPolicyPath := filepath.Join(repoRoot, ".agentjail", "policy.yaml")
+
+	// Quick check: does the file exist?
+	content, err := os.ReadFile(projectPolicyPath)
+	if err != nil {
+		return nil, nil // no project policy
+	}
+
+	hash := sha256hex(content)
+
+	// Check cache (read lock — fast path).
+	s.projectEngMu.RLock()
+	if pe, ok := s.projectEngines[repoRoot]; ok && pe.configHash == hash {
+		s.projectEngMu.RUnlock()
+		return pe.eng, pe.cache
+	}
+	s.projectEngMu.RUnlock()
+
+	// Build merged config: global base + project overlay.
+	s.engineMu.RLock()
+	globalCfg := s.cfg
+	mods := s.modules
+	s.engineMu.RUnlock()
+
+	if globalCfg == nil {
+		return nil, nil // not yet initialized
+	}
+
+	projectCfg, err := agentconfig.Load(projectPolicyPath)
+	if err != nil {
+		slog.Warn("project policy.yaml malformed — falling back to global",
+			"path", projectPolicyPath, "err", err)
+		return nil, nil
+	}
+
+	mergedCfg := agentconfig.Merge(globalCfg, projectCfg)
+	mergedCfg.File.TempRoots = buildTempRoots()
+
+	opaData := map[string]interface{}{
+		"config": mergedCfg.ToOPAData(),
+	}
+
+	eng, err := policy.NewHookOPAEngineWithData(ctx, mods, opaData)
+	if err != nil {
+		slog.Warn("project policy engine compilation failed — falling back to global",
+			"path", projectPolicyPath, "err", err)
+		return nil, nil
+	}
+
+	newCache := policy.NewLRUCache(1024)
+
+	// Store in cache (write lock).
+	s.projectEngMu.Lock()
+	if s.projectEngines == nil {
+		s.projectEngines = make(map[string]*projectEngine)
+	}
+	s.projectEngines[repoRoot] = &projectEngine{
+		eng:        eng,
+		cache:      newCache,
+		configHash: hash,
+	}
+	s.projectEngMu.Unlock()
+
+	return eng, newCache
+}
+
+// sha256hex returns the hex-encoded SHA-256 digest of data.
+func sha256hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
 // loadConfig loads ~/.agentjail/policy.yaml, merges it over Default(), and
 // injects the resolved temp roots.  Returns the merged config.  If the file
 // does not exist, Default() is returned with temp roots injected.
@@ -899,6 +1014,8 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 	}
 	s.engineMu.Lock()
 	s.engine = eng
+	s.cfg = cfg
+	s.modules = modules
 	s.gen.Add(1)
 	// Invalidate the cache on reload so decisions from the old rule set
 	// cannot leak into the new one. Borrowed from Linux page cache
@@ -910,6 +1027,11 @@ func (s *server) reload(ctx context.Context, modules [][2]string, cfg *agentconf
 	s.awsCfgMu.Lock()
 	s.awsProfiles = nil
 	s.awsCfgMu.Unlock()
+	// Invalidate all project engine caches so project policies are
+	// re-merged against the new global config on next eval.
+	s.projectEngMu.Lock()
+	s.projectEngines = nil
+	s.projectEngMu.Unlock()
 	return nil
 }
 
