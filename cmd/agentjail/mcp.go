@@ -95,6 +95,14 @@ func runMCP(args []string) int {
 			return 2
 		}
 		return runMCPWhere(args[1:])
+	case "tools":
+		return runMCPTools(args[1:])
+	case "tool":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: agentjail mcp tool {allow|block|ask|clear} <server> <tool>")
+			return 2
+		}
+		return runMCPTool(args[1:])
 	case "help", "-h", "--help":
 		printMCPUsage(os.Stdout)
 		return 0
@@ -379,6 +387,33 @@ func renderMCPScan(out io.Writer, result *mcpclient.ScanResult) int {
 	}
 	fmt.Fprintln(out)
 
+	// --- Remote Connectors (claude.ai) ---
+	if len(result.RemoteConnectors) > 0 {
+		fmt.Fprintln(out, u.Section("Remote Connectors (claude.ai)"))
+		rcServers := make([]string, 0, len(result.RemoteConnectors))
+		for s := range result.RemoteConnectors {
+			rcServers = append(rcServers, s)
+		}
+		sort.Strings(rcServers)
+		rcWidth := 0
+		for _, s := range rcServers {
+			if len(s) > rcWidth {
+				rcWidth = len(s)
+			}
+		}
+		for _, server := range rcServers {
+			tools := result.RemoteConnectors[server]
+			pad := strings.Repeat(" ", rcWidth-len(server)+2)
+			toolList := strings.Join(tools, ", ")
+			if len(toolList) > 60 {
+				toolList = toolList[:57] + "..."
+			}
+			fmt.Fprintf(out, "  %s\n",
+				u.Badge("ok", fmt.Sprintf("%s%s%d tool(s)  (%s)", server, pad, len(tools), toolList)))
+		}
+		fmt.Fprintln(out)
+	}
+
 	// --- Installed packages (not yet configured) ---
 	unconfiguredNPM := filterUnconfigured(result.NPM)
 	unconfiguredPip := filterUnconfigured(result.Pip)
@@ -442,8 +477,9 @@ func renderMCPScan(out io.Writer, result *mcpclient.ScanResult) int {
 	// --- Summary ---
 	nDocker := len(result.Docker)
 	nAudit := len(result.Audit)
-	fmt.Fprintf(out, "  Summary: %d configured, %d installed (not configured), %d docker, %d audit-only\n",
-		len(result.Configured), len(unconfiguredNPM)+len(unconfiguredPip), nDocker, nAudit)
+	nRemote := len(result.RemoteConnectors)
+	fmt.Fprintf(out, "  Summary: %d configured, %d installed (not configured), %d docker, %d audit-only, %d remote connector(s)\n",
+		len(result.Configured), len(unconfiguredNPM)+len(unconfiguredPip), nDocker, nAudit, nRemote)
 	fmt.Fprintln(out)
 
 	return 0
@@ -589,6 +625,455 @@ func tildeHome(path, home string) string {
 	return path
 }
 
+// ---------------------------------------------------------------------------
+// mcp tools -- list all tools per server with policy status
+// ---------------------------------------------------------------------------
+
+func runMCPTools(args []string) int {
+	return runMCPToolsOutput(args, os.Stdout, os.Stderr)
+}
+
+func runMCPToolsOutput(args []string, out, errOut io.Writer) int {
+	var filterServer string
+	jsonMode := false
+	for _, a := range args {
+		if a == "--json" {
+			jsonMode = true
+		} else if a == "help" || a == "-h" || a == "--help" {
+			fmt.Fprintln(out, "usage: agentjail mcp tools [<server>] [--json]")
+			return 0
+		} else if !strings.HasPrefix(a, "-") && filterServer == "" {
+			filterServer = a
+		}
+	}
+
+	cfgPath, err := policyConfigPath()
+	if err != nil {
+		fmt.Fprintf(errOut, "agentjail mcp tools: %v\n", err)
+		return 1
+	}
+	cfg, err := config.LoadOrDefault(cfgPath)
+	if err != nil {
+		fmt.Fprintf(errOut, "agentjail mcp tools: load policy: %v\n", err)
+		return 1
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(errOut, "agentjail mcp tools: %v\n", err)
+		return 1
+	}
+	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+
+	auditTools := mcpclient.AuditToolsFromDB(dbPath)
+
+	serverTools := make(map[string]map[string]bool)
+	addTool := func(server, tool string) {
+		if _, ok := serverTools[server]; !ok {
+			serverTools[server] = make(map[string]bool)
+		}
+		serverTools[server][tool] = true
+	}
+	for server, tools := range auditTools {
+		for _, t := range tools {
+			addTool(server, t)
+		}
+	}
+	for server, scfg := range cfg.MCP.Servers {
+		for _, t := range scfg.AllowedTools {
+			addTool(server, t)
+		}
+		for _, t := range scfg.BlockedTools {
+			addTool(server, t)
+		}
+		for _, t := range scfg.AskTools {
+			addTool(server, t)
+		}
+	}
+
+	// Include remote connectors from session logs.
+	remoteConnectors := mcpclient.ScanSessionLogs(home)
+	for server, tools := range remoteConnectors {
+		for _, t := range tools {
+			addTool(server, t)
+		}
+	}
+
+	if filterServer != "" {
+		if _, ok := serverTools[filterServer]; !ok {
+			fmt.Fprintf(out, "no tools found for server %q -- run 'agentjail mcp scan' first\n", filterServer)
+			return 0
+		}
+		serverTools = map[string]map[string]bool{filterServer: serverTools[filterServer]}
+	}
+
+	if len(serverTools) == 0 {
+		fmt.Fprintln(out, "no MCP tool data found -- run 'agentjail mcp scan' first to populate the audit database")
+		return 0
+	}
+
+	servers := make([]string, 0, len(serverTools))
+	for s := range serverTools {
+		servers = append(servers, s)
+	}
+	sort.Strings(servers)
+
+	if jsonMode {
+		return renderMCPToolsJSON(out, errOut, servers, serverTools, cfg)
+	}
+	u := ui.New(out)
+	return renderMCPToolsText(out, u, servers, serverTools, cfg)
+}
+
+func mcpToolStatus(toolName, server string, cfg *config.PolicyConfig) string {
+	scfg, ok := cfg.MCP.Servers[server]
+	if !ok {
+		return "inherit"
+	}
+	for _, t := range scfg.BlockedTools {
+		if t == toolName {
+			return "blocked"
+		}
+	}
+	for _, t := range scfg.AskTools {
+		if t == toolName {
+			return "ask"
+		}
+	}
+	for _, t := range scfg.AllowedTools {
+		if t == toolName {
+			return "allowed"
+		}
+	}
+	return "inherit"
+}
+
+func sortedStringSet(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func renderMCPToolsText(out io.Writer, u *ui.UI, servers []string, serverTools map[string]map[string]bool, cfg *config.PolicyConfig) int {
+	for _, server := range servers {
+		tools := sortedStringSet(serverTools[server])
+		fmt.Fprintf(out, "\n%s\n", u.Section(fmt.Sprintf("%s (%d tools)", server, len(tools))))
+
+		width := 0
+		for _, t := range tools {
+			if len(t) > width {
+				width = len(t)
+			}
+		}
+
+		for _, tool := range tools {
+			pad := strings.Repeat(" ", width-len(tool)+2)
+			status := mcpToolStatus(tool, server, cfg)
+			switch status {
+			case "allowed":
+				fmt.Fprintln(out, "  "+u.Badge("ok", tool+pad+"allowed"))
+			case "blocked":
+				fmt.Fprintln(out, "  "+u.Badge("fail", tool+pad+"blocked"))
+			case "ask":
+				fmt.Fprintln(out, "  "+u.Badge("warn", tool+pad+"ask"))
+			default:
+				fmt.Fprintln(out, "  "+u.Badge("ok", tool+pad+"inherit"))
+			}
+		}
+	}
+	fmt.Fprintln(out)
+	return 0
+}
+
+type mcpToolsJSONOutput struct {
+	Servers map[string]mcpServerToolsJSON `json:"servers"`
+}
+
+type mcpServerToolsJSON struct {
+	Tools []mcpToolJSON `json:"tools"`
+}
+
+type mcpToolJSON struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+func renderMCPToolsJSON(out, errOut io.Writer, servers []string, serverTools map[string]map[string]bool, cfg *config.PolicyConfig) int {
+	result := mcpToolsJSONOutput{
+		Servers: make(map[string]mcpServerToolsJSON, len(servers)),
+	}
+	for _, server := range servers {
+		tools := sortedStringSet(serverTools[server])
+		toolList := make([]mcpToolJSON, 0, len(tools))
+		for _, tool := range tools {
+			toolList = append(toolList, mcpToolJSON{
+				Name:   tool,
+				Status: mcpToolStatus(tool, server, cfg),
+			})
+		}
+		result.Servers[server] = mcpServerToolsJSON{Tools: toolList}
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(result); err != nil {
+		fmt.Fprintf(errOut, "agentjail mcp tools: json encode: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// ---------------------------------------------------------------------------
+// mcp tool -- per-tool policy mutation (allow/block/ask/clear)
+// ---------------------------------------------------------------------------
+
+func confirmMCPToolMutation(verb, server, tool string) bool {
+	effectDesc := map[string]string{
+		"allow": "permitted",
+		"block": "denied",
+		"ask":   "prompted for confirmation",
+		"clear": "returned to server default",
+	}[verb]
+	return requireInteractiveConfirm(
+		fmt.Sprintf(
+			"agentjail mcp tool %s: REFUSED -- no interactive terminal detected.\n"+
+				"  Changing per-tool MCP policy mutates agentjail's own policy.\n"+
+				"  It must be run in a terminal by a human.\n"+
+				"  This restriction prevents an agent from self-approving an MCP tool.\n", verb),
+		fmt.Sprintf(
+			"\n"+
+				"  You are about to %s the tool %q on MCP server %q.\n"+
+				"\n"+
+				"  Effect:   this tool will be %s through the PreToolUse hook.\n"+
+				"  Audit:    change applied to policy.yaml.\n"+
+				"\n"+
+				"  Type 'y' to confirm, anything else to cancel: ",
+			verb, tool, server, effectDesc),
+	)
+}
+
+func parseMCPToolFlags(args []string) (projectDir string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--project" && i+1 < len(args) {
+			projectDir = args[i+1]
+			rest = append(rest, args[:i]...)
+			rest = append(rest, args[i+2:]...)
+			return projectDir, rest
+		}
+	}
+	return "", args
+}
+
+func mcpToolPolicyPath(projectDir string) (string, error) {
+	if projectDir != "" {
+		return filepath.Join(projectDir, ".agentjail", "policy.yaml"), nil
+	}
+	return policyConfigPath()
+}
+
+func removeFromSlice(s []string, val string) []string {
+	out := s[:0:0]
+	for _, v := range s {
+		if v != val {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func containsString(s []string, val string) bool {
+	for _, v := range s {
+		if v == val {
+			return true
+		}
+	}
+	return false
+}
+
+func runMCPTool(args []string) int {
+	projectDir, args := parseMCPToolFlags(args)
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: agentjail mcp tool {allow|block|ask|clear} <server> <tool>")
+		return 2
+	}
+	verb := args[0]
+	switch verb {
+	case "allow", "block", "ask", "clear":
+	case "help", "-h", "--help":
+		fmt.Fprintln(os.Stderr, "usage: agentjail mcp tool {allow|block|ask|clear} <server> <tool> [--project <dir>]")
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool: unknown verb %q (want allow|block|ask|clear)\n", verb)
+		return 2
+	}
+	if len(args) < 3 {
+		fmt.Fprintf(os.Stderr, "usage: agentjail mcp tool %s <server> <tool>\n", verb)
+		return 2
+	}
+	server := args[1]
+	tool := args[2]
+	switch verb {
+	case "allow":
+		return runMCPToolAllow(server, tool, projectDir)
+	case "block":
+		return runMCPToolBlock(server, tool, projectDir)
+	case "ask":
+		return runMCPToolAsk(server, tool, projectDir)
+	case "clear":
+		return runMCPToolClear(server, tool, projectDir)
+	}
+	return 2
+}
+
+func runMCPToolAllow(server, tool, projectDir string) int {
+	if !confirmMCPToolMutation("allow", server, tool) {
+		return 1
+	}
+	path, err := mcpToolPolicyPath(projectDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool allow: %v\n", err)
+		return 1
+	}
+	cfg, err := config.LoadOrDefault(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool allow: load policy: %v\n", err)
+		return 1
+	}
+	if cfg.MCP.Servers == nil {
+		cfg.MCP.Servers = make(map[string]config.MCPServerConfig)
+	}
+	sc := cfg.MCP.Servers[server]
+	if containsString(sc.AllowedTools, tool) {
+		fmt.Printf("already allowed: %s on %s\n", tool, server)
+		return 0
+	}
+	sc.AllowedTools = append(sc.AllowedTools, tool)
+	sc.BlockedTools = removeFromSlice(sc.BlockedTools, tool)
+	sc.AskTools = removeFromSlice(sc.AskTools, tool)
+	cfg.MCP.Servers[server] = sc
+	if err := config.Save(cfg, path); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool allow: save policy: %v\n", err)
+		return 1
+	}
+	fmt.Printf("allowed: %s on %s\n", tool, server)
+	sighupDaemonFn()
+	return 0
+}
+
+func runMCPToolBlock(server, tool, projectDir string) int {
+	if !confirmMCPToolMutation("block", server, tool) {
+		return 1
+	}
+	path, err := mcpToolPolicyPath(projectDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool block: %v\n", err)
+		return 1
+	}
+	cfg, err := config.LoadOrDefault(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool block: load policy: %v\n", err)
+		return 1
+	}
+	if cfg.MCP.Servers == nil {
+		cfg.MCP.Servers = make(map[string]config.MCPServerConfig)
+	}
+	sc := cfg.MCP.Servers[server]
+	if containsString(sc.BlockedTools, tool) {
+		fmt.Printf("already blocked: %s on %s\n", tool, server)
+		return 0
+	}
+	sc.BlockedTools = append(sc.BlockedTools, tool)
+	sc.AllowedTools = removeFromSlice(sc.AllowedTools, tool)
+	sc.AskTools = removeFromSlice(sc.AskTools, tool)
+	cfg.MCP.Servers[server] = sc
+	if err := config.Save(cfg, path); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool block: save policy: %v\n", err)
+		return 1
+	}
+	fmt.Printf("blocked: %s on %s\n", tool, server)
+	sighupDaemonFn()
+	return 0
+}
+
+func runMCPToolAsk(server, tool, projectDir string) int {
+	if !confirmMCPToolMutation("ask", server, tool) {
+		return 1
+	}
+	path, err := mcpToolPolicyPath(projectDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool ask: %v\n", err)
+		return 1
+	}
+	cfg, err := config.LoadOrDefault(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool ask: load policy: %v\n", err)
+		return 1
+	}
+	if cfg.MCP.Servers == nil {
+		cfg.MCP.Servers = make(map[string]config.MCPServerConfig)
+	}
+	sc := cfg.MCP.Servers[server]
+	if containsString(sc.AskTools, tool) {
+		fmt.Printf("already asked: %s on %s\n", tool, server)
+		return 0
+	}
+	sc.AskTools = append(sc.AskTools, tool)
+	sc.AllowedTools = removeFromSlice(sc.AllowedTools, tool)
+	sc.BlockedTools = removeFromSlice(sc.BlockedTools, tool)
+	cfg.MCP.Servers[server] = sc
+	if err := config.Save(cfg, path); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool ask: save policy: %v\n", err)
+		return 1
+	}
+	fmt.Printf("asked: %s on %s\n", tool, server)
+	sighupDaemonFn()
+	return 0
+}
+
+func runMCPToolClear(server, tool, projectDir string) int {
+	if !confirmMCPToolMutation("clear", server, tool) {
+		return 1
+	}
+	path, err := mcpToolPolicyPath(projectDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool clear: %v\n", err)
+		return 1
+	}
+	cfg, err := config.LoadOrDefault(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool clear: load policy: %v\n", err)
+		return 1
+	}
+	if cfg.MCP.Servers == nil {
+		cfg.MCP.Servers = make(map[string]config.MCPServerConfig)
+	}
+	sc, exists := cfg.MCP.Servers[server]
+	if !exists ||
+		(!containsString(sc.AllowedTools, tool) &&
+			!containsString(sc.BlockedTools, tool) &&
+			!containsString(sc.AskTools, tool)) {
+		fmt.Printf("already cleared: %s on %s\n", tool, server)
+		return 0
+	}
+	sc.AllowedTools = removeFromSlice(sc.AllowedTools, tool)
+	sc.BlockedTools = removeFromSlice(sc.BlockedTools, tool)
+	sc.AskTools = removeFromSlice(sc.AskTools, tool)
+	if len(sc.AllowedTools) == 0 && len(sc.BlockedTools) == 0 && len(sc.AskTools) == 0 {
+		delete(cfg.MCP.Servers, server)
+	} else {
+		cfg.MCP.Servers[server] = sc
+	}
+	if err := config.Save(cfg, path); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool clear: save policy: %v\n", err)
+		return 1
+	}
+	fmt.Printf("cleared: %s on %s\n", tool, server)
+	sighupDaemonFn()
+	return 0
+}
+
 func printMCPUsage(w io.Writer) {
 	u := ui.New(w)
 	const bodyIndent = "  "
@@ -606,7 +1091,14 @@ func printMCPUsage(w io.Writer) {
 		{"allow <server>", "Add a server to the MCP allowed list"},
 		{"block <server>", "Add a server to the MCP blocked list (and remove from allowed)"},
 		{"list", "Show current allowed and blocked MCP servers"},
-		{"scan", "Discover all MCP servers: configs, npm, pip, Docker, audit history"},
+		{"tools", "List all MCP tools per server with policy status"},
+		{"tools <server>", "List tools for a specific server"},
+		{"tools --json", "Machine-readable tool listing"},
+		{"tool allow <server> <tool>", "Allow a specific tool on a server"},
+		{"tool block <server> <tool>", "Block a specific tool on a server"},
+		{"tool ask <server> <tool>", "Require confirmation for a specific tool"},
+		{"tool clear <server> <tool>", "Remove per-tool policy (inherit server default)"},
+		{"scan", "Discover all MCP servers: configs, npm, pip, Docker, audit, remote connectors"},
 		{"scan --json", "Machine-readable scan output"},
 		{"where <server>", "Show which projects use this MCP server"},
 		{"where <server> --json", "Machine-readable reverse-index output"},
@@ -619,9 +1111,11 @@ func printMCPUsage(w io.Writer) {
 	fmt.Fprintln(w, u.Section("Examples"))
 	examples := []string{
 		"agentjail mcp allow claude-mem",
-		"agentjail mcp allow filesystem",
 		"agentjail mcp block my-payment-bot",
 		"agentjail mcp list",
+		"agentjail mcp tools linear-server",
+		"agentjail mcp tool block linear-server save_issue",
+		"agentjail mcp tool ask filesystem write_file --project /path/to/project",
 	}
 	for _, ex := range examples {
 		fmt.Fprintln(w, bodyIndent+ex)
