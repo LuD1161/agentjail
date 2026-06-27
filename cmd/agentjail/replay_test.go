@@ -55,6 +55,10 @@ func (m *mockReadOnlyStore) ListDiscoveredSkills(_ context.Context) ([]store.Dis
 	return nil, nil
 }
 
+func (m *mockReadOnlyStore) ListSessionsFiltered(_ context.Context, _ store.SessionFilter) ([]store.Session, error) {
+	return m.sessions, nil
+}
+
 func (m *mockReadOnlyStore) Close() error { return nil }
 
 func TestResolveSessionPrefix_ExactMatch(t *testing.T) {
