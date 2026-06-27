@@ -372,6 +372,54 @@ func (s *sqliteStore) ListSessions(ctx context.Context) ([]Session, error) {
 	return out, rows.Err()
 }
 
+// ListSessionsFiltered returns sessions matching the filter, newest-first.
+func (s *sqliteStore) ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error) {
+	q := `SELECT session_id, start_ts, end_ts, agent, cwd, decision_count FROM sessions`
+	var args []interface{}
+	if f.Since > 0 {
+		cutoff := time.Now().Add(-f.Since).UTC().Format(time.RFC3339Nano)
+		q += ` WHERE end_ts > ? OR end_ts IS NULL`
+		args = append(args, cutoff)
+	}
+	q += ` ORDER BY start_ts DESC`
+	if f.Limit > 0 {
+		q += fmt.Sprintf(` LIMIT %d`, f.Limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list sessions filtered: %w", err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		var (
+			sid      string
+			startStr string
+			endStr   sql.NullString
+			agent    sql.NullString
+			cwd      sql.NullString
+			count    int64
+		)
+		if err := rows.Scan(&sid, &startStr, &endStr, &agent, &cwd, &count); err != nil {
+			return nil, fmt.Errorf("store: scan session: %w", err)
+		}
+		start, _ := time.Parse(time.RFC3339Nano, startStr)
+		var end time.Time
+		if endStr.Valid {
+			end, _ = time.Parse(time.RFC3339Nano, endStr.String)
+		}
+		out = append(out, Session{
+			SessionID:     sid,
+			StartTs:       start,
+			EndTs:         end,
+			Agent:         agent.String,
+			CWD:           cwd.String,
+			DecisionCount: int(count),
+		})
+	}
+	return out, rows.Err()
+}
+
 func (s *sqliteStore) CountActionsBySession(ctx context.Context) ([]ActionCount, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT session_id, action, COUNT(*) FROM decisions GROUP BY session_id, action`)
@@ -549,6 +597,9 @@ func (r *sqliteROStore) DecisionCount(ctx context.Context) (int64, error) {
 }
 func (r *sqliteROStore) ListSessions(ctx context.Context) ([]Session, error) {
 	return r.inner.ListSessions(ctx)
+}
+func (r *sqliteROStore) ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error) {
+	return r.inner.ListSessionsFiltered(ctx, f)
 }
 func (r *sqliteROStore) CountActionsBySession(ctx context.Context) ([]ActionCount, error) {
 	return r.inner.CountActionsBySession(ctx)
