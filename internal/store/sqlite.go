@@ -132,6 +132,25 @@ func (s *sqliteStore) migrate() error {
 			cwd             TEXT,
 			decision_count  INTEGER NOT NULL DEFAULT 0
 		)`,
+		`CREATE TABLE IF NOT EXISTS discovered_tools (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			server     TEXT    NOT NULL,
+			tool       TEXT    NOT NULL,
+			source     TEXT    NOT NULL,
+			first_seen TEXT    NOT NULL,
+			last_seen  TEXT    NOT NULL,
+			UNIQUE(server, tool)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_discovered_tools_server ON discovered_tools(server)`,
+		`CREATE TABLE IF NOT EXISTS discovered_skills (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT    NOT NULL UNIQUE,
+			source     TEXT    NOT NULL,
+			first_seen TEXT    NOT NULL,
+			last_seen  TEXT    NOT NULL,
+			use_count  INTEGER NOT NULL DEFAULT 1
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_discovered_skills_name ON discovered_skills(name)`,
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st); err != nil {
@@ -399,6 +418,113 @@ func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 	return nil
 }
 
+// UpsertDiscoveredTool inserts a discovered MCP tool or updates last_seen and
+// source on conflict (server, tool).
+func (s *sqliteStore) UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO discovered_tools (server, tool, source, first_seen, last_seen)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(server, tool) DO UPDATE SET
+		     last_seen = excluded.last_seen,
+		     source = excluded.source`,
+		server, tool, source, now, now)
+	return err
+}
+
+// UpsertDiscoveredSkill inserts a discovered skill or updates last_seen,
+// source, and increments use_count on conflict (name).
+func (s *sqliteStore) UpsertDiscoveredSkill(ctx context.Context, name, source string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO discovered_skills (name, source, first_seen, last_seen, use_count)
+		 VALUES (?, ?, ?, ?, 1)
+		 ON CONFLICT(name) DO UPDATE SET
+		     last_seen = excluded.last_seen,
+		     source = excluded.source,
+		     use_count = use_count + 1`,
+		name, source, now, now)
+	return err
+}
+
+// ListDiscoveredTools returns all discovered tools. If server is non-empty,
+// only tools for that server are returned.
+func (s *sqliteStore) ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error) {
+	var query string
+	var args []interface{}
+	if server == "" {
+		query = `SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools ORDER BY server, tool`
+	} else {
+		query = `SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools WHERE server = ? ORDER BY tool`
+		args = []interface{}{server}
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list discovered tools: %w", err)
+	}
+	defer rows.Close()
+	var out []DiscoveredTool
+	for rows.Next() {
+		var (
+			id          int64
+			srv         string
+			tool        string
+			source      string
+			firstSeenStr string
+			lastSeenStr  string
+		)
+		if err := rows.Scan(&id, &srv, &tool, &source, &firstSeenStr, &lastSeenStr); err != nil {
+			return nil, fmt.Errorf("store: scan discovered tool: %w", err)
+		}
+		firstSeen, _ := time.Parse(time.RFC3339Nano, firstSeenStr)
+		lastSeen, _ := time.Parse(time.RFC3339Nano, lastSeenStr)
+		out = append(out, DiscoveredTool{
+			ID:        id,
+			Server:    srv,
+			Tool:      tool,
+			Source:    source,
+			FirstSeen: firstSeen,
+			LastSeen:  lastSeen,
+		})
+	}
+	return out, rows.Err()
+}
+
+// ListDiscoveredSkills returns all discovered skills ordered by name.
+func (s *sqliteStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, source, first_seen, last_seen, use_count FROM discovered_skills ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list discovered skills: %w", err)
+	}
+	defer rows.Close()
+	var out []DiscoveredSkill
+	for rows.Next() {
+		var (
+			id           int64
+			name         string
+			source       string
+			firstSeenStr string
+			lastSeenStr  string
+			useCount     int
+		)
+		if err := rows.Scan(&id, &name, &source, &firstSeenStr, &lastSeenStr, &useCount); err != nil {
+			return nil, fmt.Errorf("store: scan discovered skill: %w", err)
+		}
+		firstSeen, _ := time.Parse(time.RFC3339Nano, firstSeenStr)
+		lastSeen, _ := time.Parse(time.RFC3339Nano, lastSeenStr)
+		out = append(out, DiscoveredSkill{
+			ID:        id,
+			Name:      name,
+			Source:    source,
+			FirstSeen: firstSeen,
+			LastSeen:  lastSeen,
+			UseCount:  useCount,
+		})
+	}
+	return out, rows.Err()
+}
+
 // Close closes the database handle.
 func (s *sqliteStore) Close() error {
 	if s.db == nil {
@@ -426,6 +552,12 @@ func (r *sqliteROStore) ListSessions(ctx context.Context) ([]Session, error) {
 }
 func (r *sqliteROStore) CountActionsBySession(ctx context.Context) ([]ActionCount, error) {
 	return r.inner.CountActionsBySession(ctx)
+}
+func (r *sqliteROStore) ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error) {
+	return r.inner.ListDiscoveredTools(ctx, server)
+}
+func (r *sqliteROStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error) {
+	return r.inner.ListDiscoveredSkills(ctx)
 }
 func (r *sqliteROStore) Close() error { return r.inner.Close() }
 

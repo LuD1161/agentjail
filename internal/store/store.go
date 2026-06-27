@@ -77,6 +77,26 @@ type ActionCount struct {
 	Count     int
 }
 
+// DiscoveredTool is a persisted MCP tool entry from scan/audit/session logs.
+type DiscoveredTool struct {
+	ID        int64
+	Server    string    // MCP server name (e.g. "chrome-devtools", "claude_ai_Gmail")
+	Tool      string    // tool name (e.g. "click", "authenticate")
+	Source    string    // discovery source: "audit", "session_log", "live", "config"
+	FirstSeen time.Time
+	LastSeen  time.Time
+}
+
+// DiscoveredSkill is a persisted skill entry from audit history.
+type DiscoveredSkill struct {
+	ID        int64
+	Name      string    // skill name (e.g. "superpowers:brainstorming", "deep-research")
+	Source    string    // "audit" or "session_log"
+	FirstSeen time.Time
+	LastSeen  time.Time
+	UseCount  int
+}
+
 // AuditFilter selects audit events.
 type AuditFilter struct {
 	Limit     int  // 0 = no limit (caller should bound it)
@@ -93,6 +113,10 @@ type EventStore interface {
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)
 	Cleanup(ctx context.Context, maxAge time.Duration) error
+	UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error
+	UpsertDiscoveredSkill(ctx context.Context, name, source string) error
+	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
+	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
 	Close() error
 }
 
@@ -104,6 +128,8 @@ type ReadOnlyStore interface {
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)
 	CountActionsBySession(ctx context.Context) ([]ActionCount, error)
+	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
+	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
 	Close() error
 }
 
