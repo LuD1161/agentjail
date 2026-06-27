@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -60,9 +62,20 @@ func TestParseDuration_Zero(t *testing.T) {
 	}
 }
 
-func TestLoadActiveSessions_MissingFile(t *testing.T) {
-	m := loadActiveSessions()
+func TestLoadActiveSessionsFromPath_MissingFile(t *testing.T) {
+	m := loadActiveSessionsFromPath(filepath.Join(t.TempDir(), "nonexistent.json"))
 	if m != nil && len(m) > 0 {
 		t.Errorf("expected nil or empty map when no file exists, got %v", m)
+	}
+}
+
+func TestLoadActiveSessionsFromPath_ValidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "active-sessions.json")
+	os.WriteFile(path, []byte(`["session-a","session-b"]`), 0644)
+
+	m := loadActiveSessionsFromPath(path)
+	if len(m) != 2 || !m["session-a"] || !m["session-b"] {
+		t.Errorf("expected {session-a: true, session-b: true}, got %v", m)
 	}
 }

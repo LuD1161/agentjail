@@ -25,7 +25,10 @@ func activeSessionsPath() string {
 // the set of currently active session IDs. Returns an empty set on any error
 // (file missing = daemon not running = no active sessions).
 func loadActiveSessions() map[string]bool {
-	path := activeSessionsPath()
+	return loadActiveSessionsFromPath(activeSessionsPath())
+}
+
+func loadActiveSessionsFromPath(path string) map[string]bool {
 	if path == "" {
 		return nil
 	}
