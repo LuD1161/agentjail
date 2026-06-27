@@ -17,6 +17,8 @@
 //	POST /api/policy/disable     edit mode only: disable a library rule
 //	POST /api/policy/reload      edit mode only: send SIGHUP to daemon
 //	GET  /api/policy/mcp-scan   full MCP server scan (read-only)
+//	GET  /api/policy/projects     list known projects with policy status
+//	GET  /api/policy/project-config  read/write project-level policy.yaml
 package ui
 
 import (
@@ -24,6 +26,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -110,6 +113,10 @@ func (s *Server) Start(
 	})
 	mux.HandleFunc("/api/policy/reload", s.handlePolicyReload)
 	mux.HandleFunc("/api/policy/mcp-scan", s.handlePolicyMCPScan)
+	mux.HandleFunc("/api/policy/mcp-where", s.handlePolicyMCPWhere)
+	mux.HandleFunc("/api/policy/mcp-projects", s.handlePolicyMCPProjects)
+	mux.HandleFunc("/api/policy/projects", s.handlePolicyProjects)
+	mux.HandleFunc("/api/policy/project-config", s.handlePolicyProjectConfig)
 
 	go s.tailLog()
 
@@ -687,6 +694,205 @@ func (s *Server) handlePolicyMCPScan(w http.ResponseWriter, r *http.Request) {
 
 	result := mcpclient.FullScan(home, s.dbPath)
 	writeJSON(w, result)
+}
+
+// handlePolicyMCPWhere returns the reverse index entry for one MCP server.
+// GET /api/policy/mcp-where?server=<name>
+func (s *Server) handlePolicyMCPWhere(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server := r.URL.Query().Get("server")
+	if server == "" {
+		writeJSONError(w, "missing ?server= parameter", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("home dir: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	projectDirs := mcpclient.KnownProjectDirs(s.dbPath)
+	idx := mcpclient.BuildReverseIndex(home, projectDirs)
+
+	entries := idx[server]
+	writeJSON(w, map[string]any{
+		"server":    server,
+		"found":     entries != nil,
+		"locations": entries,
+	})
+}
+
+// handlePolicyMCPProjects returns the full reverse MCP index.
+// GET /api/policy/mcp-projects
+func (s *Server) handlePolicyMCPProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("home dir: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	projectDirs := mcpclient.KnownProjectDirs(s.dbPath)
+	idx := mcpclient.BuildReverseIndex(home, projectDirs)
+	writeJSON(w, idx)
+}
+
+// projectInfo is the JSON shape for one project in GET /api/policy/projects.
+type projectInfo struct {
+	Dir        string   `json:"dir"`
+	HasPolicy  bool     `json:"hasPolicy"`
+	MCPServers []string `json:"mcpServers"`
+}
+
+// handlePolicyProjects returns known projects (from session CWDs) with their
+// policy status and MCP server names.
+func (s *Server) handlePolicyProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	st, err := s.openSQLite()
+	if err != nil {
+		writeJSON(w, []projectInfo{})
+		return
+	}
+
+	sessions, err := st.ListSessions(r.Context())
+	if err != nil {
+		writeJSON(w, []projectInfo{})
+		return
+	}
+
+	// Collect unique CWDs.
+	seen := make(map[string]struct{})
+	var dirs []string
+	for _, sess := range sessions {
+		cwd := sess.CWD
+		if cwd == "" {
+			continue
+		}
+		if _, ok := seen[cwd]; ok {
+			continue
+		}
+		seen[cwd] = struct{}{}
+		dirs = append(dirs, cwd)
+	}
+
+	projects := make([]projectInfo, 0, len(dirs))
+	for _, dir := range dirs {
+		p := projectInfo{Dir: dir}
+
+		// Check for project-level policy.yaml.
+		policyPath := filepath.Join(dir, ".agentjail", "policy.yaml")
+		if _, statErr := os.Stat(policyPath); statErr == nil {
+			p.HasPolicy = true
+		}
+
+		// Read MCP server names from .claude/settings.json.
+		entries := mcpclient.DiscoverServersWithConfig("", dir)
+		serverSet := make(map[string]struct{})
+		for _, e := range entries {
+			serverSet[e.Name] = struct{}{}
+		}
+		for name := range serverSet {
+			p.MCPServers = append(p.MCPServers, name)
+		}
+		if p.MCPServers == nil {
+			p.MCPServers = []string{}
+		}
+
+		projects = append(projects, p)
+	}
+
+	writeJSON(w, projects)
+}
+
+// handlePolicyProjectConfig handles GET and POST for a project-level policy.yaml.
+func (s *Server) handlePolicyProjectConfig(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		writeJSONError(w, "missing ?dir= parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Validate that dir is an absolute path and exists.
+	if !filepath.IsAbs(dir) {
+		writeJSONError(w, "dir must be an absolute path", http.StatusBadRequest)
+		return
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		writeJSONError(w, "dir does not exist or is not a directory", http.StatusBadRequest)
+		return
+	}
+
+	cfgPath := filepath.Join(dir, ".agentjail", "policy.yaml")
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// No project policy; return null to signal inheritance.
+				writeJSON(w, nil)
+				return
+			}
+			writeJSONError(w, fmt.Sprintf("load project config: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, cfg)
+
+	case http.MethodPost:
+		if !s.editPolicy {
+			writeJSONError(w, "policy editing is disabled; restart with --edit-policy", http.StatusForbidden)
+			return
+		}
+		if !checkCSRFJSON(w, r) {
+			return
+		}
+		var cfg config.PolicyConfig
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
+			writeJSONError(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+			return
+		}
+		if dec.More() {
+			writeJSONError(w, "unexpected trailing data in request body", http.StatusBadRequest)
+			return
+		}
+		warns := config.Validate(&cfg)
+		cfgDir := filepath.Dir(cfgPath)
+		if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+			writeJSONError(w, fmt.Sprintf("mkdir: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := config.Save(&cfg, cfgPath); err != nil {
+			writeJSONError(w, fmt.Sprintf("save project config: %v", err), http.StatusInternalServerError)
+			return
+		}
+		sighupDaemonFn()
+		resp := map[string]any{"status": "saved", "path": cfgPath}
+		if len(warns) > 0 {
+			resp["warnings"] = warns
+		}
+		writeJSON(w, resp)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // ---------------------------------------------------------------------------
