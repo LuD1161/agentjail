@@ -66,12 +66,47 @@ func isProcessAlive(pid int) bool {
 
 type sessionOutput struct {
 	SessionID     string `json:"session_id"`
+	Name          string `json:"name,omitempty"`
 	Agent         string `json:"agent,omitempty"`
 	CWD           string `json:"cwd,omitempty"`
 	StartTs       string `json:"start_ts"`
 	EndTs         string `json:"end_ts,omitempty"`
 	DecisionCount int    `json:"decision_count"`
 	Active        bool   `json:"active"`
+}
+
+// loadSessionNames scans ~/.claude/sessions/*.json and returns a map from
+// session ID prefix (first 8 hex chars) to the user-assigned session name.
+func loadSessionNames() map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	pattern := filepath.Join(home, ".claude", "sessions", "*.json")
+	files, err := filepath.Glob(pattern)
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(files))
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			SessionID string `json:"sessionId"`
+			Name      string `json:"name"`
+		}
+		if json.Unmarshal(data, &meta) != nil || meta.SessionID == "" || meta.Name == "" {
+			continue
+		}
+		prefix := meta.SessionID
+		if len(prefix) >= 8 {
+			prefix = prefix[:8]
+		}
+		m[prefix] = meta.Name
+	}
+	return m
 }
 
 func runSessions(args []string) int {
@@ -140,6 +175,7 @@ func runSessionsList(args []string) int {
 	}
 
 	activeSet := loadActiveSessions()
+	nameMap := loadSessionNames()
 
 	var output []sessionOutput
 	for _, s := range sessions {
@@ -153,6 +189,7 @@ func runSessionsList(args []string) int {
 		}
 		output = append(output, sessionOutput{
 			SessionID:     s.SessionID,
+			Name:          nameMap[shortSession(s.SessionID)],
 			Agent:         s.Agent,
 			CWD:           s.CWD,
 			StartTs:       s.StartTs.UTC().Format(time.RFC3339),
@@ -177,8 +214,8 @@ func runSessionsList(args []string) int {
 		return 0
 	}
 
-	fmt.Printf("%-22s  %-6s  %-19s  %-19s  %-8s  %-10s  %s\n",
-		"SESSION", "ACTIVE", "START", "END", "COUNT", "AGENT", "CWD")
+	fmt.Printf("%-22s  %-16s  %-6s  %-19s  %-19s  %-8s  %-10s  %s\n",
+		"SESSION", "NAME", "ACTIVE", "START", "END", "COUNT", "AGENT", "CWD")
 	for _, s := range output {
 		activeStr := " "
 		if s.Active {
@@ -194,8 +231,12 @@ func runSessionsList(args []string) int {
 		if t, err := time.Parse(time.RFC3339, start); err == nil {
 			start = t.Local().Format("2006-01-02 15:04:05")
 		}
-		fmt.Printf("%-22s  %-6s  %-19s  %-19s  %-8d  %-10s  %s\n",
-			shortSession(s.SessionID), activeStr, start, end, s.DecisionCount, s.Agent, s.CWD)
+		name := s.Name
+		if len(name) > 16 {
+			name = name[:15] + "…"
+		}
+		fmt.Printf("%-22s  %-16s  %-6s  %-19s  %-19s  %-8d  %-10s  %s\n",
+			shortSession(s.SessionID), name, activeStr, start, end, s.DecisionCount, s.Agent, s.CWD)
 	}
 	return 0
 }
