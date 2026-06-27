@@ -553,3 +553,144 @@ func TestOpenReadOnly_MissingFile(t *testing.T) {
 		t.Fatal("expected error for missing file")
 	}
 }
+
+// ─── Discovered tools and skills ───────────────────────────────────────────
+
+func TestUpsertDiscoveredTool(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert a tool.
+	if err := s.UpsertDiscoveredTool(ctx, "chrome-devtools", "click", "audit"); err != nil {
+		t.Fatalf("UpsertDiscoveredTool insert: %v", err)
+	}
+
+	tools, err := s.ListDiscoveredTools(ctx, "")
+	if err != nil {
+		t.Fatalf("ListDiscoveredTools: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("got %d tools, want 1", len(tools))
+	}
+	if tools[0].Server != "chrome-devtools" || tools[0].Tool != "click" || tools[0].Source != "audit" {
+		t.Errorf("tool = %+v", tools[0])
+	}
+	if tools[0].FirstSeen.IsZero() || tools[0].LastSeen.IsZero() {
+		t.Errorf("timestamps zero: %+v", tools[0])
+	}
+	firstSeen := tools[0].FirstSeen
+
+	// Sleep briefly so the second upsert has a distinct timestamp.
+	time.Sleep(2 * time.Millisecond)
+
+	// Upsert the same tool -- should update last_seen, not create a duplicate.
+	if err := s.UpsertDiscoveredTool(ctx, "chrome-devtools", "click", "live"); err != nil {
+		t.Fatalf("UpsertDiscoveredTool upsert: %v", err)
+	}
+
+	tools, err = s.ListDiscoveredTools(ctx, "")
+	if err != nil {
+		t.Fatalf("ListDiscoveredTools after upsert: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("got %d tools after upsert, want 1 (no duplicate)", len(tools))
+	}
+	if tools[0].Source != "live" {
+		t.Errorf("source after upsert = %q, want live", tools[0].Source)
+	}
+	if !tools[0].LastSeen.After(firstSeen) {
+		t.Errorf("last_seen not updated: first=%v last=%v", firstSeen, tools[0].LastSeen)
+	}
+}
+
+func TestUpsertDiscoveredSkill(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert a skill.
+	if err := s.UpsertDiscoveredSkill(ctx, "superpowers:brainstorming", "audit"); err != nil {
+		t.Fatalf("UpsertDiscoveredSkill insert: %v", err)
+	}
+
+	skills, err := s.ListDiscoveredSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListDiscoveredSkills: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("got %d skills, want 1", len(skills))
+	}
+	if skills[0].Name != "superpowers:brainstorming" || skills[0].Source != "audit" {
+		t.Errorf("skill = %+v", skills[0])
+	}
+	if skills[0].UseCount != 1 {
+		t.Errorf("use_count = %d, want 1", skills[0].UseCount)
+	}
+
+	// Upsert again -- use_count should increment to 2.
+	if err := s.UpsertDiscoveredSkill(ctx, "superpowers:brainstorming", "session_log"); err != nil {
+		t.Fatalf("UpsertDiscoveredSkill upsert: %v", err)
+	}
+
+	skills, err = s.ListDiscoveredSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListDiscoveredSkills after upsert: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("got %d skills after upsert, want 1 (no duplicate)", len(skills))
+	}
+	if skills[0].UseCount != 2 {
+		t.Errorf("use_count after upsert = %d, want 2", skills[0].UseCount)
+	}
+	if skills[0].Source != "session_log" {
+		t.Errorf("source after upsert = %q, want session_log", skills[0].Source)
+	}
+}
+
+func TestListDiscoveredToolsFilter(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert tools for two servers.
+	for _, tool := range []string{"click", "navigate_page", "take_screenshot"} {
+		if err := s.UpsertDiscoveredTool(ctx, "chrome-devtools", tool, "audit"); err != nil {
+			t.Fatalf("UpsertDiscoveredTool (chrome-devtools, %s): %v", tool, err)
+		}
+	}
+	for _, tool := range []string{"authenticate", "complete_authentication"} {
+		if err := s.UpsertDiscoveredTool(ctx, "claude_ai_Gmail", tool, "audit"); err != nil {
+			t.Fatalf("UpsertDiscoveredTool (claude_ai_Gmail, %s): %v", tool, err)
+		}
+	}
+
+	// Filter by server "chrome-devtools".
+	got, err := s.ListDiscoveredTools(ctx, "chrome-devtools")
+	if err != nil {
+		t.Fatalf("ListDiscoveredTools(chrome-devtools): %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("chrome-devtools: got %d tools, want 3", len(got))
+	}
+	for _, dt := range got {
+		if dt.Server != "chrome-devtools" {
+			t.Errorf("unexpected server %q in filtered result", dt.Server)
+		}
+	}
+
+	// Filter by server "claude_ai_Gmail".
+	got, err = s.ListDiscoveredTools(ctx, "claude_ai_Gmail")
+	if err != nil {
+		t.Fatalf("ListDiscoveredTools(claude_ai_Gmail): %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("claude_ai_Gmail: got %d tools, want 2", len(got))
+	}
+
+	// Empty server -- list all.
+	got, err = s.ListDiscoveredTools(ctx, "")
+	if err != nil {
+		t.Fatalf("ListDiscoveredTools(all): %v", err)
+	}
+	if len(got) != 5 {
+		t.Errorf("all servers: got %d tools, want 5", len(got))
+	}
+}
