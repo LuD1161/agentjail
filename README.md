@@ -13,7 +13,7 @@ A safety rail for Claude Code, Codex, and Cursor. It catches the accidental
 foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v0.2.6](https://img.shields.io/badge/v0.2.6-released-orange)
+&nbsp;![v0.3.0](https://img.shields.io/badge/v0.3.0-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,14 +43,17 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v0.2.6** | Jun 23, 2026 | Daemon auto-update (download, verify, swap, restart). Linux systemd support. Shared `internal/selfupdate/` package. |
-| **v0.2.5** | Jun 23, 2026 | Combined changelogs when skipping versions. UI polish (wider sidebar, scroll preservation, back button). Telemetry fixes. |
-| **v0.2.4** | Jun 23, 2026 | Git-aware session labels (`agent . branch . repo`). CWD column in timeline. Live event ticker. |
-| **v0.2.3** | Jun 23, 2026 | Press Enter to update (no more typing 'y'). Release highlights shown on install/update. |
-| **v0.2.2** | Jun 23, 2026 | MCP credential broker. Encrypted secret injection. Per-server scoping. |
-| **v0.2.0** | Jun 23, 2026 | Structured command parsing. Hook-config watchdog. Shield protects hook configs at kernel level. |
-| **v0.1.2** | Jun 20, 2026 | Network allowlist policy. `agentjail-netproxy` transparent proxy. |
-| **v0.1.0** | Jun 13, 2026 | Initial release. Hook + OPA daemon + core policies + `agentjail-shield` sandbox. |
+| **v0.3.0** | Jun 27, 2026 | Sessions subsystem (`agentjail sessions list`). Cobra CLI migration. Platform-specific procwalk. |
+| **v0.2.9** | Jun 26, 2026 | `agentjail mcp inventory`. Per-project policy resolution. Per-skill and per-tool policy CLI. |
+| **v0.2.8** | Jun 23, 2026 | Granular MCP policy (`blocked_tools`/`ask_tools`). Live tool discovery. Security fixes (XSS, CSRF). |
+| **v0.2.7** | Jun 23, 2026 | Interactive replay TUI. Colored output. Agent glyphs. |
+| **v0.2.6** | Jun 23, 2026 | Daemon auto-update. Linux systemd support. |
+| **v0.2.5** | Jun 23, 2026 | Combined changelogs. UI polish. Telemetry fixes. |
+| **v0.2.4** | Jun 23, 2026 | Git-aware session labels. CWD column. Live event ticker. |
+| **v0.2.3** | Jun 23, 2026 | Press Enter to update. Release highlights on install/update. |
+| **v0.2.0** | Jun 22, 2026 | Structured command parsing. Hook-config watchdog. Shield hook protection. |
+| **v0.1.2** | Jun 20, 2026 | Network allowlist. `agentjail-netproxy` transparent proxy. |
+| **v0.1.0** | Jun 13, 2026 | Initial release. Hook + OPA daemon + core policies + sandbox. |
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for full details, or check the [releases page](https://github.com/LuD1161/agentjail/releases).
 
@@ -187,6 +190,7 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 agentjail status                      # verify everything is wired
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
+agentjail sessions list               # active and past agent sessions
 agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay
 ```
@@ -359,6 +363,7 @@ Disabling a **core** rule requires `--force` + interactive confirmation (agents 
 agentjail mcp list                # current allowed + blocked
 agentjail mcp allow claude-mem    # trust a server
 agentjail mcp block my-payment-bot
+agentjail mcp inventory           # full MCP surface map from configs, npm, pip, Docker
 ```
 
 Install auto-seeds the allowlist from your existing MCP config (including Claude Code plugins). Changes require interactive terminal confirmation.

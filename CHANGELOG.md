@@ -2,6 +2,96 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.3.0 — 2026-06-27
+
+Sessions subsystem and Cobra CLI migration.
+
+## TL;DR
+
+- **Session tracking** — `agentjail sessions list` shows active and past agent sessions with PID-based detection.
+- **Cobra CLI** — migrated to Cobra for automatic `--help`, shell completions, and subcommand groups.
+- **Platform procwalk** — process tree walking split into `_darwin.go` / `_linux.go` with build tags.
+
+### Added
+
+- **`agentjail sessions list`** — new CLI command showing active and past agent
+  sessions with PID-based active detection via process tree walking
+- **Session names from Claude Code metadata** — sessions display human-readable
+  names sourced from Claude Code session metadata instead of opaque IDs
+- **Daemon session tracking** — active session detection wired into the daemon
+  with CLI dispatch support
+- **SQLite session store** — `internal/store` with schema, queries, and models
+  for persistent session data
+- **Cobra CLI framework** — migrated from hand-rolled subcommand dispatch to
+  Cobra for automatic `--help` generation and shell completions
+
+### Fixed
+
+- **Platform-specific procwalk** — split `procwalk.go` into `_darwin.go`
+  (sysctl) and `_linux.go` (`/proc`) with `//go:build` constraints for correct
+  cross-platform compilation
+- **Cobra wrapper** — testable active sessions loader with parity sync
+- **Mock store** — added `ListSessionsFiltered` to mock store after rebase
+
+### Changed
+
+- **AGENTS.md** — added build-tag rule for platform-specific code
+
+## v0.2.9 — 2026-06-26
+
+MCP inventory and per-project policy resolution.
+
+## TL;DR
+
+- **MCP inventory** — `agentjail mcp inventory` scans configs, npm, pip, and Docker for a full MCP surface map.
+- **Per-project policy** — policy resolution now cascades from global to per-project overrides.
+- **Skill & tool policy** — per-skill allow/block/ask and per-tool policy CLI.
+
+### Added
+
+- **`agentjail mcp inventory`** — full MCP inventory from agent configs, npm
+  packages, pip packages, and Docker containers with security audit per server
+- **Per-project policy resolution** — policies cascade from global defaults to
+  per-project overrides with a reverse MCP index
+- **Project selector UI** — web UI project selector with per-project policy
+  view and override management
+- **Per-skill policy** — `agentjail skill allow/block/ask` for granular skill
+  gating with `discovered_skills` table
+- **Per-tool policy CLI** — `agentjail mcp tool allow/block/ask` with session
+  log discovery and remote MCP connectors
+- **Discovered tables** — `discovered_tools` and `discovered_skills` SQLite
+  tables for tracking MCP tool and skill inventory
+
+## v0.2.8 — 2026-06-23
+
+MCP policy foundations and security hardening.
+
+## TL;DR
+
+- **Granular MCP policy** — per-tool `blocked_tools` and `ask_tools` controls.
+- **Live tool discovery** — MCP protocol introspection with provenance metadata.
+- **Security fixes** — XSS, CSRF, credential leak, DOM injection, goroutine safety.
+
+### Added
+
+- **Per-MCP-tool policy** — `blocked_tools` and `ask_tools` granular controls
+  in `policy.yaml` for tool-level gating within MCP servers
+- **Live MCP tool discovery** — introspects running MCP servers via the MCP
+  protocol to enumerate available tools with provenance metadata
+- **Policy management UI** — new tab in the web UI with an MCP tool matrix
+  and inline config editor
+
+### Fixed
+
+- **XSS sanitization** — HTML output in the web UI is properly escaped
+- **CSRF protection** — state-changing API endpoints validate origin
+- **Credential leak prevention** — sensitive values are redacted in API
+  responses and log output
+- **DOM chip injection** — user-controlled values rendered as text nodes,
+  not raw HTML
+- **Goroutine safety** — concurrent map access in the policy engine protected
+  with proper synchronization
+
 ## v0.2.7 — 2026-06-23
 
 Replay gets colors, agent glyphs, and cleaner session labels.
