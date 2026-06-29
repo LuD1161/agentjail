@@ -2,11 +2,40 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.3.1 — 2026-06-28
+
+![v0.3.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.3.1-summary.svg)
+
+#### TL;DR
+
+- Close a tilde/`$HOME` credential bypass that let agents read `.ssh/id_rsa` and `.aws/credentials` unblocked.
+- Fix CI flake caused by cold OPA engine exceeding the hook's 45ms deadline on first evaluation.
+- Downgrade `eval_conflict` to non-fatal so edge-case Rego conflicts don't crash the daemon.
+
+### Fixed
+
+- **Tilde/`$HOME` credential bypass closed** — path matching now normalises `~`
+  and `$HOME` before policy evaluation, closing a bypass that allowed agents to
+  read credential files (`.ssh/id_rsa`, `.aws/credentials`) without triggering
+  file_policy deny rules
+- **`eval_conflict` downgraded** — non-fatal for edge-case Rego evaluation
+  conflicts instead of crashing the daemon
+- **E2E cold-start flake** — added OPA warmup probe after daemon startup to
+  prevent spurious fail-open on the first deny assertion in CI
+- **SIGHUP test timeout** — increased daemon startup timeout from 3s to 10s for
+  loaded CI runners
+
+### Security
+
+- Path matching now normalises `~` and `$HOME` before policy evaluation, closing
+  a bypass that allowed agents to read credential files without triggering deny
+  rules.
+
 ## v0.3.0 — 2026-06-27
 
 Sessions subsystem and Cobra CLI migration.
 
-## TL;DR
+### TL;DR
 
 - **Session tracking** — `agentjail sessions list` shows active and past agent sessions with PID-based detection.
 - **Cobra CLI** — migrated to Cobra for automatic `--help`, shell completions, and subcommand groups.
@@ -41,7 +70,7 @@ Sessions subsystem and Cobra CLI migration.
 
 MCP inventory and per-project policy resolution.
 
-## TL;DR
+### TL;DR
 
 - **MCP inventory** — `agentjail mcp inventory` scans configs, npm, pip, and Docker for a full MCP surface map.
 - **Per-project policy** — policy resolution now cascades from global to per-project overrides.
@@ -66,7 +95,7 @@ MCP inventory and per-project policy resolution.
 
 MCP policy foundations and security hardening.
 
-## TL;DR
+### TL;DR
 
 - **Granular MCP policy** — per-tool `blocked_tools` and `ask_tools` controls.
 - **Live tool discovery** — MCP protocol introspection with provenance metadata.
@@ -96,7 +125,7 @@ MCP policy foundations and security hardening.
 
 Replay gets colors, agent glyphs, and cleaner session labels.
 
-## TL;DR
+### TL;DR
 
 - **Replay gets color** - colored action badges, dim metadata, bold headers with proper alignment.
 - **Agent glyphs** - replay reuses the same colored glyphs from `agentjail logs` (Claude ✳, Codex ◆, Cursor ▸).
@@ -125,7 +154,7 @@ Replay gets colors, agent glyphs, and cleaner session labels.
 Daemon auto-update - the daemon can now update itself without human
 intervention.
 
-## TL;DR
+### TL;DR
 
 - **Daemon auto-update** - download, verify, swap binaries, and restart automatically.
 - **Linux systemd support** - auto-update works on Linux via systemd in addition to macOS launchd.
