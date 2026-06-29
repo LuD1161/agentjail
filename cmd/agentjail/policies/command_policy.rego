@@ -387,11 +387,11 @@ candidate contains r if {
 
 # Sensitive path patterns — mirrors file_policy.rego's is_sensitive_path
 # clauses but matches against the raw command string rather than tool_input.file_path.
-contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.ssh\b`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.ssh\b`, c)
 
-contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.aws\b`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.aws\b`, c)
 
-contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.gnupg\b`, c)
+contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.gnupg\b`, c)
 
 contains_sensitive_path(c) if regex.match(`(/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.agentjail\b`, c)
 
