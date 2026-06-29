@@ -112,8 +112,8 @@ func (w *hookWatcher) hasAgentjailHook(path string) bool {
 	return strings.Contains(string(data), "agentjail-hook")
 }
 
-// reinjectHook reads the config at t.path, inserts the agentjail-hook entry
-// under hooks.PreToolUse (Claude Code format), and atomically writes it back.
+// reinjectHook reads the config at t.path, inserts the agent-specific
+// agentjail-hook entries, and atomically writes it back.
 func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
 	data, err := os.ReadFile(t.path)
 	if err != nil {
@@ -135,12 +135,6 @@ func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
 	}
 	hookBin := filepath.Join(home, ".agentjail", "bin", "agentjail-hook")
 
-	// Build the hook entry (Claude Code PreToolUse format).
-	hookEntry := map[string]interface{}{
-		"type":    "command",
-		"command": hookBin,
-	}
-
 	// Ensure hooks map exists.
 	hooks, _ := doc["hooks"].(map[string]interface{})
 	if hooks == nil {
@@ -148,10 +142,17 @@ func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
 		doc["hooks"] = hooks
 	}
 
-	// Append to PreToolUse list.
-	preToolUse, _ := hooks["PreToolUse"].([]interface{})
-	preToolUse = append(preToolUse, hookEntry)
-	hooks["PreToolUse"] = preToolUse
+	if t.agentID == "cursor" {
+		if _, ok := doc["version"]; !ok {
+			doc["version"] = 1
+		}
+	}
+
+	for event, entries := range hookEntriesForAgent(t.agentID, hookBin) {
+		existing, _ := hooks[event].([]interface{})
+		existing = append(existing, entries...)
+		hooks[event] = existing
+	}
 
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -185,5 +186,46 @@ func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
 	if w.auditFn != nil {
 		w.auditFn("hook_reinject",
 			fmt.Sprintf("re-injected agentjail hook into %s (%s)", t.path, t.agentID))
+	}
+}
+
+func hookEntriesForAgent(agentID, hookBin string) map[string][]interface{} {
+	switch agentID {
+	case "codex":
+		return map[string][]interface{}{
+			"PreToolUse": {
+				map[string]interface{}{
+					"matcher": ".*",
+					"hooks": []interface{}{
+						map[string]interface{}{
+							"type":    "command",
+							"command": hookBin + " --agent=codex",
+							"timeout": 30,
+						},
+					},
+				},
+			},
+		}
+	case "cursor":
+		entry := map[string]interface{}{"command": hookBin + " --agent=cursor"}
+		return map[string][]interface{}{
+			"beforeShellExecution": {entry},
+			"beforeMCPExecution":   {entry},
+			"beforeReadFile":       {entry},
+		}
+	default:
+		return map[string][]interface{}{
+			"PreToolUse": {
+				map[string]interface{}{
+					"matcher": "*",
+					"hooks": []interface{}{
+						map[string]interface{}{
+							"type":    "command",
+							"command": hookBin,
+						},
+					},
+				},
+			},
+		}
 	}
 }

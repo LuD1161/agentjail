@@ -121,6 +121,64 @@ func TestHookWatcher_DetectsRemoval(t *testing.T) {
 	}
 }
 
+// TestHookWatcher_ReinjectsCodexAgentSpecificHook verifies that Codex config
+// repair uses the Codex matcher-group shape and invokes the hook with
+// --agent=codex instead of reintroducing a bare Claude-style hook command.
+func TestHookWatcher_ReinjectsCodexAgentSpecificHook(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "hooks.json")
+	writeJSON(t, cfgPath, settingsWithoutHook())
+
+	info, _ := os.Stat(cfgPath)
+	w := &hookWatcher{
+		targets: []hookWatchTarget{
+			{path: cfgPath, agentID: "codex", lastMod: info.ModTime()},
+		},
+		logger:  discardLogger(),
+		auditFn: nil,
+	}
+
+	writeJSON(t, cfgPath, settingsWithoutHook())
+	future := time.Now().Add(2 * time.Second)
+	_ = os.Chtimes(cfgPath, future, future)
+
+	w.check()
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config after reinject: %v", err)
+	}
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("re-injected config is not valid JSON: %v", err)
+	}
+	hooks, _ := doc["hooks"].(map[string]interface{})
+	pre, _ := hooks["PreToolUse"].([]interface{})
+	if len(pre) != 1 {
+		t.Fatalf("expected one PreToolUse entry, got %d: %s", len(pre), data)
+	}
+	group, _ := pre[0].(map[string]interface{})
+	if group["matcher"] != ".*" {
+		t.Fatalf("expected Codex matcher group, got: %#v", group)
+	}
+	nested, _ := group["hooks"].([]interface{})
+	if len(nested) != 1 {
+		t.Fatalf("expected one nested Codex hook, got %#v", group["hooks"])
+	}
+	entry, _ := nested[0].(map[string]interface{})
+	cmd, _ := entry["command"].(string)
+	if !strings.Contains(cmd, "agentjail-hook --agent=codex") {
+		t.Fatalf("expected Codex hook command, got %q", cmd)
+	}
+	if entry["type"] != "command" {
+		t.Fatalf("expected command hook type, got %#v", entry["type"])
+	}
+	if entry["timeout"] != float64(30) {
+		t.Fatalf("expected timeout 30, got %#v", entry["timeout"])
+	}
+}
+
 // TestHookWatcher_NoActionOnSafeEdit verifies that when the file changes but
 // the hook entry is still present, check() does NOT re-inject or fire audit.
 func TestHookWatcher_NoActionOnSafeEdit(t *testing.T) {

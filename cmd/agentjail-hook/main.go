@@ -12,8 +12,10 @@
 //     "always allow" drift is observable.
 //
 // Supported agents (--agent flag or AGENTJAIL_AGENT env var):
-//   - claude (default): Claude Code and Codex share the same wire format.
-//     Deny → exit 2 (stderr reason). Allow/ask → stdout hookSpecificOutput JSON.
+//   - claude (default): Deny → exit 2 (stderr reason). Allow/ask → stdout
+//     hookSpecificOutput JSON.
+//   - codex: Deny → exit 2 (stderr reason). Allow → exit 0 with empty stdout.
+//     Ask → exit 2 because Codex PreToolUse does not support prompting.
 //   - cursor: Cursor stdin/stdout differ. All decisions → exit 0; stdout JSON
 //     with {"permission":"allow|deny|ask",...} (snake_case, T0-confirmed).
 //
@@ -136,11 +138,14 @@ func failOpenMarker(agent, category string) {
 	}()
 }
 
-// failOpenClaude writes a structured fail-open marker to stderr and emits a
-// Claude Code "allow" response to stdout, then exits 0.
-func failOpenClaude(category, detail string) {
-	failOpenMarker("claude", category)
+// failOpenClaudeLike writes a structured fail-open marker to stderr and emits
+// the agent's allow response, then exits 0.
+func failOpenClaudeLike(agent, category, detail string) {
+	failOpenMarker(agent, category)
 	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+	if agent == "codex" {
+		os.Exit(0)
+	}
 	writeAllow("daemon unreachable — fail-open")
 	os.Exit(0)
 }
@@ -351,13 +356,13 @@ func runClaude(agent string) {
 	// 1. Read hook JSON from stdin.
 	stdinBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		failOpenClaude("read-stdin", err.Error())
+		failOpenClaudeLike(agent, "read-stdin", err.Error())
 		return
 	}
 
 	var input hookInput
 	if err := json.Unmarshal(stdinBytes, &input); err != nil {
-		failOpenClaude("parse-input", err.Error())
+		failOpenClaudeLike(agent, "parse-input", err.Error())
 		return
 	}
 
@@ -370,7 +375,7 @@ func runClaude(agent string) {
 	// 3. Connect to daemon with a short dial timeout (30 ms).
 	conn, err := dialDaemon(sockPath)
 	if err != nil {
-		failOpenClaude("dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
+		failOpenClaudeLike(agent, "dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
 		return
 	}
 	defer conn.Close()
@@ -393,7 +398,7 @@ func runClaude(agent string) {
 		if isWriteErr(err) {
 			cat = "dial-daemon"
 		}
-		failOpenClaude(cat, err.Error())
+		failOpenClaudeLike(agent, cat, err.Error())
 		return
 	}
 
@@ -410,6 +415,10 @@ func runClaude(agent string) {
 		os.Exit(2)
 
 	case "ask":
+		if agent == "codex" {
+			fmt.Fprintf(os.Stderr, "agentjail: ask requires human review but Codex PreToolUse does not support ask; denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
+			os.Exit(2)
+		}
 		writeAsk(resp.Reason)
 		if resp.RuleID != "" && resp.RuleID != "resolver/default" {
 			fmt.Fprintf(os.Stderr, "agentjail: to disable this check permanently: agentjail policy disable %s\n", resp.RuleID)
@@ -419,6 +428,9 @@ func runClaude(agent string) {
 	default:
 		// "allow" or any unrecognised action → allow (fail-open semantics for
 		// unknown future action values).
+		if agent == "codex" {
+			os.Exit(0)
+		}
 		writeAllow(resp.Reason)
 		os.Exit(0)
 	}
