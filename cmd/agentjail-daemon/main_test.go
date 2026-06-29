@@ -266,16 +266,17 @@ func TestDaemon_SIGHUP(t *testing.T) {
 		_ = os.Remove(sockPath)
 	})
 
-	// Wait for the socket to appear (up to 3 seconds).
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait for the socket to appear (up to 10 seconds — the daemon compiles
+	// OPA Rego and opens SQLite on startup, which can exceed 3s on loaded CI).
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(sockPath); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("daemon socket did not appear within 3s")
+			t.Fatal("daemon socket did not appear within 10s")
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Helper: send a request and return the response.
