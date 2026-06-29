@@ -858,3 +858,56 @@ test_bash_cat_linux_root_aws_deny if {
 	d.action == "deny"
 	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
 }
+
+# ---------------------------------------------------------------------------
+# Tilde and $HOME coverage for .ssh, .aws, .gnupg (plan: close pattern gap)
+# ---------------------------------------------------------------------------
+
+# ~/.ssh — tilde form
+test_bash_cat_tilde_ssh_deny if {
+	d := agentjail.decision with input as bash_input("cat ~/.ssh/id_rsa")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# $HOME/.ssh — env form
+test_bash_cat_home_env_ssh_deny if {
+	d := agentjail.decision with input as bash_input(`cat "$HOME/.ssh/config"`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# ~/.aws — tilde form
+test_bash_cat_tilde_aws_deny if {
+	d := agentjail.decision with input as bash_input("cat ~/.aws/credentials")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# $HOME/.aws — env form
+test_bash_cat_home_env_aws_deny if {
+	d := agentjail.decision with input as bash_input(`cat $HOME/.aws/credentials`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# ~/.gnupg — tilde form
+test_bash_cat_tilde_gnupg_deny if {
+	d := agentjail.decision with input as bash_input("cat ~/.gnupg/pubring.kbx")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# $HOME/.gnupg — env form
+test_bash_cat_home_env_gnupg_deny if {
+	d := agentjail.decision with input as bash_input(`ls $HOME/.gnupg/`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# Multiple sensitive paths in one command (tilde forms)
+test_bash_cat_tilde_multi_deny if {
+	d := agentjail.decision with input as bash_input("cat ~/.ssh/id_rsa ~/.aws/credentials")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}

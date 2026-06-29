@@ -76,8 +76,8 @@ candidate contains r if {
 	regex.match(`\beval\s+`, _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "eval is denied (library/no-shell-eval); obfuscation primitive defeats pattern-matching policies",
+		"rule_id": "library/no-shell-eval/eval",
+		"reason":  "eval is denied; obfuscation primitive defeats pattern-matching policies",
 	}
 }
 
@@ -92,8 +92,8 @@ candidate contains r if {
 	regex.match(`\bbash\s+-c\s+["']?\$`, _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "bash -c with variable substitution is denied (library/no-shell-eval); dynamic command injection risk",
+		"rule_id": "library/no-shell-eval/bash-c",
+		"reason":  "bash -c with variable substitution is denied; dynamic command injection risk",
 	}
 }
 
@@ -103,8 +103,8 @@ candidate contains r if {
 	regex.match("\\bbash\\s+-c\\s+`", _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "bash -c with backtick command substitution is denied (library/no-shell-eval); dynamic command injection risk",
+		"rule_id": "library/no-shell-eval/bash-c",
+		"reason":  "bash -c with backtick command substitution is denied; dynamic command injection risk",
 	}
 }
 
@@ -117,8 +117,8 @@ candidate contains r if {
 	regex.match(`\bsh\s+-c\s+["']?\$`, _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "sh -c with variable substitution is denied (library/no-shell-eval); dynamic command injection risk",
+		"rule_id": "library/no-shell-eval/sh-c",
+		"reason":  "sh -c with variable substitution is denied; dynamic command injection risk",
 	}
 }
 
@@ -128,8 +128,8 @@ candidate contains r if {
 	regex.match("\\bsh\\s+-c\\s+`", _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "sh -c with backtick command substitution is denied (library/no-shell-eval); dynamic command injection risk",
+		"rule_id": "library/no-shell-eval/sh-c",
+		"reason":  "sh -c with backtick command substitution is denied; dynamic command injection risk",
 	}
 }
 
@@ -142,8 +142,8 @@ candidate contains r if {
 	regex.match(`\$\([^)]*base64[^)]*-d`, _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "base64-decoded execution pipeline is denied (library/no-shell-eval); obfuscated payload risk",
+		"rule_id": "library/no-shell-eval/base64",
+		"reason":  "base64-decoded execution pipeline is denied; obfuscated payload risk",
 	}
 }
 
@@ -157,8 +157,8 @@ candidate contains r if {
 	regex.match(`(^|\s)(source|\.)\s+/dev/stdin`, _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "source /dev/stdin is denied (library/no-shell-eval); piped code execution risk",
+		"rule_id": "library/no-shell-eval/source-stdin",
+		"reason":  "source /dev/stdin is denied; piped code execution risk",
 	}
 }
 
@@ -171,7 +171,7 @@ candidate contains r if {
 	regex.match(`<\s*\(\s*(curl|wget)\b`, _cmd_eval)
 	r := {
 		"action":  "deny",
-		"rule_id": "library/no-shell-eval",
-		"reason":  "process substitution from curl/wget is denied (library/no-shell-eval); network-sourced code execution risk",
+		"rule_id": "library/no-shell-eval/proc-subst",
+		"reason":  "process substitution from curl/wget is denied; network-sourced code execution risk",
 	}
 }

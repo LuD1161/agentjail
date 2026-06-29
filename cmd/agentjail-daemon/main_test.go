@@ -987,6 +987,102 @@ func waitForSocket(t *testing.T, sockPath string, timeout time.Duration) {
 
 // findPoliciesDir searches for the agentpolicy/policies directory relative
 // to the repo root.  Returns "" if not found.
+func TestExpandCommandPaths(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory available")
+	}
+
+	tests := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{
+			name: "tilde_slash_aws",
+			cmd:  "cat ~/.aws/credentials",
+			want: "cat " + home + "/.aws/credentials",
+		},
+		{
+			name: "tilde_slash_ssh",
+			cmd:  "cat ~/.ssh/id_rsa",
+			want: "cat " + home + "/.ssh/id_rsa",
+		},
+		{
+			name: "dollar_home_aws",
+			cmd:  "cat $HOME/.aws/credentials",
+			want: "cat " + home + "/.aws/credentials",
+		},
+		{
+			name: "dollar_home_gnupg",
+			cmd:  `ls "$HOME/.gnupg/"`,
+			want: `ls "` + home + `/.gnupg/"`,
+		},
+		{
+			name: "multiple_tildes",
+			cmd:  "cat ~/.ssh/id_rsa ~/.aws/credentials",
+			want: "cat " + home + "/.ssh/id_rsa " + home + "/.aws/credentials",
+		},
+		{
+			name: "tilde_mid_command",
+			cmd:  "echo hi && cat ~/.ssh/config",
+			want: "echo hi && cat " + home + "/.ssh/config",
+		},
+		{
+			name: "no_expansion_needed",
+			cmd:  "git status",
+			want: "git status",
+		},
+		{
+			name: "tilde_not_at_word_boundary",
+			cmd:  "echo ~other/foo",
+			want: "echo ~other/foo",
+		},
+		{
+			name: "bare_tilde_eol",
+			cmd:  "echo ~",
+			want: "echo " + home,
+		},
+		{
+			name: "bare_tilde_space",
+			cmd:  "cd ~ && ls",
+			want: "cd " + home + " && ls",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandCommandPaths(tt.cmd)
+			if got != tt.want {
+				t.Errorf("expandCommandPaths(%q)\n  got  %q\n  want %q", tt.cmd, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeToolInput_ExpandsCommand(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory available")
+	}
+
+	input := map[string]interface{}{
+		"command": "cat ~/.aws/credentials",
+	}
+	out := normalizeToolInput(input, "/tmp")
+	cmd, ok := out["command"].(string)
+	if !ok {
+		t.Fatal("command field missing from normalized output")
+	}
+	if strings.Contains(cmd, "~") {
+		t.Errorf("normalizeToolInput should expand ~ in command, got %q", cmd)
+	}
+	want := "cat " + home + "/.aws/credentials"
+	if cmd != want {
+		t.Errorf("got %q, want %q", cmd, want)
+	}
+}
+
 func findPoliciesDir(t *testing.T) string {
 	t.Helper()
 	// Walk up from current dir looking for agentpolicy/policies.

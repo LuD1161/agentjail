@@ -663,6 +663,10 @@ func canonicalizePath(p, cwd string) (canonical string, failClose bool) {
 // old_path values canonicalized against cwd.  If a path fails to canonicalize
 // and signals fail-close, the field is replaced with a sentinel that will
 // match no allow rule so the engine defaults to ask/deny.
+//
+// For Bash commands, ~ and $HOME tokens are expanded to the real home directory
+// so the Rego sensitive-path patterns (which match absolute paths) fire
+// consistently regardless of how the agent spelled the path.
 func normalizeToolInput(toolInput map[string]interface{}, cwd string) map[string]interface{} {
 	if toolInput == nil {
 		return nil
@@ -688,7 +692,52 @@ func normalizeToolInput(toolInput map[string]interface{}, cwd string) map[string
 			}
 		}
 	}
+	if cmd, ok := out["command"].(string); ok && cmd != "" {
+		out["command"] = expandCommandPaths(cmd)
+	}
 	return out
+}
+
+// expandCommandPaths expands ~ and $HOME in a Bash command string to the
+// real home directory so Rego sensitive-path patterns match regardless of
+// spelling. Expansion happens at token boundaries (start of string or after
+// whitespace) to avoid mangling arguments like "--prefix=~other".
+func expandCommandPaths(cmd string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || home == "~" {
+		return cmd
+	}
+
+	// First pass: expand ~/ and bare trailing ~ at token boundaries.
+	var b strings.Builder
+	b.Grow(len(cmd) + len(home))
+	prevWS := true
+	i := 0
+	for i < len(cmd) {
+		if cmd[i] == '~' && prevWS {
+			if i+1 < len(cmd) && cmd[i+1] == '/' {
+				b.WriteString(home)
+				i++
+				prevWS = false
+				continue
+			} else if i+1 == len(cmd) || cmd[i+1] == ' ' || cmd[i+1] == '\t' || cmd[i+1] == '"' || cmd[i+1] == '\'' {
+				b.WriteString(home)
+				i++
+				prevWS = false
+				continue
+			}
+		}
+		ch := cmd[i]
+		b.WriteByte(ch)
+		prevWS = ch == ' ' || ch == '\t'
+		i++
+	}
+	result := b.String()
+
+	// Second pass: expand $HOME to the real path.
+	result = strings.ReplaceAll(result, "$HOME", home)
+
+	return result
 }
 
 // hookCacheKey derives a CacheKey from a HookInput using only the fields that
