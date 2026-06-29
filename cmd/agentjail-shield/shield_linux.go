@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"os/signal"
 	"runtime"
 	"syscall"
@@ -331,16 +332,23 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		}
 	}
 
-	// Allow read-write on home MINUS sensitive subdirs.
-	// Landlock doesn't support "allow parent but deny child" in a single rule,
-	// so we allow ~/ at read-only and then allow writes only to explicitly
-	// non-sensitive project dirs.
-	//
-	// This is less precise than sbpl deny-list but achieves the core goal:
-	// ~/.ssh, ~/.aws, ~/.gnupg, ~/.agentjail are not in the allow list.
+	// Allow only specific home subdirectories that Claude Code needs.
+	// Default-deny: nothing in $HOME is accessible unless explicitly listed.
+	// This is the allowlist model — the agent sees only what we grant.
 	if home != "" {
-		if err := allowPath(home, roAccess); err != nil {
-			return fmt.Errorf("allow home read-only: %w", err)
+		allowedHomeDirs := []struct {
+			name   string
+			access uint64
+		}{
+			{".claude", rwAccess},  // Claude Code config, sessions, plugins, auth
+			{".local", roAccess},   // Claude binary at ~/.local/share/claude/
+			{".npm-global", roAccess}, // npm global modules (plugins may need this)
+		}
+		for _, d := range allowedHomeDirs {
+			p := filepath.Join(home, d.name)
+			if err := allowPath(p, d.access); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
+			}
 		}
 	}
 
