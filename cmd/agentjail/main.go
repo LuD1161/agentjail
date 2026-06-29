@@ -66,7 +66,10 @@ func usage(w io.Writer) {
 		desc string
 	}
 	cmds := []cmd{
+		{"claude", "Run Claude Code inside the agentjail shield"},
+		{"run", "Run any command inside the agentjail shield"},
 		{"install", "Install hooks for supported coding agents"},
+		{"doctor", "Check agentjail installation health"},
 		{"status", "Show hook, daemon, and policy health"},
 		{"try", "Check whether an action would be allowed by policy (nothing is executed)"},
 		{"logs", "View policy decisions"},
@@ -98,15 +101,15 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Examples"))
 	examples := []string{
+		"agentjail claude",
+		"agentjail run -- codex --approval-mode full-auto",
+		"agentjail install --all",
+		"agentjail install --for vscode",
+		"agentjail doctor",
 		"agentjail try \"rm -rf /\"",
-		"agentjail install --for codex",
-		"agentjail status",
 		"agentjail logs --action=deny --since=1h",
-		"agentjail replay --list",
 		"agentjail policy enable no_shell_init_write",
 		"agentjail mcp allow filesystem",
-		"agentjail secret list",
-		"agentjail mcp list",
 	}
 	for _, ex := range examples {
 		fmt.Fprintln(w, bodyIndent+ex)

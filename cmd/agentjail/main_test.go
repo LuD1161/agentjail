@@ -45,7 +45,8 @@ func TestUsagePremiumStructure(t *testing.T) {
 		"Commands",
 		"Maintenance",
 		"Examples",
-		"  agentjail install --for codex",
+		"  agentjail claude",
+		"  agentjail install --all",
 		"  agentjail policy enable no_shell_init_write",
 	}
 	for _, want := range required {
