@@ -693,6 +693,8 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 	for name, sc := range c.MCP.Servers {
 		servers[name] = map[string]interface{}{
 			"allowed_tools": sliceOrEmpty(sc.AllowedTools),
+			"blocked_tools": sliceOrEmpty(sc.BlockedTools),
+			"ask_tools":     sliceOrEmpty(sc.AskTools),
 		}
 	}
 

@@ -360,8 +360,19 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal round-trip failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(orig, decoded) {
-		t.Errorf("round-trip mismatch:\n  orig:    %+v\n  decoded: %+v", orig, decoded)
+	// Compare via YAML re-encode since reflect.DeepEqual fails on *bool
+	// (two pointers to true with different addresses aren't DeepEqual).
+	var origBuf, decodedBuf bytes.Buffer
+	enc2 := yaml.NewEncoder(&origBuf)
+	enc2.SetIndent(2)
+	_ = enc2.Encode(orig)
+	_ = enc2.Close()
+	enc3 := yaml.NewEncoder(&decodedBuf)
+	enc3.SetIndent(2)
+	_ = enc3.Encode(decoded)
+	_ = enc3.Close()
+	if origBuf.String() != decodedBuf.String() {
+		t.Errorf("round-trip mismatch:\n  orig YAML:\n%s\n  decoded YAML:\n%s", origBuf.String(), decodedBuf.String())
 	}
 }
 
