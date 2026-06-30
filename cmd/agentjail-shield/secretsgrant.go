@@ -32,7 +32,7 @@ type activeGrant struct {
 }
 
 func secretsRPC(socketPath string, req *secretsRPCRequest) (*secretsRPCResponse, error) {
-	conn, err := net.DialTimeout("unix", socketPath, 3*time.Second)
+	conn, err := net.DialTimeout("unix", socketPath, 300*time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("connect to agentjail-secrets: %w", err)
 	}

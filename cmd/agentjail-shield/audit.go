@@ -122,7 +122,7 @@ func checkAmbientEnvVars(result *AuditResult) {
 // imdsTimeout is the timeout for IMDS HTTP requests.  Short to avoid
 // blocking the launch when not on EC2 (the connection to 169.254.169.254
 // will hang until the timeout on non-EC2 hosts).
-const imdsTimeout = 2 * time.Second
+const imdsTimeout = 300 * time.Millisecond
 
 const imdsBaseURL = "http://169.254.169.254"
 

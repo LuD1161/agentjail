@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
@@ -78,13 +79,21 @@ type landlockNetPortAttr struct {
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time) {
+	noColor := os.Getenv("NO_COLOR") != ""
+	if noColor {
+		fmt.Fprintln(os.Stderr, "  agentjail — setting up sandbox...")
+	} else {
+		fmt.Fprintln(os.Stderr, "  \033[38;5;208magentjail\033[0m — setting up sandbox...")
+	}
+
 	// Start netproxy as a child process BEFORE applying Landlock — netproxy
 	// needs unrestricted network access to reach upstream hosts.  Landlock
 	// (applied below) restricts the shield + agent, not the netproxy child
 	// which was already forked before restriction.
 	netproxyPort := 0
-	var netproxyCmd *exec.Cmd
+	var netproxyCmd *exec.Cmd  // non-nil only if WE started the proxy (we must clean it up)
+	netproxyReady := false     // true if a proxy is available (ours or pre-existing)
 	if !noNetproxy {
 		netproxyPort = netproxyDefaultPort
 		netproxyBin, findErr := findNetproxyBinary()
@@ -104,10 +113,13 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 					startErr,
 				)
 			} else {
-				netproxyCmd = cmd
+				netproxyCmd = cmd // nil when reusing existing singleton
+				netproxyReady = true
 			}
 		}
 	}
+
+	// netproxy started (or reused singleton)
 
 	if profilePrint {
 		fmt.Fprintln(os.Stderr, "=== agentjail-shield: Linux Landlock rule summary ===")
@@ -140,11 +152,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// below) inherits all Landlock restrictions.
 	if err := applyLandlock(cfg, netproxyPort); err != nil {
 		if errors.Is(err, errLandlockUnsupported) {
-			fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: Landlock unavailable: %v\n"+
-				"  Sandbox enforcement DISABLED. Requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y.\n"+
-				"  The hook layer still runs on every PreToolUse call.\n", err)
+			stepFail(noColor, "Landlock unavailable — sandbox enforcement disabled")
+			fmt.Fprintf(os.Stderr, "  Requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y.\n"+
+				"  The hook layer still runs on every PreToolUse call.\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "agentjail-shield ERROR: failed to apply Landlock sandbox: %v\n"+
+			stepFail(noColor, "Failed to apply sandbox")
+			fmt.Fprintf(os.Stderr, "  %v\n"+
 				"  Refusing to run the agent unsandboxed (fail-closed).\n"+
 				"  Set AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1 to override (NOT recommended).\n", err)
 			if os.Getenv("AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED") != "1" {
@@ -154,15 +167,24 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		}
 	}
 
+	// Landlock applied
+
 	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
 	env := buildCleanEnv(os.Environ(), cfg)
 	env = stripEnv(env, cfg)
-	if netproxyCmd != nil {
+	if netproxyReady {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-host enforcement via netproxy)\n", netproxyDefaultAddr)
 	}
+	env = append(env, "AGENTJAIL_SHIELDED=1")
 	grantEnvVars, activeGrants := requestSecretGrants(cfg)
 	env = append(env, grantEnvVars...)
+
+	elapsed := time.Since(startTime)
+	if noColor {
+		fmt.Fprintf(os.Stderr, "  agentjail — sandbox ready in %dms\n", elapsed.Milliseconds())
+	} else {
+		fmt.Fprintf(os.Stderr, "  \033[38;5;208magentjail\033[0m — sandbox ready in %dms\n", elapsed.Milliseconds())
+	}
 
 	// Run the agent as a child process.  Unlike macOS (which uses
 	// syscall.Exec to replace the shield process), Linux uses os/exec so
@@ -178,24 +200,29 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr
 
-	// Forward SIGINT and SIGTERM to the agent child so interactive agents
-	// (claude, codex) receive Ctrl-C normally.
-	sigCh := make(chan os.Signal, 1)
+	// Intercept SIGINT and SIGTERM so the shield survives to print the
+	// session summary. The agent child is in the same process group and
+	// receives the signal directly from the terminal; we don't need to
+	// forward it. signal.Notify prevents Go's default handler from
+	// killing the shield process.
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 	go func() {
-		for sig := range sigCh {
-			if agentCmd.Process != nil {
-				_ = agentCmd.Process.Signal(sig)
-			}
+		for range sigCh {
+			// Drain signals — the agent already received them from the TTY.
 		}
 	}()
 
 	runErr := agentCmd.Run()
+	sessionDuration := time.Since(startTime)
 
 	// Kill and reap the netproxy child (zombie cleanup).
 	cleanupNetproxy(netproxyCmd)
 	revokeSecretGrants(activeGrants)
+
+	// Print session summary.
+	printSessionSummary(noColor, sessionDuration)
 
 	if runErr != nil {
 		if exitErr, ok := runErr.(*exec.ExitError); ok {
@@ -204,6 +231,26 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		fmt.Fprintf(os.Stderr, "agentjail-shield: agent failed: %v\n", runErr)
 		os.Exit(1)
 	}
+}
+
+func printSessionSummary(noColor bool, duration time.Duration) {
+	d := formatDuration(duration)
+	fmt.Fprintln(os.Stderr, "")
+	if noColor {
+		fmt.Fprintf(os.Stderr, "  agentjail — session ended (%s) · secured throughout\n", d)
+	} else {
+		fmt.Fprintf(os.Stderr, "  \033[38;5;208magentjail\033[0m — session ended (%s) · secured throughout\n", d)
+	}
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 // applyLandlock configures and applies a Landlock ruleset to the current
@@ -267,10 +314,6 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	if netproxyPort > 0 {
 		if abi >= 4 {
 			handledNet = unix.LANDLOCK_ACCESS_NET_CONNECT_TCP | unix.LANDLOCK_ACCESS_NET_BIND_TCP
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"agentjail-shield WARNING: Landlock network ABI requires kernel 6.7+ (current ABI v%d).\n"+
-					"  Network egress restriction is NOT applied.  Consider --no-netproxy or upgrading.\n", abi)
 		}
 	}
 
@@ -310,6 +353,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			unix.LANDLOCK_ACCESS_FS_TRUNCATE |
 			unix.LANDLOCK_ACCESS_FS_IOCTL_DEV,
 	)
+	_ = uint64(unix.LANDLOCK_ACCESS_FS_READ_FILE) // roFileAccess reserved for future use
 
 	// allowPath adds an allow rule for the given path with the specified access
 	// rights (masked by the handled set so we never request unknown bits).
@@ -353,10 +397,23 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			{".claude", rwAccess},     // Claude Code config, sessions, plugins
 			{".claude-mem", rwAccess}, // claude-mem MCP plugin database
 			{".cache", rwAccess},      // Claude CLI cache (node, updates)
-			{".local", roAccess},      // Claude binary at ~/.local/share/claude/
+			{".local", rwAccess},      // Claude binary, gryph audit DB, tool installs
 			{".npm-global", roAccess}, // npm global modules (plugins may need this)
 			{".config", roAccess},     // XDG config (MCP server configs, etc.)
 			{".agentjail", rwAccess},  // daemon socket, SQLite DB, policy
+			{".openclaw", roAccess},   // openclaw skills and config
+			{".codex", roAccess},      // codex skills and config
+			{".nvm", roAccess},        // Node version manager
+			{".fnm", roAccess},        // Fast node manager
+			{".npm", roAccess},        // npm cache/config
+			{".pyenv", roAccess},      // Python version manager
+			{".conda", roAccess},      // Conda environments
+			{".cargo", roAccess},      // Rust cargo
+			{".rustup", roAccess},     // Rust toolchain
+			{".sdkman", roAccess},     // SDKMAN (Java)
+			{".m2", roAccess},         // Maven repository
+			{".gradle", roAccess},     // Gradle cache
+			{".vscode", rwAccess},     // VS Code settings
 		}
 		for _, d := range allowedHomeDirs {
 			p := filepath.Join(home, d.name)
@@ -369,7 +426,10 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			name   string
 			access uint64
 		}{
-			{".claude.json", rwFileAccess}, // OAuth tokens, preferences, feature flags
+			{".claude.json", rwFileAccess},      // OAuth tokens, preferences, feature flags
+			{".gitconfig", rwFileAccess},        // git user config
+			{".gitignore_global", rwFileAccess},    // global gitignore
+			{".ssh/known_hosts", rwFileAccess},     // SSH host key verification (not private keys)
 		}
 		for _, f := range homeFiles {
 			p := filepath.Join(home, f.name)
@@ -471,9 +531,6 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			uintptr(unsafe.Pointer(&netAttr)), 0, 0, 0); e != 0 {
 			return fmt.Errorf("landlock_add_rule(net port %d): %w", netproxyPort, e)
 		}
-		fmt.Fprintf(os.Stderr,
-			"agentjail-shield INFO: Landlock network restriction active (ABI v%d) — TCP connect allowed only to port %d\n",
-			abi, netproxyPort)
 	}
 
 	// PR_SET_NO_NEW_PRIVS: required before landlock_restrict_self.
@@ -489,6 +546,22 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	}
 
 	return nil
+}
+
+func step(noColor bool, msg string) {
+	if noColor {
+		fmt.Fprintf(os.Stderr, "  ✓ %s\n", msg)
+	} else {
+		fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s\n", msg)
+	}
+}
+
+func stepFail(noColor bool, msg string) {
+	if noColor {
+		fmt.Fprintf(os.Stderr, "  ✗ %s\n", msg)
+	} else {
+		fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m %s\n", msg)
+	}
 }
 
 // resolveMCPServerPaths reads ~/.claude.json and returns the command paths

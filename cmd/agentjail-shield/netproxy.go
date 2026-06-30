@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -59,14 +60,22 @@ func findNetproxyBinary() (string, error) {
 // startNetproxy starts agentjail-netproxy as a child process with the given
 // policy path, waits up to 200 ms for it to bind on proxyAddr, and returns
 // the running *exec.Cmd.  Caller is responsible for calling cmd.Process.Kill()
-// on exit.
+// on exit.  Uses singleton pattern: if a netproxy is already listening on
+// proxyAddr, reuses it instead of starting a new one.
 func startNetproxy(netproxyPath, proxyAddr, policyPath string) (*exec.Cmd, error) {
+	// Singleton check: if something is already listening, reuse it.
+	if conn, err := net.DialTimeout("tcp", proxyAddr, 50*time.Millisecond); err == nil {
+		conn.Close()
+		return nil, nil // nil cmd signals "reusing existing proxy"
+	}
+
 	cmd := exec.Command(netproxyPath,
 		"--addr="+proxyAddr,
 		"--policy="+policyPath,
-		"--log-level=warn",
+		"--log-level=error",
 	)
-	cmd.Stderr = os.Stderr
+	pw := &proxyStderrWriter{}
+	cmd.Stderr = pw
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start netproxy: %w", err)
@@ -77,14 +86,23 @@ func startNetproxy(netproxyPath, proxyAddr, policyPath string) (*exec.Cmd, error
 		conn, err := net.DialTimeout("tcp", proxyAddr, 20*time.Millisecond)
 		if err == nil {
 			conn.Close()
-			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: netproxy started (pid=%d) listening on %s\n", cmd.Process.Pid, proxyAddr)
 			return cmd, nil
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
 	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("netproxy did not bind on %s within 200ms; per-host enforcement unavailable", proxyAddr)
+	return nil, fmt.Errorf("netproxy did not bind on %s within 200ms: %s", proxyAddr, strings.TrimSpace(pw.buf.String()))
+}
+
+// proxyStderrWriter buffers writes until forward is set, then writes to os.Stderr.
+type proxyStderrWriter struct {
+	buf     strings.Builder
+	forward bool
+}
+
+func (w *proxyStderrWriter) Write(p []byte) (int, error) {
+	return w.buf.Write(p)
 }
 
 // proxyEnvVars returns the HTTPS_PROXY, HTTP_PROXY, and ALL_PROXY environment

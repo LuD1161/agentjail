@@ -162,6 +162,30 @@ func failOpenCursor(category, detail string) {
 	os.Exit(0)
 }
 
+// printPolicyEval prints a one-line policy evaluation result to stderr.
+func printPolicyEval(noColor bool, toolName, action, ruleID, reason string, ms int64) {
+	switch action {
+	case "deny":
+		if noColor {
+			fmt.Fprintf(os.Stderr, "  ✗ %s denied (%dms) — %s\n", toolName, ms, reason)
+		} else {
+			fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m %s \033[31mdenied\033[0m (%dms) — %s\n", toolName, ms, reason)
+		}
+	case "ask":
+		if noColor {
+			fmt.Fprintf(os.Stderr, "  ? %s ask (%dms) — %s\n", toolName, ms, reason)
+		} else {
+			fmt.Fprintf(os.Stderr, "  \033[33m?\033[0m %s \033[33mask\033[0m (%dms) — %s\n", toolName, ms, reason)
+		}
+	default:
+		if noColor {
+			fmt.Fprintf(os.Stderr, "  ✓ %s (%dms)\n", toolName, ms)
+		} else {
+			fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s (%dms)\n", toolName, ms)
+		}
+	}
+}
+
 // writeAllow writes a Claude Code "allow" hook response to stdout.
 func writeAllow(reason string) {
 	out := claudeHookOutput{
@@ -398,7 +422,9 @@ func runClaude(agent string) {
 		AgentPID:  findAgentPID(),
 	}
 
+	evalStart := time.Now()
 	resp, err := sendAndReceive(conn, req)
+	evalMs := time.Since(evalStart).Milliseconds()
 	if err != nil {
 		cat := "read-response"
 		if isWriteErr(err) {
@@ -408,13 +434,15 @@ func runClaude(agent string) {
 		return
 	}
 
-	// 5. Translate daemon action to Claude Code exit/output convention.
+	// 5. Print policy eval indicator to stderr.
+	noColor := os.Getenv("NO_COLOR") != ""
+	printPolicyEval(noColor, input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
+
+	// 6. Translate daemon action to Claude Code exit/output convention.
 	switch resp.Action {
 	case "deny":
 		// Exit code 2: Claude Code's fast-block path reads stderr for the reason.
 		fmt.Fprintf(os.Stderr, "agentjail: denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
-		// For MCP unknown-server denials, add the exact remediation so the user
-		// knows how to grant access without digging through docs.
 		if resp.RuleID == "mcp_policy/unknown" {
 			fmt.Fprintf(os.Stderr, "  run: agentjail mcp allow <server-name>   (see 'agentjail mcp list' for current state)\n")
 		}

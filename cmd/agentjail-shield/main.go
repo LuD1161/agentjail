@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 )
@@ -65,6 +66,7 @@ func main() {
 		os.Exit(64) // EX_USAGE
 	}
 	flag.Parse()
+	startTime := time.Now()
 
 	// The '--' separator is required.
 	args := flag.Args()
@@ -115,7 +117,9 @@ func main() {
 	// best-effort and non-blocking: warnings are printed to stderr.
 	// In --audit-strict mode, critical findings abort the launch.
 	auditResult := runAudit()
-	printAuditWarnings(auditResult)
+	if *auditJSON != "" || *auditStrict {
+		printAuditWarnings(auditResult)
+	}
 	if *auditJSON != "" {
 		if err := writeAuditJSON(auditResult, *auditJSON); err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail-shield: could not write audit JSON: %v\n", err)
@@ -127,5 +131,5 @@ func main() {
 	}
 
 	// Delegate to the OS-specific sandbox implementation.
-	runShield(cfg, agentPath, agentArgs, *profilePrint, *noNetproxy, *policyPath)
+	runShield(cfg, agentPath, agentArgs, *profilePrint, *noNetproxy, *policyPath, startTime)
 }
