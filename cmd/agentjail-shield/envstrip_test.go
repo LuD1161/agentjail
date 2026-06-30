@@ -349,6 +349,201 @@ func TestSecretsConfig_YAMLLoad(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// buildCleanEnv tests
+// ---------------------------------------------------------------------------
+
+// TestBuildCleanEnv_OnlyAllowlisted verifies that only allowlisted vars survive.
+func TestBuildCleanEnv_OnlyAllowlisted(t *testing.T) {
+	hostEnv := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=/home/user",
+		"TERM=xterm-256color",
+		"TYPEFULLY_API_KEY=secret",
+		"ANTHROPIC_API_KEY=sk-...",
+		"MY_RANDOM_VAR=hello",
+		"GOPATH=/home/user/go",
+	}
+
+	cfg := config.Default()
+	result := buildCleanEnv(hostEnv, cfg)
+
+	resultMap := make(map[string]bool)
+	for _, kv := range result {
+		resultMap[envVarName(kv)] = true
+	}
+
+	// Allowlisted vars should be present.
+	for _, want := range []string{"PATH", "HOME", "TERM", "GOPATH"} {
+		if !resultMap[want] {
+			t.Errorf("allowlisted var %q missing from clean env", want)
+		}
+	}
+
+	// Non-allowlisted vars should be absent.
+	for _, unwanted := range []string{"TYPEFULLY_API_KEY", "ANTHROPIC_API_KEY", "MY_RANDOM_VAR"} {
+		if resultMap[unwanted] {
+			t.Errorf("non-allowlisted var %q leaked into clean env", unwanted)
+		}
+	}
+}
+
+// TestBuildCleanEnv_Passthrough verifies that env_passthrough adds to the allowlist.
+func TestBuildCleanEnv_Passthrough(t *testing.T) {
+	hostEnv := []string{
+		"PATH=/usr/bin",
+		"MY_SAFE_CONFIG=value",
+		"CUSTOM_VAR=custom",
+		"SECRET_KEY=shouldnotpass",
+	}
+
+	strip := true
+	cfg := &config.PolicyConfig{
+		Secrets: config.SecretsConfig{
+			StripOnLaunch:  &strip,
+			EnvPassthrough: []string{"MY_SAFE_CONFIG", "CUSTOM_VAR"},
+		},
+	}
+
+	result := buildCleanEnv(hostEnv, cfg)
+
+	resultMap := make(map[string]bool)
+	for _, kv := range result {
+		resultMap[envVarName(kv)] = true
+	}
+
+	if !resultMap["PATH"] {
+		t.Error("baseline var PATH missing")
+	}
+	if !resultMap["MY_SAFE_CONFIG"] {
+		t.Error("passthrough var MY_SAFE_CONFIG missing")
+	}
+	if !resultMap["CUSTOM_VAR"] {
+		t.Error("passthrough var CUSTOM_VAR missing")
+	}
+	if resultMap["SECRET_KEY"] {
+		t.Error("non-allowlisted var SECRET_KEY leaked")
+	}
+}
+
+// TestBuildCleanEnv_NilConfig verifies that nil config uses only baseline.
+func TestBuildCleanEnv_NilConfig(t *testing.T) {
+	hostEnv := []string{
+		"PATH=/usr/bin",
+		"HOME=/home/user",
+		"RANDOM_THING=value",
+	}
+
+	result := buildCleanEnv(hostEnv, nil)
+
+	resultMap := make(map[string]bool)
+	for _, kv := range result {
+		resultMap[envVarName(kv)] = true
+	}
+
+	if !resultMap["PATH"] {
+		t.Error("PATH missing with nil config")
+	}
+	if !resultMap["HOME"] {
+		t.Error("HOME missing with nil config")
+	}
+	if resultMap["RANDOM_THING"] {
+		t.Error("RANDOM_THING should not be in clean env")
+	}
+}
+
+// TestBuildCleanEnv_PreservesValues verifies that values are copied correctly.
+func TestBuildCleanEnv_PreservesValues(t *testing.T) {
+	hostEnv := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"HOME=/home/testuser",
+	}
+
+	result := buildCleanEnv(hostEnv, nil)
+
+	found := make(map[string]string)
+	for _, kv := range result {
+		name := envVarName(kv)
+		found[name] = kv
+	}
+
+	if v, ok := found["PATH"]; !ok || v != "PATH=/usr/local/bin:/usr/bin:/bin" {
+		t.Errorf("PATH value mismatch: got %q", v)
+	}
+	if v, ok := found["HOME"]; !ok || v != "HOME=/home/testuser" {
+		t.Errorf("HOME value mismatch: got %q", v)
+	}
+}
+
+// TestBuildCleanEnv_MissingHostVars verifies that missing host vars are not synthesized.
+func TestBuildCleanEnv_MissingHostVars(t *testing.T) {
+	// Only PATH in host; HOME is allowlisted but not present.
+	hostEnv := []string{"PATH=/usr/bin"}
+
+	result := buildCleanEnv(hostEnv, nil)
+
+	if len(result) != 1 {
+		t.Errorf("expected 1 var, got %d: %v", len(result), result)
+	}
+}
+
+// TestBuildCleanEnv_ThenStripEnv verifies the full pipeline: clean env + strip.
+func TestBuildCleanEnv_ThenStripEnv(t *testing.T) {
+	hostEnv := []string{
+		"PATH=/usr/bin",
+		"HOME=/home/user",
+		"TERM=xterm",
+		"TYPEFULLY_API_KEY=leak",
+		"ANTHROPIC_API_KEY=sk-...",
+		"GOPATH=/home/user/go",
+	}
+
+	cfg := config.Default()
+
+	// Step 1: clean env (allowlist)
+	clean := buildCleanEnv(hostEnv, cfg)
+	// Step 2: strip env (blocklist defence-in-depth)
+	final := stripEnv(clean, cfg)
+
+	resultMap := make(map[string]bool)
+	for _, kv := range final {
+		resultMap[envVarName(kv)] = true
+	}
+
+	// Safe vars survive both layers.
+	for _, want := range []string{"PATH", "HOME", "TERM", "GOPATH"} {
+		if !resultMap[want] {
+			t.Errorf("safe var %q missing from final env", want)
+		}
+	}
+
+	// TYPEFULLY_API_KEY is not in allowlist, so clean env already drops it.
+	if resultMap["TYPEFULLY_API_KEY"] {
+		t.Error("TYPEFULLY_API_KEY should have been dropped by clean env")
+	}
+
+	// ANTHROPIC_API_KEY is not in allowlist, so clean env drops it.
+	// Even if it were, stripEnv would catch it via the blocklist.
+	if resultMap["ANTHROPIC_API_KEY"] {
+		t.Error("ANTHROPIC_API_KEY should have been dropped")
+	}
+}
+
+// TestBuildCleanEnv_AllBaselineVars verifies every baseline var is recognized.
+func TestBuildCleanEnv_AllBaselineVars(t *testing.T) {
+	// Build a host env with every baseline var.
+	var hostEnv []string
+	for name := range envAllowlistBaseline {
+		hostEnv = append(hostEnv, name+"=test")
+	}
+
+	result := buildCleanEnv(hostEnv, nil)
+
+	if len(result) != len(envAllowlistBaseline) {
+		t.Errorf("expected %d vars, got %d", len(envAllowlistBaseline), len(result))
+	}
+}
+
 // TestSecretsConfig_YAMLLoadStripFalse verifies that strip_on_launch: false is respected.
 func TestSecretsConfig_YAMLLoadStripFalse(t *testing.T) {
 	dir := t.TempDir()

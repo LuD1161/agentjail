@@ -207,6 +207,13 @@ type SecretsConfig struct {
 
 	StripOnLaunch *bool `yaml:"strip_on_launch"`
 
+	// EnvPassthrough is a list of additional env var names that are allowed
+	// through the clean-env allowlist. These are appended to the built-in
+	// baseline allowlist (PATH, HOME, TERM, etc.) when constructing the
+	// agent's environment. Use this for project-specific safe variables
+	// that the agent needs but that are not in the baseline.
+	EnvPassthrough []string `yaml:"env_passthrough"`
+
 	Grants []SecretGrant `yaml:"grants"`
 }
 
@@ -483,6 +490,12 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 	} else {
 		result.Secrets.Grants = append([]SecretGrant(nil), base.Secrets.Grants...)
 	}
+	// Secrets.EnvPassthrough — overlay wins if non-empty, else keep base.
+	if len(overlay.Secrets.EnvPassthrough) > 0 {
+		result.Secrets.EnvPassthrough = append([]string(nil), overlay.Secrets.EnvPassthrough...)
+	} else {
+		result.Secrets.EnvPassthrough = append([]string(nil), base.Secrets.EnvPassthrough...)
+	}
 
 	// DisabledRules — overlay wins if non-empty, else keep base.
 	// An empty overlay means "don't change the base" (not "clear all disabled rules").
@@ -658,6 +671,7 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 		},
 		"secrets": map[string]interface{}{
 			"env_blocklist":   sliceOrEmpty(c.Secrets.EnvBlocklist),
+			"env_passthrough": sliceOrEmpty(c.Secrets.EnvPassthrough),
 			"strip_on_launch": c.Secrets.StripOnLaunch != nil && *c.Secrets.StripOnLaunch,
 			"grants":          grantsToOPA(c.Secrets.Grants),
 		},

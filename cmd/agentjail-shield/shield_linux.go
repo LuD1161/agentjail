@@ -152,8 +152,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		}
 	}
 
-	// Build the agent's environment: inherit + strip ambient creds + proxy vars + granted secrets.
-	env := stripEnv(os.Environ(), cfg)
+	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
+	env := buildCleanEnv(os.Environ(), cfg)
+	env = stripEnv(env, cfg)
 	if netproxyCmd != nil {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
 		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-host enforcement via netproxy)\n", netproxyDefaultAddr)

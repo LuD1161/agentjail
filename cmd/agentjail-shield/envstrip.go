@@ -1,6 +1,13 @@
-// Package main is agentjail-shield. This file contains the env stripping
-// logic that removes ambient credentials from the agent's environment
-// before exec'ing it.  Shared between macOS and Linux (no build constraint).
+// Package main is agentjail-shield. This file contains the env construction
+// logic that builds a clean environment for the agent process.
+//
+// The primary defence is allowlist-based: buildCleanEnv starts with an empty
+// environment and copies only variables from a known-safe baseline plus any
+// extras listed in the policy's env_passthrough list.  stripEnv runs as a
+// second, defence-in-depth layer that catches anything the allowlist
+// accidentally included.
+//
+// Shared between macOS and Linux (no build constraint).
 
 package main
 
@@ -14,6 +21,108 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 )
+
+// envAllowlistBaseline is the set of env var names that are safe for any
+// agent to inherit.  These are the minimum variables needed for a working
+// shell, TLS, proxy, editor, and common language toolchains.
+//
+// Credential-bearing variables (API keys, tokens, passwords) are NOT in
+// this list — they must go through the secrets broker.
+var envAllowlistBaseline = map[string]bool{
+	// Core POSIX / shell
+	"PATH":    true,
+	"HOME":    true,
+	"USER":    true,
+	"SHELL":   true,
+	"TERM":    true,
+	"LANG":    true,
+	"LC_ALL":  true,
+	"TMPDIR":  true,
+
+	// Display / Wayland / X11
+	"DISPLAY":          true,
+	"WAYLAND_DISPLAY":  true,
+	"XDG_RUNTIME_DIR":  true,
+
+	// TLS / proxy
+	"SSL_CERT_FILE":       true,
+	"SSL_CERT_DIR":        true,
+	"NODE_EXTRA_CA_CERTS": true,
+	"HTTPS_PROXY":         true,
+	"HTTP_PROXY":          true,
+	"NO_PROXY":            true,
+
+	// agentjail internal
+	"AGENTJAIL_SECRETS": true,
+	"AGENTJAIL_SESSION": true,
+
+	// Agent tooling
+	"DISABLE_AUTOUPDATER": true,
+
+	// Editor / pager
+	"EDITOR":   true,
+	"VISUAL":   true,
+	"PAGER":    true,
+	"LESS":     true,
+	"LESSOPEN": true,
+
+	// Git identity (not credentials)
+	"GIT_AUTHOR_NAME":     true,
+	"GIT_AUTHOR_EMAIL":    true,
+	"GIT_COMMITTER_NAME":  true,
+	"GIT_COMMITTER_EMAIL": true,
+
+	// Language toolchain roots (paths, not secrets)
+	"GOPATH":      true,
+	"GOROOT":      true,
+	"CARGO_HOME":  true,
+	"RUSTUP_HOME": true,
+	"NVM_DIR":     true,
+	"VOLTA_HOME":  true,
+	"PYENV_ROOT":  true,
+}
+
+// buildCleanEnv constructs a clean environment for the agent by starting
+// with an empty slice and copying only allowlisted variables from hostEnv.
+//
+// The allowlist is the union of envAllowlistBaseline and any variable names
+// listed in cfg.Secrets.EnvPassthrough.
+//
+// This is the primary defence against credential leakage: any env var NOT
+// in the allowlist is silently dropped.  stripEnv runs afterward as a
+// second layer.
+func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
+	// Build the effective allowlist: baseline + policy passthrough.
+	allowed := make(map[string]bool, len(envAllowlistBaseline))
+	for k, v := range envAllowlistBaseline {
+		allowed[k] = v
+	}
+	if cfg != nil {
+		for _, name := range cfg.Secrets.EnvPassthrough {
+			allowed[name] = true
+		}
+	}
+
+	// Index hostEnv by name for O(1) lookup.
+	hostMap := make(map[string]string, len(hostEnv))
+	for _, kv := range hostEnv {
+		name := envVarName(kv)
+		hostMap[name] = kv
+	}
+
+	// Copy only allowlisted variables that exist in the host env.
+	result := make([]string, 0, len(allowed))
+	for name := range allowed {
+		if kv, ok := hostMap[name]; ok {
+			result = append(result, kv)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "agentjail-shield: clean environment (%d variables from %d host vars)\n",
+		len(result), len(hostEnv))
+
+	return result
+}
 
 // secretsSocketPath returns the path to the agentjail-secrets Unix socket.
 func secretsSocketPath() string {
@@ -39,6 +148,10 @@ func secretsBrokerRunning() bool {
 // stripEnv removes env vars matching the blocklist from env, returning a
 // new env slice.  If secrets.StripOnLaunch is false, env is returned
 // unchanged.
+//
+// This is the defence-in-depth layer that runs AFTER buildCleanEnv.  It
+// catches any credential-bearing variable that the allowlist baseline
+// accidentally included.
 //
 // The blocklist supports glob patterns (path.Match semantics):
 //   - "AWS_ACCESS_KEY_ID" — exact match
