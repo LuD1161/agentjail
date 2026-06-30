@@ -356,6 +356,9 @@ func main() {
 // The agent parameter carries the resolved agent identity string (e.g. "claude",
 // "codex") and is forwarded to the daemon on the outgoing request.
 func runClaude(agent string) {
+	// 0. One-time shield warning (non-blocking, stderr only).
+	maybeEmitShieldWarning()
+
 	// 1. Read hook JSON from stdin.
 	stdinBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -442,6 +445,9 @@ func runClaude(agent string) {
 // runCursor implements the Cursor hook adapter (--agent=cursor).
 // All decisions exit 0; stdout carries the Cursor JSON response.
 func runCursor() {
+	// 0. One-time shield warning (non-blocking, stderr only).
+	maybeEmitShieldWarning()
+
 	// 1. Read hook JSON from stdin.
 	stdinBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
