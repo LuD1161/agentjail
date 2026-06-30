@@ -38,8 +38,9 @@ type PolicyConfig struct {
 	Network  NetworkConfig `yaml:"network"`
 	Web      WebConfig     `yaml:"web"`
 	AWS      AWSConfig     `yaml:"aws"`
-	Secrets  SecretsConfig `yaml:"secrets"`
-	Skills   SkillsConfig  `yaml:"skills"`
+	Secrets     SecretsConfig      `yaml:"secrets"`
+	Credentials []CredentialConfig `yaml:"credentials"`
+	Skills      SkillsConfig      `yaml:"skills"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -221,6 +222,30 @@ type SecretGrant struct {
 	Name  string `yaml:"name"`
 	Scope string `yaml:"scope"`
 	TTL   string `yaml:"ttl"`
+}
+
+// CredentialConfig describes a credential that the phantom token registry
+// manages. The proxy generates a phantom token for each credential, strips
+// the real value from the agent's env, and injects it into upstream requests
+// that pass host/method/path validation.
+type CredentialConfig struct {
+	ID             string                   `yaml:"id"`
+	EnvVar         string                   `yaml:"env_var"`
+	Source         string                   `yaml:"source"`
+	AllowedHosts   []string                 `yaml:"allowed_hosts"`
+	AllowedMethods []string                 `yaml:"allowed_methods"`
+	AllowedPaths   []string                 `yaml:"allowed_paths"`
+	Injection      CredentialInjectionConfig `yaml:"injection"`
+	Violation      string                   `yaml:"violation"`
+	TTL            string                   `yaml:"ttl"`
+}
+
+// CredentialInjectionConfig describes how a real credential is injected into
+// the upstream HTTP request when the proxy swaps a phantom token.
+type CredentialInjectionConfig struct {
+	Type   string `yaml:"type"`
+	Header string `yaml:"header"`
+	Scheme string `yaml:"scheme"`
 }
 
 // Load reads a PolicyConfig from a YAML file at path.
@@ -497,6 +522,13 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Secrets.EnvPassthrough = append([]string(nil), base.Secrets.EnvPassthrough...)
 	}
 
+	// Credentials — overlay wins if non-empty, else keep base.
+	if len(overlay.Credentials) > 0 {
+		result.Credentials = append([]CredentialConfig(nil), overlay.Credentials...)
+	} else {
+		result.Credentials = append([]CredentialConfig(nil), base.Credentials...)
+	}
+
 	// DisabledRules — overlay wins if non-empty, else keep base.
 	// An empty overlay means "don't change the base" (not "clear all disabled rules").
 	if len(overlay.DisabledRules) > 0 {
@@ -682,6 +714,8 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 			"blocked": sliceOrEmpty(c.Skills.Blocked),
 			"ask":     sliceOrEmpty(c.Skills.Ask),
 		},
+		// credentials is read by policy to understand phantom token bindings.
+		"credentials": credentialsToOPA(c.Credentials),
 		// disabled_rules is read by resolver.rego to suppress non-locked candidates.
 		// Rego reads it as data.agentjail.config.disabled_rules.
 		"disabled_rules": sliceOrEmpty(c.DisabledRules),
@@ -705,6 +739,37 @@ func grantsToOPA(grants []SecretGrant) []interface{} {
 			"name":  g.Name,
 			"scope": g.Scope,
 			"ttl":   g.TTL,
+		}
+	}
+	return out
+}
+
+func credentialsToOPA(creds []CredentialConfig) []interface{} {
+	nilSafe := func(s []string) []string {
+		if s == nil {
+			return []string{}
+		}
+		return s
+	}
+	if len(creds) == 0 {
+		return []interface{}{}
+	}
+	out := make([]interface{}, len(creds))
+	for i, c := range creds {
+		out[i] = map[string]interface{}{
+			"id":              c.ID,
+			"env_var":         c.EnvVar,
+			"source":          c.Source,
+			"allowed_hosts":   nilSafe(c.AllowedHosts),
+			"allowed_methods": nilSafe(c.AllowedMethods),
+			"allowed_paths":   nilSafe(c.AllowedPaths),
+			"injection": map[string]interface{}{
+				"type":   c.Injection.Type,
+				"header": c.Injection.Header,
+				"scheme": c.Injection.Scheme,
+			},
+			"violation": c.Violation,
+			"ttl":       c.TTL,
 		}
 	}
 	return out
