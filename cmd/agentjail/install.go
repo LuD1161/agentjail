@@ -89,12 +89,39 @@ func runInstallCmd(args []string) {
 	forAgent, all, yes, allowUnsupported := parseInstallFlags(args)
 
 	u := ui.New(os.Stdout)
+	_ = u // used below on macOS path
+
+	// ── IDE wrapper and PATH shim targets work on all platforms ──────────
+	// These don't need the daemon, so they run before the Linux gate.
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		if forAgent == "vscode" || forAgent == "cursor-ide" {
+			chain := hasFlag(args, "--chain")
+			replace := hasFlag(args, "--replace")
+			app := "Code"
+			if forAgent == "cursor-ide" {
+				app = "Cursor"
+			}
+			if err := installVSCodeWrapper(home, app, chain, replace); err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: %v", err)))
+				os.Exit(1)
+			}
+			return
+		}
+
+		if hasFlag(args, "--with-path-shim") && forAgent == "" && !all && !yes {
+			if err := installPathShim(home); err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: %v", err)))
+				os.Exit(1)
+			}
+			return
+		}
+	}
 
 	// ── Linux gate ──────────────────────────────────────────────────────────
 	if currentGOOS != "darwin" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: cannot determine home dir: %v", err)))
+		if homeErr != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: cannot determine home dir: %v", homeErr)))
 			os.Exit(1)
 		}
 		env := buildAgentsEnv(home)
@@ -142,7 +169,7 @@ func runInstallCmd(args []string) {
 		env := buildAgentsEnv(home)
 		ag := agentByID(forAgent)
 		if ag == nil {
-			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: unknown agent %q (supported: claude-code, codex, cursor)", forAgent)))
+			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: unknown agent %q (supported: claude-code, codex, cursor, vscode, cursor-ide)", forAgent)))
 			os.Exit(2)
 		}
 		if err := installDaemonPreamble(home, os.Stdout, mcpSeed); err != nil {
@@ -284,6 +311,31 @@ func runInstallCmd(args []string) {
 				id:      r.ag.ID(),
 				skipped: true,
 			})
+		}
+	}
+
+	// ── IDE wrappers (--all installs wrappers for detected IDEs) ────────
+	if all || yes {
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, u.Section(u.Emoji("🔧  ")+"Configuring IDE wrappers"))
+
+		for _, app := range []string{"Code", "Cursor"} {
+			settingsPath := vscodeSettingsPath(home, app)
+			if settingsPath == "" {
+				fmt.Fprintln(os.Stdout, "      "+u.Badge("dim", app+": not detected — skipping"))
+				continue
+			}
+			if err := installVSCodeWrapper(home, app, false, false); err != nil {
+				fmt.Fprintln(os.Stdout, "      "+u.Badge("warn", fmt.Sprintf("%s: %v", app, err)))
+			}
+		}
+
+		// PATH shim only with --with-path-shim (even in --all mode).
+		if hasFlag(args, "--with-path-shim") {
+			fmt.Fprintln(os.Stdout)
+			if err := installPathShim(home); err != nil {
+				fmt.Fprintln(os.Stdout, "      "+u.Badge("warn", fmt.Sprintf("PATH shim: %v", err)))
+			}
 		}
 	}
 
@@ -527,6 +579,12 @@ func performFullUninstall(home, goos string) UninstallResult {
 	} else {
 		r.DaemonSkipped = true
 	}
+
+	// Step 2.5: remove IDE wrappers (best-effort).
+	for _, app := range []string{"Code", "Cursor"} {
+		_ = uninstallVSCodeWrapper(home, app)
+	}
+	uninstallPathShim(home)
 
 	// Step 3: remove ~/.agentjail.
 	installDir := filepath.Join(home, ".agentjail")
@@ -1286,19 +1344,38 @@ func parseInstallFlags(args []string) (forAgent string, all, yes, allowUnsupport
 		a := args[i]
 		switch {
 		case a == "--for" && i+1 < len(args):
-			forAgent = validateTarget(args[i+1], "install", []string{"claude-code", "codex", "cursor"})
+			forAgent = validateTarget(args[i+1], "install", installTargets)
 			i++
 		case strings.HasPrefix(a, "--for="):
-			forAgent = validateTarget(strings.TrimPrefix(a, "--for="), "install", []string{"claude-code", "codex", "cursor"})
+			forAgent = validateTarget(strings.TrimPrefix(a, "--for="), "install", installTargets)
 		case a == "--all":
 			all = true
 		case a == "--yes", a == "-y":
 			yes = true
 		case a == "--allow-unsupported":
 			allowUnsupported = true
+		case a == "--with-path-shim":
+			// Handled in runInstallCmd via hasFlag.
+		case a == "--chain":
+			// Handled in runInstallCmd via hasFlag.
+		case a == "--replace":
+			// Handled in runInstallCmd via hasFlag.
 		}
 	}
 	return
+}
+
+// installTargets lists all valid --for targets.
+var installTargets = []string{"claude-code", "codex", "cursor", "vscode", "cursor-ide"}
+
+// hasFlag checks if a flag is present in the args slice.
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }
 
 // parseForFlag extracts the --for flag from args for uninstall.
