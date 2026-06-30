@@ -240,6 +240,20 @@ func TestDefaultNetworkAllowedHostsIncludesTelemetry(t *testing.T) {
 		telemetryHost, cfg.Network.AllowedHosts)
 }
 
+func TestDefaultNetworkAllowedHostsIncludesClaudeCode(t *testing.T) {
+	cfg := Default()
+	required := []string{"api.anthropic.com", "platform.claude.com"}
+	hosts := make(map[string]bool, len(cfg.Network.AllowedHosts))
+	for _, h := range cfg.Network.AllowedHosts {
+		hosts[h] = true
+	}
+	for _, r := range required {
+		if !hosts[r] {
+			t.Errorf("Default().Network.AllowedHosts missing %q (required for Claude Code connectivity)", r)
+		}
+	}
+}
+
 // TestDefaultWebBlockedIsEmpty verifies WebFetch is unrestricted out of the box
 // (no hosts blocked) and the slice is non-nil so Rego sees [] not null.
 func TestDefaultWebBlockedIsEmpty(t *testing.T) {

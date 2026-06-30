@@ -58,6 +58,19 @@ var envAllowlistBaseline = map[string]bool{
 
 	// Agent tooling
 	"DISABLE_AUTOUPDATER": true,
+	"CLAUDECODE":          true,
+	"AI_AGENT":            true,
+	"COREPACK_ENABLE_AUTO_PIN": true,
+
+	// Process / session context
+	"PWD":     true,
+	"OLDPWD":  true,
+	"LOGNAME": true,
+	"SHLVL":   true,
+	"SSH_TTY": true,
+	"COLORTERM": true,
+	"TERM_PROGRAM":         true,
+	"TERM_PROGRAM_VERSION": true,
 
 	// Editor / pager
 	"EDITOR":   true,
@@ -110,11 +123,35 @@ func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 		hostMap[name] = kv
 	}
 
+	// Prefixes that are safe to pass through (non-credential env families).
+	safePrefixes := []string{
+		"CLAUDE_CODE_", // Claude Code session metadata
+		"CLAUDE_",      // Claude agent config (CLAUDE_EFFORT, etc.)
+		"LC_",          // Locale variants
+		"XDG_",         // XDG base directory spec
+	}
+
 	// Copy only allowlisted variables that exist in the host env.
 	result := make([]string, 0, len(allowed))
 	for name := range allowed {
 		if kv, ok := hostMap[name]; ok {
 			result = append(result, kv)
+		}
+	}
+	// Also copy any var matching a safe prefix (unless already copied).
+	copied := make(map[string]bool, len(result))
+	for _, kv := range result {
+		copied[envVarName(kv)] = true
+	}
+	for name, kv := range hostMap {
+		if copied[name] {
+			continue
+		}
+		for _, pfx := range safePrefixes {
+			if strings.HasPrefix(name, pfx) {
+				result = append(result, kv)
+				break
+			}
 		}
 	}
 

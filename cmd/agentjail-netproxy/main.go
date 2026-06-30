@@ -365,11 +365,13 @@ func defaultPolicyPath() string {
 func main() {
 	addr := flag.String("addr", defaultAddr, "listen address (default 127.0.0.1:9100)")
 	policyPath := flag.String("policy", defaultPolicyPath(), "path to policy.yaml")
+	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-netproxy [--addr=HOST:PORT] [--policy=PATH]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-netproxy [--addr=HOST:PORT] [--policy=PATH] [--log-level=LEVEL]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --addr=HOST:PORT    listen address (default 127.0.0.1:9100)")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml")
+		fmt.Fprintln(os.Stderr, "  --log-level=LEVEL   log level: debug, info, warn, error (default info)")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "HTTPS forward proxy that enforces network.allowed_hosts from policy.yaml.")
 		fmt.Fprintln(os.Stderr, "Only HTTP CONNECT is supported (HTTPS tunneling).")
@@ -377,8 +379,19 @@ func main() {
 	}
 	flag.Parse()
 
+	var level slog.Level
+	switch strings.ToLower(*logLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: level,
 	}))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

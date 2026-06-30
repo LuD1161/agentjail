@@ -334,16 +334,37 @@ func Default() *PolicyConfig {
 		DisabledRules: []string{},
 		Network: NetworkConfig{
 			AllowedHosts: []string{
+				// Claude Code / Anthropic services
+				"api.anthropic.com",
+				"platform.claude.com",
+				"statsig.anthropic.com",
+				"claude.ai",
+				"*.claude.ai",
+				"sentry.io",
+				"*.sentry.io",
+				// OAuth / Google (for claude.ai Gmail, Calendar, Drive MCPs)
+				"accounts.google.com",
+				"oauth2.googleapis.com",
+				"*.googleapis.com",
+				// Common MCP plugin APIs
+				"api.linear.app",
+				"*.posthog.com",
+				"api.typefully.com",
+				// Package registries
 				"api.github.com",
 				"raw.githubusercontent.com",
+				"objects.githubusercontent.com",
 				"codeload.github.com",
 				"registry.npmjs.org",
 				"pypi.org",
 				"files.pythonhosted.org",
 				"crates.io",
+				"static.crates.io",
 				"proxy.golang.org",
 				"sum.golang.org",
+				"repo1.maven.org",
 				"deno.land",
+				"*.huggingface.co",
 				// agentjail anonymous telemetry backend (see docs/TELEMETRY.md); users may remove this.
 				"us.i.posthog.com",
 			},

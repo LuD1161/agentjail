@@ -64,6 +64,7 @@ func startNetproxy(netproxyPath, proxyAddr, policyPath string) (*exec.Cmd, error
 	cmd := exec.Command(netproxyPath,
 		"--addr="+proxyAddr,
 		"--policy="+policyPath,
+		"--log-level=warn",
 	)
 	cmd.Stderr = os.Stderr
 

@@ -3,13 +3,15 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -302,6 +304,13 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Read-only access: system directories, binaries.
 	roAccess := uint64(unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_READ_DIR | unix.LANDLOCK_ACCESS_FS_EXECUTE)
 
+	// File-only access (no directory flags like READ_DIR, MAKE_DIR, etc.).
+	rwFileAccess := uint64(
+		unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_WRITE_FILE |
+			unix.LANDLOCK_ACCESS_FS_TRUNCATE |
+			unix.LANDLOCK_ACCESS_FS_IOCTL_DEV,
+	)
+
 	// allowPath adds an allow rule for the given path with the specified access
 	// rights (masked by the handled set so we never request unknown bits).
 	// If the path does not exist the rule is silently skipped.
@@ -341,9 +350,13 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			name   string
 			access uint64
 		}{
-			{".claude", rwAccess},  // Claude Code config, sessions, plugins, auth
-			{".local", roAccess},   // Claude binary at ~/.local/share/claude/
+			{".claude", rwAccess},     // Claude Code config, sessions, plugins
+			{".claude-mem", rwAccess}, // claude-mem MCP plugin database
+			{".cache", rwAccess},      // Claude CLI cache (node, updates)
+			{".local", roAccess},      // Claude binary at ~/.local/share/claude/
 			{".npm-global", roAccess}, // npm global modules (plugins may need this)
+			{".config", roAccess},     // XDG config (MCP server configs, etc.)
+			{".agentjail", rwAccess},  // daemon socket, SQLite DB, policy
 		}
 		for _, d := range allowedHomeDirs {
 			p := filepath.Join(home, d.name)
@@ -351,17 +364,89 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 			}
 		}
+		// Individual files at $HOME root that Claude Code reads/writes.
+		homeFiles := []struct {
+			name   string
+			access uint64
+		}{
+			{".claude.json", rwFileAccess}, // OAuth tokens, preferences, feature flags
+		}
+		for _, f := range homeFiles {
+			p := filepath.Join(home, f.name)
+			if err := allowPath(p, f.access); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
+			}
+		}
 	}
 
 	// Allow read-only on standard system paths.
-	sysDirs := []string{
+	roSysDirs := []string{
 		"/usr", "/bin", "/lib", "/lib64", "/sbin",
-		"/etc", "/dev", "/proc", "/sys",
+		"/etc", "/proc", "/sys",
 		"/opt", "/run",
 	}
-	for _, p := range sysDirs {
+	for _, p := range roSysDirs {
 		if err := allowPath(p, roAccess); err != nil {
 			return fmt.Errorf("allow %s: %w", p, err)
+		}
+	}
+	// /dev needs write access for /dev/null, /dev/zero, /dev/urandom, ptys, etc.
+	if err := allowPath("/dev", rwAccess); err != nil {
+		return fmt.Errorf("allow /dev: %w", err)
+	}
+
+	// Resolve common runtime binaries that MCP servers depend on. If they
+	// live outside the standard system paths (e.g. ~/.bun/, ~/.nvm/, ~/.cargo/)
+	// we add their real directory read-only so they can execute inside the sandbox.
+	runtimes := []string{"node", "bun", "npx", "python3", "python", "deno", "go", "cargo", "ruby"}
+	seen := make(map[string]bool)
+	for _, name := range runtimes {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			continue
+		}
+		dir := filepath.Dir(real)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if err := allowPath(dir, roAccess); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: skip runtime dir %s: %v\n", dir, err)
+		}
+	}
+
+	// Resolve MCP server binary paths from ~/.claude.json. MCP servers may
+	// live in virtualenvs or tool-specific directories outside the standard
+	// system paths. We read their command paths and allow their parent
+	// directory trees so they can execute inside the sandbox.
+	if home != "" {
+		mcpPaths := resolveMCPServerPaths(filepath.Join(home, ".claude.json"))
+		for _, mp := range mcpPaths {
+			real, err := filepath.EvalSymlinks(mp)
+			if err != nil {
+				real = mp
+			}
+			dir := filepath.Dir(real)
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			// Allow the venv/tool directory tree (read-only + execute).
+			topDir := findTopLevelDir(dir, home)
+			if topDir != "" && !seen[topDir] {
+				seen[topDir] = true
+				if err := allowPath(topDir, roAccess); err != nil {
+					fmt.Fprintf(os.Stderr, "agentjail-shield: skip MCP dir %s: %v\n", topDir, err)
+				}
+			} else if !seen[dir] {
+				if err := allowPath(dir, roAccess); err != nil {
+					fmt.Fprintf(os.Stderr, "agentjail-shield: skip MCP dir %s: %v\n", dir, err)
+				}
+			}
 		}
 	}
 
@@ -404,4 +489,42 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	}
 
 	return nil
+}
+
+// resolveMCPServerPaths reads ~/.claude.json and returns the command paths
+// of configured MCP servers.
+func resolveMCPServerPaths(claudeJSON string) []string {
+	data, err := os.ReadFile(claudeJSON)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string `json:"command"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+	var paths []string
+	for _, s := range cfg.MCPServers {
+		if s.Command != "" && filepath.IsAbs(s.Command) {
+			paths = append(paths, s.Command)
+		}
+	}
+	return paths
+}
+
+// findTopLevelDir walks up from dir to find the first directory under parent.
+// For dir="/home/user/.headroom-venv/bin" and parent="/home/user", returns
+// "/home/user/.headroom-venv".
+func findTopLevelDir(dir, parent string) string {
+	parent = filepath.Clean(parent)
+	dir = filepath.Clean(dir)
+	if !strings.HasPrefix(dir, parent+"/") {
+		return ""
+	}
+	rel := strings.TrimPrefix(dir, parent+"/")
+	parts := strings.SplitN(rel, "/", 2)
+	return filepath.Join(parent, parts[0])
 }
