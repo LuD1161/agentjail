@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -130,6 +131,14 @@ const imdsBaseURL = "http://169.254.169.254"
 // instance role name.  Best-effort: if IMDS is unreachable (non-EC2 host),
 // the check is skipped silently.
 func checkIMDS(result *AuditResult) {
+	// Fast bail: if IMDS IP isn't reachable at TCP level, skip the
+	// full HTTP probes. This avoids a 300ms wait on non-cloud machines.
+	conn, err := net.DialTimeout("tcp", "169.254.169.254:80", 10*time.Millisecond)
+	if err != nil {
+		return // not on a cloud instance
+	}
+	conn.Close()
+
 	client := &http.Client{Timeout: imdsTimeout}
 
 	// Try IMDSv2: PUT /latest/api/token
