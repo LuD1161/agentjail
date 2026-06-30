@@ -44,6 +44,11 @@ import (
 // hookVersion is set via -ldflags at build time (mirrors cmd/agentjail version).
 var hookVersion = ""
 
+var (
+	defaultTelemetryPaths = telemetry.DefaultPaths
+	sendFailOpen          = telemetry.SendFailOpen
+)
+
 // hookInput is the JSON Claude Code/Codex writes to the hook binary's stdin.
 // The field name uses "hook_event_name" (with the _name suffix) which is
 // Claude Code's convention on the stdin side; the daemon expects "hook_event"
@@ -129,13 +134,11 @@ func defaultSocketPath() string {
 func failOpenMarker(agent, category string) {
 	fmt.Fprintf(os.Stderr, "agentjail-hook: fail-open agent=%s reason=%s\n", agent, category)
 	// Emit telemetry best-effort: short timeout, all errors silently discarded.
-	go func() {
-		if tp, err := telemetry.DefaultPaths(); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = telemetry.SendFailOpen(ctx, tp, os.Getenv, hookVersion, runtime.GOOS, category)
-		}
-	}()
+	if tp, err := defaultTelemetryPaths(); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = sendFailOpen(ctx, tp, os.Getenv, hookVersion, runtime.GOOS, category)
+	}
 }
 
 // failOpenClaudeLike writes a structured fail-open marker to stderr and emits
