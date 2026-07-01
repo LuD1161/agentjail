@@ -8,6 +8,7 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 type secretsRPCRequest struct {
@@ -78,12 +79,12 @@ func requestSecretGrants(cfg *config.PolicyConfig) ([]string, []activeGrant) {
 	if cfg == nil || len(cfg.Secrets.Grants) == 0 {
 		return nil, nil
 	}
-	if !secretsBrokerRunning() {
+	if !sandbox.SecretsBrokerRunning() {
 		fmt.Fprintln(os.Stderr, "agentjail-shield WARNING: secrets.grants configured but agentjail-secrets broker is not running")
 		return nil, nil
 	}
 
-	socketPath := secretsSocketPath()
+	socketPath := sandbox.SecretsSocketPath()
 	var envVars []string
 	var grants []activeGrant
 
@@ -117,7 +118,7 @@ func requestSecretGrants(cfg *config.PolicyConfig) ([]string, []activeGrant) {
 }
 
 func revokeSecretGrants(grants []activeGrant) {
-	socketPath := secretsSocketPath()
+	socketPath := sandbox.SecretsSocketPath()
 	for _, g := range grants {
 		resp, err := secretsRPC(socketPath, &secretsRPCRequest{
 			Action:  "revoke",

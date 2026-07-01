@@ -14,6 +14,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 const sandboxExecPath = "/usr/bin/sandbox-exec"
@@ -430,7 +431,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	argv = append(argv, agentArgs...)
 
 	// Build the environment: inherit everything + strip ambient creds + set proxy vars + granted secrets.
-	env := stripEnv(os.Environ(), cfg)
+	env := sandbox.StripEnv(os.Environ(), cfg)
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
@@ -456,7 +457,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
 // is absent (fail-open path).  Env stripping still applies.
 func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool) {
-	env := stripEnv(os.Environ(), cfg)
+	env := sandbox.StripEnv(os.Environ(), cfg)
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)

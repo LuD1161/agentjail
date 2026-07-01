@@ -3,13 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/LuD1161/agentjail/internal/envaudit"
 )
 
 // TestCheckRoot_NonRoot verifies that no finding is added when not running as root.
@@ -17,8 +16,8 @@ func TestCheckRoot_NonRoot(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root; running as root")
 	}
-	result := &AuditResult{Findings: []Finding{}}
-	checkRoot(result)
+	result := &envaudit.AuditResult{Findings: []envaudit.Finding{}}
+	envaudit.CheckRoot(result)
 	for _, f := range result.Findings {
 		if f.Check == "root" {
 			t.Error("expected no root finding when not running as root")
@@ -40,8 +39,8 @@ func TestCheckAmbientCredFiles_Detected(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	result := &AuditResult{Findings: []Finding{}}
-	checkAmbientCredFiles(result)
+	result := &envaudit.AuditResult{Findings: []envaudit.Finding{}}
+	envaudit.CheckAmbientCredFiles(result)
 
 	found := false
 	for _, f := range result.Findings {
@@ -59,8 +58,8 @@ func TestCheckAmbientCredFiles_NotPresent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	result := &AuditResult{Findings: []Finding{}}
-	checkAmbientCredFiles(result)
+	result := &envaudit.AuditResult{Findings: []envaudit.Finding{}}
+	envaudit.CheckAmbientCredFiles(result)
 
 	for _, f := range result.Findings {
 		if f.Check == "ambient_cred_file" {
@@ -74,8 +73,8 @@ func TestCheckAmbientEnvVars_Detected(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
 	t.Setenv("PGPASSWORD", "test-pg-pass")
 
-	result := &AuditResult{Findings: []Finding{}}
-	checkAmbientEnvVars(result)
+	result := &envaudit.AuditResult{Findings: []envaudit.Finding{}}
+	envaudit.CheckAmbientEnvVars(result)
 
 	foundAWS := false
 	foundPG := false
@@ -104,8 +103,8 @@ func TestCheckAmbientEnvVars_NotSet(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("AWS_SESSION_TOKEN", "")
 
-	result := &AuditResult{Findings: []Finding{}}
-	checkAmbientEnvVars(result)
+	result := &envaudit.AuditResult{Findings: []envaudit.Finding{}}
+	envaudit.CheckAmbientEnvVars(result)
 
 	for _, f := range result.Findings {
 		if f.Check == "ambient_env_var" {
@@ -118,33 +117,33 @@ func TestCheckAmbientEnvVars_NotSet(t *testing.T) {
 func TestHasCriticalFindings(t *testing.T) {
 	tests := []struct {
 		name     string
-		findings []Finding
+		findings []envaudit.Finding
 		want     bool
 	}{
 		{
 			name:     "no findings",
-			findings: []Finding{},
+			findings: []envaudit.Finding{},
 			want:     false,
 		},
 		{
 			name: "only warnings",
-			findings: []Finding{
-				{Severity: SeverityWarning, Check: "test", Message: "warning"},
+			findings: []envaudit.Finding{
+				{Severity: envaudit.SeverityWarning, Check: "test", Message: "warning"},
 			},
 			want: false,
 		},
 		{
 			name: "has critical",
-			findings: []Finding{
-				{Severity: SeverityWarning, Check: "test", Message: "warning"},
-				{Severity: SeverityCritical, Check: "root", Message: "running as root"},
+			findings: []envaudit.Finding{
+				{Severity: envaudit.SeverityWarning, Check: "test", Message: "warning"},
+				{Severity: envaudit.SeverityCritical, Check: "root", Message: "running as root"},
 			},
 			want: true,
 		},
 		{
 			name: "only info",
-			findings: []Finding{
-				{Severity: SeverityInfo, Check: "test", Message: "info"},
+			findings: []envaudit.Finding{
+				{Severity: envaudit.SeverityInfo, Check: "test", Message: "info"},
 			},
 			want: false,
 		},
@@ -152,8 +151,8 @@ func TestHasCriticalFindings(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := &AuditResult{Findings: tc.findings}
-			got := hasCriticalFindings(result)
+			result := &envaudit.AuditResult{Findings: tc.findings}
+			got := envaudit.HasCriticalFindings(result)
 			if got != tc.want {
 				t.Errorf("hasCriticalFindings = %v; want %v", got, tc.want)
 			}
@@ -163,11 +162,11 @@ func TestHasCriticalFindings(t *testing.T) {
 
 // TestPrintAuditWarnings verifies that warnings are printed to stderr.
 func TestPrintAuditWarnings(t *testing.T) {
-	result := &AuditResult{
-		Findings: []Finding{
-			{Severity: SeverityCritical, Check: "root", Message: "running as root", Detail: "should be non-root"},
-			{Severity: SeverityWarning, Check: "ambient_env_var", Message: "AWS_SECRET_ACCESS_KEY is set"},
-			{Severity: SeverityInfo, Check: "iam_role", Message: "instance role: dev-role"},
+	result := &envaudit.AuditResult{
+		Findings: []envaudit.Finding{
+			{Severity: envaudit.SeverityCritical, Check: "root", Message: "running as root", Detail: "should be non-root"},
+			{Severity: envaudit.SeverityWarning, Check: "ambient_env_var", Message: "AWS_SECRET_ACCESS_KEY is set"},
+			{Severity: envaudit.SeverityInfo, Check: "iam_role", Message: "instance role: dev-role"},
 		},
 	}
 
@@ -199,9 +198,9 @@ func TestPrintAuditWarnings(t *testing.T) {
 
 // TestWriteAuditJSON verifies JSON output to a file.
 func TestWriteAuditJSON(t *testing.T) {
-	result := &AuditResult{
-		Findings: []Finding{
-			{Severity: SeverityCritical, Check: "root", Message: "running as root"},
+	result := &envaudit.AuditResult{
+		Findings: []envaudit.Finding{
+			{Severity: envaudit.SeverityCritical, Check: "root", Message: "running as root"},
 		},
 		IsEC2: true,
 	}
@@ -216,7 +215,7 @@ func TestWriteAuditJSON(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	var parsed AuditResult
+	var parsed envaudit.AuditResult
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -234,9 +233,9 @@ func TestWriteAuditJSON(t *testing.T) {
 
 // TestWriteAuditJSON_Stdout verifies JSON output to stdout.
 func TestWriteAuditJSON_Stdout(t *testing.T) {
-	result := &AuditResult{
-		Findings: []Finding{
-			{Severity: SeverityInfo, Check: "test", Message: "hello"},
+	result := &envaudit.AuditResult{
+		Findings: []envaudit.Finding{
+			{Severity: envaudit.SeverityInfo, Check: "test", Message: "hello"},
 		},
 	}
 
@@ -254,7 +253,7 @@ func TestWriteAuditJSON_Stdout(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	_, _ = buf.ReadFrom(r)
-	var parsed AuditResult
+	var parsed envaudit.AuditResult
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -263,14 +262,14 @@ func TestWriteAuditJSON_Stdout(t *testing.T) {
 	}
 }
 
-// TestRunAudit verifies that runAudit returns a result with the expected checks.
+// TestRunAudit verifies that RunAudit returns a result with the expected checks.
 func TestRunAudit(t *testing.T) {
 	// Set an env var to trigger a finding.
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
 
-	result := runAudit()
+	result := envaudit.RunAudit()
 	if result == nil {
-		t.Fatal("runAudit returned nil")
+		t.Fatal("RunAudit returned nil")
 	}
 	if len(result.Findings) == 0 {
 		t.Skip("no findings (not root, no cred files, not on EC2) — test environment is clean")
@@ -289,76 +288,26 @@ func TestRunAudit(t *testing.T) {
 }
 
 // TestCheckIMDS_NotEC2 verifies that IMDS checks are skipped when not on EC2.
-// This test uses a mock HTTP server that simulates IMDS being unreachable.
 func TestCheckIMDS_NotEC2(t *testing.T) {
-	// On a non-EC2 host, the IMDS connection will timeout.
-	// The check should complete within imdsTimeout and add no findings.
-	result := &AuditResult{Findings: []Finding{}}
-	checkIMDS(result)
+	result := &envaudit.AuditResult{Findings: []envaudit.Finding{}}
+	envaudit.CheckIMDS(result)
 
-	// On non-EC2 hosts, no IMDS findings should be present.
 	for _, f := range result.Findings {
 		if f.Check == "imds_version" {
-			// This could happen if we're on EC2 — skip the assertion.
 			t.Skipf("IMDS responded — appears to be on EC2. Finding: %s", f.Message)
 		}
 	}
 }
 
-// TestCheckIMDS_MockIMDSv2 verifies IMDSv2 detection with a mock server.
-func TestCheckIMDS_MockIMDSv2(t *testing.T) {
-	// Create a mock IMDS server that supports IMDSv2.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "PUT" && r.URL.Path == "/latest/api/token" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("mock-imds-v2-token"))
-			return
-		}
-		if r.Method == "GET" && r.URL.Path == "/latest/meta-data/" {
-			if r.Header.Get("X-aws-ec2-metadata-token") != "mock-imds-v2-token" {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("instance-id\nami-id"))
-			return
-		}
-		if r.Method == "GET" && r.URL.Path == "/latest/meta-data/iam/security-credentials/" {
-			if r.Header.Get("X-aws-ec2-metadata-token") != "mock-imds-v2-token" {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("dev-role"))
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer ts.Close()
-
-	// We can't easily redirect the IMDS base URL for testing since it's
-	// a constant. This test verifies the helper functions work correctly
-	// with a mock server instead.
-	client := &http.Client{Timeout: 5 * time.Second}
-	token, err := getIMDSv2Token(client)
-	if err != nil {
-		// On non-EC2 hosts, this will fail — skip.
-		t.Skipf("getIMDSv2Token failed (expected on non-EC2): %v", err)
-	}
-	if token == "" {
-		t.Error("expected non-empty token")
-	}
-}
-
 // TestFindingSeverity verifies that severity constants are correct.
 func TestFindingSeverity(t *testing.T) {
-	if SeverityCritical != "critical" {
-		t.Errorf("SeverityCritical = %q; want 'critical'", SeverityCritical)
+	if envaudit.SeverityCritical != "critical" {
+		t.Errorf("SeverityCritical = %q; want 'critical'", envaudit.SeverityCritical)
 	}
-	if SeverityWarning != "warning" {
-		t.Errorf("SeverityWarning = %q; want 'warning'", SeverityWarning)
+	if envaudit.SeverityWarning != "warning" {
+		t.Errorf("SeverityWarning = %q; want 'warning'", envaudit.SeverityWarning)
 	}
-	if SeverityInfo != "info" {
-		t.Errorf("SeverityInfo = %q; want 'info'", SeverityInfo)
+	if envaudit.SeverityInfo != "info" {
+		t.Errorf("SeverityInfo = %q; want 'info'", envaudit.SeverityInfo)
 	}
 }

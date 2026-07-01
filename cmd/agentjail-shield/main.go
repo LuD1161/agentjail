@@ -37,6 +37,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/envaudit"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -133,7 +134,7 @@ func main() {
 	// Run the environment audit before shield setup.  The audit is
 	// best-effort and non-blocking: warnings are printed to stderr.
 	// In --audit-strict mode, critical findings abort the launch.
-	auditResult := runAudit()
+	auditResult := envaudit.RunAudit()
 	if *auditJSON != "" || *auditStrict {
 		printAuditWarnings(auditResult)
 	}
@@ -142,7 +143,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "agentjail-shield: could not write audit JSON: %v\n", err)
 		}
 	}
-	if *auditStrict && hasCriticalFindings(auditResult) {
+	if *auditStrict && envaudit.HasCriticalFindings(auditResult) {
 		fmt.Fprintln(os.Stderr, "agentjail-shield: --audit-strict: refusing to launch due to critical audit findings")
 		os.Exit(1)
 	}

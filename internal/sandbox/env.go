@@ -1,15 +1,16 @@
-// Package main is agentjail-shield. This file contains the env construction
-// logic that builds a clean environment for the agent process.
+// Package sandbox contains the OS-sandbox domain logic for agentjail-shield.
 //
-// The primary defence is allowlist-based: buildCleanEnv starts with an empty
+// This file holds the env construction logic that builds a clean environment
+// for the agent process.
+//
+// The primary defence is allowlist-based: BuildCleanEnv starts with an empty
 // environment and copies only variables from a known-safe baseline plus any
-// extras listed in the policy's env_passthrough list.  stripEnv runs as a
+// extras listed in the policy's env_passthrough list.  StripEnv runs as a
 // second, defence-in-depth layer that catches anything the allowlist
 // accidentally included.
 //
 // Shared between macOS and Linux (no build constraint).
-
-package main
+package sandbox
 
 import (
 	"fmt"
@@ -23,13 +24,13 @@ import (
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 )
 
-// envAllowlistBaseline is the set of env var names that are safe for any
+// EnvAllowlistBaseline is the set of env var names that are safe for any
 // agent to inherit.  These are the minimum variables needed for a working
 // shell, TLS, proxy, editor, and common language toolchains.
 //
 // Credential-bearing variables (API keys, tokens, passwords) are NOT in
 // this list — they must go through the secrets broker.
-var envAllowlistBaseline = map[string]bool{
+var EnvAllowlistBaseline = map[string]bool{
 	// Core POSIX / shell
 	"PATH":    true,
 	"HOME":    true,
@@ -105,10 +106,10 @@ var envAllowlistBaseline = map[string]bool{
 	"PYENV_ROOT":  true,
 }
 
-// envDenylist blocks dangerous injection vectors. These are stripped even
+// EnvDenylist blocks dangerous injection vectors. These are stripped even
 // if they match a safe prefix or appear in the policy passthrough list.
 // These are non-overridable even if listed in the policy passthrough.
-var envDenylist = map[string]bool{
+var EnvDenylist = map[string]bool{
 	// Linker injection
 	"LD_PRELOAD":            true,
 	"LD_LIBRARY_PATH":       true,
@@ -141,21 +142,21 @@ var envDenylist = map[string]bool{
 	"GOFLAGS":               true,
 }
 
-// envDenyPrefixes blocks any env var starting with these prefixes.
-var envDenyPrefixes = []string{
+// EnvDenyPrefixes blocks any env var starting with these prefixes.
+var EnvDenyPrefixes = []string{
 	"LD_",
 	"DYLD_",
 	"BASH_FUNC_",
 	"OP_SESSION_",
 }
 
-// isDenied returns true if the variable name is on the denylist or matches
+// IsDenied returns true if the variable name is on the denylist or matches
 // a denied prefix.
-func isDenied(name string) bool {
-	if envDenylist[name] {
+func IsDenied(name string) bool {
+	if EnvDenylist[name] {
 		return true
 	}
-	for _, pfx := range envDenyPrefixes {
+	for _, pfx := range EnvDenyPrefixes {
 		if strings.HasPrefix(name, pfx) {
 			return true
 		}
@@ -163,19 +164,19 @@ func isDenied(name string) bool {
 	return false
 }
 
-// buildCleanEnv constructs a clean environment for the agent by starting
+// BuildCleanEnv constructs a clean environment for the agent by starting
 // with an empty slice and copying only allowlisted variables from hostEnv.
 //
-// The allowlist is the union of envAllowlistBaseline and any variable names
+// The allowlist is the union of EnvAllowlistBaseline and any variable names
 // listed in cfg.Secrets.EnvPassthrough.
 //
 // This is the primary defence against credential leakage: any env var NOT
-// in the allowlist is silently dropped.  stripEnv runs afterward as a
+// in the allowlist is silently dropped.  StripEnv runs afterward as a
 // second layer.
-func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
+func BuildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	// Build the effective allowlist: baseline + policy passthrough.
-	allowed := make(map[string]bool, len(envAllowlistBaseline))
-	for k, v := range envAllowlistBaseline {
+	allowed := make(map[string]bool, len(EnvAllowlistBaseline))
+	for k, v := range EnvAllowlistBaseline {
 		allowed[k] = v
 	}
 	if cfg != nil {
@@ -187,7 +188,7 @@ func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	// Index hostEnv by name for O(1) lookup.
 	hostMap := make(map[string]string, len(hostEnv))
 	for _, kv := range hostEnv {
-		name := envVarName(kv)
+		name := EnvVarName(kv)
 		hostMap[name] = kv
 	}
 
@@ -202,7 +203,7 @@ func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	// Copy only allowlisted variables that exist in the host env.
 	result := make([]string, 0, len(allowed))
 	for name := range allowed {
-		if isDenied(name) {
+		if IsDenied(name) {
 			continue
 		}
 		if kv, ok := hostMap[name]; ok {
@@ -212,10 +213,10 @@ func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	// Also copy any var matching a safe prefix (unless already copied).
 	copied := make(map[string]bool, len(result))
 	for _, kv := range result {
-		copied[envVarName(kv)] = true
+		copied[EnvVarName(kv)] = true
 	}
 	for name, kv := range hostMap {
-		if copied[name] || isDenied(name) {
+		if copied[name] || IsDenied(name) {
 			continue
 		}
 		for _, pfx := range safePrefixes {
@@ -232,8 +233,8 @@ func buildCleanEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	return result
 }
 
-// secretsSocketPath returns the path to the agentjail-secrets Unix socket.
-func secretsSocketPath() string {
+// SecretsSocketPath returns the path to the agentjail-secrets Unix socket.
+func SecretsSocketPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "/tmp/agentjail-secrets.sock"
@@ -241,11 +242,11 @@ func secretsSocketPath() string {
 	return filepath.Join(home, ".agentjail", "secrets.sock")
 }
 
-// secretsBrokerRunning returns true if the agentjail-secrets broker is
+// SecretsBrokerRunning returns true if the agentjail-secrets broker is
 // listening on its Unix socket.  Best-effort: if the check fails for any
 // reason, returns false.
-func secretsBrokerRunning() bool {
-	conn, err := net.DialTimeout("unix", secretsSocketPath(), 200*time.Millisecond)
+func SecretsBrokerRunning() bool {
+	conn, err := net.DialTimeout("unix", SecretsSocketPath(), 200*time.Millisecond)
 	if err != nil {
 		return false
 	}
@@ -253,11 +254,11 @@ func secretsBrokerRunning() bool {
 	return true
 }
 
-// stripEnv removes env vars matching the blocklist from env, returning a
+// StripEnv removes env vars matching the blocklist from env, returning a
 // new env slice.  If secrets.StripOnLaunch is false, env is returned
 // unchanged.
 //
-// This is the defence-in-depth layer that runs AFTER buildCleanEnv.  It
+// This is the defence-in-depth layer that runs AFTER BuildCleanEnv.  It
 // catches any credential-bearing variable that the allowlist baseline
 // accidentally included.
 //
@@ -269,7 +270,7 @@ func secretsBrokerRunning() bool {
 // If the agentjail-secrets broker is running, a placeholder env var
 // (AGENTJAIL_SECRETS=1) is added to signal that scoped creds are available
 // via the broker.
-func stripEnv(env []string, cfg *config.PolicyConfig) []string {
+func StripEnv(env []string, cfg *config.PolicyConfig) []string {
 	if cfg == nil {
 		return env
 	}
@@ -285,8 +286,8 @@ func stripEnv(env []string, cfg *config.PolicyConfig) []string {
 	result := make([]string, 0, len(env))
 	stripped := 0
 	for _, kv := range env {
-		key := envVarName(kv)
-		if matchesBlocklist(key, blocklist) {
+		key := EnvVarName(kv)
+		if MatchesBlocklist(key, blocklist) {
 			stripped++
 			continue
 		}
@@ -298,7 +299,7 @@ func stripEnv(env []string, cfg *config.PolicyConfig) []string {
 	}
 
 	// If the secrets broker is running, signal it to the agent.
-	if secretsBrokerRunning() {
+	if SecretsBrokerRunning() {
 		result = append(result, "AGENTJAIL_SECRETS=1")
 		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: agentjail-secrets broker detected — scoped creds available via broker")
 	}
@@ -306,17 +307,17 @@ func stripEnv(env []string, cfg *config.PolicyConfig) []string {
 	return result
 }
 
-// envVarName extracts the key from a "KEY=VALUE" env string.
-func envVarName(kv string) string {
+// EnvVarName extracts the key from a "KEY=VALUE" env string.
+func EnvVarName(kv string) string {
 	if idx := strings.IndexByte(kv, '='); idx >= 0 {
 		return kv[:idx]
 	}
 	return kv
 }
 
-// matchesBlocklist returns true if key matches any pattern in blocklist.
+// MatchesBlocklist returns true if key matches any pattern in blocklist.
 // Patterns use path.Match glob semantics (case-sensitive).
-func matchesBlocklist(key string, blocklist []string) bool {
+func MatchesBlocklist(key string, blocklist []string) bool {
 	for _, pattern := range blocklist {
 		if matched, err := path.Match(pattern, key); err == nil && matched {
 			return true

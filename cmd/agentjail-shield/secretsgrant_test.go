@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 func TestRequestSecretGrants_NoBroker(t *testing.T) {
@@ -120,7 +121,7 @@ func TestSecretsBrokerRunning_NoSocket(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	defer t.Setenv("HOME", oldHome)
 
-	if secretsBrokerRunning() {
-		t.Error("expected secretsBrokerRunning to return false with no socket")
+	if sandbox.SecretsBrokerRunning() {
+		t.Error("expected SecretsBrokerRunning to return false with no socket")
 	}
 }

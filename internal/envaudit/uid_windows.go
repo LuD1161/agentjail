@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package envaudit
 
 func currentUID() int {
 	return -1

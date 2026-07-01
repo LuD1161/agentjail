@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 // TestStripEnv_RemovesBlocklistedVars verifies that blocklisted env vars are stripped.
@@ -24,10 +25,10 @@ func TestStripEnv_RemovesBlocklistedVars(t *testing.T) {
 		"MY_CUSTOM_VAR=hello",
 	}
 
-	result := stripEnv(env, cfg)
+	result := sandbox.StripEnv(env, cfg)
 
 	for _, kv := range result {
-		name := envVarName(kv)
+		name := sandbox.EnvVarName(kv)
 		for _, blocked := range []string{
 			"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
 			"PGPASSWORD", "REDIS_PASSWORD", "GITHUB_TOKEN",
@@ -54,15 +55,12 @@ func TestStripEnv_KeepsNonBlocklistedVars(t *testing.T) {
 		"TERM=xterm-256color",
 	}
 
-	result := stripEnv(env, cfg)
+	result := sandbox.StripEnv(env, cfg)
 
 	if len(result) < len(env) {
 		t.Errorf("expected all env vars to be kept, got %d (was %d)", len(result), len(env))
 	}
-	for i, kv := range env {
-		if i >= len(result) {
-			break
-		}
+	for _, kv := range env {
 		found := false
 		for _, r := range result {
 			if r == kv {
@@ -94,11 +92,11 @@ func TestStripEnv_CustomBlocklist(t *testing.T) {
 		"PATH=/usr/bin",
 	}
 
-	result := stripEnv(env, cfg)
+	result := sandbox.StripEnv(env, cfg)
 
 	resultMap := make(map[string]bool)
 	for _, kv := range result {
-		resultMap[envVarName(kv)] = true
+		resultMap[sandbox.EnvVarName(kv)] = true
 	}
 
 	if resultMap["MY_SECRET"] {
@@ -134,11 +132,11 @@ func TestStripEnv_GlobPatterns(t *testing.T) {
 		"NORMAL_VAR=value",
 	}
 
-	result := stripEnv(env, cfg)
+	result := sandbox.StripEnv(env, cfg)
 
 	resultMap := make(map[string]bool)
 	for _, kv := range result {
-		resultMap[envVarName(kv)] = true
+		resultMap[sandbox.EnvVarName(kv)] = true
 	}
 
 	if resultMap["MY_SERVICE_API_KEY"] {
@@ -173,7 +171,7 @@ func TestStripEnv_Disabled(t *testing.T) {
 		"PATH=/usr/bin",
 	}
 
-	result := stripEnv(env, cfg)
+	result := sandbox.StripEnv(env, cfg)
 
 	if len(result) != len(env) {
 		t.Errorf("expected %d vars (stripping disabled), got %d", len(env), len(result))
@@ -183,7 +181,7 @@ func TestStripEnv_Disabled(t *testing.T) {
 // TestStripEnv_NilConfig verifies that nil config returns env unchanged.
 func TestStripEnv_NilConfig(t *testing.T) {
 	env := []string{"AWS_ACCESS_KEY_ID=AKIA...", "PATH=/usr/bin"}
-	result := stripEnv(env, nil)
+	result := sandbox.StripEnv(env, nil)
 	if len(result) != len(env) {
 		t.Errorf("expected %d vars (nil config), got %d", len(env), len(result))
 	}
@@ -206,7 +204,7 @@ func TestStripEnv_DefaultBlocklist(t *testing.T) {
 	}
 
 	for _, name := range expected {
-		if !matchesBlocklist(name, cfg.Secrets.EnvBlocklist) {
+		if !sandbox.MatchesBlocklist(name, cfg.Secrets.EnvBlocklist) {
 			t.Errorf("default blocklist does not cover %q", name)
 		}
 	}
@@ -229,7 +227,7 @@ func TestMatchesBlocklist(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		got := matchesBlocklist(tc.key, tc.patterns)
+		got := sandbox.MatchesBlocklist(tc.key, tc.patterns)
 		if got != tc.want {
 			t.Errorf("matchesBlocklist(%q, %v) = %v; want %v", tc.key, tc.patterns, got, tc.want)
 		}
@@ -248,7 +246,7 @@ func TestEnvVarName(t *testing.T) {
 		{"", ""},
 	}
 	for _, tc := range tests {
-		got := envVarName(tc.kv)
+		got := sandbox.EnvVarName(tc.kv)
 		if got != tc.want {
 			t.Errorf("envVarName(%q) = %q; want %q", tc.kv, got, tc.want)
 		}
@@ -350,7 +348,7 @@ func TestSecretsConfig_YAMLLoad(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildCleanEnv tests
+// BuildCleanEnv tests
 // ---------------------------------------------------------------------------
 
 // TestBuildCleanEnv_OnlyAllowlisted verifies that only allowlisted vars survive.
@@ -366,11 +364,11 @@ func TestBuildCleanEnv_OnlyAllowlisted(t *testing.T) {
 	}
 
 	cfg := config.Default()
-	result := buildCleanEnv(hostEnv, cfg)
+	result := sandbox.BuildCleanEnv(hostEnv, cfg)
 
 	resultMap := make(map[string]bool)
 	for _, kv := range result {
-		resultMap[envVarName(kv)] = true
+		resultMap[sandbox.EnvVarName(kv)] = true
 	}
 
 	// Allowlisted vars should be present.
@@ -405,11 +403,11 @@ func TestBuildCleanEnv_Passthrough(t *testing.T) {
 		},
 	}
 
-	result := buildCleanEnv(hostEnv, cfg)
+	result := sandbox.BuildCleanEnv(hostEnv, cfg)
 
 	resultMap := make(map[string]bool)
 	for _, kv := range result {
-		resultMap[envVarName(kv)] = true
+		resultMap[sandbox.EnvVarName(kv)] = true
 	}
 
 	if !resultMap["PATH"] {
@@ -434,11 +432,11 @@ func TestBuildCleanEnv_NilConfig(t *testing.T) {
 		"RANDOM_THING=value",
 	}
 
-	result := buildCleanEnv(hostEnv, nil)
+	result := sandbox.BuildCleanEnv(hostEnv, nil)
 
 	resultMap := make(map[string]bool)
 	for _, kv := range result {
-		resultMap[envVarName(kv)] = true
+		resultMap[sandbox.EnvVarName(kv)] = true
 	}
 
 	if !resultMap["PATH"] {
@@ -459,11 +457,11 @@ func TestBuildCleanEnv_PreservesValues(t *testing.T) {
 		"HOME=/home/testuser",
 	}
 
-	result := buildCleanEnv(hostEnv, nil)
+	result := sandbox.BuildCleanEnv(hostEnv, nil)
 
 	found := make(map[string]string)
 	for _, kv := range result {
-		name := envVarName(kv)
+		name := sandbox.EnvVarName(kv)
 		found[name] = kv
 	}
 
@@ -480,7 +478,7 @@ func TestBuildCleanEnv_MissingHostVars(t *testing.T) {
 	// Only PATH in host; HOME is allowlisted but not present.
 	hostEnv := []string{"PATH=/usr/bin"}
 
-	result := buildCleanEnv(hostEnv, nil)
+	result := sandbox.BuildCleanEnv(hostEnv, nil)
 
 	if len(result) != 1 {
 		t.Errorf("expected 1 var, got %d: %v", len(result), result)
@@ -501,13 +499,13 @@ func TestBuildCleanEnv_ThenStripEnv(t *testing.T) {
 	cfg := config.Default()
 
 	// Step 1: clean env (allowlist)
-	clean := buildCleanEnv(hostEnv, cfg)
+	clean := sandbox.BuildCleanEnv(hostEnv, cfg)
 	// Step 2: strip env (blocklist defence-in-depth)
-	final := stripEnv(clean, cfg)
+	final := sandbox.StripEnv(clean, cfg)
 
 	resultMap := make(map[string]bool)
 	for _, kv := range final {
-		resultMap[envVarName(kv)] = true
+		resultMap[sandbox.EnvVarName(kv)] = true
 	}
 
 	// Safe vars survive both layers.
@@ -523,7 +521,6 @@ func TestBuildCleanEnv_ThenStripEnv(t *testing.T) {
 	}
 
 	// ANTHROPIC_API_KEY is not in allowlist, so clean env drops it.
-	// Even if it were, stripEnv would catch it via the blocklist.
 	if resultMap["ANTHROPIC_API_KEY"] {
 		t.Error("ANTHROPIC_API_KEY should have been dropped")
 	}
@@ -533,14 +530,14 @@ func TestBuildCleanEnv_ThenStripEnv(t *testing.T) {
 func TestBuildCleanEnv_AllBaselineVars(t *testing.T) {
 	// Build a host env with every baseline var.
 	var hostEnv []string
-	for name := range envAllowlistBaseline {
+	for name := range sandbox.EnvAllowlistBaseline {
 		hostEnv = append(hostEnv, name+"=test")
 	}
 
-	result := buildCleanEnv(hostEnv, nil)
+	result := sandbox.BuildCleanEnv(hostEnv, nil)
 
-	if len(result) != len(envAllowlistBaseline) {
-		t.Errorf("expected %d vars, got %d", len(envAllowlistBaseline), len(result))
+	if len(result) != len(sandbox.EnvAllowlistBaseline) {
+		t.Errorf("expected %d vars, got %d", len(sandbox.EnvAllowlistBaseline), len(result))
 	}
 }
 

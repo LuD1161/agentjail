@@ -21,6 +21,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 
 	"golang.org/x/sys/unix"
 )
@@ -190,8 +191,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// Landlock applied
 
 	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
-	env := buildCleanEnv(os.Environ(), cfg)
-	env = stripEnv(env, cfg)
+	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
+	env = sandbox.StripEnv(env, cfg)
 	if netproxyReady {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
 	}
