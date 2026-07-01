@@ -38,3 +38,26 @@ CREATE TABLE IF NOT EXISTS sessions (
     cwd             TEXT,
     decision_count  INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS discovered_tools (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    server     TEXT    NOT NULL,
+    tool       TEXT    NOT NULL,
+    source     TEXT    NOT NULL,
+    first_seen TEXT    NOT NULL,
+    last_seen  TEXT    NOT NULL,
+    UNIQUE(server, tool)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovered_tools_server ON discovered_tools(server);
+
+CREATE TABLE IF NOT EXISTS discovered_skills (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,
+    source     TEXT    NOT NULL,
+    first_seen TEXT    NOT NULL,
+    last_seen  TEXT    NOT NULL,
+    use_count  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovered_skills_name ON discovered_skills(name);

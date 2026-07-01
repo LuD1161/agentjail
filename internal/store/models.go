@@ -32,6 +32,24 @@ type DBDecision struct {
 	ToolInputRedacted sql.NullString `json:"tool_input_redacted"`
 }
 
+type DBDiscoveredSkill struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Source    string `json:"source"`
+	FirstSeen string `json:"first_seen"`
+	LastSeen  string `json:"last_seen"`
+	UseCount  int64  `json:"use_count"`
+}
+
+type DBDiscoveredTool struct {
+	ID        int64  `json:"id"`
+	Server    string `json:"server"`
+	Tool      string `json:"tool"`
+	Source    string `json:"source"`
+	FirstSeen string `json:"first_seen"`
+	LastSeen  string `json:"last_seen"`
+}
+
 type DBSession struct {
 	SessionID     string         `json:"session_id"`
 	StartTs       string         `json:"start_ts"`

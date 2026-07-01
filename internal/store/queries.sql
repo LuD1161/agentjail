@@ -31,3 +31,37 @@ DELETE FROM audit_events WHERE ts < ?;
 
 -- name: DeleteOldSessions :exec
 DELETE FROM sessions WHERE start_ts < ?;
+
+-- name: ListDistinctCWDs :many
+SELECT DISTINCT cwd FROM sessions WHERE cwd IS NOT NULL AND cwd != '' ORDER BY cwd;
+
+-- name: ListDistinctMCPToolNames :many
+SELECT DISTINCT tool_name FROM decisions WHERE tool_name LIKE 'mcp__%' ORDER BY tool_name;
+
+-- name: ListDistinctSkillInputs :many
+SELECT DISTINCT tool_input_redacted FROM decisions WHERE tool_name = 'Skill' AND tool_input_redacted IS NOT NULL AND tool_input_redacted != '';
+
+-- name: UpsertDiscoveredTool :exec
+INSERT INTO discovered_tools (server, tool, source, first_seen, last_seen)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(server, tool) DO UPDATE SET
+    last_seen = excluded.last_seen,
+    source = excluded.source;
+
+-- name: UpsertDiscoveredSkill :exec
+INSERT INTO discovered_skills (name, source, first_seen, last_seen, use_count)
+VALUES (?, ?, ?, ?, 1)
+ON CONFLICT(name) DO UPDATE SET
+    last_seen = excluded.last_seen,
+    source = excluded.source,
+    use_count = use_count + 1;
+
+-- name: ListDiscoveredToolsAll :many
+SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools ORDER BY server, tool;
+
+-- name: ListDiscoveredToolsByServer :many
+SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools WHERE server = ? ORDER BY tool;
+
+-- name: ListDiscoveredSkillsAll :many
+SELECT id, name, source, first_seen, last_seen, use_count FROM discovered_skills ORDER BY name;
+

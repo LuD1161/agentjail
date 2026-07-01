@@ -174,6 +174,242 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]DBSession, error) {
 	return items, nil
 }
 
+const listDiscoveredSkillsAll = `-- name: ListDiscoveredSkillsAll :many
+SELECT id, name, source, first_seen, last_seen, use_count FROM discovered_skills ORDER BY name
+`
+
+func (q *Queries) ListDiscoveredSkillsAll(ctx context.Context) ([]DBDiscoveredSkill, error) {
+	rows, err := q.db.QueryContext(ctx, listDiscoveredSkillsAll)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBDiscoveredSkill{}
+	for rows.Next() {
+		var i DBDiscoveredSkill
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Source,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.UseCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDiscoveredToolsAll = `-- name: ListDiscoveredToolsAll :many
+SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools ORDER BY server, tool
+`
+
+func (q *Queries) ListDiscoveredToolsAll(ctx context.Context) ([]DBDiscoveredTool, error) {
+	rows, err := q.db.QueryContext(ctx, listDiscoveredToolsAll)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBDiscoveredTool{}
+	for rows.Next() {
+		var i DBDiscoveredTool
+		if err := rows.Scan(
+			&i.ID,
+			&i.Server,
+			&i.Tool,
+			&i.Source,
+			&i.FirstSeen,
+			&i.LastSeen,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDiscoveredToolsByServer = `-- name: ListDiscoveredToolsByServer :many
+SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools WHERE server = ? ORDER BY tool
+`
+
+func (q *Queries) ListDiscoveredToolsByServer(ctx context.Context, server string) ([]DBDiscoveredTool, error) {
+	rows, err := q.db.QueryContext(ctx, listDiscoveredToolsByServer, server)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBDiscoveredTool{}
+	for rows.Next() {
+		var i DBDiscoveredTool
+		if err := rows.Scan(
+			&i.ID,
+			&i.Server,
+			&i.Tool,
+			&i.Source,
+			&i.FirstSeen,
+			&i.LastSeen,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDistinctCWDs = `-- name: ListDistinctCWDs :many
+SELECT DISTINCT cwd FROM sessions WHERE cwd IS NOT NULL AND cwd != '' ORDER BY cwd
+`
+
+func (q *Queries) ListDistinctCWDs(ctx context.Context) ([]sql.NullString, error) {
+	rows, err := q.db.QueryContext(ctx, listDistinctCWDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []sql.NullString{}
+	for rows.Next() {
+		var cwd sql.NullString
+		if err := rows.Scan(&cwd); err != nil {
+			return nil, err
+		}
+		items = append(items, cwd)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDistinctMCPToolNames = `-- name: ListDistinctMCPToolNames :many
+SELECT DISTINCT tool_name FROM decisions WHERE tool_name LIKE 'mcp__%' ORDER BY tool_name
+`
+
+func (q *Queries) ListDistinctMCPToolNames(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listDistinctMCPToolNames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tool_name string
+		if err := rows.Scan(&tool_name); err != nil {
+			return nil, err
+		}
+		items = append(items, tool_name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDistinctSkillInputs = `-- name: ListDistinctSkillInputs :many
+SELECT DISTINCT tool_input_redacted FROM decisions WHERE tool_name = 'Skill' AND tool_input_redacted IS NOT NULL AND tool_input_redacted != ''
+`
+
+func (q *Queries) ListDistinctSkillInputs(ctx context.Context) ([]sql.NullString, error) {
+	rows, err := q.db.QueryContext(ctx, listDistinctSkillInputs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []sql.NullString{}
+	for rows.Next() {
+		var tool_input_redacted sql.NullString
+		if err := rows.Scan(&tool_input_redacted); err != nil {
+			return nil, err
+		}
+		items = append(items, tool_input_redacted)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertDiscoveredSkill = `-- name: UpsertDiscoveredSkill :exec
+INSERT INTO discovered_skills (name, source, first_seen, last_seen, use_count)
+VALUES (?, ?, ?, ?, 1)
+ON CONFLICT(name) DO UPDATE SET
+    last_seen = excluded.last_seen,
+    source = excluded.source,
+    use_count = use_count + 1
+`
+
+type UpsertDiscoveredSkillParams struct {
+	Name      string `json:"name"`
+	Source    string `json:"source"`
+	FirstSeen string `json:"first_seen"`
+	LastSeen  string `json:"last_seen"`
+}
+
+func (q *Queries) UpsertDiscoveredSkill(ctx context.Context, arg UpsertDiscoveredSkillParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDiscoveredSkill,
+		arg.Name,
+		arg.Source,
+		arg.FirstSeen,
+		arg.LastSeen,
+	)
+	return err
+}
+
+const upsertDiscoveredTool = `-- name: UpsertDiscoveredTool :exec
+INSERT INTO discovered_tools (server, tool, source, first_seen, last_seen)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(server, tool) DO UPDATE SET
+    last_seen = excluded.last_seen,
+    source = excluded.source
+`
+
+type UpsertDiscoveredToolParams struct {
+	Server    string `json:"server"`
+	Tool      string `json:"tool"`
+	Source    string `json:"source"`
+	FirstSeen string `json:"first_seen"`
+	LastSeen  string `json:"last_seen"`
+}
+
+func (q *Queries) UpsertDiscoveredTool(ctx context.Context, arg UpsertDiscoveredToolParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDiscoveredTool,
+		arg.Server,
+		arg.Tool,
+		arg.Source,
+		arg.FirstSeen,
+		arg.LastSeen,
+	)
+	return err
+}
+
 const upsertSession = `-- name: UpsertSession :exec
 INSERT INTO sessions (session_id, start_ts, end_ts, agent, cwd, decision_count)
 VALUES (?, ?, ?, ?, ?, 1)
