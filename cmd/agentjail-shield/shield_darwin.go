@@ -30,13 +30,16 @@ func sensitiveWritePaths(home string) []string {
 		home + "/.gnupg",
 		home + "/.config",
 		home + "/.agentjail",
-		home + "/.claude",
 		home + "/.codex",
 		home + "/.cursor",
 		home + "/.docker",
 		home + "/.kube",
 		home + "/.cargo",
-		home + "/Library/Keychains",
+		// NOTE: ~/Library/Keychains is intentionally NOT write-denied here.
+		// The shielded agent's own process needs its login keychain writable
+		// so Claude Code auth/token-refresh works. NAMED per-OS exception --
+		// no Linux analog (Linux Claude creds live in ~/.claude/.credentials.json,
+		// already granted). See docs/adr/0037-macos-keychain-access-shielded-agent.md.
 		home + "/Downloads",
 		home + "/Desktop",
 		"/etc",
@@ -84,7 +87,11 @@ func sensitiveReadPaths(home string) []string {
 		home + "/.agentjail",
 		home + "/.docker",
 		home + "/.kube",
-		home + "/Library/Keychains",
+		// NOTE: ~/Library/Keychains is intentionally NOT read-denied here.
+		// The shielded agent's own process needs its login keychain readable
+		// so Claude Code auth/token-refresh works. NAMED per-OS exception --
+		// no Linux analog (Linux Claude creds live in ~/.claude/.credentials.json,
+		// already granted). See docs/adr/0037-macos-keychain-access-shielded-agent.md.
 	}
 }
 
@@ -190,6 +197,28 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 		fmt.Fprintf(&sb, "    (regex #\"%s\")\n", rx)
 	}
 	sb.WriteString(")\n")
+	sb.WriteString("\n")
+
+	// --- file-write* allow carve-outs (must appear AFTER the deny block) ---
+	// sbpl uses LAST-MATCH-WINS ordering, so these allows take precedence over
+	// the broad deny above for the specific paths the agent needs to write
+	// (e.g. ~/.claude/session-env/<uuid>). Sourced from agentPaths().HomeRW so
+	// this stays in lockstep with the Linux Landlock allowlist and never
+	// re-introduces the write-deny-on-~/.claude regression.
+	//
+	// darwinWriteDenyOverrides lists HomeRW entries that must stay
+	// write-denied on macOS even though Linux grants them read-write —
+	// e.g. ~/.agentjail (daemon socket/DB/policy) stays in sensitiveWritePaths
+	// above, so it must NOT get an allow carve-out here.
+	darwinWriteDenyOverrides := map[string]bool{
+		".agentjail": true,
+	}
+	for _, name := range agentPaths().HomeRW {
+		if darwinWriteDenyOverrides[name] {
+			continue
+		}
+		fmt.Fprintf(&sb, "(allow file-write*\n    (subpath %q))\n", home+"/"+name)
+	}
 	sb.WriteString("\n")
 
 	// --- file-read* deny block (credentials only) ---
@@ -402,6 +431,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 
 	// Build the environment: inherit everything + strip ambient creds + set proxy vars + granted secrets.
 	env := stripEnv(os.Environ(), cfg)
+	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
 		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-host enforcement via netproxy)\n", netproxyDefaultAddr)
@@ -427,6 +457,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 // is absent (fail-open path).  Env stripping still applies.
 func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool) {
 	env := stripEnv(os.Environ(), cfg)
+	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
 	}

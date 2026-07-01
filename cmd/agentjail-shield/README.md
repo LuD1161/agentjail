@@ -76,7 +76,6 @@ mirroring the `is_sensitive_path` predicates in
 | `~/.docker/` | deny | deny |
 | `~/.kube/` | deny | deny |
 | `~/.cargo/` | deny | — |
-| `~/Library/Keychains/` | deny | deny |
 | `~/.npmrc` (home only, exact) | deny | deny |
 | `~/.pypirc` (home only, exact) | deny | deny |
 | `~/.git-credentials` (home only, exact) | deny | deny |
@@ -89,6 +88,13 @@ mirroring the `is_sensitive_path` predicates in
 | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore` | deny | deny |
 | `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa` | deny | deny |
 | `credentials`, `secrets`, `.netrc` | deny | deny |
+
+**Note on the keychain:** `~/Library/Keychains/` (the user keychain root) is
+**granted** read+write by default — this is a named per-OS exception so
+Claude Code's own login/token-refresh flow works. See
+[ADR 0037](../../docs/adr/0037-macos-keychain-access-shielded-agent.md). This
+is a shield-layer grant for the shielded agent's own process only; the hook
+layer still denies an agent's explicit tool-driven read of that path.
 
 **Note on project-local files:** The exact home-file patterns (`~/.npmrc`, `~/.pypirc`,
 `~/.git-credentials`) use anchored regex (`/Users/<user>/.<file>$`) so project-local copies

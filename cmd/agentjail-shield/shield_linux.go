@@ -410,50 +410,23 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Default-deny: nothing in $HOME is accessible unless explicitly listed.
 	// This is the allowlist model — the agent sees only what we grant.
 	if home != "" {
-		allowedHomeDirs := []struct {
-			name   string
-			access uint64
-		}{
-			{".claude", rwAccess},     // Claude Code config, sessions, plugins
-			{".claude-mem", rwAccess}, // claude-mem MCP plugin database
-			{".cache", rwAccess},      // Claude CLI cache (node, updates)
-			{".local", rwAccess},      // Claude binary, gryph audit DB, tool installs
-			{".npm-global", roAccess}, // npm global modules (plugins may need this)
-			{".config", roAccess},     // XDG config (MCP server configs, etc.)
-			{".agentjail", rwAccess},  // daemon socket, SQLite DB, policy
-			{".openclaw", roAccess},   // openclaw skills and config
-			{".codex", roAccess},      // codex skills and config
-			{".nvm", roAccess},        // Node version manager
-			{".fnm", roAccess},        // Fast node manager
-			{".npm", roAccess},        // npm cache/config
-			{".pyenv", roAccess},      // Python version manager
-			{".conda", roAccess},      // Conda environments
-			{".cargo", roAccess},      // Rust cargo
-			{".rustup", roAccess},     // Rust toolchain
-			{".sdkman", roAccess},     // SDKMAN (Java)
-			{".m2", roAccess},         // Maven repository
-			{".gradle", roAccess},     // Gradle cache
-			{".vscode", rwAccess},     // VS Code settings
+		paths := agentPaths()
+		for _, name := range paths.HomeRW {
+			p := filepath.Join(home, name)
+			if err := allowPath(p, rwAccess); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
+			}
 		}
-		for _, d := range allowedHomeDirs {
-			p := filepath.Join(home, d.name)
-			if err := allowPath(p, d.access); err != nil {
+		for _, name := range paths.HomeRO {
+			p := filepath.Join(home, name)
+			if err := allowPath(p, roAccess); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 			}
 		}
 		// Individual files at $HOME root that Claude Code reads/writes.
-		homeFiles := []struct {
-			name   string
-			access uint64
-		}{
-			{".claude.json", rwFileAccess},      // OAuth tokens, preferences, feature flags
-			{".gitconfig", rwFileAccess},        // git user config
-			{".gitignore_global", rwFileAccess},    // global gitignore
-			{".ssh/known_hosts", rwFileAccess},     // SSH host key verification (not private keys)
-		}
-		for _, f := range homeFiles {
-			p := filepath.Join(home, f.name)
-			if err := allowPath(p, f.access); err != nil {
+		for _, name := range paths.HomeFilesRW {
+			p := filepath.Join(home, name)
+			if err := allowPath(p, rwFileAccess); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 			}
 		}
@@ -478,9 +451,8 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Resolve common runtime binaries that MCP servers depend on. If they
 	// live outside the standard system paths (e.g. ~/.bun/, ~/.nvm/, ~/.cargo/)
 	// we add their real directory read-only so they can execute inside the sandbox.
-	runtimes := []string{"node", "bun", "npx", "python3", "python", "deno", "go", "cargo", "ruby"}
 	seen := make(map[string]bool)
-	for _, name := range runtimes {
+	for _, name := range agentPaths().Runtimes {
 		p, err := exec.LookPath(name)
 		if err != nil {
 			continue

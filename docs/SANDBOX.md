@@ -45,12 +45,17 @@ The profile is **deny-list based** (allow-by-default):
 
 - **Denies writes** to sensitive paths: `~/.ssh`, `~/.aws`, `~/.gnupg`,
   `~/.config`, `~/.agentjail`, `~/.docker`, `~/.kube`, `~/.cargo`,
-  `~/Library/Keychains`, `~/Downloads`, `~/Desktop`, `/etc`, `/var`
+  `~/Downloads`, `~/Desktop`, `/etc`, `/var`
 - **Denies writes** matching sensitive filename patterns: `.env*`, `*.pem`,
   `*.key`, `id_rsa`, `credentials`, `.netrc`, `~/.npmrc`, `~/.pypirc`,
   `~/.git-credentials`
 - **Denies reads** of credential paths: `~/.ssh`, `~/.aws`, `~/.gnupg`,
-  `~/.docker`, `~/.kube`, `~/Library/Keychains`, private key files
+  `~/.docker`, `~/.kube`, private key files
+- **Grants** the user keychain root (`~/Library/Keychains`, read+write) by
+  default, so Claude Code's own login/token-refresh flow works — see
+  [ADR 0037](./adr/0037-macos-keychain-access-shielded-agent.md). This is a
+  shield-layer grant only: the hook layer (`file_policy.rego`) still denies
+  an agent's own direct read of that path (e.g. a `cat` or `Read` tool call).
 - **Allows reads** of system trust stores (`/private/etc/ssl`,
   `/System/Library/Keychains`, `/Library/Keychains`) so TLS works
 - **Restricts network egress** (see [Network enforcement](#network-enforcement))

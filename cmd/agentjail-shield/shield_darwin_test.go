@@ -496,7 +496,6 @@ func TestSensitiveReadPaths_NewCredentialStores(t *testing.T) {
 	want := []string{
 		home + "/.docker",
 		home + "/.kube",
-		home + "/Library/Keychains",
 	}
 	for _, w := range want {
 		found := false
@@ -510,6 +509,14 @@ func TestSensitiveReadPaths_NewCredentialStores(t *testing.T) {
 			t.Errorf("sensitiveReadPaths missing %q", w)
 		}
 	}
+	// ~/Library/Keychains must NOT be read-denied: the shielded agent's own
+	// process needs its login keychain readable for Claude Code auth. See
+	// docs/adr/0037-macos-keychain-access-shielded-agent.md.
+	for _, p := range paths {
+		if p == home+"/Library/Keychains" {
+			t.Errorf("sensitiveReadPaths must NOT contain %q", home+"/Library/Keychains")
+		}
+	}
 }
 
 // TestSensitiveWritePaths_NewCredentialStores verifies that the new credential
@@ -521,7 +528,6 @@ func TestSensitiveWritePaths_NewCredentialStores(t *testing.T) {
 		home + "/.docker",
 		home + "/.kube",
 		home + "/.cargo",
-		home + "/Library/Keychains",
 	}
 	for _, w := range want {
 		found := false
@@ -533,6 +539,14 @@ func TestSensitiveWritePaths_NewCredentialStores(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("sensitiveWritePaths missing %q", w)
+		}
+	}
+	// ~/Library/Keychains must NOT be write-denied: the shielded agent's own
+	// process needs its login keychain writable for Claude Code auth/token
+	// refresh. See docs/adr/0037-macos-keychain-access-shielded-agent.md.
+	for _, p := range paths {
+		if p == home+"/Library/Keychains" {
+			t.Errorf("sensitiveWritePaths must NOT contain %q", home+"/Library/Keychains")
 		}
 	}
 }
@@ -579,6 +593,71 @@ func TestNpmrcBakNotCaughtByRegex(t *testing.T) {
 	// Confirm the profile does NOT contain a pattern like \.npmrc\. which would catch .npmrc.bak
 	if strings.Contains(profile, `\.npmrc\.`) {
 		t.Errorf("profile contains a pattern that could over-match .npmrc.bak")
+	}
+}
+
+// TestGenerateSBProfile_ClaudeWriteCarveOut verifies the fix for the darwin
+// vs linux allow-list drift: ~/.claude must be write-allowed (Claude Code
+// needs to create files like ~/.claude/session-env/<uuid>), while paths that
+// must stay denied (~/.ssh, ~/.agentjail) remain denied. ~/Library/Keychains
+// is intentionally granted (read+write) by default -- see
+// docs/adr/0037-macos-keychain-access-shielded-agent.md.
+func TestGenerateSBProfile_ClaudeWriteCarveOut(t *testing.T) {
+	cfg := config.Default()
+	home := "/Users/testuser"
+	profile := generateSBProfile(cfg, home)
+
+	// (i) file-write* to <home>/.claude must be allowed via an explicit
+	// carve-out subpath rule appearing after the deny block.
+	claudeAllow := `(allow file-write*
+    (subpath "/Users/testuser/.claude"))`
+	if !strings.Contains(profile, claudeAllow) {
+		t.Errorf("profile missing file-write* allow carve-out for ~/.claude; got:\n%s", profile)
+	}
+	// ~/.claude must NOT appear in the write-deny subpath block anymore.
+	denyBlockEnd := strings.Index(profile, "(deny file-read*")
+	writeBlock := profile
+	if denyBlockEnd != -1 {
+		writeBlock = profile[:denyBlockEnd]
+	}
+	// The write-deny block (before the carve-out allows) must not itself
+	// list ~/.claude among the (subpath ...) denies. We check this by
+	// ensuring the deny block up to the first allow carve-out doesn't
+	// contain the bare subpath entry.
+	denyOnlyEnd := strings.Index(writeBlock, "(allow file-write*")
+	if denyOnlyEnd != -1 {
+		denyOnly := writeBlock[:denyOnlyEnd]
+		if strings.Contains(denyOnly, `(subpath "/Users/testuser/.claude")`) {
+			t.Errorf("~/.claude must not be in the file-write* deny block; got deny block:\n%s", denyOnly)
+		}
+	}
+
+	// (ii) file-write* to <home>/.ssh and <home>/.agentjail must still be denied
+	// — no allow carve-out must exist for either.
+	for _, p := range []string{"/Users/testuser/.ssh", "/Users/testuser/.agentjail"} {
+		denyRule := fmt.Sprintf(`(subpath %q)`, p)
+		if !strings.Contains(profile, denyRule) {
+			t.Errorf("profile missing write-deny subpath for %s", p)
+		}
+		allowRule := fmt.Sprintf("(allow file-write*\n    (subpath %q))", p)
+		if strings.Contains(profile, allowRule) {
+			t.Errorf("profile must NOT contain a write-allow carve-out for %s", p)
+		}
+	}
+
+	// (iii) ~/Library/Keychains must NOT be deny-listed (read or write) --
+	// the shielded agent's own process is granted its login keychain by
+	// default so Claude Code auth/token-refresh works. See
+	// docs/adr/0037-macos-keychain-access-shielded-agent.md.
+	keychainDenySubpath := `(subpath "/Users/testuser/Library/Keychains")`
+	writeDenyEnd := strings.Index(profile, "(allow file-write*")
+	if writeDenyEnd != -1 && strings.Contains(profile[:writeDenyEnd], keychainDenySubpath) {
+		t.Errorf("profile must NOT contain a write-deny subpath for ~/Library/Keychains; got deny block:\n%s", profile[:writeDenyEnd])
+	}
+	readDenyStart := strings.Index(profile, "(deny file-read*")
+	readDenyEnd := strings.Index(profile, "(allow file-read*")
+	if readDenyStart != -1 && readDenyEnd != -1 && strings.Contains(profile[readDenyStart:readDenyEnd], keychainDenySubpath) {
+		t.Errorf("profile must NOT contain a read-deny subpath for ~/Library/Keychains; got deny block:\n%s", profile[readDenyStart:readDenyEnd])
 	}
 }
 

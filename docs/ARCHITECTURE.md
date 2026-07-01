@@ -220,7 +220,11 @@ agentjail-shield
 
 **macOS (Seatbelt):** deny-list based. Denies writes to sensitive paths
 (`~/.ssh`, `~/.aws`, `~/.gnupg`, etc.), denies reads of credential paths, and
-restricts network egress. When `agentjail-netproxy` is running (default), the
+restricts network egress. `~/Library/Keychains` (user keychain root) is
+granted read+write by default so Claude Code's login/token-refresh flow
+works — see [ADR 0037](./adr/0037-macos-keychain-access-shielded-agent.md);
+the hook layer still denies an agent's own direct reads of that path. When
+`agentjail-netproxy` is running (default), the
 agent is restricted to localhost-only outbound TCP and all HTTPS traffic flows
 through the proxy, which enforces `network.allowed_hosts` from `policy.yaml`.
 
