@@ -27,6 +27,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -35,6 +36,8 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/store"
 )
 
 // defaultPolicyPath returns ~/.agentjail/policy.yaml.
@@ -67,6 +70,20 @@ func main() {
 	}
 	flag.Parse()
 	startTime := time.Now()
+
+	// Open the audit emitter BEFORE sandbox activation. After Landlock/
+	// Seatbelt is applied, new file opens may be restricted. Pre-opened
+	// file descriptors survive Landlock.
+	var emitter audit.Emitter = audit.NopEmitter{}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+		if st, err := store.Open(dbPath); err == nil {
+			emitter = st
+			defer st.Close()
+		}
+	}
+	ctx := context.Background()
 
 	// The '--' separator is required.
 	args := flag.Args()
@@ -130,6 +147,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Emit audit findings to the unified audit log (best-effort).
+	for _, f := range auditResult.Findings {
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ShieldAuditFinding,
+			Entity:    f.Check,
+			Detail:    map[string]string{"severity": string(f.Severity), "message": f.Message},
+			Actor:     "shield",
+		})
+	}
+
 	// Delegate to the OS-specific sandbox implementation.
-	runShield(cfg, agentPath, agentArgs, *profilePrint, *noNetproxy, *policyPath, startTime)
+	runShield(cfg, agentPath, agentArgs, *profilePrint, *noNetproxy, *policyPath, startTime, emitter)
 }

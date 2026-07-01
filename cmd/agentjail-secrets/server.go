@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/audit"
+	auditstore "github.com/LuD1161/agentjail/internal/store"
 )
 
 // RPCRequest is the newline-delimited JSON request sent by CLI clients.
@@ -82,6 +86,17 @@ func runServer(args []string) {
 
 	gm := NewGrantManager()
 
+	// Open audit emitter (best-effort; fall back to NopEmitter).
+	var emitter audit.Emitter = audit.NopEmitter{}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+		if st, err := auditstore.Open(dbPath); err == nil {
+			emitter = st
+			defer st.Close()
+		}
+	}
+
 	socketDir := filepath.Dir(*socketPath)
 	if err := os.MkdirAll(socketDir, 0o700); err != nil {
 		slog.Error("create socket dir", "dir", socketDir, "err", err)
@@ -110,7 +125,7 @@ func runServer(args []string) {
 			if err != nil {
 				return
 			}
-			go handleConn(conn, store, gm)
+			go handleConn(conn, store, gm, emitter)
 		}
 	}()
 
@@ -122,7 +137,7 @@ func runServer(args []string) {
 }
 
 // handleConn serves one client connection.
-func handleConn(conn net.Conn, store *Store, gm *GrantManager) {
+func handleConn(conn net.Conn, store *Store, gm *GrantManager, emitter audit.Emitter) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -136,13 +151,14 @@ func handleConn(conn net.Conn, store *Store, gm *GrantManager) {
 			continue
 		}
 
-		resp := handleRPC(&req, store, gm)
+		resp := handleRPC(&req, store, gm, emitter)
 		_ = enc.Encode(resp)
 	}
 }
 
 // handleRPC dispatches an RPC request to the appropriate handler.
-func handleRPC(req *RPCRequest, store *Store, gm *GrantManager) RPCResponse {
+func handleRPC(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.Emitter) RPCResponse {
+	ctx := context.Background()
 	switch req.Action {
 	case "set":
 		if err := store.Set(req.Name, req.Value); err != nil {
@@ -166,12 +182,17 @@ func handleRPC(req *RPCRequest, store *Store, gm *GrantManager) RPCResponse {
 		return RPCResponse{OK: true}
 
 	case "grant":
-		return handleGrant(req, store, gm)
+		return handleGrant(req, store, gm, emitter)
 
 	case "revoke":
 		if err := gm.Revoke(req.GrantID); err != nil {
 			return RPCResponse{OK: false, Error: err.Error()}
 		}
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.CredentialRevoked,
+			Entity:    req.GrantID,
+			Actor:     "secrets",
+		})
 		return RPCResponse{OK: true}
 
 	default:
@@ -180,7 +201,7 @@ func handleRPC(req *RPCRequest, store *Store, gm *GrantManager) RPCResponse {
 }
 
 // handleGrant issues scoped credentials for a secret.
-func handleGrant(req *RPCRequest, store *Store, gm *GrantManager) RPCResponse {
+func handleGrant(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.Emitter) RPCResponse {
 	cfg, err := store.loadConfig(req.Name)
 	if err != nil {
 		return RPCResponse{OK: false, Error: fmt.Sprintf("load secret: %v", err)}
@@ -227,6 +248,13 @@ func handleGrant(req *RPCRequest, store *Store, gm *GrantManager) RPCResponse {
 
 	grant.SecretName = req.Name
 	grantID := gm.Register(grant)
+
+	_ = emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.CredentialIssued,
+		Entity:    req.Name,
+		Detail:    map[string]string{"type": grant.Backend, "grant_id": grantID},
+		Actor:     "secrets",
+	})
 
 	return RPCResponse{
 		OK:      true,

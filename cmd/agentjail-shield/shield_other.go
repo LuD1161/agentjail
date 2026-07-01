@@ -3,11 +3,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
 )
 
 // runShield is the fallback implementation for platforms other than macOS and
@@ -15,7 +18,7 @@ import (
 //
 // It prints a loud warning and execs the agent without any sandbox.
 // The hook layer (agentjail-hook) still runs on every PreToolUse call.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, _ time.Time, emitter audit.Emitter) {
 	if profilePrint {
 		fmt.Fprintln(os.Stderr, "agentjail-shield: sandbox is not supported on this platform.")
 		fmt.Fprintln(os.Stderr, "Supported platforms: darwin (macOS), linux (Landlock, kernel 5.13+)")
@@ -34,6 +37,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	_ = cfg
 	_ = noNetproxy
 	_ = policyPath
+
+	_ = emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.ShieldFailed,
+		Detail:    map[string]string{"error": "unsupported platform"},
+		Actor:     "shield",
+	})
 
 	argv := append([]string{agentPath}, agentArgs...)
 	if err := syscall.Exec(agentPath, argv, os.Environ()); err != nil {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
 )
 
 const sandboxExecPath = "/usr/bin/sandbox-exec"
@@ -311,7 +313,8 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 //
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+	ctx := context.Background()
 	_ = startTime // TODO: add startup timing + session summary to macOS shield
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -380,6 +383,11 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 				"  Please file an issue at https://github.com/LuD1161/agentjail/issues.\n",
 			sandboxExecPath,
 		)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ShieldFailed,
+			Detail:    map[string]string{"error": "sandbox-exec not found"},
+			Actor:     "shield",
+		})
 		execAgent(cfg, agentPath, agentArgs, withNetproxy)
 		return
 	}
@@ -400,6 +408,13 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	}
 	grantEnvVars, _ := requestSecretGrants(cfg)
 	env = append(env, grantEnvVars...)
+
+	// Emit activation before exec — syscall.Exec replaces this process, so
+	// this is the last chance to write to the audit log.
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.ShieldActivated,
+		Actor:     "shield",
+	})
 
 	// syscall.Exec replaces this process entirely.  If it returns, it failed.
 	if err := syscall.Exec(sandboxExecPath, argv, env); err != nil {

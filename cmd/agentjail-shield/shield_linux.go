@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"unsafe"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
 
 	"golang.org/x/sys/unix"
 )
@@ -81,7 +83,8 @@ type landlockNetPortAttr struct {
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+	ctx := context.Background()
 	noColor := os.Getenv("NO_COLOR") != ""
 	if noColor {
 		fmt.Fprintln(os.Stderr, "  agentjail — setting up sandbox...")
@@ -157,16 +160,31 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			stepFail(noColor, "Landlock unavailable — sandbox enforcement disabled")
 			fmt.Fprintf(os.Stderr, "  Requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y.\n"+
 				"  The hook layer still runs on every PreToolUse call.\n")
+			_ = emitter.Emit(ctx, audit.Event{
+				EventType: audit.ShieldFailed,
+				Detail:    map[string]string{"error": "landlock not supported by kernel"},
+				Actor:     "shield",
+			})
 		} else {
 			stepFail(noColor, "Failed to apply sandbox")
 			fmt.Fprintf(os.Stderr, "  %v\n"+
 				"  Refusing to run the agent unsandboxed (fail-closed).\n"+
 				"  Set AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1 to override (NOT recommended).\n", err)
+			_ = emitter.Emit(ctx, audit.Event{
+				EventType: audit.ShieldFailed,
+				Detail:    map[string]string{"error": err.Error()},
+				Actor:     "shield",
+			})
 			if os.Getenv("AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED") != "1" {
 				cleanupNetproxy(netproxyCmd)
 				os.Exit(1)
 			}
 		}
+	} else {
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ShieldActivated,
+			Actor:     "shield",
+		})
 	}
 
 	// Landlock applied
