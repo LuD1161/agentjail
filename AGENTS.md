@@ -64,6 +64,27 @@ implement it — don't open a second connection.
   are exempt from the singleton rule since they are separate databases, but
   must still use typed scan targets.
 
+## Audit events
+
+All significant events are captured in the unified `audit_log` table via the
+`audit.Emitter` interface (`internal/audit/`). Components import the
+interface, not the store.
+
+Three durability classes:
+
+- **Fail-closed:** `policy.change_requested` emitted BEFORE `config.Save()`
+  (abort if audit fails), `policy.changed` AFTER successful save.
+- **Transactional:** emitted in the same transaction as the data write via
+  `New(tx)`. Audit failure logged, does NOT roll back the primary write.
+- **Best-effort:** post-commit, fire-and-forget. Never blocks the hot path.
+
+Rules:
+- Never log credential values in `Detail` — fingerprints only (ADR 0032).
+- `Detail` is redacted at the store boundary (same key-pattern as
+  `RedactToolInput`). Caller-side redaction is defense-in-depth.
+- Decisions are NOT duplicated into `audit_log` — they stay in `decisions`.
+- New event types are added to `internal/audit/audit.go` as constants.
+
 ## Platform-specific code must use build tags
 
 Define the interface or shared logic in a plain `.go` file. Put each OS

@@ -273,6 +273,38 @@ agentjail logs / replay / ui  (readers via OpenReadOnly)
 `AfterID` (keyset pagination, direction-aware for ASC/DESC), and `Limit` (clamped
 to [100, 10000]).
 
+### Unified Audit Log
+
+The `audit_log` table captures every significant event across daemon, CLI,
+shield, and secrets — policy mutations, session lifecycle, shield activation,
+credential grants/revokes, config reloads, and more. It replaces the scattered
+`audit_events` table and flat-file `audit.log` with a single queryable source.
+
+Components emit audit events through the `AuditEmitter` interface
+(`internal/audit/`), which decouples event production from storage. Event type
+constants live in `internal/audit/audit.go`. Three durability classes govern
+how events are written:
+
+- **Fail-closed:** policy mutations (`policy.change_requested` /
+  `policy.changed`) — audit must succeed before `config.Save()` proceeds.
+- **Transactional:** emitted in the same SQLite transaction as the primary data
+  write (e.g. session upsert, tool registration). Audit failure is logged but
+  does not roll back the primary write.
+- **Best-effort:** lifecycle events (daemon startup, shield activation). Fire-
+  and-forget, never blocks the hot path.
+
+Decisions are NOT duplicated into `audit_log` — they remain in the `decisions`
+table, which is optimized for the per-decision hot path. A unified query layer
+provides combined chronological views when needed.
+
+The `Detail` column is redacted at the store boundary using the same
+key-pattern matcher as `RedactToolInput`, with a 4096-byte cap. Credential
+values are never stored — only fingerprints (ADR 0032). The shield opens the
+database before sandbox activation so pre-opened file descriptors survive
+Landlock/Seatbelt restrictions.
+
+See [ADR 0033](adr/0033-unified-audit-log.md) for the full decision record.
+
 ---
 
 ## Local UI
