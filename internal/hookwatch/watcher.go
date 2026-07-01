@@ -1,4 +1,6 @@
-package main
+// Package hookwatch monitors agent hook configuration files for tampering
+// and re-injects the agentjail-hook entry when it is removed (ADR 0026).
+package hookwatch
 
 import (
 	"context"
@@ -9,28 +11,30 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/audit"
 )
 
-// hookWatchTarget describes one hook config file to monitor.
-type hookWatchTarget struct {
+// Target describes one hook config file to monitor.
+type Target struct {
 	path    string // absolute path to the config file
 	agentID string // "claude-code", "codex", "cursor"
 	lastMod time.Time
 }
 
-// hookWatcher monitors hook configuration files for tampering.
-type hookWatcher struct {
-	targets []hookWatchTarget
+// Watcher monitors hook configuration files for tampering.
+type Watcher struct {
+	targets []Target
 	logger  *slog.Logger
-	auditFn func(action, detail string) // callback to record audit events
+	emitter audit.Emitter
 }
 
-// newHookWatcher discovers which hook config files exist and returns a watcher.
-func newHookWatcher(logger *slog.Logger, auditFn func(action, detail string)) *hookWatcher {
+// New discovers which hook config files exist and returns a Watcher.
+func New(logger *slog.Logger, emitter audit.Emitter) *Watcher {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		logger.Warn("hookwatch: cannot determine home dir", "error", err)
-		return &hookWatcher{logger: logger, auditFn: auditFn}
+		return &Watcher{logger: logger, emitter: emitter}
 	}
 
 	candidates := []struct {
@@ -42,13 +46,13 @@ func newHookWatcher(logger *slog.Logger, auditFn func(action, detail string)) *h
 		{filepath.Join(home, ".cursor", "hooks.json"), "cursor"},
 	}
 
-	var targets []hookWatchTarget
+	var targets []Target
 	for _, c := range candidates {
 		info, err := os.Stat(c.path)
 		if err != nil {
-			continue // file doesn't exist — agent not installed
+			continue // file doesn't exist -- agent not installed
 		}
-		targets = append(targets, hookWatchTarget{
+		targets = append(targets, Target{
 			path:    c.path,
 			agentID: c.agentID,
 			lastMod: info.ModTime(),
@@ -56,11 +60,11 @@ func newHookWatcher(logger *slog.Logger, auditFn func(action, detail string)) *h
 	}
 
 	logger.Info("hookwatch: monitoring hook configs", "count", len(targets))
-	return &hookWatcher{targets: targets, logger: logger, auditFn: auditFn}
+	return &Watcher{targets: targets, logger: logger, emitter: emitter}
 }
 
 // Run starts the polling loop. Blocks until ctx is cancelled.
-func (w *hookWatcher) Run(ctx context.Context) {
+func (w *Watcher) Run(ctx context.Context) {
 	if len(w.targets) == 0 {
 		return
 	}
@@ -78,7 +82,7 @@ func (w *hookWatcher) Run(ctx context.Context) {
 	}
 }
 
-func (w *hookWatcher) check() {
+func (w *Watcher) check() {
 	for i := range w.targets {
 		t := &w.targets[i]
 		info, err := os.Stat(t.path)
@@ -93,9 +97,15 @@ func (w *hookWatcher) check() {
 		}
 		t.lastMod = info.ModTime()
 
-		// File changed — verify hook entry is still present.
+		// File changed -- verify hook entry is still present.
 		if !w.hasAgentjailHook(t.path) {
 			w.logger.Warn("hookwatch: agentjail hook removed from config", "path", t.path, "agent", t.agentID)
+			_ = w.emitter.Emit(context.Background(), audit.Event{
+				EventType: audit.HookTampered,
+				Entity:    t.path,
+				Detail:    map[string]string{"agent": t.agentID},
+				Actor:     "daemon:hookwatch",
+			})
 			w.reinjectHook(t)
 		}
 	}
@@ -104,7 +114,7 @@ func (w *hookWatcher) check() {
 // hasAgentjailHook returns true if path contains the canonical hook binary name.
 // "agentjail-hook" is unique enough to avoid false matches on the word "agentjail"
 // appearing elsewhere in the config (e.g. in comments or tool descriptions).
-func (w *hookWatcher) hasAgentjailHook(path string) bool {
+func (w *Watcher) hasAgentjailHook(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -114,7 +124,7 @@ func (w *hookWatcher) hasAgentjailHook(path string) bool {
 
 // reinjectHook reads the config at t.path, inserts the agent-specific
 // agentjail-hook entries, and atomically writes it back.
-func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
+func (w *Watcher) reinjectHook(t *Target) {
 	data, err := os.ReadFile(t.path)
 	if err != nil {
 		w.logger.Error("hookwatch: cannot read config for reinject", "path", t.path, "error", err)
@@ -123,7 +133,7 @@ func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
 
 	var doc map[string]interface{}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		w.logger.Error("hookwatch: cannot parse config for reinject (broken JSON — skipping)", "path", t.path, "error", err)
+		w.logger.Error("hookwatch: cannot parse config for reinject (broken JSON -- skipping)", "path", t.path, "error", err)
 		return
 	}
 
@@ -183,10 +193,12 @@ func (w *hookWatcher) reinjectHook(t *hookWatchTarget) {
 		"hook_bin", hookBin,
 	)
 
-	if w.auditFn != nil {
-		w.auditFn("hook_reinject",
-			fmt.Sprintf("re-injected agentjail hook into %s (%s)", t.path, t.agentID))
-	}
+	_ = w.emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.HookReinjected,
+		Entity:    t.path,
+		Detail:    map[string]string{"agent": t.agentID},
+		Actor:     "daemon:hookwatch",
+	})
 }
 
 func hookEntriesForAgent(agentID, hookBin string) map[string][]interface{} {
@@ -228,4 +240,27 @@ func hookEntriesForAgent(agentID, hookBin string) map[string][]interface{} {
 			},
 		}
 	}
+}
+
+// HookEntriesForAgent returns the hook configuration entries for a given agent
+// and hook binary path. Exported for testing.
+func HookEntriesForAgent(agentID, hookBin string) map[string][]interface{} {
+	return hookEntriesForAgent(agentID, hookBin)
+}
+
+// EmitTampered is a convenience for external callers that need to emit a
+// tamper event with the same shape the watcher uses internally.
+func EmitTampered(emitter audit.Emitter, path, agentID string) error {
+	return emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.HookTampered,
+		Entity:    path,
+		Detail:    map[string]string{"agent": agentID},
+		Actor:     "daemon:hookwatch",
+	})
+}
+
+// FormatDetail returns the detail string matching the old callback format,
+// useful during migration.
+func FormatDetail(path, agentID string) string {
+	return fmt.Sprintf("re-injected agentjail hook into %s (%s)", path, agentID)
 }

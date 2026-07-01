@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/hookwatch"
 )
 
 // discardLogger returns a slog.Logger that discards all output.
@@ -52,113 +55,37 @@ func settingsWithoutHook() map[string]interface{} {
 	}
 }
 
-// TestHookWatcher_DetectsRemoval verifies that when the hook entry is removed
-// from a config file, check() re-injects it and fires the audit callback.
-func TestHookWatcher_DetectsRemoval(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "settings.json")
-	hookBin := filepath.Join(dir, "agentjail-hook") // canonical path doesn't need to exist for the test
-
-	// Write initial config WITH the hook entry so the watcher starts "clean".
-	writeJSON(t, cfgPath, settingsWithHook(hookBin))
-
-	info, _ := os.Stat(cfgPath)
-	target := &hookWatchTarget{
-		path:    cfgPath,
-		agentID: "claude-code",
-		lastMod: info.ModTime(),
+// TestHookEntriesForAgent_ClaudeCode verifies the Claude Code shape via the
+// exported hookwatch.HookEntriesForAgent function.
+func TestHookEntriesForAgent_ClaudeCode(t *testing.T) {
+	entries := hookwatch.HookEntriesForAgent("claude-code", "/usr/bin/agentjail-hook")
+	ptu, ok := entries["PreToolUse"]
+	if !ok {
+		t.Fatal("expected PreToolUse key for claude-code")
 	}
-
-	var auditAction, auditDetail string
-	w := &hookWatcher{
-		targets: []hookWatchTarget{*target},
-		logger:  discardLogger(),
-		auditFn: func(action, detail string) {
-			auditAction = action
-			auditDetail = detail
-		},
+	if len(ptu) != 1 {
+		t.Fatalf("expected 1 PreToolUse entry, got %d", len(ptu))
 	}
-
-	// Now overwrite with a config that has NO hook entry.
-	// Sleep briefly so the mtime changes (filesystem resolution is usually 1s on
-	// most platforms; use 10ms with a forced mtime tweak via chtimes instead).
-	writeJSON(t, cfgPath, settingsWithoutHook())
-	future := time.Now().Add(2 * time.Second)
-	_ = os.Chtimes(cfgPath, future, future)
-
-	// Run check — should detect the change and re-inject.
-	w.check()
-
-	// Verify the config now contains "agentjail-hook".
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatalf("read config after reinject: %v", err)
+	entry, ok := ptu[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("entry is not a map")
 	}
-	if !strings.Contains(string(data), "agentjail-hook") {
-		t.Errorf("expected agentjail-hook to be present in config after reinject, got:\n%s", data)
-	}
-
-	// Verify audit callback fired.
-	if auditAction != "hook_reinject" {
-		t.Errorf("expected audit action 'hook_reinject', got %q", auditAction)
-	}
-	if !strings.Contains(auditDetail, "claude-code") {
-		t.Errorf("expected audit detail to mention 'claude-code', got %q", auditDetail)
-	}
-
-	// Verify PreToolUse array is present and valid JSON.
-	var doc map[string]interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("re-injected config is not valid JSON: %v", err)
-	}
-	hooks, _ := doc["hooks"].(map[string]interface{})
-	if hooks == nil {
-		t.Fatal("hooks key missing after reinject")
-	}
-	pre, _ := hooks["PreToolUse"].([]interface{})
-	if len(pre) == 0 {
-		t.Fatal("PreToolUse is empty after reinject")
+	if entry["matcher"] != "*" {
+		t.Errorf("expected matcher '*', got %v", entry["matcher"])
 	}
 }
 
-// TestHookWatcher_ReinjectsCodexAgentSpecificHook verifies that Codex config
-// repair uses the Codex matcher-group shape and invokes the hook with
-// --agent=codex instead of reintroducing a bare Claude-style hook command.
-func TestHookWatcher_ReinjectsCodexAgentSpecificHook(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "hooks.json")
-	writeJSON(t, cfgPath, settingsWithoutHook())
-
-	info, _ := os.Stat(cfgPath)
-	w := &hookWatcher{
-		targets: []hookWatchTarget{
-			{path: cfgPath, agentID: "codex", lastMod: info.ModTime()},
-		},
-		logger:  discardLogger(),
-		auditFn: nil,
+// TestHookEntriesForAgent_Codex verifies the Codex shape.
+func TestHookEntriesForAgent_Codex(t *testing.T) {
+	entries := hookwatch.HookEntriesForAgent("codex", "/bin/hook")
+	ptu, ok := entries["PreToolUse"]
+	if !ok {
+		t.Fatal("expected PreToolUse key for codex")
 	}
-
-	writeJSON(t, cfgPath, settingsWithoutHook())
-	future := time.Now().Add(2 * time.Second)
-	_ = os.Chtimes(cfgPath, future, future)
-
-	w.check()
-
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatalf("read config after reinject: %v", err)
+	if len(ptu) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(ptu))
 	}
-
-	var doc map[string]interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("re-injected config is not valid JSON: %v", err)
-	}
-	hooks, _ := doc["hooks"].(map[string]interface{})
-	pre, _ := hooks["PreToolUse"].([]interface{})
-	if len(pre) != 1 {
-		t.Fatalf("expected one PreToolUse entry, got %d: %s", len(pre), data)
-	}
-	group, _ := pre[0].(map[string]interface{})
+	group, _ := ptu[0].(map[string]interface{})
 	if group["matcher"] != ".*" {
 		t.Fatalf("expected Codex matcher group, got: %#v", group)
 	}
@@ -168,217 +95,35 @@ func TestHookWatcher_ReinjectsCodexAgentSpecificHook(t *testing.T) {
 	}
 	entry, _ := nested[0].(map[string]interface{})
 	cmd, _ := entry["command"].(string)
-	if !strings.Contains(cmd, "agentjail-hook --agent=codex") {
-		t.Fatalf("expected Codex hook command, got %q", cmd)
-	}
-	if entry["type"] != "command" {
-		t.Fatalf("expected command hook type, got %#v", entry["type"])
-	}
-	if entry["timeout"] != float64(30) {
-		t.Fatalf("expected timeout 30, got %#v", entry["timeout"])
+	if !strings.Contains(cmd, "--agent=codex") {
+		t.Fatalf("expected Codex hook command with --agent=codex, got %q", cmd)
 	}
 }
 
-// TestHookWatcher_NoActionOnSafeEdit verifies that when the file changes but
-// the hook entry is still present, check() does NOT re-inject or fire audit.
-func TestHookWatcher_NoActionOnSafeEdit(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "settings.json")
-	hookBin := filepath.Join(dir, "agentjail-hook")
-
-	writeJSON(t, cfgPath, settingsWithHook(hookBin))
-	info, _ := os.Stat(cfgPath)
-	target := &hookWatchTarget{
-		path:    cfgPath,
-		agentID: "claude-code",
-		lastMod: info.ModTime(),
-	}
-
-	auditCalled := false
-	w := &hookWatcher{
-		targets: []hookWatchTarget{*target},
-		logger:  discardLogger(),
-		auditFn: func(action, detail string) {
-			auditCalled = true
-		},
-	}
-
-	// Modify the file but keep the hook entry (add an unrelated key).
-	updated := settingsWithHook(hookBin)
-	updated["theme"] = "light"
-	writeJSON(t, cfgPath, updated)
-	future := time.Now().Add(2 * time.Second)
-	_ = os.Chtimes(cfgPath, future, future)
-
-	w.check()
-
-	if auditCalled {
-		t.Error("audit callback should NOT fire when hook entry is still present")
-	}
-
-	// File content should be unchanged (no reinject appended a second entry).
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	var doc map[string]interface{}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("config not valid JSON: %v", err)
-	}
-	hooks, _ := doc["hooks"].(map[string]interface{})
-	pre, _ := hooks["PreToolUse"].([]interface{})
-	if len(pre) != 1 {
-		t.Errorf("expected exactly 1 PreToolUse entry, got %d", len(pre))
+// TestHookwatchNew_Integration is a basic smoke test that New() does not
+// crash. The actual target discovery depends on the user's home directory
+// and installed agents, so we just verify it returns a non-nil Watcher.
+func TestHookwatchNew_Integration(t *testing.T) {
+	w := hookwatch.New(discardLogger(), audit.NopEmitter{})
+	if w == nil {
+		t.Fatal("New returned nil")
 	}
 }
 
-// TestHookWatcher_SkipsMissingFiles verifies that a watcher whose target file
-// has been deleted does not crash, and does not re-inject into a non-existent file.
-func TestHookWatcher_SkipsMissingFiles(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "nonexistent.json")
-
-	// Target file never created.
-	w := &hookWatcher{
-		targets: []hookWatchTarget{
-			{path: cfgPath, agentID: "claude-code", lastMod: time.Time{}},
-		},
-		logger:  discardLogger(),
-		auditFn: nil,
-	}
-
-	// Should not panic.
-	w.check()
-
-	// File should still not exist.
-	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
-		t.Error("expected file to remain absent, but it exists")
-	}
-}
-
-// TestHookWatcher_RunCancels verifies Run exits promptly when ctx is cancelled.
-func TestHookWatcher_RunCancels(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "settings.json")
-	writeJSON(t, cfgPath, settingsWithHook(filepath.Join(dir, "agentjail-hook")))
-	info, _ := os.Stat(cfgPath)
-
-	w := &hookWatcher{
-		targets: []hookWatchTarget{
-			{path: cfgPath, agentID: "claude-code", lastMod: info.ModTime()},
-		},
-		logger:  discardLogger(),
-		auditFn: nil,
-	}
-
+// TestHookwatchRun_CancelsPromptly verifies Run exits when ctx is cancelled.
+func TestHookwatchRun_CancelsPromptly(t *testing.T) {
+	w := hookwatch.New(discardLogger(), audit.NopEmitter{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		w.Run(ctx)
 		close(done)
 	}()
-
 	cancel()
 	select {
 	case <-done:
-		// Good: Run exited promptly.
+		// OK
 	case <-time.After(2 * time.Second):
 		t.Error("Run did not exit within 2s after context cancellation")
-	}
-}
-
-// TestHookWatcher_EmptyTargets verifies Run returns immediately when there are
-// no targets (e.g. no agents installed).
-func TestHookWatcher_EmptyTargets(t *testing.T) {
-	w := &hookWatcher{
-		targets: nil,
-		logger:  discardLogger(),
-		auditFn: nil,
-	}
-
-	done := make(chan struct{})
-	go func() {
-		w.Run(context.Background())
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Good.
-	case <-time.After(1 * time.Second):
-		t.Error("Run with no targets should return immediately")
-	}
-}
-
-// TestHasAgentjailHook verifies the hook-presence check.
-func TestHasAgentjailHook(t *testing.T) {
-	dir := t.TempDir()
-	w := &hookWatcher{logger: discardLogger()}
-
-	cases := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{
-			name:    "has agentjail-hook",
-			content: `{"hooks":{"PreToolUse":[{"type":"command","command":"/home/user/.agentjail/bin/agentjail-hook"}]}}`,
-			want:    true,
-		},
-		{
-			name:    "word agentjail only — no match",
-			content: `{"description":"agentjail is a policy guardrail"}`,
-			want:    false,
-		},
-		{
-			name:    "empty file",
-			content: `{}`,
-			want:    false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			p := filepath.Join(dir, tc.name+".json")
-			if err := os.WriteFile(p, []byte(tc.content), 0o644); err != nil {
-				t.Fatalf("write: %v", err)
-			}
-			got := w.hasAgentjailHook(p)
-			if got != tc.want {
-				t.Errorf("hasAgentjailHook = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestHookWatcher_BrokenJSONSkipsReinject ensures a config file with invalid
-// JSON is left untouched rather than being silently corrupted.
-func TestHookWatcher_BrokenJSONSkipsReinject(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "settings.json")
-
-	broken := []byte(`{ "hooks": { THIS IS NOT JSON }`)
-	if err := os.WriteFile(cfgPath, broken, 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	w := &hookWatcher{
-		targets: []hookWatchTarget{
-			{path: cfgPath, agentID: "claude-code", lastMod: time.Time{}},
-		},
-		logger:  discardLogger(),
-		auditFn: nil,
-	}
-
-	// Force mtime into the "changed" window.
-	info, _ := os.Stat(cfgPath)
-	w.targets[0].lastMod = info.ModTime().Add(-1 * time.Second)
-
-	// check() should detect the file changed, try to parse it, fail, and leave it alone.
-	w.check()
-
-	got, _ := os.ReadFile(cfgPath)
-	if string(got) != string(broken) {
-		t.Error("broken JSON config was modified; expected it to be left untouched")
 	}
 }

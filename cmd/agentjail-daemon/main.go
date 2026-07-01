@@ -47,6 +47,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/policyeval"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
@@ -653,20 +654,11 @@ func main() {
 
 	// Start hook-config watchdog: polls agent settings files every 5 s and
 	// re-injects the agentjail-hook entry if it is removed (ADR 0026).
-	hookWatchdog := newHookWatcher(logger, func(action, detail string) {
-		slog.Info("hookwatch audit", "action", action, "detail", detail)
-		if srv.eventStore != nil {
-			eventType := audit.HookTampered
-			if action == "hook_reinject" {
-				eventType = audit.HookReinjected
-			}
-			_ = srv.eventStore.Emit(context.Background(), audit.Event{
-				EventType: eventType,
-				Entity:    detail,
-				Actor:     "daemon:hookwatch",
-			})
-		}
-	})
+	var hwEmitter audit.Emitter = audit.NopEmitter{}
+	if srv.eventStore != nil {
+		hwEmitter = srv.eventStore
+	}
+	hookWatchdog := hookwatch.New(logger, hwEmitter)
 	go hookWatchdog.Run(ctx)
 
 	// Start listening before installing signal handlers so the socket is
