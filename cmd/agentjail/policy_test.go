@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/policyctl"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -789,8 +790,9 @@ func TestEnableRuleID_RemovesFromDisabledRules(t *testing.T) {
 }
 
 // runPolicyDisableRuleIDWithAuditPath is the testable version of
-// runPolicyDisableRuleID that uses an injected audit log path so tests never
-// touch ~/.agentjail/audit.log.
+// runPolicyDisableRuleID that uses an injected audit DB directory so tests
+// never touch ~/.agentjail/audit.log. The auditPath parameter is used to
+// derive the DB path (agentjail.db in the same directory).
 func runPolicyDisableRuleIDWithAuditPath(ruleID string, force bool, auditPath string) int {
 	locked := LockedRuleIDs()
 	if locked[ruleID] {
@@ -824,12 +826,19 @@ func runPolicyDisableRuleIDWithAuditPath(ruleID string, force bool, auditPath st
 			return 0 // idempotent
 		}
 	}
-	cfg.DisabledRules = append(cfg.DisabledRules, ruleID)
 
-	if err := appendAuditEvent(auditPath, "disable", ruleID); err != nil {
+	dbPath := filepath.Join(filepath.Dir(auditPath), "agentjail.db")
+	ctl, st, cerr := policyctl.NewFromDBPath(cfgPath, dbPath, nil)
+	if cerr != nil {
 		return 1
 	}
-	if err := config.Save(cfg, cfgPath); err != nil {
+	defer st.Close()
+
+	detail := map[string]string{"rule_id": ruleID, "action": "disable"}
+	if err := ctl.ApplyWithConfig(context.Background(), cfg, ruleID, "cli:policy-disable", detail, func(c *config.PolicyConfig) error {
+		c.DisabledRules = append(c.DisabledRules, ruleID)
+		return nil
+	}); err != nil {
 		return 1
 	}
 	return 0
@@ -924,25 +933,34 @@ func TestAuditWriteFailure_AbortsDisable(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_Format verifies that appendAuditEvent writes to the
+// TestAuditEvent_Format verifies that policyctl writes audit events to the
 // unified audit_log in the SQLite store.
 func TestAuditEvent_Format(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "audit.log")
-
-	if err := appendAuditEvent(logPath, "disable", "command_policy/no-sudo"); err != nil {
-		t.Fatalf("appendAuditEvent() error: %v", err)
-	}
-
-	// Verify the event was written to the SQLite store.
+	policyPath := filepath.Join(dir, "policy.yaml")
 	dbPath := filepath.Join(dir, "agentjail.db")
-	st, err := store.OpenReadOnly(dbPath)
+
+	ctl, st, err := policyctl.NewFromDBPath(policyPath, dbPath, nil)
 	if err != nil {
-		t.Fatalf("open store: %v", err)
+		t.Fatalf("NewFromDBPath() error: %v", err)
 	}
 	defer st.Close()
 
-	got, err := st.ListAuditLog(context.Background(), store.AuditLogFilter{EventType: "policy.changed", Limit: 10})
+	detail := map[string]string{"rule_id": "command_policy/no-sudo", "action": "disable"}
+	if err := ctl.Apply(context.Background(), "command_policy/no-sudo", "cli:policy-disable", detail, func(c *config.PolicyConfig) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("Apply() error: %v", err)
+	}
+
+	// Verify the event was written to the SQLite store.
+	stRO, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer stRO.Close()
+
+	got, err := stRO.ListAuditLog(context.Background(), store.AuditLogFilter{EventType: "policy.changed", Limit: 10})
 	if err != nil {
 		t.Fatalf("ListAuditLog: %v", err)
 	}

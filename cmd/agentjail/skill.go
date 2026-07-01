@@ -29,7 +29,7 @@ import (
 	"strings"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
-	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/policyctl"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
@@ -265,30 +265,25 @@ func runSkillAllow(skillName, path string, cfg *config.PolicyConfig) int {
 		fmt.Printf("already allowed: %s\n", skillName)
 		return 0
 	}
-	cfg.Skills.Allowed = append(cfg.Skills.Allowed, skillName)
-	cfg.Skills.Blocked = removeFromSlice(cfg.Skills.Blocked, skillName)
-	cfg.Skills.Ask = removeFromSlice(cfg.Skills.Ask, skillName)
 
-	// Two-phase unified audit (Plan 009).
-	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
-	if serr != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill allow: audit: cannot open store: %v\n", serr)
+	ctl, st, cerr := policyctl.NewFromDBPath(path, skillAuditDBPath(path), sighupDaemonFn)
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill allow: %v\n", cerr)
 		return 1
 	}
 	defer st.Close()
-	detail := map[string]string{"skill": skillName, "action": "allow"}
-	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "skill:"+skillName, "cli:skill-allow", detail); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill allow: audit emit failed — aborting: %v\n", err)
-		return 1
-	}
 
-	if err := config.Save(cfg, path); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill allow: save policy: %v\n", err)
+	detail := map[string]string{"skill": skillName, "action": "allow"}
+	if err := ctl.ApplyWithConfig(context.Background(), cfg, "skill:"+skillName, "cli:skill-allow", detail, func(c *config.PolicyConfig) error {
+		c.Skills.Allowed = append(c.Skills.Allowed, skillName)
+		c.Skills.Blocked = removeFromSlice(c.Skills.Blocked, skillName)
+		c.Skills.Ask = removeFromSlice(c.Skills.Ask, skillName)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill allow: %v\n", err)
 		return 1
 	}
-	_ = emitPolicyAudit(st, audit.PolicyChanged, "skill:"+skillName, "cli:skill-allow", detail)
 	fmt.Printf("allowed: %s\n", skillName)
-	sighupDaemonFn()
 	return 0
 }
 
@@ -298,30 +293,25 @@ func runSkillBlock(skillName, path string, cfg *config.PolicyConfig) int {
 		fmt.Printf("already blocked: %s\n", skillName)
 		return 0
 	}
-	cfg.Skills.Blocked = append(cfg.Skills.Blocked, skillName)
-	cfg.Skills.Allowed = removeFromSlice(cfg.Skills.Allowed, skillName)
-	cfg.Skills.Ask = removeFromSlice(cfg.Skills.Ask, skillName)
 
-	// Two-phase unified audit (Plan 009).
-	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
-	if serr != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill block: audit: cannot open store: %v\n", serr)
+	ctl, st, cerr := policyctl.NewFromDBPath(path, skillAuditDBPath(path), sighupDaemonFn)
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill block: %v\n", cerr)
 		return 1
 	}
 	defer st.Close()
-	detail := map[string]string{"skill": skillName, "action": "block"}
-	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "skill:"+skillName, "cli:skill-block", detail); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill block: audit emit failed — aborting: %v\n", err)
-		return 1
-	}
 
-	if err := config.Save(cfg, path); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill block: save policy: %v\n", err)
+	detail := map[string]string{"skill": skillName, "action": "block"}
+	if err := ctl.ApplyWithConfig(context.Background(), cfg, "skill:"+skillName, "cli:skill-block", detail, func(c *config.PolicyConfig) error {
+		c.Skills.Blocked = append(c.Skills.Blocked, skillName)
+		c.Skills.Allowed = removeFromSlice(c.Skills.Allowed, skillName)
+		c.Skills.Ask = removeFromSlice(c.Skills.Ask, skillName)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill block: %v\n", err)
 		return 1
 	}
-	_ = emitPolicyAudit(st, audit.PolicyChanged, "skill:"+skillName, "cli:skill-block", detail)
 	fmt.Printf("blocked: %s\n", skillName)
-	sighupDaemonFn()
 	return 0
 }
 
@@ -331,30 +321,25 @@ func runSkillAsk(skillName, path string, cfg *config.PolicyConfig) int {
 		fmt.Printf("already ask: %s\n", skillName)
 		return 0
 	}
-	cfg.Skills.Ask = append(cfg.Skills.Ask, skillName)
-	cfg.Skills.Allowed = removeFromSlice(cfg.Skills.Allowed, skillName)
-	cfg.Skills.Blocked = removeFromSlice(cfg.Skills.Blocked, skillName)
 
-	// Two-phase unified audit (Plan 009).
-	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
-	if serr != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill ask: audit: cannot open store: %v\n", serr)
+	ctl, st, cerr := policyctl.NewFromDBPath(path, skillAuditDBPath(path), sighupDaemonFn)
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill ask: %v\n", cerr)
 		return 1
 	}
 	defer st.Close()
-	detail := map[string]string{"skill": skillName, "action": "ask"}
-	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "skill:"+skillName, "cli:skill-ask", detail); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill ask: audit emit failed — aborting: %v\n", err)
-		return 1
-	}
 
-	if err := config.Save(cfg, path); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill ask: save policy: %v\n", err)
+	detail := map[string]string{"skill": skillName, "action": "ask"}
+	if err := ctl.ApplyWithConfig(context.Background(), cfg, "skill:"+skillName, "cli:skill-ask", detail, func(c *config.PolicyConfig) error {
+		c.Skills.Ask = append(c.Skills.Ask, skillName)
+		c.Skills.Allowed = removeFromSlice(c.Skills.Allowed, skillName)
+		c.Skills.Blocked = removeFromSlice(c.Skills.Blocked, skillName)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill ask: %v\n", err)
 		return 1
 	}
-	_ = emitPolicyAudit(st, audit.PolicyChanged, "skill:"+skillName, "cli:skill-ask", detail)
 	fmt.Printf("ask: %s\n", skillName)
-	sighupDaemonFn()
 	return 0
 }
 
@@ -366,30 +351,25 @@ func runSkillClear(skillName, path string, cfg *config.PolicyConfig) int {
 		fmt.Printf("not in any list: %s\n", skillName)
 		return 0
 	}
-	cfg.Skills.Allowed = removeFromSlice(cfg.Skills.Allowed, skillName)
-	cfg.Skills.Blocked = removeFromSlice(cfg.Skills.Blocked, skillName)
-	cfg.Skills.Ask = removeFromSlice(cfg.Skills.Ask, skillName)
 
-	// Two-phase unified audit (Plan 009).
-	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
-	if serr != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill clear: audit: cannot open store: %v\n", serr)
+	ctl, st, cerr := policyctl.NewFromDBPath(path, skillAuditDBPath(path), sighupDaemonFn)
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill clear: %v\n", cerr)
 		return 1
 	}
 	defer st.Close()
-	detail := map[string]string{"skill": skillName, "action": "clear"}
-	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "skill:"+skillName, "cli:skill-clear", detail); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill clear: audit emit failed — aborting: %v\n", err)
-		return 1
-	}
 
-	if err := config.Save(cfg, path); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail skill clear: save policy: %v\n", err)
+	detail := map[string]string{"skill": skillName, "action": "clear"}
+	if err := ctl.ApplyWithConfig(context.Background(), cfg, "skill:"+skillName, "cli:skill-clear", detail, func(c *config.PolicyConfig) error {
+		c.Skills.Allowed = removeFromSlice(c.Skills.Allowed, skillName)
+		c.Skills.Blocked = removeFromSlice(c.Skills.Blocked, skillName)
+		c.Skills.Ask = removeFromSlice(c.Skills.Ask, skillName)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail skill clear: %v\n", err)
 		return 1
 	}
-	_ = emitPolicyAudit(st, audit.PolicyChanged, "skill:"+skillName, "cli:skill-clear", detail)
 	fmt.Printf("cleared: %s\n", skillName)
-	sighupDaemonFn()
 	return 0
 }
 
