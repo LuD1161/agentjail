@@ -105,19 +105,27 @@ func matchHost(pattern, host string) bool {
 	return strings.HasSuffix(host, "."+suffix)
 }
 
-// loadPolicy reads the policy file and returns the allowed host list.
-// On error it returns an empty slice (fail-open for the proxy — if we
-// can't read the policy, deny all would break the agent entirely; caller
-// should log the error).
+// loadPolicy reads the policy file and returns the EFFECTIVE allowed host
+// list -- the non-removable essential provider hosts merged with the user's
+// editable Network.AllowedHosts. This is the enforcement point: netproxy is
+// what actually gates egress on both OSes, so essential hosts are only
+// genuinely non-removable if this function returns them regardless of what
+// policy.yaml says (including a MISSING policy file, which still gets the
+// full default via LoadOrDefault).
+//
+// On a parse error it returns an empty slice (fail-open for the proxy -- if
+// we can't read the policy, deny all would break the agent entirely; caller
+// should log the error). A missing file is not an error here -- LoadOrDefault
+// treats it as Default().
 func loadPolicy(path string) ([]string, error) {
-	cfg, err := config.Load(path)
+	cfg, err := config.LoadOrDefault(path)
 	if err != nil {
 		return nil, err
 	}
 	if cfg == nil {
-		return nil, nil
+		return config.EssentialAllowedHosts(), nil
 	}
-	return cfg.Network.AllowedHosts, nil
+	return cfg.EffectiveAllowedHosts(), nil
 }
 
 // proxy is the forward proxy server.

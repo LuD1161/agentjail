@@ -202,8 +202,10 @@ When `agentjail-netproxy` is available (Tier 1.75), the shield:
 3. Sets `HTTPS_PROXY=http://127.0.0.1:9100`, `HTTP_PROXY`, and `ALL_PROXY`
    in the agent's environment.
 
-All HTTPS CONNECT requests flow through the proxy.  The proxy enforces
-`network.allowed_hosts` from policy.yaml:
+All HTTPS CONNECT requests flow through the proxy.  The proxy enforces the
+EFFECTIVE `network.allowed_hosts` -- the non-removable essential provider
+hosts (see "Default `allowed_hosts` list" below) merged with the editable
+list from policy.yaml, additive, not a straight read of the raw YAML field:
 
 - **Allowed host:** proxy returns `200 Connection established`, then pipes bytes
   bidirectionally to the upstream.
@@ -244,32 +246,46 @@ denied with `(deny network*)`.
 
 ### Default `allowed_hosts` list
 
-The hosts in `network.allowed_hosts` are used by agentjail-netproxy to build
-its allowlist.  In port-only mode (`--no-netproxy`), their resolved IPs are
-logged at startup for audit visibility but are not enforced.
+`network.allowed_hosts` splits into two layers (ADR 0038):
 
-Default hosts (from `agentpolicy/config/config.go`):
+- **Essential** (`config.EssentialAllowedHosts()`, hardcoded in Go, exact
+  hostnames only, no wildcards) -- the minimal set an agent needs to
+  authenticate and run inference against its own provider. **Always
+  allowed**, regardless of what `policy.yaml` says, and NOT listed in
+  `policy.yaml` at all:
 
-```
-api.github.com
-raw.githubusercontent.com
-codeload.github.com
-registry.npmjs.org
-pypi.org
-files.pythonhosted.org
-crates.io
-proxy.golang.org
-sum.golang.org
-deno.land
-```
+  ```
+  api.anthropic.com
+  claude.ai
+  platform.claude.com
+  api.openai.com
+  auth.openai.com
+  chatgpt.com
+  accounts.google.com
+  oauth2.googleapis.com
+  ```
+
+- **Extended** (`config.ExtendedDefaultAllowedHosts()`, seeded into
+  `policy.yaml` at install time) -- the editable/removable default set:
+  broad wildcards, Cursor CLI subdomains, telemetry, hosted MCP endpoints,
+  package registries, git hosting, and documentation sites. See
+  `agentpolicy/default_policy.yaml` for the full, current list.
+
+agentjail-netproxy enforces the EFFECTIVE list (essential + extended,
+deduplicated) on both macOS and Linux. In port-only mode (`--no-netproxy`),
+the effective list's resolved IPs are logged at startup for audit visibility
+but are not enforced.
 
 ### Adding custom hosts
+
+`policy.yaml`'s `allowed_hosts` is ADDITIVE on top of the essentials -- you
+never need to (and cannot) list the essential hosts yourself, and an empty
+`allowed_hosts: []` still leaves the essentials in effect:
 
 ```yaml
 network:
   allowed_hosts:
-    - api.github.com        # default
-    - registry.npmjs.org    # default
+    - registry.npmjs.org    # extended default
     - my-internal-registry.corp.example.com  # custom
 ```
 

@@ -110,7 +110,8 @@ func sensitiveReadRegexes() []string {
 	}
 }
 
-// resolveAllowedHosts resolves each hostname in cfg.Network.AllowedHosts to
+// resolveAllowedHosts resolves each hostname in cfg.EffectiveAllowedHosts()
+// (the non-removable essentials plus the editable Network.AllowedHosts) to
 // its current IP addresses.  Failures are logged to stderr as warnings and the
 // host is skipped — the launch is not aborted.
 //
@@ -118,12 +119,16 @@ func sensitiveReadRegexes() []string {
 // Loopback addresses are not included here; they are always allowed by the
 // generated profile regardless.
 func resolveAllowedHosts(cfg *config.PolicyConfig) []string {
-	if cfg == nil || len(cfg.Network.AllowedHosts) == 0 {
+	if cfg == nil {
+		return nil
+	}
+	hosts := cfg.EffectiveAllowedHosts()
+	if len(hosts) == 0 {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	var ips []string
-	for _, host := range cfg.Network.AllowedHosts {
+	for _, host := range hosts {
 		addrs, err := net.LookupHost(host)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: could not resolve %s: %v — skipping\n", host, err)

@@ -105,8 +105,11 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 
 By default on macOS, agentjail-shield starts `agentjail-netproxy` as a child
 process on `127.0.0.1:9100` and restricts the agent to **localhost-only**
-outbound TCP. All HTTPS traffic flows through the proxy, which enforces
-`network.allowed_hosts` from `~/.agentjail/policy.yaml`.
+outbound TCP. All HTTPS traffic flows through the proxy, which enforces the
+EFFECTIVE `network.allowed_hosts` -- non-removable essential provider hosts
+merged additively with the editable list from `~/.agentjail/policy.yaml`
+(ADR 0038). An omitted or even explicitly empty `allowed_hosts` in
+policy.yaml never blocks the agent's own provider.
 
 ```
 Agent (sandboxed, localhost-only TCP)

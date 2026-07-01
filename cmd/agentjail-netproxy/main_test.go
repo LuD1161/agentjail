@@ -535,6 +535,9 @@ func TestParseRequestLine_Empty(t *testing.T) {
 
 // ---- loadPolicy ----
 
+// TestLoadPolicy_ReadsAllowedHosts verifies loadPolicy returns the EFFECTIVE
+// allowlist: the file's explicit hosts plus the non-removable essentials
+// (config.EssentialAllowedHosts), even though the file only lists two hosts.
 func TestLoadPolicy_ReadsAllowedHosts(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "policy.yaml")
@@ -544,15 +547,61 @@ func TestLoadPolicy_ReadsAllowedHosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadPolicy: %v", err)
 	}
-	if len(hosts) != 2 {
-		t.Errorf("expected 2 hosts, got %d: %v", len(hosts), hosts)
+	want := len(config.EssentialAllowedHosts()) + 2
+	if len(hosts) != want {
+		t.Errorf("expected %d hosts (essentials + 2 explicit), got %d: %v", want, len(hosts), hosts)
+	}
+	hostSet := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		hostSet[h] = true
+	}
+	for _, h := range []string{"api.github.com", "registry.npmjs.org", "api.anthropic.com"} {
+		if !hostSet[h] {
+			t.Errorf("expected loadPolicy to include %q, got %v", h, hosts)
+		}
 	}
 }
 
+// TestLoadPolicy_AllowedHostsOmitsEssentialStillAllows verifies that a
+// policy whose allowed_hosts omits an essential provider host (e.g.
+// api.anthropic.com) still allows it through loadPolicy -- essentials are
+// non-removable at the netproxy enforcement point.
+func TestLoadPolicy_AllowedHostsOmitsEssentialStillAllows(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "policy.yaml")
+	writePolicy(t, f, []string{"my.corp.internal"})
+
+	hosts, err := loadPolicy(f)
+	if err != nil {
+		t.Fatalf("loadPolicy: %v", err)
+	}
+	hostSet := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		hostSet[h] = true
+	}
+	if !hostSet["api.anthropic.com"] {
+		t.Errorf("expected loadPolicy to still allow api.anthropic.com despite policy omitting it, got %v", hosts)
+	}
+	if !hostSet["my.corp.internal"] {
+		t.Errorf("expected loadPolicy to allow the explicit my.corp.internal host, got %v", hosts)
+	}
+}
+
+// TestLoadPolicy_FileNotFound verifies that a missing policy file is not an
+// error -- loadPolicy falls back to defaults (config.LoadOrDefault) so the
+// proxy is never in a fail-closed-with-error state, and essentials are still
+// present.
 func TestLoadPolicy_FileNotFound(t *testing.T) {
-	_, err := loadPolicy("/nonexistent/path/policy.yaml")
-	if err == nil {
-		t.Error("expected error for nonexistent file")
+	hosts, err := loadPolicy("/nonexistent/path/policy.yaml")
+	if err != nil {
+		t.Fatalf("loadPolicy with missing file should not error, got: %v", err)
+	}
+	hostSet := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		hostSet[h] = true
+	}
+	if !hostSet["api.anthropic.com"] {
+		t.Errorf("expected loadPolicy to allow essentials with a missing policy file, got %v", hosts)
 	}
 }
 
