@@ -90,12 +90,60 @@ Rules:
   that handles both internally (see AGE-95).
 
 
-## Platform-specific code must use build tags
+## Architecture: domain-driven, interface-first, type-safe
+
+**Every component MUST follow a domain-driven, interface-first, type-safe shape
+-- strictly, wherever possible.** This is not aspirational: new code is held to
+it, and existing code is migrated to it whenever touched. See
+[ADR 0035](./docs/adr/0035-domain-driven-interface-first-typesafe.md).
+
+- **Organize by domain.** Each responsibility (policy, credentials, mcpproxy,
+  shield, agents, store, telemetry) is a package that owns its types and exposes
+  a small public surface. Names match the domain's language (Decision, Grant,
+  Verdict, Hook).
+- **Interface at the seam, defined by the consumer.** Cross-domain dependencies
+  go through an interface ("accept interfaces, return structs") -- e.g. the
+  daemon depends on `policy.HookEngine` and `store.EventStore`, not concrete
+  types. Multiple implementors are selected via a registry or build-tag split,
+  never a `switch` scattered across call sites. Do NOT add an interface for a
+  single-implementor internal helper with no seam -- design the contract first,
+  don't wrap every struct.
+- **Type-safe throughout.** Domain data uses named types/structs/enums, never
+  `interface{}`/`any`, and never a bare `string`/`int` where a domain concept
+  exists (`Action`, `Verdict`, `Tier`). `any`/`map[string]any` is allowed only
+  at serialization boundaries (JSON hook I/O, wire) and must decode into a typed
+  struct immediately. SQL via sqlc. Make illegal states unrepresentable.
+
+The per-OS interface + implementor split below (ADR 0034) is this same pattern
+applied to the OS axis.
+
+## Platform-specific code: interface + per-OS implementor
 
 Define the interface or shared logic in a plain `.go` file. Put each OS
 implementation in `_linux.go`, `_darwin.go`, etc. with `//go:build` constraints.
 Never put `/proc` reads, `sysctl` calls, or other OS-specific APIs in an
-unconstrained file — the compiler selects the right file at build time.
+unconstrained file — the compiler selects the right file at build time. Each
+binary therefore compiles only the files relevant to its target OS.
+
+**Splitting the files is not enough — the data must be shared too.** The
+per-OS files are thin *implementors* of a single, OS-agnostic *contract*.
+See [ADR 0034](./docs/adr/0034-platform-backend-shared-contract.md).
+
+- **One source of truth.** Data that is conceptually cross-platform (path
+  allowlists, capability sets, feature toggles) lives in a tag-free `.go` file
+  as a typed value/interface (e.g. `shield_agentpaths.go` → `AgentPaths`).
+  Backends *translate* it into their primitive (Landlock allow-rules on Linux,
+  sbpl carve-outs on macOS); they never re-list it.
+- **Drift is a bug.** A change to the shared contract must reach every platform
+  by construction. If a fix only helps one OS, the contract was bypassed.
+- **Name your exceptions.** A genuine per-OS difference is an explicit, commented
+  override in that backend (e.g. `darwinWriteDenyOverrides`), never a silent
+  omission.
+
+Cautionary example: `agentjail-shield` once hardcoded "paths Claude Code needs"
+separately in `shield_linux.go` and `shield_darwin.go`. They drifted — Linux
+granted `~/.claude` read-write, macOS left it write-denied — so Claude Code ran
+sandboxed on Linux but hit `EPERM` on macOS. A shared contract prevents this.
 
 ## Small atomic commits
 
