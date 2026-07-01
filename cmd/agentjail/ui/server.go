@@ -518,6 +518,8 @@ func (s *Server) handlePolicyConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, fmt.Sprintf("save config: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// TODO(Plan 009 Phase 5): wire two-phase audit here when the UI
+		// server gains an EventStore reference (currently read-only).
 		sighupDaemonFn()
 		resp := map[string]any{"status": "saved"}
 		if len(warns) > 0 {
@@ -852,6 +854,7 @@ func (s *Server) handlePolicyProjectConfig(w http.ResponseWriter, r *http.Reques
 			writeJSONError(w, fmt.Sprintf("save project config: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// TODO(Plan 009 Phase 5): wire two-phase audit for project config saves.
 		sighupDaemonFn()
 		resp := map[string]any{"status": "saved", "path": cfgPath}
 		if len(warns) > 0 {

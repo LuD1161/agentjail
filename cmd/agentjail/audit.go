@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -82,4 +83,17 @@ func appendAuditEvent(logPath, action, ruleID string) error {
 		})
 	}
 	return nil
+}
+
+// emitPolicyAudit emits a structured audit event via the unified audit emitter
+// (Plan 009). This supplements appendAuditEvent (which writes to flat-file
+// audit.log and the legacy RecordAuditEvent table). Phase 5 will remove the
+// flat-file path; until then both coexist.
+func emitPolicyAudit(emitter audit.Emitter, eventType, entity, actor string, detail map[string]string) error {
+	return emitter.Emit(context.Background(), audit.Event{
+		EventType: eventType,
+		Entity:    entity,
+		Actor:     actor,
+		Detail:    detail,
+	})
 }

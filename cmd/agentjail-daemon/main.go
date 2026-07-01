@@ -51,6 +51,7 @@ import (
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/shellparse"
@@ -1437,6 +1438,17 @@ func main() {
 	// re-injects the agentjail-hook entry if it is removed (ADR 0026).
 	hookWatchdog := newHookWatcher(logger, func(action, detail string) {
 		slog.Info("hookwatch audit", "action", action, "detail", detail)
+		if srv.eventStore != nil {
+			eventType := audit.HookTampered
+			if action == "hook_reinject" {
+				eventType = audit.HookReinjected
+			}
+			_ = srv.eventStore.Emit(context.Background(), audit.Event{
+				EventType: eventType,
+				Entity:    detail,
+				Actor:     "daemon:hookwatch",
+			})
+		}
 	})
 	go hookWatchdog.Run(ctx)
 
@@ -1454,6 +1466,14 @@ func main() {
 	}
 
 	slog.Info("listening", "socket", *socketPath)
+
+	// Emit daemon.started audit event (best-effort).
+	if srv.eventStore != nil {
+		_ = srv.eventStore.Emit(ctx, audit.Event{
+			EventType: audit.DaemonStarted,
+			Actor:     "daemon",
+		})
+	}
 
 	// Signal handling.
 	sigCh := make(chan os.Signal, 1)
@@ -1515,10 +1535,24 @@ func main() {
 				"mcp_allowed", newCfg.MCP.Allowed,
 				"mcp_blocked_count", len(newCfg.MCP.Blocked),
 			)
+			// Emit policy.reloaded audit event (best-effort).
+			if srv.eventStore != nil {
+				_ = srv.eventStore.Emit(ctx, audit.Event{
+					EventType: audit.PolicyReloaded,
+					Actor:     "daemon",
+				})
+			}
 			srv.recordPolicyConfig(newCfg, *rulesDir)
 
 		case syscall.SIGTERM, syscall.SIGINT:
 			slog.Info("shutdown signal received", "signal", sig)
+			// Emit daemon.stopped audit event (best-effort, before cancel).
+			if srv.eventStore != nil {
+				_ = srv.eventStore.Emit(context.Background(), audit.Event{
+					EventType: audit.DaemonStopped,
+					Actor:     "daemon",
+				})
+			}
 			// Stop accepting new connections.
 			cancel()
 			_ = ln.Close()

@@ -46,6 +46,8 @@ import (
 	"syscall"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -395,10 +397,29 @@ func runPolicyEnableRuleID(ruleID string) int {
 		return 1
 	}
 
+	// Two-phase unified audit (Plan 009): emit policy.change_requested before
+	// Save — abort if it fails; emit policy.changed after successful Save
+	// (best-effort).
+	st, serr := store.Open(filepath.Join(filepath.Dir(logPath), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail policy enable: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+
+	detail := map[string]string{"rule_id": ruleID, "action": "enable"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, ruleID, "cli:policy-enable", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail policy enable: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, cfgPath); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail policy enable: save policy: %v\n", err)
 		return 1
 	}
+
+	// Best-effort: record that the mutation succeeded.
+	_ = emitPolicyAudit(st, audit.PolicyChanged, ruleID, "cli:policy-enable", detail)
 
 	fmt.Printf("enabled: %s (removed from disabled_rules)\n", ruleID)
 	sighupDaemonFn()
@@ -554,10 +575,29 @@ func runPolicyDisableRuleID(ruleID string, force bool) int {
 		return 1
 	}
 
+	// Two-phase unified audit (Plan 009): emit policy.change_requested before
+	// Save — abort if it fails; emit policy.changed after successful Save
+	// (best-effort).
+	st, serr := store.Open(filepath.Join(filepath.Dir(logPath), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail policy disable: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+
+	detail := map[string]string{"rule_id": ruleID, "action": "disable"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, ruleID, "cli:policy-disable", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail policy disable: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, cfgPath); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail policy disable: save policy: %v\n", err)
 		return 1
 	}
+
+	// Best-effort: record that the mutation succeeded.
+	_ = emitPolicyAudit(st, audit.PolicyChanged, ruleID, "cli:policy-disable", detail)
 
 	fmt.Printf("disabled: %s (added to disabled_rules)\n", ruleID)
 	sighupDaemonFn()

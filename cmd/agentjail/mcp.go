@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/ui"
@@ -149,10 +150,26 @@ func runMCPAllow(server string) int {
 
 	cfg.MCP.Allowed = append(cfg.MCP.Allowed, server)
 
+	// Two-phase unified audit (Plan 009).
+	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp allow: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+
+	detail := map[string]string{"server": server, "action": "allow"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "mcp:"+server, "cli:mcp-allow", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp allow: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, path); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail mcp allow: save policy: %v\n", err)
 		return 1
 	}
+
+	_ = emitPolicyAudit(st, audit.PolicyChanged, "mcp:"+server, "cli:mcp-allow", detail)
 
 	fmt.Printf("allowed: %s\n", server)
 	sighupDaemonFn()
@@ -204,10 +221,26 @@ func runMCPBlock(server string) int {
 	}
 	cfg.MCP.Allowed = filtered
 
+	// Two-phase unified audit (Plan 009).
+	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp block: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+
+	detail := map[string]string{"server": server, "action": "block"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "mcp:"+server, "cli:mcp-block", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp block: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, path); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail mcp block: save policy: %v\n", err)
 		return 1
 	}
+
+	_ = emitPolicyAudit(st, audit.PolicyChanged, "mcp:"+server, "cli:mcp-block", detail)
 
 	fmt.Printf("blocked: %s\n", server)
 	sighupDaemonFn()
@@ -966,10 +999,25 @@ func runMCPToolAllow(server, tool, projectDir string) int {
 	sc.BlockedTools = removeFromSlice(sc.BlockedTools, tool)
 	sc.AskTools = removeFromSlice(sc.AskTools, tool)
 	cfg.MCP.Servers[server] = sc
+
+	// Two-phase unified audit (Plan 009).
+	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool allow: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+	detail := map[string]string{"server": server, "tool": tool, "action": "allow"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-allow", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool allow: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, path); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail mcp tool allow: save policy: %v\n", err)
 		return 1
 	}
+	_ = emitPolicyAudit(st, audit.PolicyChanged, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-allow", detail)
 	fmt.Printf("allowed: %s on %s\n", tool, server)
 	sighupDaemonFn()
 	return 0
@@ -1001,10 +1049,25 @@ func runMCPToolBlock(server, tool, projectDir string) int {
 	sc.AllowedTools = removeFromSlice(sc.AllowedTools, tool)
 	sc.AskTools = removeFromSlice(sc.AskTools, tool)
 	cfg.MCP.Servers[server] = sc
+
+	// Two-phase unified audit (Plan 009).
+	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool block: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+	detail := map[string]string{"server": server, "tool": tool, "action": "block"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-block", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool block: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, path); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail mcp tool block: save policy: %v\n", err)
 		return 1
 	}
+	_ = emitPolicyAudit(st, audit.PolicyChanged, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-block", detail)
 	fmt.Printf("blocked: %s on %s\n", tool, server)
 	sighupDaemonFn()
 	return 0
@@ -1036,10 +1099,25 @@ func runMCPToolAsk(server, tool, projectDir string) int {
 	sc.AllowedTools = removeFromSlice(sc.AllowedTools, tool)
 	sc.BlockedTools = removeFromSlice(sc.BlockedTools, tool)
 	cfg.MCP.Servers[server] = sc
+
+	// Two-phase unified audit (Plan 009).
+	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool ask: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+	detail := map[string]string{"server": server, "tool": tool, "action": "ask"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-ask", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool ask: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, path); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail mcp tool ask: save policy: %v\n", err)
 		return 1
 	}
+	_ = emitPolicyAudit(st, audit.PolicyChanged, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-ask", detail)
 	fmt.Printf("asked: %s on %s\n", tool, server)
 	sighupDaemonFn()
 	return 0
@@ -1078,10 +1156,25 @@ func runMCPToolClear(server, tool, projectDir string) int {
 	} else {
 		cfg.MCP.Servers[server] = sc
 	}
+
+	// Two-phase unified audit (Plan 009).
+	st, serr := store.Open(filepath.Join(filepath.Dir(path), "agentjail.db"))
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool clear: audit: cannot open store: %v\n", serr)
+		return 1
+	}
+	defer st.Close()
+	detail := map[string]string{"server": server, "tool": tool, "action": "clear"}
+	if err := emitPolicyAudit(st, audit.PolicyChangeRequested, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-clear", detail); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail mcp tool clear: audit emit failed — aborting: %v\n", err)
+		return 1
+	}
+
 	if err := config.Save(cfg, path); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail mcp tool clear: save policy: %v\n", err)
 		return 1
 	}
+	_ = emitPolicyAudit(st, audit.PolicyChanged, "mcp-tool:"+server+"/"+tool, "cli:mcp-tool-clear", detail)
 	fmt.Printf("cleared: %s on %s\n", tool, server)
 	sighupDaemonFn()
 	return 0

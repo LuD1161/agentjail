@@ -131,6 +131,11 @@ func defaultSocketPath() string {
 // about to os.Exit(0) so blocking briefly is acceptable).
 // Format: "agentjail-hook: fail-open agent=<agent> reason=<category>"
 // Categories: read-stdin | parse-input | dial-daemon | read-response | parse-response
+//
+// TODO(Plan 009 Phase 5): emit audit.DaemonFailopen here. The hook process
+// doesn't hold the daemon's store, so this would require opening a short-lived
+// store (similar to appendAuditEvent in the CLI). Deferred to Phase 5 to keep
+// the hook's hot path lean.
 func failOpenMarker(agent, category string) {
 	fmt.Fprintf(os.Stderr, "agentjail-hook: fail-open agent=%s reason=%s\n", agent, category)
 	// Emit telemetry best-effort: short timeout, all errors silently discarded.
