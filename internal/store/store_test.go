@@ -846,6 +846,170 @@ func TestEmitDetailSizeCap(t *testing.T) {
 	}
 }
 
+// ─── Phase 2: auto-emit audit events ──────────────────────────────────────
+
+func TestUpsertDiscoveredToolEmitsAuditLog(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// First upsert — should emit tool.discovered.
+	if err := s.UpsertDiscoveredTool(ctx, "chrome-devtools", "click", "audit"); err != nil {
+		t.Fatalf("UpsertDiscoveredTool: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.ToolDiscovered, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tool.discovered entries, want 1", len(got))
+	}
+	if got[0].Entity != "chrome-devtools/click" {
+		t.Errorf("entity = %q, want chrome-devtools/click", got[0].Entity)
+	}
+
+	// Second upsert — should emit tool.updated.
+	if err := s.UpsertDiscoveredTool(ctx, "chrome-devtools", "click", "live"); err != nil {
+		t.Fatalf("UpsertDiscoveredTool second: %v", err)
+	}
+
+	got, err = s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.ToolUpdated, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tool.updated entries, want 1", len(got))
+	}
+	if got[0].Entity != "chrome-devtools/click" {
+		t.Errorf("entity = %q, want chrome-devtools/click", got[0].Entity)
+	}
+}
+
+func TestUpsertDiscoveredSkillEmitsAuditLog(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// First upsert — should emit skill.discovered.
+	if err := s.UpsertDiscoveredSkill(ctx, "superpowers:brainstorming", "audit"); err != nil {
+		t.Fatalf("UpsertDiscoveredSkill: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.SkillDiscovered, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d skill.discovered entries, want 1", len(got))
+	}
+	if got[0].Entity != "superpowers:brainstorming" {
+		t.Errorf("entity = %q, want superpowers:brainstorming", got[0].Entity)
+	}
+
+	// Second upsert (use_count bump) — should NOT emit another audit row.
+	if err := s.UpsertDiscoveredSkill(ctx, "superpowers:brainstorming", "session_log"); err != nil {
+		t.Fatalf("UpsertDiscoveredSkill second: %v", err)
+	}
+
+	got, err = s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.SkillDiscovered, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d skill.discovered entries after second upsert, want 1 (no noise)", len(got))
+	}
+}
+
+func TestCleanupEmitsRetentionPurged(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	recent := time.Now().Add(-1 * time.Minute).UTC()
+
+	// Insert old and recent decisions.
+	if err := s.RecordDecision(ctx, DecisionRecord{Ts: old, SessionID: "old", ToolName: "Bash", Action: "allow"}); err != nil {
+		t.Fatalf("RecordDecision old: %v", err)
+	}
+	if err := s.RecordDecision(ctx, DecisionRecord{Ts: recent, SessionID: "recent", ToolName: "Bash", Action: "allow"}); err != nil {
+		t.Fatalf("RecordDecision recent: %v", err)
+	}
+
+	if err := s.Cleanup(ctx, 24*time.Hour); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.RetentionPurged, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d retention.purged entries, want 1", len(got))
+	}
+
+	// Detail should contain deleted counts as JSON.
+	var detail map[string]string
+	if err := json.Unmarshal([]byte(got[0].Detail), &detail); err != nil {
+		t.Fatalf("detail is not valid JSON: %q: %v", got[0].Detail, err)
+	}
+	if detail["decisions"] != "1" {
+		t.Errorf("decisions deleted = %q, want 1", detail["decisions"])
+	}
+	if detail["sessions"] != "1" {
+		t.Errorf("sessions deleted = %q, want 1", detail["sessions"])
+	}
+}
+
+func TestRecordDecisionEmitsSessionStarted(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// First decision for a new session — should emit session.started.
+	if err := s.RecordDecision(ctx, DecisionRecord{
+		Ts:        time.Now(),
+		SessionID: "sess-new",
+		ToolName:  "Bash",
+		Action:    "allow",
+		Agent:     "claude",
+		CWD:       "/home/dev",
+	}); err != nil {
+		t.Fatalf("RecordDecision first: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.SessionStarted, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d session.started entries, want 1", len(got))
+	}
+	if got[0].Entity != "sess-new" {
+		t.Errorf("entity = %q, want sess-new", got[0].Entity)
+	}
+	if got[0].SessionID != "sess-new" {
+		t.Errorf("session_id = %q, want sess-new", got[0].SessionID)
+	}
+
+	// Second decision for same session — should NOT emit another session.started.
+	if err := s.RecordDecision(ctx, DecisionRecord{
+		Ts:        time.Now(),
+		SessionID: "sess-new",
+		ToolName:  "Write",
+		Action:    "allow",
+		Agent:     "claude",
+		CWD:       "/home/dev",
+	}); err != nil {
+		t.Fatalf("RecordDecision second: %v", err)
+	}
+
+	got, err = s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.SessionStarted, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d session.started entries after second decision, want 1", len(got))
+	}
+}
+
 func TestConcurrentAuditWrites(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

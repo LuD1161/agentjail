@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,7 +190,9 @@ func (s *sqliteStore) migrate() error {
 }
 
 // RecordDecision inserts a decision and upserts its session. The tool_input
-// is redacted before persisting (ADR 0019).
+// is redacted before persisting (ADR 0019). On the first decision for a
+// session (INSERT, not UPDATE), a session.started audit event is emitted
+// best-effort.
 func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) error {
 	ts := d.Ts.UTC().Format(time.RFC3339Nano)
 	redacted := RedactToolInput(d.ToolInput)
@@ -197,7 +200,7 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.ExecContext(ctx, `INSERT INTO decisions
 		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -216,6 +219,28 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 			d.SessionID, ts, ts, d.Agent, d.CWD,
 		); err != nil {
 			return fmt.Errorf("store: upsert session: %w", err)
+		}
+
+		// Check if the upsert was an INSERT (new session).
+		var changes int64
+		_ = tx.QueryRowContext(ctx, `SELECT changes()`).Scan(&changes)
+		if changes == 1 {
+			// Could be insert or update — disambiguate by checking decision_count.
+			var count int64
+			_ = tx.QueryRowContext(ctx, `SELECT decision_count FROM sessions WHERE session_id = ?`, d.SessionID).Scan(&count)
+			if count == 1 {
+				// First decision for this session — emit session.started.
+				txq := New(tx)
+				if auditErr := txq.InsertAuditLog(ctx, InsertAuditLogParams{
+					Ts:        ts,
+					EventType: audit.SessionStarted,
+					Entity:    toNullString(d.SessionID),
+					SessionID: toNullString(d.SessionID),
+					Detail:    toNullString(redactDetail(map[string]string{"agent": d.Agent, "cwd": d.CWD})),
+				}); auditErr != nil {
+					slog.Warn("audit emit failed for session started", "session", d.SessionID, "error", auditErr)
+				}
+			}
 		}
 	}
 	return tx.Commit()
@@ -458,57 +483,145 @@ func (s *sqliteStore) CountActionsBySession(ctx context.Context) ([]ActionCount,
 	return out, nil
 }
 
-// Cleanup deletes decisions and audit_events older than maxAge, removes
-// sessions whose start_ts is older than maxAge, and VACUUMs to reclaim space.
+// Cleanup deletes decisions, audit_events, audit_log, and sessions older than
+// maxAge, then VACUUMs to reclaim space. A retention.purged audit event is
+// emitted post-commit (best-effort).
 func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge).UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: cleanup begin: %w", err)
 	}
-	defer tx.Rollback()
-	for _, q := range []string{
-		`DELETE FROM decisions WHERE ts < ?`,
-		`DELETE FROM audit_events WHERE ts < ?`,
-		`DELETE FROM sessions WHERE start_ts < ?`,
+	defer tx.Rollback() //nolint:errcheck
+
+	type deleteResult struct {
+		table string
+		count int64
+	}
+	var results []deleteResult
+	for _, q := range []struct {
+		sql   string
+		table string
+	}{
+		{`DELETE FROM decisions WHERE ts < ?`, "decisions"},
+		{`DELETE FROM audit_events WHERE ts < ?`, "audit_events"},
+		{`DELETE FROM audit_log WHERE ts < ?`, "audit_log"},
+		{`DELETE FROM sessions WHERE start_ts < ?`, "sessions"},
 	} {
-		if _, err := tx.ExecContext(ctx, q, cutoff); err != nil {
+		res, err := tx.ExecContext(ctx, q.sql, cutoff)
+		if err != nil {
 			return fmt.Errorf("store: cleanup delete: %w", err)
 		}
+		n, _ := res.RowsAffected()
+		results = append(results, deleteResult{table: q.table, count: n})
 	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: cleanup commit: %w", err)
 	}
+
 	// VACUUM cannot run inside a transaction.
 	if _, err := s.db.ExecContext(ctx, `VACUUM`); err != nil {
 		return fmt.Errorf("store: vacuum: %w", err)
 	}
+
+	// Emit retention.purged best-effort (fire-and-forget).
+	detail := make(map[string]string, len(results))
+	for _, r := range results {
+		detail[r.table] = fmt.Sprintf("%d", r.count)
+	}
+	if auditErr := s.Emit(ctx, audit.Event{
+		EventType: audit.RetentionPurged,
+		Detail:    detail,
+	}); auditErr != nil {
+		slog.Warn("audit emit failed for retention purge", "error", auditErr)
+	}
+
 	return nil
 }
 
 // UpsertDiscoveredTool inserts a discovered MCP tool or updates last_seen and
-// source on conflict (server, tool).
+// source on conflict (server, tool). It emits audit.ToolDiscovered (new) or
+// audit.ToolUpdated (existing) best-effort — audit failure is logged but does
+// not roll back the upsert.
 func (s *sqliteStore) UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return s.queries.UpsertDiscoveredTool(ctx, UpsertDiscoveredToolParams{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Check if the row already exists.
+	var exists int
+	_ = tx.QueryRowContext(ctx, `SELECT 1 FROM discovered_tools WHERE server = ? AND tool = ?`, server, tool).Scan(&exists)
+
+	txq := New(tx)
+	if err := txq.UpsertDiscoveredTool(ctx, UpsertDiscoveredToolParams{
 		Server:    server,
 		Tool:      tool,
 		Source:    source,
 		FirstSeen: now,
 		LastSeen:  now,
-	})
+	}); err != nil {
+		return fmt.Errorf("store: upsert discovered tool: %w", err)
+	}
+
+	// Emit audit event best-effort.
+	eventType := audit.ToolDiscovered
+	if exists == 1 {
+		eventType = audit.ToolUpdated
+	}
+	if auditErr := txq.InsertAuditLog(ctx, InsertAuditLogParams{
+		Ts:        now,
+		EventType: eventType,
+		Entity:    toNullString(server + "/" + tool),
+		Detail:    toNullString(redactDetail(map[string]string{"source": source})),
+	}); auditErr != nil {
+		slog.Warn("audit emit failed for discovered tool", "event", eventType, "error", auditErr)
+	}
+
+	return tx.Commit()
 }
 
 // UpsertDiscoveredSkill inserts a discovered skill or updates last_seen,
-// source, and increments use_count on conflict (name).
+// source, and increments use_count on conflict (name). It emits
+// audit.SkillDiscovered only on first insert (use_count bumps are noise).
 func (s *sqliteStore) UpsertDiscoveredSkill(ctx context.Context, name, source string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return s.queries.UpsertDiscoveredSkill(ctx, UpsertDiscoveredSkillParams{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Check if the row already exists.
+	var exists int
+	_ = tx.QueryRowContext(ctx, `SELECT 1 FROM discovered_skills WHERE name = ?`, name).Scan(&exists)
+
+	txq := New(tx)
+	if err := txq.UpsertDiscoveredSkill(ctx, UpsertDiscoveredSkillParams{
 		Name:      name,
 		Source:    source,
 		FirstSeen: now,
 		LastSeen:  now,
-	})
+	}); err != nil {
+		return fmt.Errorf("store: upsert discovered skill: %w", err)
+	}
+
+	// Emit audit event only for new skills (use_count bumps are noise).
+	if exists == 0 {
+		if auditErr := txq.InsertAuditLog(ctx, InsertAuditLogParams{
+			Ts:        now,
+			EventType: audit.SkillDiscovered,
+			Entity:    toNullString(name),
+			Detail:    toNullString(redactDetail(map[string]string{"source": source})),
+		}); auditErr != nil {
+			slog.Warn("audit emit failed for discovered skill", "event", audit.SkillDiscovered, "error", auditErr)
+		}
+	}
+
+	return tx.Commit()
 }
 
 // ListDiscoveredTools returns all discovered tools. If server is non-empty,
