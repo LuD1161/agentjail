@@ -61,3 +61,18 @@ CREATE TABLE IF NOT EXISTS discovered_skills (
 );
 
 CREATE INDEX IF NOT EXISTS idx_discovered_skills_name ON discovered_skills(name);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT    NOT NULL,
+    event_type TEXT    NOT NULL,
+    entity     TEXT,
+    detail     TEXT,
+    actor      TEXT,
+    session_id TEXT,
+    ref_id     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity);
+CREATE INDEX IF NOT EXISTS idx_audit_log_session ON audit_log(session_id);

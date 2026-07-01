@@ -65,3 +65,26 @@ SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools WHE
 -- name: ListDiscoveredSkillsAll :many
 SELECT id, name, source, first_seen, last_seen, use_count FROM discovered_skills ORDER BY name;
 
+-- name: InsertAuditLog :exec
+INSERT INTO audit_log (ts, event_type, entity, detail, actor, session_id, ref_id)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListAuditLogByEntity :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log WHERE entity = ? ORDER BY ts DESC LIMIT ?;
+
+-- name: ListAuditLogByType :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log WHERE event_type = ? ORDER BY ts DESC LIMIT ?;
+
+-- name: ListAuditLogBySession :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log WHERE session_id = ? ORDER BY ts DESC LIMIT ?;
+
+-- name: ListAuditLogRecent :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log ORDER BY ts DESC LIMIT ?;
+
+-- name: DeleteOldAuditLog :exec
+DELETE FROM audit_log WHERE ts < ?;
+

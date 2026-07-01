@@ -52,6 +52,15 @@ func (q *Queries) DeleteOldAuditEvents(ctx context.Context, ts string) error {
 	return err
 }
 
+const deleteOldAuditLog = `-- name: DeleteOldAuditLog :exec
+DELETE FROM audit_log WHERE ts < ?
+`
+
+func (q *Queries) DeleteOldAuditLog(ctx context.Context, ts string) error {
+	_, err := q.db.ExecContext(ctx, deleteOldAuditLog, ts)
+	return err
+}
+
 const deleteOldDecisions = `-- name: DeleteOldDecisions :exec
 DELETE FROM decisions WHERE ts < ?
 `
@@ -98,6 +107,34 @@ func (q *Queries) InsertAuditEvent(ctx context.Context, arg InsertAuditEventPara
 		arg.Action,
 		arg.RuleID,
 		arg.User,
+	)
+	return err
+}
+
+const insertAuditLog = `-- name: InsertAuditLog :exec
+INSERT INTO audit_log (ts, event_type, entity, detail, actor, session_id, ref_id)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertAuditLogParams struct {
+	Ts        string         `json:"ts"`
+	EventType string         `json:"event_type"`
+	Entity    sql.NullString `json:"entity"`
+	Detail    sql.NullString `json:"detail"`
+	Actor     sql.NullString `json:"actor"`
+	SessionID sql.NullString `json:"session_id"`
+	RefID     sql.NullString `json:"ref_id"`
+}
+
+func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error {
+	_, err := q.db.ExecContext(ctx, insertAuditLog,
+		arg.Ts,
+		arg.EventType,
+		arg.Entity,
+		arg.Detail,
+		arg.Actor,
+		arg.SessionID,
+		arg.RefID,
 	)
 	return err
 }
@@ -160,6 +197,169 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]DBSession, error) {
 			&i.Agent,
 			&i.Cwd,
 			&i.DecisionCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogByEntity = `-- name: ListAuditLogByEntity :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log WHERE entity = ? ORDER BY ts DESC LIMIT ?
+`
+
+type ListAuditLogByEntityParams struct {
+	Entity sql.NullString `json:"entity"`
+	Limit  int64          `json:"limit"`
+}
+
+func (q *Queries) ListAuditLogByEntity(ctx context.Context, arg ListAuditLogByEntityParams) ([]DBAuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditLogByEntity, arg.Entity, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBAuditLog{}
+	for rows.Next() {
+		var i DBAuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ts,
+			&i.EventType,
+			&i.Entity,
+			&i.Detail,
+			&i.Actor,
+			&i.SessionID,
+			&i.RefID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogBySession = `-- name: ListAuditLogBySession :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log WHERE session_id = ? ORDER BY ts DESC LIMIT ?
+`
+
+type ListAuditLogBySessionParams struct {
+	SessionID sql.NullString `json:"session_id"`
+	Limit     int64          `json:"limit"`
+}
+
+func (q *Queries) ListAuditLogBySession(ctx context.Context, arg ListAuditLogBySessionParams) ([]DBAuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditLogBySession, arg.SessionID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBAuditLog{}
+	for rows.Next() {
+		var i DBAuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ts,
+			&i.EventType,
+			&i.Entity,
+			&i.Detail,
+			&i.Actor,
+			&i.SessionID,
+			&i.RefID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogByType = `-- name: ListAuditLogByType :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log WHERE event_type = ? ORDER BY ts DESC LIMIT ?
+`
+
+type ListAuditLogByTypeParams struct {
+	EventType string `json:"event_type"`
+	Limit     int64  `json:"limit"`
+}
+
+func (q *Queries) ListAuditLogByType(ctx context.Context, arg ListAuditLogByTypeParams) ([]DBAuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditLogByType, arg.EventType, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBAuditLog{}
+	for rows.Next() {
+		var i DBAuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ts,
+			&i.EventType,
+			&i.Entity,
+			&i.Detail,
+			&i.Actor,
+			&i.SessionID,
+			&i.RefID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogRecent = `-- name: ListAuditLogRecent :many
+SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+FROM audit_log ORDER BY ts DESC LIMIT ?
+`
+
+func (q *Queries) ListAuditLogRecent(ctx context.Context, limit int64) ([]DBAuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditLogRecent, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBAuditLog{}
+	for rows.Next() {
+		var i DBAuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ts,
+			&i.EventType,
+			&i.Entity,
+			&i.Detail,
+			&i.Actor,
+			&i.SessionID,
+			&i.RefID,
 		); err != nil {
 			return nil, err
 		}

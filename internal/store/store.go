@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/audit"
 )
 
 // DecisionRecord is one tool-call evaluation. Writes set ToolInput (raw); the
@@ -103,6 +105,26 @@ type DiscoveredSkill struct {
 	UseCount  int
 }
 
+// AuditLogFilter selects unified audit log entries (Plan 009).
+type AuditLogFilter struct {
+	Entity    string
+	EventType string
+	SessionID string
+	Limit     int
+}
+
+// AuditLogEntry is one row from the audit_log table (Plan 009).
+type AuditLogEntry struct {
+	ID        int64
+	Ts        time.Time
+	EventType string
+	Entity    string
+	Detail    string
+	Actor     string
+	SessionID string
+	RefID     string
+}
+
 // AuditFilter selects audit events.
 type AuditFilter struct {
 	Limit     int  // 0 = no limit (caller should bound it)
@@ -124,6 +146,8 @@ type EventStore interface {
 	UpsertDiscoveredSkill(ctx context.Context, name, source string) error
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
+	Emit(ctx context.Context, e audit.Event) error
+	ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error)
 	Close() error
 }
 
@@ -138,6 +162,7 @@ type ReadOnlyStore interface {
 	CountActionsBySession(ctx context.Context) ([]ActionCount, error)
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
+	ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error)
 	ListDistinctCWDs(ctx context.Context) ([]string, error)
 	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	ListDistinctSkillInputs(ctx context.Context) ([]string, error)

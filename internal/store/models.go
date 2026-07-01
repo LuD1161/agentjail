@@ -16,6 +16,17 @@ type DBAuditEvent struct {
 	User   sql.NullString `json:"user"`
 }
 
+type DBAuditLog struct {
+	ID        int64          `json:"id"`
+	Ts        string         `json:"ts"`
+	EventType string         `json:"event_type"`
+	Entity    sql.NullString `json:"entity"`
+	Detail    sql.NullString `json:"detail"`
+	Actor     sql.NullString `json:"actor"`
+	SessionID sql.NullString `json:"session_id"`
+	RefID     sql.NullString `json:"ref_id"`
+}
+
 type DBDecision struct {
 	ID                int64          `json:"id"`
 	Ts                string         `json:"ts"`

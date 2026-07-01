@@ -70,6 +70,9 @@ func (m *mockReadOnlyStore) ListDistinctMCPToolNames(_ context.Context) ([]strin
 func (m *mockReadOnlyStore) ListDistinctSkillInputs(_ context.Context) ([]string, error) {
 	return nil, nil
 }
+func (m *mockReadOnlyStore) ListAuditLog(_ context.Context, _ store.AuditLogFilter) ([]store.AuditLogEntry, error) {
+	return nil, nil
+}
 
 func (m *mockReadOnlyStore) Close() error { return nil }
 

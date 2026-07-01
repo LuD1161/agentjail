@@ -3,13 +3,17 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/audit"
 	_ "modernc.org/sqlite"
 )
 
@@ -692,5 +696,193 @@ func TestListDiscoveredToolsFilter(t *testing.T) {
 	}
 	if len(got) != 5 {
 		t.Errorf("all servers: got %d tools, want 5", len(got))
+	}
+}
+
+// ─── Unified audit log (Plan 009) ─────────────────────────────────────────
+
+func TestEmitAndListAuditLog(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	evt := audit.Event{
+		EventType: audit.PolicyChanged,
+		Entity:    "command_policy/no-sudo",
+		Detail:    map[string]string{"action": "disable", "reason": "testing"},
+		Actor:     "alice",
+		SessionID: "sess-42",
+		RefID:     "ref-1",
+	}
+	if err := s.Emit(ctx, evt); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	// List by entity.
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{Entity: "command_policy/no-sudo", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog by entity: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+	e := got[0]
+	if e.EventType != audit.PolicyChanged {
+		t.Errorf("event_type = %q, want %q", e.EventType, audit.PolicyChanged)
+	}
+	if e.Entity != "command_policy/no-sudo" {
+		t.Errorf("entity = %q", e.Entity)
+	}
+	if e.Actor != "alice" {
+		t.Errorf("actor = %q", e.Actor)
+	}
+	if e.SessionID != "sess-42" {
+		t.Errorf("session_id = %q", e.SessionID)
+	}
+	if e.RefID != "ref-1" {
+		t.Errorf("ref_id = %q", e.RefID)
+	}
+	if e.Ts.IsZero() {
+		t.Error("ts is zero")
+	}
+	// Detail should be valid JSON containing the keys.
+	if !strings.Contains(e.Detail, `"action"`) || !strings.Contains(e.Detail, `"disable"`) {
+		t.Errorf("detail = %q, missing expected content", e.Detail)
+	}
+
+	// List by type.
+	got, err = s.ListAuditLog(ctx, AuditLogFilter{EventType: audit.PolicyChanged, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog by type: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("by type: got %d, want 1", len(got))
+	}
+
+	// List by session.
+	got, err = s.ListAuditLog(ctx, AuditLogFilter{SessionID: "sess-42", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog by session: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("by session: got %d, want 1", len(got))
+	}
+
+	// List recent (no filter).
+	got, err = s.ListAuditLog(ctx, AuditLogFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog recent: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("recent: got %d, want 1", len(got))
+	}
+}
+
+func TestEmitRedactsDetail(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	evt := audit.Event{
+		EventType: audit.CredentialIssued,
+		Entity:    "oauth/github",
+		Detail:    map[string]string{"api_key": "secret123", "name": "foo"},
+	}
+	if err := s.Emit(ctx, evt); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d, want 1", len(got))
+	}
+	detail := got[0].Detail
+	// api_key must be redacted.
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(detail), &parsed); err != nil {
+		t.Fatalf("detail is not valid JSON: %q: %v", detail, err)
+	}
+	if parsed["api_key"] != "[redacted]" {
+		t.Errorf("api_key = %q, want [redacted]", parsed["api_key"])
+	}
+	// name must not be redacted.
+	if parsed["name"] != "foo" {
+		t.Errorf("name = %q, want foo", parsed["name"])
+	}
+	// The raw secret must not appear anywhere.
+	if strings.Contains(detail, "secret123") {
+		t.Errorf("raw secret leaked in detail: %s", detail)
+	}
+}
+
+func TestEmitDetailSizeCap(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Build a detail that serialises to >4096 bytes.
+	big := strings.Repeat("x", 5000)
+	evt := audit.Event{
+		EventType: audit.ShieldAuditFinding,
+		Entity:    "test",
+		Detail:    map[string]string{"payload": big},
+	}
+	if err := s.Emit(ctx, evt); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d, want 1", len(got))
+	}
+	if len(got[0].Detail) > maxRedactedLen+8 {
+		t.Errorf("detail length %d exceeds cap+ellipsis", len(got[0].Detail))
+	}
+	if !strings.HasSuffix(got[0].Detail, "…") {
+		t.Errorf("truncated detail should end with ellipsis")
+	}
+}
+
+func TestConcurrentAuditWrites(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 100)
+
+	for g := 0; g < 2; g++ {
+		wg.Add(1)
+		go func(goroutine int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				evt := audit.Event{
+					EventType: audit.ToolDiscovered,
+					Entity:    fmt.Sprintf("tool-%d-%d", goroutine, i),
+					Detail:    map[string]string{"i": fmt.Sprintf("%d", i)},
+					Actor:     fmt.Sprintf("g%d", goroutine),
+				}
+				if err := s.Emit(ctx, evt); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("concurrent Emit error: %v", err)
+	}
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{Limit: 200})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 100 {
+		t.Errorf("got %d audit entries, want 100", len(got))
 	}
 }

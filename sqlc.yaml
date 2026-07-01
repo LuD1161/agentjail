@@ -15,3 +15,4 @@ sql:
           audit_event: "DBAuditEvent"
           discovered_tool: "DBDiscoveredTool"
           discovered_skill: "DBDiscoveredSkill"
+          audit_log: "DBAuditLog"

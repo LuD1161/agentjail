@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/audit"
 	_ "modernc.org/sqlite"
 )
 
@@ -163,6 +165,20 @@ func (s *sqliteStore) migrate() error {
 			use_count  INTEGER NOT NULL DEFAULT 1
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_discovered_skills_name ON discovered_skills(name)`,
+		`CREATE TABLE IF NOT EXISTS audit_log (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts         TEXT    NOT NULL,
+			event_type TEXT    NOT NULL,
+			entity     TEXT,
+			detail     TEXT,
+			actor      TEXT,
+			session_id TEXT,
+			ref_id     TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_session ON audit_log(session_id)`,
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st); err != nil {
@@ -583,6 +599,101 @@ func (s *sqliteStore) ListDistinctSkillInputs(ctx context.Context) ([]string, er
 	return out, nil
 }
 
+// Emit persists an audit.Event to the audit_log table (Plan 009). The Detail
+// map is redacted and serialised to JSON before storage.
+func (s *sqliteStore) Emit(ctx context.Context, e audit.Event) error {
+	detail := redactDetail(e.Detail)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	err := s.queries.InsertAuditLog(ctx, InsertAuditLogParams{
+		Ts:        now,
+		EventType: e.EventType,
+		Entity:    toNullString(e.Entity),
+		Detail:    toNullString(detail),
+		Actor:     toNullString(e.Actor),
+		SessionID: toNullString(e.SessionID),
+		RefID:     toNullString(e.RefID),
+	})
+	if err != nil {
+		return fmt.Errorf("store: emit audit: %w", err)
+	}
+	return nil
+}
+
+// redactDetail serialises a Detail map to JSON, replacing secret-bearing keys
+// with "[redacted]" and truncating to maxRedactedLen.
+func redactDetail(d map[string]string) string {
+	if len(d) == 0 {
+		return ""
+	}
+	redacted := make(map[string]string, len(d))
+	for k, v := range d {
+		if shouldRedactKey(k) {
+			redacted[k] = "[redacted]"
+		} else {
+			redacted[k] = v
+		}
+	}
+	b, err := json.Marshal(redacted)
+	if err != nil {
+		return "{}"
+	}
+	s := string(b)
+	if len(s) <= maxRedactedLen {
+		return s
+	}
+	end := maxRedactedLen
+	for end > 0 && (s[end]&0xC0) == 0x80 {
+		end--
+	}
+	return s[:end] + "…"
+}
+
+// ListAuditLog returns audit log entries matching the filter.
+func (s *sqliteStore) ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error) {
+	limit := int64(clampLimit(f.Limit))
+	var dbRows []DBAuditLog
+	var err error
+
+	switch {
+	case f.Entity != "":
+		dbRows, err = s.queries.ListAuditLogByEntity(ctx, ListAuditLogByEntityParams{
+			Entity: toNullString(f.Entity),
+			Limit:  limit,
+		})
+	case f.EventType != "":
+		dbRows, err = s.queries.ListAuditLogByType(ctx, ListAuditLogByTypeParams{
+			EventType: f.EventType,
+			Limit:     limit,
+		})
+	case f.SessionID != "":
+		dbRows, err = s.queries.ListAuditLogBySession(ctx, ListAuditLogBySessionParams{
+			SessionID: toNullString(f.SessionID),
+			Limit:     limit,
+		})
+	default:
+		dbRows, err = s.queries.ListAuditLogRecent(ctx, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: list audit log: %w", err)
+	}
+
+	out := make([]AuditLogEntry, 0, len(dbRows))
+	for _, r := range dbRows {
+		ts, _ := time.Parse(time.RFC3339Nano, r.Ts)
+		out = append(out, AuditLogEntry{
+			ID:        r.ID,
+			Ts:        ts,
+			EventType: r.EventType,
+			Entity:    r.Entity.String,
+			Detail:    r.Detail.String,
+			Actor:     r.Actor.String,
+			SessionID: r.SessionID.String,
+			RefID:     r.RefID.String,
+		})
+	}
+	return out, nil
+}
+
 // Close closes the database handle.
 func (s *sqliteStore) Close() error {
 	if s.db == nil {
@@ -619,6 +730,9 @@ func (r *sqliteROStore) ListDiscoveredTools(ctx context.Context, server string) 
 }
 func (r *sqliteROStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error) {
 	return r.inner.ListDiscoveredSkills(ctx)
+}
+func (r *sqliteROStore) ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error) {
+	return r.inner.ListAuditLog(ctx, f)
 }
 func (r *sqliteROStore) ListDistinctCWDs(ctx context.Context) ([]string, error) {
 	return r.inner.ListDistinctCWDs(ctx)
