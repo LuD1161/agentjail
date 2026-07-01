@@ -53,30 +53,99 @@ commands:
 
 network:
   # Hosts whose resolved IP addresses are permitted for outbound TCP
-  # connections when agentjail-shield is active (macOS only).
+  # connections when agentjail-shield is active, and hosts allowed through
+  # agentjail-netproxy's hostname-based egress filter (the real enforcement
+  # point on both OSes).
   #
-  # Filtering is IP-based: hostnames are resolved once at shield startup.
-  # CDN-backed hosts (npm, pypi, github) rotate IPs frequently; if a
-  # connection is refused after a long session, restarting the shield
-  # re-resolves the latest IPs.  This is a documented Tier 1.5 trade-off.
+  # The essential provider hosts (api.anthropic.com, claude.ai,
+  # platform.claude.com, api.openai.com, auth.openai.com, chatgpt.com,
+  # accounts.google.com, oauth2.googleapis.com) are ALWAYS allowed -- they are
+  # baked into agentpolicy/config (EssentialAllowedHosts) and are
+  # intentionally NOT listed here, because they cannot be removed by editing
+  # this file. This list below is the EDITABLE / removable extended set: the
+  # agent's effective allowlist is always essentials + this list (additive),
+  # never just this list alone.
+  #
+  # Filtering at the shield layer is IP-based: hostnames are resolved once at
+  # shield startup. CDN-backed hosts (npm, pypi, github) rotate IPs
+  # frequently; if a connection is refused after a long session, restarting
+  # the shield re-resolves the latest IPs. netproxy filters per-request by
+  # hostname and does not share this staleness trade-off.
   #
   # DNS (UDP port 53) and loopback (127.0.0.1 / ::1) are always allowed
   # regardless of this list.
   #
-  # Linux: Landlock has no network ABI; this list is parsed but ignored on
-  # Linux — a warning is printed at startup.  eBPF enforcement is Tier 3.
+  # Linux: Landlock has no network ABI, so the shield's own IP-based rules are
+  # not enforced there; agentjail-netproxy is the enforcement point on Linux.
   allowed_hosts:
-    - api.github.com
-    - raw.githubusercontent.com
-    - codeload.github.com
+    # Anthropic (non-essential / broad)
+    - "*.claude.ai"
+    - statsig.anthropic.com
+    - sentry.io
+    - "*.sentry.io"
+    # Google (broad wildcard stays removable)
+    - "*.googleapis.com"
+    # OpenAI Codex extras (core codex hosts are essential above)
+    # Cursor CLI (exact required subdomains, removable)
+    - api2.cursor.sh
+    - api5.cursor.sh
+    - agent.api5.cursor.sh
+    - agentn.api5.cursor.sh
+    - authenticate.cursor.sh
+    - authenticator.cursor.sh
+    - authentication.cursor.sh
+    - prod.authentication.cursor.sh
+    # Hosted MCP servers (the MCP call is still gated by mcp.allowed)
+    - api.linear.app
+    - mcp.linear.app
+    - "*.posthog.com"
+    - api.typefully.com
+    - api.githubcopilot.com
+    - mcp.context7.com
+    - mcp.deepwiki.com
+    - mcp.notion.com
+    - mcp.cloudflare.com
+    - hf.co
+    # Package registries
     - registry.npmjs.org
+    - registry.yarnpkg.com
     - pypi.org
     - files.pythonhosted.org
     - crates.io
+    - static.crates.io
+    - index.crates.io
     - proxy.golang.org
     - sum.golang.org
+    - repo1.maven.org
+    - repo.maven.apache.org
+    - plugins.gradle.org
+    - rubygems.org
     - deno.land
-
+    - cdn.jsdelivr.net
+    - unpkg.com
+    - esm.sh
+    - "*.huggingface.co"
+    # Git hosting
+    - github.com
+    - api.github.com
+    - raw.githubusercontent.com
+    - objects.githubusercontent.com
+    - github-releases.githubusercontent.com
+    - codeload.github.com
+    - ghcr.io
+    - gitlab.com
+    - registry.gitlab.com
+    # Documentation
+    - docs.python.org
+    - docs.rs
+    - doc.rust-lang.org
+    - nodejs.org
+    - go.dev
+    - pkg.go.dev
+    - developer.mozilla.org
+    - learn.microsoft.com
+    # agentjail anonymous telemetry (users may remove)
+    - us.i.posthog.com
 web:
   # The agent's web read tools — WebSearch and WebFetch — are allowed by default
   # so they don't prompt on every call. WebSearch is always allowed; WebFetch is

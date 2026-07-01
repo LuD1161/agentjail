@@ -240,17 +240,166 @@ func TestDefaultNetworkAllowedHostsIncludesTelemetry(t *testing.T) {
 		telemetryHost, cfg.Network.AllowedHosts)
 }
 
+// TestDefaultNetworkAllowedHostsIncludesClaudeCode verifies that the
+// essential Claude Code provider hosts reach the agent via
+// EffectiveAllowedHosts(), even though they are no longer part of the raw
+// (editable) Default().Network.AllowedHosts seed -- they now live in
+// EssentialAllowedHosts and are merged in unconditionally.
 func TestDefaultNetworkAllowedHostsIncludesClaudeCode(t *testing.T) {
 	cfg := Default()
 	required := []string{"api.anthropic.com", "platform.claude.com"}
 	hosts := make(map[string]bool, len(cfg.Network.AllowedHosts))
-	for _, h := range cfg.Network.AllowedHosts {
+	for _, h := range cfg.EffectiveAllowedHosts() {
 		hosts[h] = true
 	}
 	for _, r := range required {
 		if !hosts[r] {
-			t.Errorf("Default().Network.AllowedHosts missing %q (required for Claude Code connectivity)", r)
+			t.Errorf("Default().EffectiveAllowedHosts() missing %q (required for Claude Code connectivity)", r)
 		}
+	}
+}
+
+// TestDefaultAllowedHostsIsExtendedOnly verifies that Default().Network.AllowedHosts
+// equals ExtendedDefaultAllowedHosts() exactly, and contains none of the
+// essential hosts (which are merged separately via EffectiveAllowedHosts).
+func TestDefaultAllowedHostsIsExtendedOnly(t *testing.T) {
+	cfg := Default()
+	extended := ExtendedDefaultAllowedHosts()
+	if !reflect.DeepEqual(cfg.Network.AllowedHosts, extended) {
+		t.Fatalf("Default().Network.AllowedHosts != ExtendedDefaultAllowedHosts()\ngot:  %v\nwant: %v", cfg.Network.AllowedHosts, extended)
+	}
+	essentials := EssentialAllowedHosts()
+	extendedSet := make(map[string]bool, len(extended))
+	for _, h := range extended {
+		extendedSet[h] = true
+	}
+	for _, e := range essentials {
+		if extendedSet[e] {
+			t.Errorf("Default().Network.AllowedHosts (extended) must not contain essential host %q", e)
+		}
+	}
+}
+
+// TestEssentialAllowedHostsExactOnly verifies no essential host contains a
+// wildcard -- the non-removable surface must be exact hostnames only.
+func TestEssentialAllowedHostsExactOnly(t *testing.T) {
+	for _, h := range EssentialAllowedHosts() {
+		if strings.Contains(h, "*") {
+			t.Errorf("EssentialAllowedHosts() contains a wildcard entry %q; essentials must be exact hosts only", h)
+		}
+	}
+}
+
+// TestAllowedHostsExcludeMetaProxyAndPayment verifies neither the essential
+// nor extended default host lists contain meta-proxy MCP hosts (Composio,
+// Zapier) or the Stripe payment MCP host -- these are deliberately excluded.
+func TestAllowedHostsExcludeMetaProxyAndPayment(t *testing.T) {
+	excluded := []string{"mcp.composio.dev", "mcp.zapier.com", "mcp.stripe.com"}
+	all := append(append([]string{}, EssentialAllowedHosts()...), ExtendedDefaultAllowedHosts()...)
+	for _, e := range excluded {
+		for _, h := range all {
+			if h == e {
+				t.Errorf("essential/extended default hosts must not contain %q", e)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EffectiveAllowedHosts()
+// ---------------------------------------------------------------------------
+
+// TestEffectiveAllowedHostsAlwaysIncludesEssentials verifies that
+// EffectiveAllowedHosts() contains every essential host regardless of
+// whether Network.AllowedHosts is nil, an explicit empty slice, or a custom
+// user list -- and that a custom user host is additive, not a replacement.
+func TestEffectiveAllowedHostsAlwaysIncludesEssentials(t *testing.T) {
+	essentials := EssentialAllowedHosts()
+
+	cases := []struct {
+		name  string
+		hosts []string
+	}{
+		{"nil", nil},
+		{"empty", []string{}},
+		{"custom", []string{"my.corp.internal"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &PolicyConfig{Network: NetworkConfig{AllowedHosts: tc.hosts}}
+			effective := cfg.EffectiveAllowedHosts()
+			effectiveSet := make(map[string]bool, len(effective))
+			for _, h := range effective {
+				effectiveSet[h] = true
+			}
+			for _, e := range essentials {
+				if !effectiveSet[e] {
+					t.Errorf("EffectiveAllowedHosts() (case %s) missing essential host %q; got %v", tc.name, e, effective)
+				}
+			}
+			if tc.name == "custom" && !effectiveSet["my.corp.internal"] {
+				t.Errorf("EffectiveAllowedHosts() (case custom) missing user host my.corp.internal; got %v", effective)
+			}
+		})
+	}
+}
+
+// TestEffectiveAllowedHostsDedupedEssentialsFirst verifies dedupe and
+// essentials-first ordering when the user list happens to overlap with an
+// essential host.
+func TestEffectiveAllowedHostsDedupedEssentialsFirst(t *testing.T) {
+	cfg := &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{"api.anthropic.com", "extra.example.com"}}}
+	effective := cfg.EffectiveAllowedHosts()
+
+	count := 0
+	for _, h := range effective {
+		if h == "api.anthropic.com" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected api.anthropic.com exactly once, got %d occurrences in %v", count, effective)
+	}
+	if effective[0] != EssentialAllowedHosts()[0] {
+		t.Errorf("expected essentials first, got %v", effective)
+	}
+	found := false
+	for _, h := range effective {
+		if h == "extra.example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected extra.example.com present, got %v", effective)
+	}
+}
+
+// TestEffectiveAllowedHostsReturnsCopy verifies EffectiveAllowedHosts (and
+// EssentialAllowedHosts / ExtendedDefaultAllowedHosts) return defensive
+// copies: mutating a returned slice must not affect a subsequent call.
+func TestEffectiveAllowedHostsReturnsCopy(t *testing.T) {
+	cfg := &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{"foo.example.com"}}}
+
+	first := cfg.EffectiveAllowedHosts()
+	first[0] = "tampered"
+	second := cfg.EffectiveAllowedHosts()
+	if second[0] == "tampered" {
+		t.Fatalf("EffectiveAllowedHosts() shares backing storage across calls: %v", second)
+	}
+
+	e1 := EssentialAllowedHosts()
+	e1[0] = "tampered"
+	e2 := EssentialAllowedHosts()
+	if e2[0] == "tampered" {
+		t.Fatalf("EssentialAllowedHosts() shares backing storage across calls: %v", e2)
+	}
+
+	x1 := ExtendedDefaultAllowedHosts()
+	x1[0] = "tampered"
+	x2 := ExtendedDefaultAllowedHosts()
+	if x2[0] == "tampered" {
+		t.Fatalf("ExtendedDefaultAllowedHosts() shares backing storage across calls: %v", x2)
 	}
 }
 
@@ -402,6 +551,51 @@ func TestMergePartialYAML(t *testing.T) {
 	}
 }
 
+// TestMergeNetworkAllowedHostsNilVsEmpty verifies the nil-vs-empty merge
+// semantics specific to Network.AllowedHosts: an omitted "network" section or
+// omitted "allowed_hosts" key (decodes to nil) keeps the base extended
+// defaults; an explicit "allowed_hosts: []" (a non-nil empty slice) replaces
+// the base with an empty extended list; an explicit non-empty list replaces
+// the base entirely. In every case EffectiveAllowedHosts() still contains the
+// essentials, since Merge never touches those.
+func TestMergeNetworkAllowedHostsNilVsEmpty(t *testing.T) {
+	base := Default()
+
+	// Omitted network section entirely -> overlay.Network.AllowedHosts is nil.
+	omitted := Merge(base, &PolicyConfig{})
+	if !reflect.DeepEqual(omitted.Network.AllowedHosts, base.Network.AllowedHosts) {
+		t.Errorf("omitted network section: expected base extended hosts, got %v", omitted.Network.AllowedHosts)
+	}
+
+	// Explicit empty list -> overlay.Network.AllowedHosts is non-nil empty.
+	explicitEmpty := Merge(base, &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{}}})
+	if len(explicitEmpty.Network.AllowedHosts) != 0 {
+		t.Errorf("explicit empty allowed_hosts: expected raw list to be empty, got %v", explicitEmpty.Network.AllowedHosts)
+	}
+	if effective := explicitEmpty.EffectiveAllowedHosts(); len(effective) != len(EssentialAllowedHosts()) {
+		t.Errorf("explicit empty allowed_hosts: expected effective == essentials only, got %v", effective)
+	}
+
+	// Explicit non-empty list -> replaces base entirely.
+	replaced := Merge(base, &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{"my.corp.internal"}}})
+	if !reflect.DeepEqual(replaced.Network.AllowedHosts, []string{"my.corp.internal"}) {
+		t.Errorf("explicit non-empty allowed_hosts: expected [my.corp.internal], got %v", replaced.Network.AllowedHosts)
+	}
+	effective := replaced.EffectiveAllowedHosts()
+	foundEssential, foundCustom := false, false
+	for _, h := range effective {
+		if h == "api.anthropic.com" {
+			foundEssential = true
+		}
+		if h == "my.corp.internal" {
+			foundCustom = true
+		}
+	}
+	if !foundEssential || !foundCustom {
+		t.Errorf("replaced allowed_hosts: expected effective to contain both essential and custom host, got %v", effective)
+	}
+}
+
 // TestMergeNilOverlay verifies that Merge(base, nil) returns a deep copy of base.
 func TestMergeNilOverlay(t *testing.T) {
 	base := Default()
@@ -546,6 +740,33 @@ func TestToOPADataShape(t *testing.T) {
 	}
 	if len(roots) < 1 {
 		t.Error("expected at least one temp_root")
+	}
+}
+
+// TestToOPADataNetworkAllowedHostsIsEffective verifies that ToOPAData
+// serializes the EFFECTIVE allowlist under network.allowed_hosts -- i.e. it
+// includes the essential hosts even when the raw Network.AllowedHosts list
+// omits them.
+func TestToOPADataNetworkAllowedHostsIsEffective(t *testing.T) {
+	cfg := &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{"my.corp.internal"}}}
+	data := cfg.ToOPAData()
+	network, ok := data["network"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data[network] to be map, got %T", data["network"])
+	}
+	hosts, ok := network["allowed_hosts"].([]string)
+	if !ok {
+		t.Fatalf("expected data.network.allowed_hosts to be []string, got %T", network["allowed_hosts"])
+	}
+	hostSet := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		hostSet[h] = true
+	}
+	if !hostSet["api.anthropic.com"] {
+		t.Errorf("ToOPAData network.allowed_hosts missing essential host api.anthropic.com; got %v", hosts)
+	}
+	if !hostSet["my.corp.internal"] {
+		t.Errorf("ToOPAData network.allowed_hosts missing user host my.corp.internal; got %v", hosts)
 	}
 }
 

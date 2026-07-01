@@ -132,18 +132,168 @@ type CommandConfig struct {
 }
 
 // NetworkConfig controls which hosts the agent process is allowed to reach
-// over TCP.  The shield resolves each hostname to IP addresses at startup and
-// emits per-IP sbpl allow rules (macOS) or logs a not-implemented warning
-// (Linux — Landlock has no network ABI).
+// over TCP.  With agentjail-netproxy running, hostname-based egress filtering
+// is enforced at the proxy (the real enforcement point on both OSes); the
+// shield's own resolve-and-allow-by-IP behavior (sbpl rules on macOS, a
+// not-implemented warning on Linux since Landlock has no network ABI) is a
+// secondary, best-effort layer kept consistent with the proxy's list.
 //
-// Filtering is IP-based, not hostname-based: if a CDN host rotates its IPs
-// between sessions, the new IPs will not be in the allow set until the next
-// shield launch.  This is a documented Tier 1.5 trade-off.
+// AllowedHosts here is the EDITABLE/removable list. It does not include the
+// essential provider hosts (see EssentialAllowedHosts) -- those are always
+// merged in via PolicyConfig.EffectiveAllowedHosts and cannot be removed by
+// policy.yaml. Enforcement (netproxy) and OPA serialization (ToOPAData) both
+// use the effective list, not this raw field, so callers should not read
+// AllowedHosts directly when they need the enforced set.
+//
+// Filtering at the shield layer is IP-based, not hostname-based: if a CDN
+// host rotates its IPs between sessions, the new IPs will not be in the
+// allow set until the next shield launch.  This is a documented Tier 1.5
+// trade-off; netproxy (hostname-based, per-request) does not share it.
 type NetworkConfig struct {
 	// AllowedHosts is the list of hostnames whose resolved IPs are permitted
 	// for outbound TCP connections.  The resolver runs at shield startup; DNS
 	// (UDP 53) and loopback are always permitted regardless of this list.
+	// This is the extended/editable list -- see EffectiveAllowedHosts for the
+	// enforced set, which always includes the non-removable essentials.
 	AllowedHosts []string `yaml:"allowed_hosts"`
+}
+
+// EssentialAllowedHosts returns the minimal, non-removable set of hosts an
+// agent needs to authenticate and run inference against its own provider.
+// These are EXACT hostnames only -- no wildcards -- to keep the always-on,
+// non-removable surface as small as possible. They are merged into every
+// PolicyConfig's effective allowlist (see EffectiveAllowedHosts) regardless
+// of what policy.yaml says, so a user cannot accidentally (or a malicious
+// policy edit cannot silently) starve or reroute the agent's own provider
+// traffic. See ADR 0038.
+//
+// Returns a defensive copy; callers may freely mutate the result.
+func EssentialAllowedHosts() []string {
+	return []string{
+		"api.anthropic.com",
+		"claude.ai",
+		"platform.claude.com",
+		"api.openai.com",
+		"auth.openai.com",
+		"chatgpt.com",
+		"accounts.google.com",
+		"oauth2.googleapis.com",
+	}
+}
+
+// ExtendedDefaultAllowedHosts returns the shipped default for the editable
+// Network.AllowedHosts field: broad wildcards, telemetry, hosted MCP
+// endpoints, package registries, git hosting, and documentation sites. This
+// list is fully removable/replaceable by a user's policy.yaml -- unlike
+// EssentialAllowedHosts, nothing here is required for the agent's own
+// provider connection to function.
+//
+// Deliberately excluded: meta-proxy MCP hosts (mcp.composio.dev,
+// mcp.zapier.com) and the Stripe payment MCP host (mcp.stripe.com) -- these
+// remain blocked by default even though the corresponding MCP call is also
+// gated by mcp.allowed.
+//
+// Returns a defensive copy; callers may freely mutate the result.
+func ExtendedDefaultAllowedHosts() []string {
+	return []string{
+		// Anthropic (non-essential / broad)
+		"*.claude.ai",
+		"statsig.anthropic.com",
+		"sentry.io",
+		"*.sentry.io",
+		// Google (broad wildcard stays removable)
+		"*.googleapis.com",
+		// OpenAI Codex extras (core codex hosts are essential above)
+		// Cursor CLI (exact required subdomains, removable)
+		"api2.cursor.sh",
+		"api5.cursor.sh",
+		"agent.api5.cursor.sh",
+		"agentn.api5.cursor.sh",
+		"authenticate.cursor.sh",
+		"authenticator.cursor.sh",
+		"authentication.cursor.sh",
+		"prod.authentication.cursor.sh",
+		// Hosted MCP servers (the MCP call is still gated by mcp.allowed)
+		"api.linear.app",
+		"mcp.linear.app",
+		"*.posthog.com",
+		"api.typefully.com",
+		"api.githubcopilot.com",
+		"mcp.context7.com",
+		"mcp.deepwiki.com",
+		"mcp.notion.com",
+		"mcp.cloudflare.com",
+		"hf.co",
+		// Package registries
+		"registry.npmjs.org",
+		"registry.yarnpkg.com",
+		"pypi.org",
+		"files.pythonhosted.org",
+		"crates.io",
+		"static.crates.io",
+		"index.crates.io",
+		"proxy.golang.org",
+		"sum.golang.org",
+		"repo1.maven.org",
+		"repo.maven.apache.org",
+		"plugins.gradle.org",
+		"rubygems.org",
+		"deno.land",
+		"cdn.jsdelivr.net",
+		"unpkg.com",
+		"esm.sh",
+		"*.huggingface.co",
+		// Git hosting
+		"github.com",
+		"api.github.com",
+		"raw.githubusercontent.com",
+		"objects.githubusercontent.com",
+		"github-releases.githubusercontent.com",
+		"codeload.github.com",
+		"ghcr.io",
+		"gitlab.com",
+		"registry.gitlab.com",
+		// Documentation
+		"docs.python.org",
+		"docs.rs",
+		"doc.rust-lang.org",
+		"nodejs.org",
+		"go.dev",
+		"pkg.go.dev",
+		"developer.mozilla.org",
+		"learn.microsoft.com",
+		// agentjail anonymous telemetry (users may remove)
+		"us.i.posthog.com",
+	}
+}
+
+// EffectiveAllowedHosts returns the enforced allowlist: the non-removable
+// essentials followed by the editable Network.AllowedHosts, deduplicated
+// with essentials taking priority (i.e. essentials always appear first,
+// order-stable, no duplicate entries). This is what netproxy and the shield
+// enforce, and what ToOPAData serializes -- never the raw
+// Network.AllowedHosts field alone.
+//
+// Returns a defensive copy; callers may freely mutate the result.
+func (c *PolicyConfig) EffectiveAllowedHosts() []string {
+	essentials := EssentialAllowedHosts()
+	seen := make(map[string]struct{}, len(essentials)+len(c.Network.AllowedHosts))
+	out := make([]string, 0, len(essentials)+len(c.Network.AllowedHosts))
+	for _, h := range essentials {
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	for _, h := range c.Network.AllowedHosts {
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	return out
 }
 
 // WebConfig governs the agent's web read tools (WebSearch / WebFetch), which
@@ -333,64 +483,11 @@ func Default() *PolicyConfig {
 		},
 		DisabledRules: []string{},
 		Network: NetworkConfig{
-			AllowedHosts: []string{
-				// Claude Code / Anthropic services
-				"api.anthropic.com",
-				"platform.claude.com",
-				"statsig.anthropic.com",
-				"claude.ai",
-				"*.claude.ai",
-				"sentry.io",
-				"*.sentry.io",
-				// OAuth / Google (for claude.ai Gmail, Calendar, Drive MCPs)
-				"accounts.google.com",
-				"oauth2.googleapis.com",
-				"*.googleapis.com",
-				// Common MCP plugin APIs
-				"api.linear.app",
-				"*.posthog.com",
-				"api.typefully.com",
-				// Package registries
-				"registry.npmjs.org",
-				"registry.yarnpkg.com",
-				"pypi.org",
-				"files.pythonhosted.org",
-				"crates.io",
-				"static.crates.io",
-				"index.crates.io",
-				"proxy.golang.org",
-				"sum.golang.org",
-				"repo1.maven.org",
-				"repo.maven.apache.org",
-				"plugins.gradle.org",
-				"rubygems.org",
-				"deno.land",
-				"cdn.jsdelivr.net",
-				"unpkg.com",
-				"esm.sh",
-				"*.huggingface.co",
-				// Git hosting
-				"github.com",
-				"api.github.com",
-				"raw.githubusercontent.com",
-				"objects.githubusercontent.com",
-				"github-releases.githubusercontent.com",
-				"codeload.github.com",
-				"ghcr.io",
-				"gitlab.com",
-				"registry.gitlab.com",
-				// Documentation
-				"docs.python.org",
-				"docs.rs",
-				"doc.rust-lang.org",
-				"nodejs.org",
-				"go.dev",
-				"pkg.go.dev",
-				"developer.mozilla.org",
-				"learn.microsoft.com",
-				// agentjail anonymous telemetry backend (see docs/TELEMETRY.md); users may remove this.
-				"us.i.posthog.com",
-			},
+			// Extended/editable defaults only -- the essential provider hosts
+			// (api.anthropic.com, claude.ai, ...) are always merged in via
+			// EffectiveAllowedHosts and are intentionally NOT part of this
+			// seed. See EssentialAllowedHosts / ExtendedDefaultAllowedHosts.
+			AllowedHosts: ExtendedDefaultAllowedHosts(),
 		},
 		// Web read tools (WebSearch/WebFetch) are allowed by default; no hosts
 		// are blocked out of the box. Add host globs here to deny specific
@@ -498,8 +595,14 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Commands.ExtraBlock = append([]string(nil), base.Commands.ExtraBlock...)
 	}
 
-	// Network.AllowedHosts
-	if len(overlay.Network.AllowedHosts) > 0 {
+	// Network.AllowedHosts -- nil-vs-empty matters here: yaml.v3 decodes an
+	// omitted "allowed_hosts" key to nil, and an explicit "allowed_hosts: []"
+	// to a non-nil empty slice. An omitted field means "keep the base
+	// (extended defaults)"; an explicit empty list means "the user wants no
+	// extended hosts" and replaces the base with an empty list. Either way,
+	// EffectiveAllowedHosts still merges in the non-removable essentials, so
+	// even an explicit empty list keeps the agent able to reach its provider.
+	if overlay.Network.AllowedHosts != nil {
 		result.Network.AllowedHosts = append([]string(nil), overlay.Network.AllowedHosts...)
 	} else {
 		result.Network.AllowedHosts = append([]string(nil), base.Network.AllowedHosts...)
@@ -733,8 +836,12 @@ func (c *PolicyConfig) ToOPAData() map[string]interface{} {
 		"commands": map[string]interface{}{
 			"extra_block": sliceOrEmpty(c.Commands.ExtraBlock),
 		},
+		// network.allowed_hosts is the EFFECTIVE egress allowlist (non-removable
+		// essentials + the editable Network.AllowedHosts), not the raw editable
+		// YAML list -- so any future rego rule reading this key sees the real
+		// enforced set. See PolicyConfig.EffectiveAllowedHosts.
 		"network": map[string]interface{}{
-			"allowed_hosts": sliceOrEmpty(c.Network.AllowedHosts),
+			"allowed_hosts": sliceOrEmpty(c.EffectiveAllowedHosts()),
 		},
 		// web.blocked is read by web_policy.rego to deny WebFetch to matching hosts.
 		"web": map[string]interface{}{
