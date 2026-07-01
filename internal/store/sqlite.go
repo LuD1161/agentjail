@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -186,7 +188,54 @@ func (s *sqliteStore) migrate() error {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 	}
+
+	// Migrate legacy audit_events into audit_log (idempotent).
+	if tableExists(s.db, "audit_events") {
+		_, _ = s.db.Exec(`INSERT INTO audit_log (ts, event_type, entity, actor)
+			SELECT ts, 'policy.changed', rule_id, user FROM audit_events
+			WHERE NOT EXISTS (
+				SELECT 1 FROM audit_log
+				WHERE audit_log.ts = audit_events.ts
+				AND audit_log.event_type = 'policy.changed'
+				AND COALESCE(audit_log.entity, '') = COALESCE(audit_events.rule_id, '')
+				AND COALESCE(audit_log.actor, '') = COALESCE(audit_events.user, '')
+			)`)
+		_, _ = s.db.Exec(`DROP TABLE IF EXISTS audit_events`)
+	}
+
+	// Import legacy flat-file audit.log (best-effort, idempotent).
+	auditLogPath := filepath.Join(filepath.Dir(s.path), "audit.log")
+	if f, err := os.Open(auditLogPath); err == nil {
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var entry struct {
+				Ts     string `json:"ts"`
+				Action string `json:"action"`
+				RuleID string `json:"rule_id"`
+				User   string `json:"user"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &entry) != nil || entry.Ts == "" {
+				continue
+			}
+			// Deterministic ref_id for dedup.
+			h := sha256.Sum256([]byte(entry.Ts + "|" + entry.Action + "|" + entry.RuleID + "|" + entry.User))
+			refID := fmt.Sprintf("legacy:%x", h[:8])
+			_, _ = s.db.Exec(`INSERT INTO audit_log (ts, event_type, entity, actor, ref_id)
+				SELECT ?, 'policy.changed', ?, ?, ?
+				WHERE NOT EXISTS (SELECT 1 FROM audit_log WHERE ref_id = ?)`,
+				entry.Ts, entry.RuleID, entry.User, refID, refID)
+		}
+	}
+
 	return nil
+}
+
+// tableExists reports whether a table with the given name exists in the DB.
+func tableExists(db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
+	return err == nil && n > 0
 }
 
 // RecordDecision inserts a decision and upserts its session. The tool_input
@@ -246,19 +295,14 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	return tx.Commit()
 }
 
-// RecordAuditEvent inserts an audit event (replaces audit.log).
+// RecordAuditEvent inserts an audit event into the unified audit_log.
+// Legacy callers that passed Action/RuleID/User are mapped to the new schema.
 func (s *sqliteStore) RecordAuditEvent(ctx context.Context, a AuditRecord) error {
-	ts := a.Ts.UTC().Format(time.RFC3339Nano)
-	err := s.queries.InsertAuditEvent(ctx, InsertAuditEventParams{
-		Ts:     ts,
-		Action: a.Action,
-		RuleID: toNullString(a.RuleID),
-		User:   toNullString(a.User),
+	return s.Emit(ctx, audit.Event{
+		EventType: audit.PolicyChanged,
+		Entity:    a.RuleID,
+		Actor:     a.User,
 	})
-	if err != nil {
-		return fmt.Errorf("store: insert audit: %w", err)
-	}
-	return nil
 }
 
 // DecisionCount returns the total number of decision rows (used by the daemon
@@ -356,9 +400,12 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 	return out, rows.Err()
 }
 
-// ListAuditEvents returns audit events in chronological order by default.
+// ListAuditEvents returns policy audit events from the unified audit_log,
+// mapped back to the legacy AuditRecord shape for backward compatibility.
 func (s *sqliteStore) ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error) {
-	q := "SELECT id, ts, action, rule_id, user FROM audit_events ORDER BY id " + orderDir(f.OrderDesc)
+	q := `SELECT id, ts, event_type, entity, actor FROM audit_log
+		  WHERE event_type IN ('policy.changed', 'policy.change_requested')
+		  ORDER BY id ` + orderDir(f.OrderDesc)
 	q += fmt.Sprintf(" LIMIT %d", clampLimit(f.Limit))
 	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {
@@ -369,22 +416,22 @@ func (s *sqliteStore) ListAuditEvents(ctx context.Context, f AuditFilter) ([]Aud
 	var out []AuditRecord
 	for rows.Next() {
 		var (
-			id     int64
-			tsStr  string
-			action string
-			ruleID sql.NullString
-			user   sql.NullString
+			id        int64
+			tsStr     string
+			eventType string
+			entity    sql.NullString
+			actor     sql.NullString
 		)
-		if err := rows.Scan(&id, &tsStr, &action, &ruleID, &user); err != nil {
+		if err := rows.Scan(&id, &tsStr, &eventType, &entity, &actor); err != nil {
 			return nil, fmt.Errorf("store: scan audit event: %w", err)
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, tsStr)
 		out = append(out, AuditRecord{
 			ID:     id,
 			Ts:     ts,
-			Action: action,
-			RuleID: ruleID.String,
-			User:   user.String,
+			Action: eventType,
+			RuleID: entity.String,
+			User:   actor.String,
 		})
 	}
 	return out, rows.Err()
@@ -483,7 +530,7 @@ func (s *sqliteStore) CountActionsBySession(ctx context.Context) ([]ActionCount,
 	return out, nil
 }
 
-// Cleanup deletes decisions, audit_events, audit_log, and sessions older than
+// Cleanup deletes decisions, audit_log entries, and sessions older than
 // maxAge, then VACUUMs to reclaim space. A retention.purged audit event is
 // emitted post-commit (best-effort).
 func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
@@ -504,7 +551,6 @@ func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 		table string
 	}{
 		{`DELETE FROM decisions WHERE ts < ?`, "decisions"},
-		{`DELETE FROM audit_events WHERE ts < ?`, "audit_events"},
 		{`DELETE FROM audit_log WHERE ts < ?`, "audit_log"},
 		{`DELETE FROM sessions WHERE start_ts < ?`, "sessions"},
 	} {

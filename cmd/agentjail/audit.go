@@ -1,22 +1,17 @@
-// audit.go — append-only audit log for policy mutations.
+// audit.go — audit helpers for policy mutations.
 //
-// appendAuditEvent writes a structured JSON line to path (typically
-// ~/.agentjail/audit.log). The file is opened with O_APPEND|O_CREATE|O_WRONLY
-// at 0600 so same-user processes can append but cannot unilaterally truncate.
+// appendAuditEvent records a policy mutation in the unified audit_log via
+// the SQLite store. The flat-file audit.log path is kept as a parameter for
+// backward compatibility with callers that resolve it, but no flat file is
+// written (legacy flat files are imported into audit_log at migration time).
 //
-// IMPORTANT: If the append write FAILS the caller MUST abort the mutation
+// IMPORTANT: If the write FAILS the caller MUST abort the mutation
 // (do not call Save after appendAuditEvent returns an error). This is
 // fail-closed on auditability: a weakened guardrail must never be silent.
-//
-// This is best-effort provenance, NOT tamper resistance. A same-user
-// process can still rewrite the file; real tamper-proofing (daemon-owned
-// append API or platform immutable flag) is future work and is not claimed
-// here.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,69 +21,27 @@ import (
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
-// auditEvent is the structured record written to audit.log.
-type auditEvent struct {
-	Time   string `json:"time"`   // RFC3339
-	Action string `json:"action"` // "disable" | "enable"
-	RuleID string `json:"rule_id"`
-	PID    int    `json:"pid"`
-	PPID   int    `json:"ppid"`
-	CWD    string `json:"cwd"`
-}
-
-// appendAuditEvent appends one JSON audit line to logPath.
-// It returns an error if:
-//   - the file cannot be opened for appending
-//   - the JSON encoding fails
-//   - the write to the file fails
+// appendAuditEvent records one policy-mutation audit event in the unified
+// audit_log via the SQLite store. logPath is used only to locate the DB
+// (agentjail.db in the same directory); no flat file is written.
 //
 // Callers MUST check the error and abort the mutation if it is non-nil.
 func appendAuditEvent(logPath, action, ruleID string) error {
-	cwd, _ := os.Getwd() // best-effort; empty string on error
-
-	ev := auditEvent{
-		Time:   time.Now().UTC().Format(time.RFC3339),
+	st, err := store.Open(filepath.Join(filepath.Dir(logPath), "agentjail.db"))
+	if err != nil {
+		return fmt.Errorf("audit: open store: %w", err)
+	}
+	defer st.Close()
+	return st.RecordAuditEvent(context.Background(), store.AuditRecord{
+		Ts:     time.Now().UTC(),
 		Action: action,
 		RuleID: ruleID,
-		PID:    os.Getpid(),
-		PPID:   os.Getppid(),
-		CWD:    cwd,
-	}
-
-	line, err := json.Marshal(ev)
-	if err != nil {
-		return fmt.Errorf("audit: marshal event: %w", err)
-	}
-	line = append(line, '\n')
-
-	// O_APPEND ensures concurrent writes from separate processes do not
-	// interleave within a single line (POSIX atomic-append guarantee for
-	// writes ≤ PIPE_BUF).
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("audit: open %s: %w", logPath, err)
-	}
-	defer f.Close()
-
-	if _, err := f.Write(line); err != nil {
-		return fmt.Errorf("audit: write to %s: %w", logPath, err)
-	}
-	if st, err := store.Open(filepath.Join(filepath.Dir(logPath), "agentjail.db")); err == nil {
-		defer st.Close()
-		_ = st.RecordAuditEvent(context.Background(), store.AuditRecord{
-			Ts:     time.Now().UTC(),
-			Action: action,
-			RuleID: ruleID,
-			User:   os.Getenv("USER"),
-		})
-	}
-	return nil
+		User:   os.Getenv("USER"),
+	})
 }
 
 // emitPolicyAudit emits a structured audit event via the unified audit emitter
-// (Plan 009). This supplements appendAuditEvent (which writes to flat-file
-// audit.log and the legacy RecordAuditEvent table). Phase 5 will remove the
-// flat-file path; until then both coexist.
+// (Plan 009).
 func emitPolicyAudit(emitter audit.Emitter, eventType, entity, actor string, detail map[string]string) error {
 	return emitter.Emit(context.Background(), audit.Event{
 		EventType: eventType,

@@ -287,6 +287,7 @@ func TestRecordAndListAuditEvents(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Microsecond)
+	// RecordAuditEvent now maps to audit_log with event_type=policy.changed.
 	records := []AuditRecord{
 		{Ts: base, Action: "policy.disable", RuleID: "command_policy/no-sudo", User: "alice"},
 		{Ts: base.Add(time.Second), Action: "policy.enable", RuleID: "command_policy/no-sudo", User: "bob"},
@@ -305,7 +306,8 @@ func TestRecordAndListAuditEvents(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("got %d audit events, want 3", len(got))
 	}
-	if got[0].Action != "policy.disable" || got[0].ID == 0 {
+	// All events are now stored as policy.changed in audit_log.
+	if got[0].Action != "policy.changed" || got[0].ID == 0 {
 		t.Errorf("first audit event = %+v", got[0])
 	}
 	if got[2].User != "carol" {
@@ -319,7 +321,7 @@ func TestRecordAndListAuditEvents(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("newest got %d audit events, want 2", len(got))
 	}
-	if got[0].Action != "mcp.allow" || got[1].Action != "policy.enable" {
+	if got[0].Action != "policy.changed" || got[1].Action != "policy.changed" {
 		t.Errorf("newest audit events = %+v", got)
 	}
 }
@@ -1048,5 +1050,160 @@ func TestConcurrentAuditWrites(t *testing.T) {
 	}
 	if len(got) != 100 {
 		t.Errorf("got %d audit entries, want 100", len(got))
+	}
+}
+
+// ─── Phase 5: migration of audit_events → audit_log ────────────────────────
+
+func TestMigrateAuditEventsToAuditLog(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Step 1: Create a raw DB with the audit_events table and seed rows
+	// BEFORE the migrating Open() runs. We open a raw connection that only
+	// creates the audit_events table (no audit_log), insert rows, then close.
+	rawDSN := fmt.Sprintf(
+		"file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)",
+		dbPath,
+	)
+	rawDB, err := sql.Open("sqlite", rawDSN)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	rawDB.SetMaxOpenConns(1)
+	_, err = rawDB.Exec(`CREATE TABLE IF NOT EXISTS audit_events (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts      TEXT    NOT NULL,
+		action  TEXT    NOT NULL,
+		rule_id TEXT,
+		user    TEXT
+	)`)
+	if err != nil {
+		t.Fatalf("create audit_events: %v", err)
+	}
+	// Insert test rows.
+	for _, row := range []struct {
+		ts, action, ruleID, user string
+	}{
+		{"2025-01-01T00:00:00Z", "disable", "command_policy/no-sudo", "alice"},
+		{"2025-01-02T00:00:00Z", "enable", "command_policy/no-sudo", "bob"},
+		{"2025-01-03T00:00:00Z", "disable", "file_policy/no-etc", "carol"},
+	} {
+		_, err := rawDB.Exec(`INSERT INTO audit_events (ts, action, rule_id, user) VALUES (?, ?, ?, ?)`,
+			row.ts, row.action, row.ruleID, row.user)
+		if err != nil {
+			t.Fatalf("insert audit_events row: %v", err)
+		}
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close raw DB: %v", err)
+	}
+
+	// Step 2: Open via the store (triggers migrate + migration logic).
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+
+	// Verify rows migrated into audit_log.
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{EventType: "policy.changed", Limit: 100})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d migrated entries, want 3", len(got))
+	}
+	// Verify entities (rule_id mapped to entity).
+	entities := map[string]bool{}
+	for _, e := range got {
+		entities[e.Entity] = true
+	}
+	for _, want := range []string{"command_policy/no-sudo", "file_policy/no-etc"} {
+		if !entities[want] {
+			t.Errorf("missing entity %q in migrated rows", want)
+		}
+	}
+
+	// Verify audit_events table was dropped.
+	openRawDB, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open raw for verification: %v", err)
+	}
+	defer openRawDB.Close()
+	if tableExists(openRawDB, "audit_events") {
+		t.Error("audit_events table still exists after migration")
+	}
+
+	_ = s.Close()
+
+	// Step 3: Reopen to verify idempotency (no duplicate rows, no crash).
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	defer s2.Close()
+
+	got2, err := s2.ListAuditLog(ctx, AuditLogFilter{EventType: "policy.changed", Limit: 100})
+	if err != nil {
+		t.Fatalf("ListAuditLog after reopen: %v", err)
+	}
+	if len(got2) != 3 {
+		t.Errorf("after reopen: got %d entries, want 3 (idempotent)", len(got2))
+	}
+}
+
+func TestMigrateFlatFileAuditLog(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Write a legacy flat-file audit.log next to the DB path.
+	lines := []string{
+		`{"ts":"2025-02-01T10:00:00Z","action":"disable","rule_id":"command_policy/no-rm-rf","user":"dave"}`,
+		`{"ts":"2025-02-02T10:00:00Z","action":"enable","rule_id":"command_policy/no-rm-rf","user":"eve"}`,
+		`not valid json — should be skipped`,
+	}
+	auditLogPath := filepath.Join(dir, "audit.log")
+	if err := os.WriteFile(auditLogPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write audit.log: %v", err)
+	}
+
+	// Open the store — migrate() should import the flat-file entries.
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+
+	got, err := s.ListAuditLog(ctx, AuditLogFilter{EventType: "policy.changed", Limit: 100})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d entries from flat-file import, want 2", len(got))
+	}
+
+	// Verify ref_id is set (deterministic dedup key).
+	for _, e := range got {
+		if e.RefID == "" || !strings.HasPrefix(e.RefID, "legacy:") {
+			t.Errorf("expected legacy: ref_id, got %q", e.RefID)
+		}
+	}
+
+	_ = s.Close()
+
+	// Reopen to verify idempotency (flat-file still exists, no duplicate rows).
+	s2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	defer s2.Close()
+
+	got2, err := s2.ListAuditLog(ctx, AuditLogFilter{EventType: "policy.changed", Limit: 100})
+	if err != nil {
+		t.Fatalf("ListAuditLog after reopen: %v", err)
+	}
+	if len(got2) != 2 {
+		t.Errorf("after reopen: got %d entries, want 2 (idempotent)", len(got2))
 	}
 }

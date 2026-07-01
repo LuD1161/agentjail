@@ -43,15 +43,6 @@ func (q *Queries) CountActionsBySession(ctx context.Context) ([]CountActionsBySe
 	return items, nil
 }
 
-const deleteOldAuditEvents = `-- name: DeleteOldAuditEvents :exec
-DELETE FROM audit_events WHERE ts < ?
-`
-
-func (q *Queries) DeleteOldAuditEvents(ctx context.Context, ts string) error {
-	_, err := q.db.ExecContext(ctx, deleteOldAuditEvents, ts)
-	return err
-}
-
 const deleteOldAuditLog = `-- name: DeleteOldAuditLog :exec
 DELETE FROM audit_log WHERE ts < ?
 `
@@ -88,27 +79,6 @@ func (q *Queries) GetDecisionCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
-}
-
-const insertAuditEvent = `-- name: InsertAuditEvent :exec
-INSERT INTO audit_events (ts, action, rule_id, user) VALUES (?, ?, ?, ?)
-`
-
-type InsertAuditEventParams struct {
-	Ts     string         `json:"ts"`
-	Action string         `json:"action"`
-	RuleID sql.NullString `json:"rule_id"`
-	User   sql.NullString `json:"user"`
-}
-
-func (q *Queries) InsertAuditEvent(ctx context.Context, arg InsertAuditEventParams) error {
-	_, err := q.db.ExecContext(ctx, insertAuditEvent,
-		arg.Ts,
-		arg.Action,
-		arg.RuleID,
-		arg.User,
-	)
-	return err
 }
 
 const insertAuditLog = `-- name: InsertAuditLog :exec

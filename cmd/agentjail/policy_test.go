@@ -6,12 +6,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/store"
 )
 
 // TestLibraryRuleNames verifies the embedded library rules are all present.
@@ -835,7 +837,7 @@ func runPolicyDisableRuleIDWithAuditPath(ruleID string, force bool, auditPath st
 
 // TestDisableRuleID_WritesAuditAndConfig verifies that a valid (non-locked,
 // non-core or simulated post-confirm) rule disable adds to disabled_rules and
-// writes an audit event.
+// writes an audit event to the unified audit_log (SQLite).
 func TestDisableRuleID_WritesAuditAndConfig(t *testing.T) {
 	home, policyPath := setupADR0047Home(t)
 	withFakeHome(t, home)
@@ -864,30 +866,45 @@ func TestDisableRuleID_WritesAuditAndConfig(t *testing.T) {
 		t.Errorf("rule_id %q not found in disabled_rules: %v", ruleID, cfg.DisabledRules)
 	}
 
-	// Verify audit log was written.
-	data, err := os.ReadFile(auditPath)
+	// Verify audit event was written to the SQLite store.
+	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+	st, err := store.OpenReadOnly(dbPath)
 	if err != nil {
-		t.Fatalf("audit log not created: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if !strings.Contains(string(data), ruleID) {
-		t.Errorf("audit log missing rule_id %q:\n%s", ruleID, data)
+	defer st.Close()
+	got, err := st.ListAuditLog(context.Background(), store.AuditLogFilter{EventType: "policy.changed", Limit: 100})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
 	}
-	if !strings.Contains(string(data), "disable") {
-		t.Errorf("audit log missing action 'disable':\n%s", data)
+	if len(got) == 0 {
+		t.Fatal("no audit entries written to store")
+	}
+	foundEntity := false
+	for _, e := range got {
+		if e.Entity == ruleID {
+			foundEntity = true
+		}
+	}
+	if !foundEntity {
+		t.Errorf("audit_log missing entity %q", ruleID)
 	}
 }
 
-// TestAuditWriteFailure_AbortsDisable verifies that if appendAuditEvent fails,
-// the disable is aborted (policy.yaml is not modified).
+// TestAuditWriteFailure_AbortsDisable verifies that if appendAuditEvent fails
+// (e.g. the DB directory is unwritable), the disable is aborted.
 func TestAuditWriteFailure_AbortsDisable(t *testing.T) {
 	home, policyPath := setupADR0047Home(t)
 	withFakeHome(t, home)
 
-	// Make the audit log path unwritable: point it at a directory (can't write).
-	badAuditPath := filepath.Join(home, ".agentjail", "audit_dir")
-	if err := os.MkdirAll(badAuditPath, 0o700); err != nil {
+	// Point the audit path to a non-existent deep directory that cannot be
+	// created because the parent is a regular file (not a dir).
+	blocker := filepath.Join(home, ".agentjail", "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// audit path whose Dir is blocker — store.Open will fail to MkdirAll.
+	badAuditPath := filepath.Join(blocker, "sub", "audit.log")
 
 	ruleID := "library/no-history-read"
 
@@ -907,7 +924,8 @@ func TestAuditWriteFailure_AbortsDisable(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_Format verifies the audit event JSON structure.
+// TestAuditEvent_Format verifies that appendAuditEvent writes to the
+// unified audit_log in the SQLite store.
 func TestAuditEvent_Format(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "audit.log")
@@ -916,23 +934,24 @@ func TestAuditEvent_Format(t *testing.T) {
 		t.Fatalf("appendAuditEvent() error: %v", err)
 	}
 
-	data, err := os.ReadFile(logPath)
+	// Verify the event was written to the SQLite store.
+	dbPath := filepath.Join(dir, "agentjail.db")
+	st, err := store.OpenReadOnly(dbPath)
 	if err != nil {
-		t.Fatalf("read audit log: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	line := strings.TrimSpace(string(data))
+	defer st.Close()
 
-	// Must be valid JSON with required fields.
-	for _, field := range []string{`"time"`, `"action"`, `"rule_id"`, `"pid"`, `"ppid"`, `"cwd"`} {
-		if !strings.Contains(line, field) {
-			t.Errorf("audit event missing field %q\nline: %s", field, line)
-		}
+	got, err := st.ListAuditLog(context.Background(), store.AuditLogFilter{EventType: "policy.changed", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
 	}
-	if !strings.Contains(line, `"disable"`) {
-		t.Errorf("audit event missing action value 'disable'\nline: %s", line)
+	if len(got) != 1 {
+		t.Fatalf("got %d audit entries, want 1", len(got))
 	}
-	if !strings.Contains(line, "command_policy/no-sudo") {
-		t.Errorf("audit event missing rule_id\nline: %s", line)
+	e := got[0]
+	if e.Entity != "command_policy/no-sudo" {
+		t.Errorf("entity = %q, want command_policy/no-sudo", e.Entity)
 	}
 }
 

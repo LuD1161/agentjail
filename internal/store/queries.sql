@@ -11,9 +11,6 @@ ON CONFLICT(session_id) DO UPDATE SET
     cwd = COALESCE(excluded.cwd, sessions.cwd),
     decision_count = sessions.decision_count + 1;
 
--- name: InsertAuditEvent :exec
-INSERT INTO audit_events (ts, action, rule_id, user) VALUES (?, ?, ?, ?);
-
 -- name: GetDecisionCount :one
 SELECT COUNT(*) FROM decisions;
 
@@ -25,9 +22,6 @@ SELECT session_id, action, COUNT(*) AS count FROM decisions GROUP BY session_id,
 
 -- name: DeleteOldDecisions :exec
 DELETE FROM decisions WHERE ts < ?;
-
--- name: DeleteOldAuditEvents :exec
-DELETE FROM audit_events WHERE ts < ?;
 
 -- name: DeleteOldSessions :exec
 DELETE FROM sessions WHERE start_ts < ?;
