@@ -87,7 +87,8 @@ Rules:
 - **Any new `slog.Info`/`slog.Warn` that represents a state change or
   user-visible action must also `Emit()` an audit event.** If you add a
   new significant event, add both — or better, use a domain service method
-  that handles both internally.
+  that handles both internally (see AGE-95).
+
 
 ## Platform-specific code must use build tags
 
