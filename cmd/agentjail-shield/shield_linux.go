@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -520,7 +522,6 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	}
 
 	// Network rules: allow TCP connect to the netproxy port only (ABI v4+).
-	// BIND_TCP is handled but no rule is added → all binds are denied.
 	if netproxyPort > 0 && abi >= 4 {
 		netAttr := landlockNetPortAttr{
 			AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_CONNECT_TCP),
@@ -530,6 +531,27 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			uintptr(rulesetFd), uintptr(landlockRuleNetPort),
 			uintptr(unsafe.Pointer(&netAttr)), 0, 0, 0); e != 0 {
 			return fmt.Errorf("landlock_add_rule(net port %d): %w", netproxyPort, e)
+		}
+
+		// Allow TCP bind on ports used by MCP OAuth redirect callbacks.
+		// These ports are read from ~/.claude/.credentials.json at
+		// startup so the agent can complete OAuth re-authentication
+		// flows inside the sandbox. Landlock is irreversible, so ports
+		// for new MCPs (not yet in credentials) require out-of-jail
+		// initial auth via `claude mcp login`.
+		if home != "" {
+			oauthPorts := resolveOAuthCallbackPorts(filepath.Join(home, ".claude", ".credentials.json"))
+			for _, port := range oauthPorts {
+				bindAttr := landlockNetPortAttr{
+					AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_BIND_TCP),
+					Port:          uint64(port),
+				}
+				if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
+					uintptr(rulesetFd), uintptr(landlockRuleNetPort),
+					uintptr(unsafe.Pointer(&bindAttr)), 0, 0, 0); e != 0 {
+					fmt.Fprintf(os.Stderr, "agentjail-shield: skip OAuth bind port %d: %v\n", port, e)
+				}
+			}
 		}
 	}
 
@@ -586,6 +608,44 @@ func resolveMCPServerPaths(claudeJSON string) []string {
 		}
 	}
 	return paths
+}
+
+// resolveOAuthCallbackPorts reads ~/.claude/.credentials.json and returns the
+// localhost ports used by MCP OAuth redirect URIs (e.g. http://localhost:52819/callback).
+// Returns deduplicated, valid port numbers only.
+func resolveOAuthCallbackPorts(credentialsJSON string) []int {
+	data, err := os.ReadFile(credentialsJSON)
+	if err != nil {
+		return nil
+	}
+	var creds struct {
+		MCPOAuth map[string]struct {
+			RedirectURI string `json:"redirectUri"`
+		} `json:"mcpOAuth"`
+	}
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil
+	}
+	seen := make(map[int]bool)
+	var ports []int
+	for _, entry := range creds.MCPOAuth {
+		if entry.RedirectURI == "" {
+			continue
+		}
+		u, err := url.Parse(entry.RedirectURI)
+		if err != nil || u.Hostname() != "localhost" {
+			continue
+		}
+		port, err := strconv.Atoi(u.Port())
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		if !seen[port] {
+			seen[port] = true
+			ports = append(ports, port)
+		}
+	}
+	return ports
 }
 
 // findTopLevelDir walks up from dir to find the first directory under parent.
