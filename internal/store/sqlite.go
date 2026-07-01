@@ -86,6 +86,17 @@ func chmodDBFiles(path string, mode os.FileMode) error {
 	return nil
 }
 
+func toNullString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
+}
+
+func toNullInt64(n int64) sql.NullInt64 {
+	return sql.NullInt64{Int64: n, Valid: n != 0}
+}
+
 // orderDir returns the SQL order direction for the filter.
 func orderDir(desc bool) string {
 	if desc {
@@ -197,8 +208,12 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 // RecordAuditEvent inserts an audit event (replaces audit.log).
 func (s *sqliteStore) RecordAuditEvent(ctx context.Context, a AuditRecord) error {
 	ts := a.Ts.UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_events (ts, action, rule_id, user) VALUES (?, ?, ?, ?)`,
-		ts, a.Action, a.RuleID, a.User)
+	err := s.queries.InsertAuditEvent(ctx, InsertAuditEventParams{
+		Ts:     ts,
+		Action: a.Action,
+		RuleID: toNullString(a.RuleID),
+		User:   toNullString(a.User),
+	})
 	if err != nil {
 		return fmt.Errorf("store: insert audit: %w", err)
 	}
@@ -208,16 +223,14 @@ func (s *sqliteStore) RecordAuditEvent(ctx context.Context, a AuditRecord) error
 // DecisionCount returns the total number of decision rows (used by the daemon
 // to decide whether to migrate an existing daemon.log on first run).
 func (s *sqliteStore) DecisionCount(ctx context.Context) (int64, error) {
-	var n int64
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM decisions`).Scan(&n)
-	return n, err
+	return s.queries.GetDecisionCount(ctx)
 }
 
 // ListDecisions returns decisions matching f, oldest-first (chronological).
 func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error) {
 	var (
 		conds []string
-		args  []interface{}
+		args  []any
 	)
 	if f.SessionID != "" {
 		conds = append(conds, "INSTR(session_id, ?) > 0")
@@ -338,45 +351,37 @@ func (s *sqliteStore) ListAuditEvents(ctx context.Context, f AuditFilter) ([]Aud
 
 // ListSessions returns sessions newest-first by start_ts.
 func (s *sqliteStore) ListSessions(ctx context.Context) ([]Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT session_id, start_ts, end_ts, agent, cwd, decision_count FROM sessions ORDER BY start_ts DESC`)
+	rows, err := s.queries.ListAllSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("store: list sessions: %w", err)
 	}
-	defer rows.Close()
-	var out []Session
-	for rows.Next() {
-		var (
-			sid      string
-			startStr string
-			endStr   sql.NullString
-			agent    sql.NullString
-			cwd      sql.NullString
-			count    int64
-		)
-		if err := rows.Scan(&sid, &startStr, &endStr, &agent, &cwd, &count); err != nil {
-			return nil, fmt.Errorf("store: scan session: %w", err)
-		}
-		start, _ := time.Parse(time.RFC3339Nano, startStr)
+	return dbSessionsToSessions(rows), nil
+}
+
+func dbSessionsToSessions(rows []DBSession) []Session {
+	out := make([]Session, 0, len(rows))
+	for _, r := range rows {
+		start, _ := time.Parse(time.RFC3339Nano, r.StartTs)
 		var end time.Time
-		if endStr.Valid {
-			end, _ = time.Parse(time.RFC3339Nano, endStr.String)
+		if r.EndTs.Valid {
+			end, _ = time.Parse(time.RFC3339Nano, r.EndTs.String)
 		}
 		out = append(out, Session{
-			SessionID:     sid,
+			SessionID:     r.SessionID,
 			StartTs:       start,
 			EndTs:         end,
-			Agent:         agent.String,
-			CWD:           cwd.String,
-			DecisionCount: int(count),
+			Agent:         r.Agent.String,
+			CWD:           r.Cwd.String,
+			DecisionCount: int(r.DecisionCount),
 		})
 	}
-	return out, rows.Err()
+	return out
 }
 
 // ListSessionsFiltered returns sessions matching the filter, newest-first.
 func (s *sqliteStore) ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error) {
 	q := `SELECT session_id, start_ts, end_ts, agent, cwd, decision_count FROM sessions`
-	var args []interface{}
+	var args []any
 	if f.Since > 0 {
 		cutoff := time.Now().Add(-f.Since).UTC().Format(time.RFC3339Nano)
 		q += ` WHERE end_ts > ? OR end_ts IS NULL`
@@ -422,21 +427,19 @@ func (s *sqliteStore) ListSessionsFiltered(ctx context.Context, f SessionFilter)
 }
 
 func (s *sqliteStore) CountActionsBySession(ctx context.Context) ([]ActionCount, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT session_id, action, COUNT(*) FROM decisions GROUP BY session_id, action`)
+	rows, err := s.queries.CountActionsBySession(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("store: count actions: %w", err)
 	}
-	defer rows.Close()
-	var out []ActionCount
-	for rows.Next() {
-		var ac ActionCount
-		if err := rows.Scan(&ac.SessionID, &ac.Action, &ac.Count); err != nil {
-			return nil, fmt.Errorf("store: scan action count: %w", err)
-		}
-		out = append(out, ac)
+	out := make([]ActionCount, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ActionCount{
+			SessionID: r.SessionID,
+			Action:    r.Action,
+			Count:     int(r.Count),
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // Cleanup deletes decisions and audit_events older than maxAge, removes
@@ -471,107 +474,76 @@ func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 // source on conflict (server, tool).
 func (s *sqliteStore) UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO discovered_tools (server, tool, source, first_seen, last_seen)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(server, tool) DO UPDATE SET
-		     last_seen = excluded.last_seen,
-		     source = excluded.source`,
-		server, tool, source, now, now)
-	return err
+	return s.queries.UpsertDiscoveredTool(ctx, UpsertDiscoveredToolParams{
+		Server:    server,
+		Tool:      tool,
+		Source:    source,
+		FirstSeen: now,
+		LastSeen:  now,
+	})
 }
 
 // UpsertDiscoveredSkill inserts a discovered skill or updates last_seen,
 // source, and increments use_count on conflict (name).
 func (s *sqliteStore) UpsertDiscoveredSkill(ctx context.Context, name, source string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO discovered_skills (name, source, first_seen, last_seen, use_count)
-		 VALUES (?, ?, ?, ?, 1)
-		 ON CONFLICT(name) DO UPDATE SET
-		     last_seen = excluded.last_seen,
-		     source = excluded.source,
-		     use_count = use_count + 1`,
-		name, source, now, now)
-	return err
+	return s.queries.UpsertDiscoveredSkill(ctx, UpsertDiscoveredSkillParams{
+		Name:      name,
+		Source:    source,
+		FirstSeen: now,
+		LastSeen:  now,
+	})
 }
 
 // ListDiscoveredTools returns all discovered tools. If server is non-empty,
 // only tools for that server are returned.
 func (s *sqliteStore) ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error) {
-	var query string
-	var args []interface{}
+	var dbRows []DBDiscoveredTool
+	var err error
 	if server == "" {
-		query = `SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools ORDER BY server, tool`
+		dbRows, err = s.queries.ListDiscoveredToolsAll(ctx)
 	} else {
-		query = `SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools WHERE server = ? ORDER BY tool`
-		args = []interface{}{server}
+		dbRows, err = s.queries.ListDiscoveredToolsByServer(ctx, server)
 	}
-	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list discovered tools: %w", err)
 	}
-	defer rows.Close()
-	var out []DiscoveredTool
-	for rows.Next() {
-		var (
-			id          int64
-			srv         string
-			tool        string
-			source      string
-			firstSeenStr string
-			lastSeenStr  string
-		)
-		if err := rows.Scan(&id, &srv, &tool, &source, &firstSeenStr, &lastSeenStr); err != nil {
-			return nil, fmt.Errorf("store: scan discovered tool: %w", err)
-		}
-		firstSeen, _ := time.Parse(time.RFC3339Nano, firstSeenStr)
-		lastSeen, _ := time.Parse(time.RFC3339Nano, lastSeenStr)
+	out := make([]DiscoveredTool, 0, len(dbRows))
+	for _, r := range dbRows {
+		firstSeen, _ := time.Parse(time.RFC3339Nano, r.FirstSeen)
+		lastSeen, _ := time.Parse(time.RFC3339Nano, r.LastSeen)
 		out = append(out, DiscoveredTool{
-			ID:        id,
-			Server:    srv,
-			Tool:      tool,
-			Source:    source,
+			ID:        r.ID,
+			Server:    r.Server,
+			Tool:      r.Tool,
+			Source:    r.Source,
 			FirstSeen: firstSeen,
 			LastSeen:  lastSeen,
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListDiscoveredSkills returns all discovered skills ordered by name.
 func (s *sqliteStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, source, first_seen, last_seen, use_count FROM discovered_skills ORDER BY name`)
+	dbRows, err := s.queries.ListDiscoveredSkillsAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("store: list discovered skills: %w", err)
 	}
-	defer rows.Close()
-	var out []DiscoveredSkill
-	for rows.Next() {
-		var (
-			id           int64
-			name         string
-			source       string
-			firstSeenStr string
-			lastSeenStr  string
-			useCount     int
-		)
-		if err := rows.Scan(&id, &name, &source, &firstSeenStr, &lastSeenStr, &useCount); err != nil {
-			return nil, fmt.Errorf("store: scan discovered skill: %w", err)
-		}
-		firstSeen, _ := time.Parse(time.RFC3339Nano, firstSeenStr)
-		lastSeen, _ := time.Parse(time.RFC3339Nano, lastSeenStr)
+	out := make([]DiscoveredSkill, 0, len(dbRows))
+	for _, r := range dbRows {
+		firstSeen, _ := time.Parse(time.RFC3339Nano, r.FirstSeen)
+		lastSeen, _ := time.Parse(time.RFC3339Nano, r.LastSeen)
 		out = append(out, DiscoveredSkill{
-			ID:        id,
-			Name:      name,
-			Source:    source,
+			ID:        r.ID,
+			Name:      r.Name,
+			Source:    r.Source,
 			FirstSeen: firstSeen,
 			LastSeen:  lastSeen,
-			UseCount:  useCount,
+			UseCount:  int(r.UseCount),
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListDistinctCWDs returns unique non-empty CWD values from the sessions table.
