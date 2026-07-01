@@ -84,6 +84,10 @@ Rules:
   `RedactToolInput`). Caller-side redaction is defense-in-depth.
 - Decisions are NOT duplicated into `audit_log` — they stay in `decisions`.
 - New event types are added to `internal/audit/audit.go` as constants.
+- **Any new `slog.Info`/`slog.Warn` that represents a state change or
+  user-visible action must also `Emit()` an audit event.** If you add a
+  new significant event, add both — or better, use a domain service method
+  that handles both internally.
 
 ## Platform-specific code must use build tags
 
