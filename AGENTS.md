@@ -39,6 +39,20 @@ New libraries require an ADR justifying the addition. After adding or removing
 any dependency, regenerate the attribution file with `make licenses` (CI fails
 the release if `THIRD_PARTY_LICENSES` is stale).
 
+## Database access must be type-safe
+
+All SQL queries go through [sqlc](https://sqlc.dev/). The config is at
+`sqlc.yaml`; schema lives in `internal/store/schema.sql`, queries in
+`internal/store/queries.sql`.
+
+- **New queries:** add the SQL to `queries.sql`, then run `sqlc generate` to
+  produce typed Go code in `internal/store/`.
+- **Dynamic queries** that sqlc can't express (e.g. variable column lists,
+  conditional `WHERE` clauses) stay manual but must scan into typed structs —
+  never use `interface{}` or `any` for database rows.
+- **Schema changes:** update `schema.sql` first, then `queries.sql`, then
+  `sqlc generate`.
+
 ## Platform-specific code must use build tags
 
 Define the interface or shared logic in a plain `.go` file. Put each OS
