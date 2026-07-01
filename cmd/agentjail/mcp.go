@@ -26,6 +26,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
+	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -346,8 +347,12 @@ func runMCPScan(args []string) int {
 		return 1
 	}
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+	st, _ := store.OpenReadOnly(dbPath)
+	if st != nil {
+		defer st.Close()
+	}
 
-	result := mcpclient.FullScan(home, dbPath)
+	result := mcpclient.FullScan(home, st)
 
 	if jsonMode {
 		enc := json.NewEncoder(os.Stdout)
@@ -529,7 +534,11 @@ func runMCPWhere(args []string) int {
 		return 1
 	}
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
-	projectDirs := mcpclient.KnownProjectDirs(dbPath)
+	st, _ := store.OpenReadOnly(dbPath)
+	if st != nil {
+		defer st.Close()
+	}
+	projectDirs := mcpclient.KnownProjectDirs(st)
 	idx := mcpclient.BuildReverseIndex(home, projectDirs)
 
 	if jsonMode {
@@ -664,8 +673,12 @@ func runMCPToolsOutput(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+	st, _ := store.OpenReadOnly(dbPath)
+	if st != nil {
+		defer st.Close()
+	}
 
-	auditTools := mcpclient.AuditToolsFromDB(dbPath)
+	auditTools := mcpclient.AuditToolsFromStore(st)
 
 	serverTools := make(map[string]map[string]bool)
 	addTool := func(server, tool string) {

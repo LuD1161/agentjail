@@ -18,7 +18,7 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,8 +29,8 @@ import (
 	"strings"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/ui"
-	_ "modernc.org/sqlite"
 )
 
 // confirmSkillMutation gates `skill allow/block/ask/clear` behind a human at
@@ -142,7 +142,11 @@ func runSkillList(args []string) int {
 	}
 
 	dbPath := skillAuditDBPath(path)
-	skills := discoverSkillsFromDB(dbPath)
+	st, _ := store.OpenReadOnly(dbPath)
+	if st != nil {
+		defer st.Close()
+	}
+	skills := discoverSkillsFromStore(st)
 
 	if *jsonMode {
 		return runSkillListJSON(os.Stdout, os.Stderr, skills, cfg)
@@ -343,49 +347,28 @@ func skillStatus(name string, cfg *config.PolicyConfig) string {
 	return "inherit"
 }
 
-// discoverSkillsFromDB opens the audit DB read-only, queries distinct skill
-// names from decisions where tool_name = 'Skill', parses the skill field from
+// discoverSkillsFromStore queries the store for distinct skill names from
+// decisions where tool_name = 'Skill', parses the skill field from
 // tool_input_redacted JSON, and returns a sorted, deduplicated list.
-// Returns an empty slice (not an error) if the DB does not exist.
-func discoverSkillsFromDB(dbPath string) []string {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+func discoverSkillsFromStore(s store.ReadOnlyStore) []string {
+	if s == nil {
 		return []string{}
 	}
-
-	// Open the DB read-only using a file URI with mode=ro.
-	safeEscaped := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(dbPath)
-	dsn := "file:" + safeEscaped + "?mode=ro"
-	db, err := sql.Open("sqlite", dsn)
+	ctx := context.Background()
+	inputs, err := s.ListDistinctSkillInputs(ctx)
 	if err != nil {
 		return []string{}
 	}
-	defer db.Close()
-
-	rows, err := db.Query(`SELECT DISTINCT tool_input_redacted FROM decisions WHERE tool_name = 'Skill'`)
-	if err != nil {
-		return []string{}
-	}
-	defer rows.Close()
 
 	seen := make(map[string]struct{})
-	for rows.Next() {
-		var raw sql.NullString
-		if err := rows.Scan(&raw); err != nil || !raw.Valid || raw.String == "" {
+	for _, raw := range inputs {
+		var obj map[string]string
+		if err := json.Unmarshal([]byte(raw), &obj); err != nil {
 			continue
 		}
-		var obj map[string]interface{}
-		if err := json.Unmarshal([]byte(raw.String), &obj); err != nil {
-			continue
+		if name := obj["skill"]; name != "" {
+			seen[name] = struct{}{}
 		}
-		skillVal, ok := obj["skill"]
-		if !ok {
-			continue
-		}
-		skillStr, ok := skillVal.(string)
-		if !ok || skillStr == "" {
-			continue
-		}
-		seen[skillStr] = struct{}{}
 	}
 
 	out := make([]string, 0, len(seen))

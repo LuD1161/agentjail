@@ -138,6 +138,9 @@ type ReadOnlyStore interface {
 	CountActionsBySession(ctx context.Context) ([]ActionCount, error)
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
+	ListDistinctCWDs(ctx context.Context) ([]string, error)
+	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
+	ListDistinctSkillInputs(ctx context.Context) ([]string, error)
 	Close() error
 }
 

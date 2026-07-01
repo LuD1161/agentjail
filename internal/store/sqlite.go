@@ -31,8 +31,9 @@ func clampLimit(n int) int {
 
 // sqliteStore is the SQLite-backed EventStore.
 type sqliteStore struct {
-	db   *sql.DB
-	path string
+	db      *sql.DB
+	queries *Queries
+	path    string
 }
 
 // Open opens (or creates) the SQLite store at path. The directory is created
@@ -58,7 +59,7 @@ func Open(path string) (EventStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
-	s := &sqliteStore{db: db, path: path}
+	s := &sqliteStore{db: db, queries: New(db), path: path}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -573,6 +574,43 @@ func (s *sqliteStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSki
 	return out, rows.Err()
 }
 
+// ListDistinctCWDs returns unique non-empty CWD values from the sessions table.
+func (s *sqliteStore) ListDistinctCWDs(ctx context.Context) ([]string, error) {
+	rows, err := s.queries.ListDistinctCWDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: list distinct cwds: %w", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.Valid {
+			out = append(out, r.String)
+		}
+	}
+	return out, nil
+}
+
+// ListDistinctMCPToolNames returns distinct MCP tool names (prefixed "mcp__")
+// from the decisions table.
+func (s *sqliteStore) ListDistinctMCPToolNames(ctx context.Context) ([]string, error) {
+	return s.queries.ListDistinctMCPToolNames(ctx)
+}
+
+// ListDistinctSkillInputs returns distinct non-empty tool_input_redacted values
+// from decisions where tool_name = 'Skill'.
+func (s *sqliteStore) ListDistinctSkillInputs(ctx context.Context) ([]string, error) {
+	rows, err := s.queries.ListDistinctSkillInputs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: list distinct skill inputs: %w", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.Valid {
+			out = append(out, r.String)
+		}
+	}
+	return out, nil
+}
+
 // Close closes the database handle.
 func (s *sqliteStore) Close() error {
 	if s.db == nil {
@@ -610,6 +648,15 @@ func (r *sqliteROStore) ListDiscoveredTools(ctx context.Context, server string) 
 func (r *sqliteROStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error) {
 	return r.inner.ListDiscoveredSkills(ctx)
 }
+func (r *sqliteROStore) ListDistinctCWDs(ctx context.Context) ([]string, error) {
+	return r.inner.ListDistinctCWDs(ctx)
+}
+func (r *sqliteROStore) ListDistinctMCPToolNames(ctx context.Context) ([]string, error) {
+	return r.inner.ListDistinctMCPToolNames(ctx)
+}
+func (r *sqliteROStore) ListDistinctSkillInputs(ctx context.Context) ([]string, error) {
+	return r.inner.ListDistinctSkillInputs(ctx)
+}
 func (r *sqliteROStore) Close() error { return r.inner.Close() }
 
 // OpenReadOnly opens the SQLite store in read-only mode. The DB must already
@@ -633,5 +680,5 @@ func OpenReadOnly(path string) (ReadOnlyStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: read-only ping: %w", err)
 	}
-	return &sqliteROStore{inner: &sqliteStore{db: db, path: path}}, nil
+	return &sqliteROStore{inner: &sqliteStore{db: db, queries: New(db), path: path}}, nil
 }

@@ -24,7 +24,6 @@ package ui
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -635,46 +634,13 @@ func (s *Server) handlePolicyMCPTools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"servers": result})
 }
 
-// mcpToolsFromAudit queries the decisions table for distinct MCP tool names.
-func (s *Server) mcpToolsFromAudit(ctx context.Context) map[string][]string {
-	if s.dbPath == "" {
-		return nil
-	}
-	db, err := sql.Open("sqlite", fmt.Sprintf(
-		"file:%s?mode=ro&_pragma=busy_timeout(3000)",
-		strings.NewReplacer("?", "%3f", "#", "%23").Replace(s.dbPath),
-	))
+// mcpToolsFromAudit queries the store for distinct MCP tool names.
+func (s *Server) mcpToolsFromAudit(_ context.Context) map[string][]string {
+	st, err := s.openSQLite()
 	if err != nil {
 		return nil
 	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT tool_name FROM decisions WHERE tool_name LIKE 'mcp__%' ORDER BY tool_name`)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
-	result := make(map[string][]string)
-	for rows.Next() {
-		var toolName string
-		if err := rows.Scan(&toolName); err != nil {
-			continue
-		}
-		rest := strings.TrimPrefix(toolName, "mcp__")
-		idx := strings.Index(rest, "__")
-		var server, tool string
-		if idx > 0 {
-			server = rest[:idx]
-			tool = rest[idx+2:]
-		} else {
-			server = rest
-			tool = rest
-		}
-		result[server] = append(result[server], tool)
-	}
-	return result
+	return mcpclient.AuditToolsFromStore(st)
 }
 
 // handlePolicyMCPScan performs a full MCP scan and returns the JSON result.
@@ -692,7 +658,8 @@ func (s *Server) handlePolicyMCPScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := mcpclient.FullScan(home, s.dbPath)
+	st, _ := s.openSQLite()
+	result := mcpclient.FullScan(home, st)
 	writeJSON(w, result)
 }
 
@@ -716,7 +683,8 @@ func (s *Server) handlePolicyMCPWhere(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectDirs := mcpclient.KnownProjectDirs(s.dbPath)
+	st2, _ := s.openSQLite()
+	projectDirs := mcpclient.KnownProjectDirs(st2)
 	idx := mcpclient.BuildReverseIndex(home, projectDirs)
 
 	entries := idx[server]
@@ -742,7 +710,8 @@ func (s *Server) handlePolicyMCPProjects(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	projectDirs := mcpclient.KnownProjectDirs(s.dbPath)
+	st3, _ := s.openSQLite()
+	projectDirs := mcpclient.KnownProjectDirs(st3)
 	idx := mcpclient.BuildReverseIndex(home, projectDirs)
 	writeJSON(w, idx)
 }

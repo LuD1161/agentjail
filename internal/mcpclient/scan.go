@@ -9,9 +9,7 @@ package mcpclient
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite" // register sqlite driver for audit queries
+	localstore "github.com/LuD1161/agentjail/internal/store"
 )
 
 // ScanResult is the full inventory of MCP servers found on the machine.
@@ -248,45 +246,22 @@ func ScanDocker() []DockerEntry {
 	return entries
 }
 
-// AuditToolsFromDB is the exported version of auditToolsFromDB for use by
-// the CLI `mcp tools` command. Returns nil if the DB is unavailable.
-func AuditToolsFromDB(dbPath string) map[string][]string {
-	return auditToolsFromDB(dbPath)
-}
-
-// auditToolsFromDB queries the decisions table for distinct MCP tool names
-// grouped by server. Returns nil if the database is unavailable.
-func auditToolsFromDB(dbPath string) map[string][]string {
-	if dbPath == "" {
+// AuditToolsFromStore queries the store for distinct MCP tool names grouped
+// by server. Returns nil if the store is unavailable.
+func AuditToolsFromStore(s localstore.ReadOnlyStore) map[string][]string {
+	if s == nil {
 		return nil
 	}
-
-	dsn := fmt.Sprintf(
-		"file:%s?mode=ro&_pragma=busy_timeout(3000)",
-		strings.NewReplacer("?", "%3f", "#", "%23").Replace(dbPath),
-	)
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil
-	}
-	defer db.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT tool_name FROM decisions WHERE tool_name LIKE 'mcp__%' ORDER BY tool_name`)
+	toolNames, err := s.ListDistinctMCPToolNames(ctx)
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
 
 	result := make(map[string][]string)
-	for rows.Next() {
-		var toolName string
-		if err := rows.Scan(&toolName); err != nil {
-			continue
-		}
+	for _, toolName := range toolNames {
 		rest := strings.TrimPrefix(toolName, "mcp__")
 		idx := strings.Index(rest, "__")
 		var server, tool string
@@ -412,7 +387,7 @@ func ScanSessionLogs(home string) map[string][]string {
 // FullScan orchestrates all scanners concurrently and cross-references results.
 // home is the user's home directory; dbPath is the path to the agentjail SQLite
 // database (empty string to skip audit history).
-func FullScan(home string, dbPath string) *ScanResult {
+func FullScan(home string, s localstore.ReadOnlyStore) *ScanResult {
 	var (
 		configured       []MCPServerEntry
 		npmPkgs          []PackageEntry
@@ -447,7 +422,7 @@ func FullScan(home string, dbPath string) *ScanResult {
 
 	go func() {
 		defer wg.Done()
-		auditTools = auditToolsFromDB(dbPath)
+		auditTools = AuditToolsFromStore(s)
 	}()
 
 	go func() {
