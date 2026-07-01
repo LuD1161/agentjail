@@ -1,7 +1,8 @@
-package main
+package credentials
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,9 +10,12 @@ import (
 	"time"
 )
 
-// grantRedis creates a short-lived Redis ACL user with scoped privileges.
+// RedisBackend issues scoped Redis credentials by creating ACL users.
+type RedisBackend struct{}
+
+// Grant creates a short-lived Redis ACL user with scoped privileges.
 //
-// The secret config must contain:
+// The config must contain:
 //   - addr: Redis server address (host:port)
 //   - password: admin password for ACL SETUSER
 //   - keys: allowed key glob (e.g. "prod:*")
@@ -20,10 +24,10 @@ import (
 //   - read-only: +@read -@write
 //   - read-write: +@read +@write -@dangerous
 //
-// On revocation, the ACL user is deleted (ACL DELUSER — immediate revocation).
+// On revocation, the ACL user is deleted (ACL DELUSER -- immediate revocation).
 // Redis ACL users don't have a native TTL, so revocation is handled by the
 // grant manager on session end or TTL expiry.
-func grantRedis(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error) {
+func (b *RedisBackend) Grant(_ context.Context, cfg *Config, scope string, ttl time.Duration) (*Grant, error) {
 	if cfg.Addr == "" {
 		return nil, fmt.Errorf("redis secret missing addr")
 	}
@@ -48,8 +52,10 @@ func grantRedis(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, err
 
 	expiresAt := time.Now().Add(ttl)
 
+	addr := cfg.Addr         // capture for revokeFn closure
+	adminPass := cfg.Password // capture for revokeFn closure
 	grant := &Grant{
-		ID:         newGrantID(),
+		ID:         NewGrantID(),
 		SecretName: cfg.Backend,
 		Backend:    "redis",
 		Scope:      scope,
@@ -57,14 +63,14 @@ func grantRedis(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, err
 		EnvVars: map[string]string{
 			"REDIS_PASSWORD": password,
 		},
-		revokeFn: func() error {
-			delCmd := []string{"ACL", "DELUSER", username}
-			if _, err := redisExec(cfg.Addr, cfg.Password, delCmd); err != nil {
-				return fmt.Errorf("redis acl deluser: %w", err)
-			}
-			return nil
-		},
 	}
+	grant.SetRevokeFn(func() error {
+		delCmd := []string{"ACL", "DELUSER", username}
+		if _, err := redisExec(addr, adminPass, delCmd); err != nil {
+			return fmt.Errorf("redis acl deluser: %w", err)
+		}
+		return nil
+	})
 
 	slog.Info("redis grant issued",
 		"grant_id", grant.ID,
@@ -74,6 +80,14 @@ func grantRedis(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, err
 	)
 
 	return grant, nil
+}
+
+// Revoke deletes the Redis ACL user that was created for this grant.
+func (b *RedisBackend) Revoke(_ context.Context, grant *Grant) error {
+	if grant.revokeFn != nil {
+		return grant.revokeFn()
+	}
+	return nil
 }
 
 // buildRedisACLCommand builds the ACL SETUSER command parts for the given scope.

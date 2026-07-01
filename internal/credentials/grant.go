@@ -1,4 +1,4 @@
-package main
+package credentials
 
 import (
 	"crypto/rand"
@@ -22,6 +22,13 @@ type Grant struct {
 	revokeFn func() error `json:"-"`
 }
 
+// SetRevokeFn sets the backend-specific revocation function on a grant.
+// This is intentionally not exported via the Grant struct to avoid
+// exposing revocation internals through the public API.
+func (g *Grant) SetRevokeFn(fn func() error) {
+	g.revokeFn = fn
+}
+
 // GrantManager tracks active grants and handles revocation.
 // It is safe for concurrent use.
 type GrantManager struct {
@@ -34,8 +41,8 @@ func NewGrantManager() *GrantManager {
 	return &GrantManager{grants: make(map[string]*Grant)}
 }
 
-// newGrantID generates a random grant ID.
-func newGrantID() string {
+// NewGrantID generates a random grant ID.
+func NewGrantID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return "grant-" + hex.EncodeToString(b)
@@ -44,7 +51,7 @@ func newGrantID() string {
 // Register adds a grant to the manager and returns its ID.
 func (gm *GrantManager) Register(g *Grant) string {
 	if g.ID == "" {
-		g.ID = newGrantID()
+		g.ID = NewGrantID()
 	}
 	gm.mu.Lock()
 	gm.grants[g.ID] = g

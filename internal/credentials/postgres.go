@@ -1,6 +1,7 @@
-package main
+package credentials
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -10,12 +11,15 @@ import (
 	"time"
 )
 
-// grantPostgres creates a short-lived PG role with scoped privileges.
+// PostgresBackend issues scoped PostgreSQL credentials by creating short-lived roles.
+type PostgresBackend struct{}
+
+// Grant creates a short-lived PG role with scoped privileges.
 //
-// The secret config must contain a DSN (e.g.
+// The config must contain a DSN (e.g.
 // "postgresql://admin:pass@host:5432/db").  The backend shells out to
 // `psql` to run SQL commands, avoiding the need for a PG driver dependency
-// (per ADR 0023 — no new deps for the secret server).
+// (per ADR 0023 -- no new deps for the secret server).
 //
 // The scope determines the privileges:
 //   - read-only: GRANT USAGE on schema, GRANT SELECT on all tables
@@ -23,7 +27,7 @@ import (
 //
 // The role is created with VALID UNTIL set to now + TTL.  On revocation,
 // the role is DROPped (immediate revocation, unlike STS).
-func grantPostgres(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error) {
+func (b *PostgresBackend) Grant(_ context.Context, cfg *Config, scope string, ttl time.Duration) (*Grant, error) {
 	if cfg.DSN == "" {
 		return nil, fmt.Errorf("pg secret missing dsn")
 	}
@@ -46,8 +50,9 @@ func grantPostgres(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, 
 	// Parse the DSN to extract host, port, database for the env vars.
 	host, port, database := parsePGDSN(cfg.DSN)
 
+	dsn := cfg.DSN // capture for revokeFn closure
 	grant := &Grant{
-		ID:         newGrantID(),
+		ID:         NewGrantID(),
 		SecretName: cfg.Backend,
 		Backend:    "pg",
 		Scope:      scope,
@@ -59,14 +64,14 @@ func grantPostgres(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, 
 			"PGPORT":     port,
 			"PGDATABASE": database,
 		},
-		revokeFn: func() error {
-			dropSQL := fmt.Sprintf(`DROP ROLE IF EXISTS %s;`, quoteIdent(roleName))
-			if err := psqlExec(cfg.DSN, dropSQL); err != nil {
-				return fmt.Errorf("drop pg role: %w", err)
-			}
-			return nil
-		},
 	}
+	grant.SetRevokeFn(func() error {
+		dropSQL := fmt.Sprintf(`DROP ROLE IF EXISTS %s;`, quoteIdent(roleName))
+		if err := psqlExec(dsn, dropSQL); err != nil {
+			return fmt.Errorf("drop pg role: %w", err)
+		}
+		return nil
+	})
 
 	slog.Info("pg grant issued",
 		"grant_id", grant.ID,
@@ -76,6 +81,14 @@ func grantPostgres(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, 
 	)
 
 	return grant, nil
+}
+
+// Revoke drops the PostgreSQL role that was created for this grant.
+func (b *PostgresBackend) Revoke(_ context.Context, grant *Grant) error {
+	if grant.revokeFn != nil {
+		return grant.revokeFn()
+	}
+	return nil
 }
 
 // buildPGCreateRoleSQL builds the SQL to create a scoped PG role.

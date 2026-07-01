@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/credentials"
 	auditstore "github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -84,7 +85,7 @@ func runServer(args []string) {
 		os.Exit(1)
 	}
 
-	gm := NewGrantManager()
+	gm := credentials.NewGrantManager()
 
 	// Open audit emitter (best-effort; fall back to NopEmitter).
 	var emitter audit.Emitter = audit.NopEmitter{}
@@ -137,7 +138,7 @@ func runServer(args []string) {
 }
 
 // handleConn serves one client connection.
-func handleConn(conn net.Conn, store *Store, gm *GrantManager, emitter audit.Emitter) {
+func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -157,7 +158,7 @@ func handleConn(conn net.Conn, store *Store, gm *GrantManager, emitter audit.Emi
 }
 
 // handleRPC dispatches an RPC request to the appropriate handler.
-func handleRPC(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.Emitter) RPCResponse {
+func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) RPCResponse {
 	ctx := context.Background()
 	switch req.Action {
 	case "set":
@@ -200,8 +201,15 @@ func handleRPC(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.Em
 	}
 }
 
+// backends maps backend names to their implementations.
+var backends = map[string]credentials.Backend{
+	"aws":   &credentials.AWSBackend{},
+	"pg":    &credentials.PostgresBackend{},
+	"redis": &credentials.RedisBackend{},
+}
+
 // handleGrant issues scoped credentials for a secret.
-func handleGrant(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.Emitter) RPCResponse {
+func handleGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) RPCResponse {
 	cfg, err := store.loadConfig(req.Name)
 	if err != nil {
 		return RPCResponse{OK: false, Error: fmt.Sprintf("load secret: %v", err)}
@@ -217,28 +225,36 @@ func handleGrant(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.
 		scope = "read-only"
 	}
 
-	var grant *Grant
-	switch cfg.Backend {
-	case "aws":
-		grant, err = grantAWS(cfg, scope, ttl)
-	case "pg":
-		grant, err = grantPostgres(cfg, scope, ttl)
-	case "redis":
-		grant, err = grantRedis(cfg, scope, ttl)
-	case "raw":
+	ctx := context.Background()
+
+	var grant *credentials.Grant
+	if backend, ok := backends[cfg.Backend]; ok {
+		credCfg := &credentials.Config{
+			Backend:    cfg.Backend,
+			RoleARN:    cfg.RoleARN,
+			AccessKey:  cfg.AccessKey,
+			SecretKey:  cfg.SecretKey,
+			SessionTTL: cfg.SessionTTL,
+			DSN:        cfg.DSN,
+			Addr:       cfg.Addr,
+			Password:   cfg.Password,
+			Keys:       cfg.Keys,
+		}
+		grant, err = backend.Grant(ctx, credCfg, scope, ttl)
+	} else if cfg.Backend == "raw" {
 		value, gerr := store.Get(req.Name)
 		if gerr != nil {
 			return RPCResponse{OK: false, Error: gerr.Error()}
 		}
-		grant = &Grant{
-			ID:         newGrantID(),
+		grant = &credentials.Grant{
+			ID:         credentials.NewGrantID(),
 			SecretName: req.Name,
 			Backend:    "raw",
 			Scope:      scope,
 			ExpiresAt:  time.Now().Add(ttl),
 			EnvVars:    map[string]string{req.Name: value},
 		}
-	default:
+	} else {
 		return RPCResponse{OK: false, Error: "unknown backend: " + cfg.Backend}
 	}
 
@@ -249,7 +265,7 @@ func handleGrant(req *RPCRequest, store *Store, gm *GrantManager, emitter audit.
 	grant.SecretName = req.Name
 	grantID := gm.Register(grant)
 
-	_ = emitter.Emit(context.Background(), audit.Event{
+	_ = emitter.Emit(ctx, audit.Event{
 		EventType: audit.CredentialIssued,
 		Entity:    req.Name,
 		Detail:    map[string]string{"type": grant.Backend, "grant_id": grantID},

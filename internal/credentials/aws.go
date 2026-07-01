@@ -1,4 +1,4 @@
-package main
+package credentials
 
 import (
 	"context"
@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 )
+
+// AWSBackend issues scoped AWS credentials via STS AssumeRole.
+type AWSBackend struct{}
 
 // AssumeRoleResponse is the XML response from STS AssumeRole.
 type AssumeRoleResponse struct {
@@ -27,9 +30,9 @@ type AssumeRoleResponse struct {
 	} `xml:"ResponseMetadata"`
 }
 
-// grantAWS issues scoped AWS credentials via STS AssumeRole.
+// Grant issues scoped AWS credentials via STS AssumeRole.
 //
-// The secret config must contain:
+// The config must contain:
 //   - role_arn: the IAM role to assume
 //   - access_key / secret_key: base credentials for the AssumeRole call
 //
@@ -39,7 +42,7 @@ type AssumeRoleResponse struct {
 //
 // The TTL is the STS session duration (minimum 900 seconds = 15 minutes).
 // STS sessions cannot be revoked early — revocation relies on the short TTL.
-func grantAWS(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error) {
+func (b *AWSBackend) Grant(ctx context.Context, cfg *Config, scope string, ttl time.Duration) (*Grant, error) {
 	if cfg.RoleARN == "" {
 		return nil, fmt.Errorf("aws secret missing role_arn")
 	}
@@ -63,7 +66,7 @@ func grantAWS(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error
 	sessionName := fmt.Sprintf("agentjail-%d", time.Now().Unix())
 	bodyStr, bodyBytes := buildAssumeRoleBody(cfg.RoleARN, sessionName, durationSeconds, policy)
 
-	req, err := http.NewRequestWithContext(context.Background(),
+	req, err := http.NewRequestWithContext(ctx,
 		"POST", "https://sts.amazonaws.com/", strings.NewReader(bodyStr))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -104,7 +107,7 @@ func grantAWS(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error
 	}
 
 	grant := &Grant{
-		ID:         newGrantID(),
+		ID:         NewGrantID(),
 		SecretName: cfg.Backend,
 		Backend:    "aws",
 		Scope:      scope,
@@ -114,7 +117,7 @@ func grantAWS(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error
 			"AWS_SECRET_ACCESS_KEY": creds.SecretAccessKey,
 			"AWS_SESSION_TOKEN":     creds.SessionToken,
 		},
-		revokeFn: nil,
+		// STS sessions cannot be revoked early; revokeFn stays nil.
 	}
 
 	slog.Info("aws grant issued",
@@ -125,4 +128,9 @@ func grantAWS(cfg *secretConfig, scope string, ttl time.Duration) (*Grant, error
 	)
 
 	return grant, nil
+}
+
+// Revoke is a no-op for AWS STS — sessions cannot be revoked early.
+func (b *AWSBackend) Revoke(_ context.Context, _ *Grant) error {
+	return nil
 }

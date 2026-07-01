@@ -1,4 +1,4 @@
-package main
+package credentials
 
 import (
 	"crypto/hmac"
