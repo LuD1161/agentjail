@@ -1,0 +1,101 @@
+package main
+
+import (
+	"regexp"
+	"testing"
+)
+
+// ---- Shared, OS-agnostic contract sanity (ADR 0039) ----
+
+// TestSensitiveFilePatterns_CompileAndCoverBoth verifies every contract
+// pattern compiles as a Go regexp (a reasonable proxy for sbpl-compatibility
+// -- sbpl's engine is stricter, but a pattern that doesn't even compile as a
+// standard regex is certainly wrong) and that at least one Write-only and
+// one Read+Write entry exist (regression guard: FIX4 moved this list out of
+// shield_darwin.go's sensitiveWriteRegexes/sensitiveReadRegexes; losing an
+// entry during the move would silently narrow the deny surface).
+func TestSensitiveFilePatterns_CompileAndCoverBoth(t *testing.T) {
+	patterns := SensitiveFilePatterns()
+	if len(patterns) == 0 {
+		t.Fatal("SensitiveFilePatterns() returned no entries")
+	}
+	var sawWriteOnly, sawReadWrite bool
+	for _, p := range patterns {
+		if p.Regex == "" {
+			t.Errorf("PatternDeny with empty Regex: %+v", p)
+		}
+		if !p.Read && !p.Write {
+			t.Errorf("PatternDeny %q applies to neither read nor write", p.Regex)
+		}
+		if _, err := regexp.Compile(p.Regex); err != nil {
+			t.Errorf("pattern %q does not compile as a regex: %v", p.Regex, err)
+		}
+		if p.Write && !p.Read {
+			sawWriteOnly = true
+		}
+		if p.Write && p.Read {
+			sawReadWrite = true
+		}
+	}
+	if !sawWriteOnly {
+		t.Error("expected at least one write-only pattern (e.g. .env)")
+	}
+	if !sawReadWrite {
+		t.Error("expected at least one read+write pattern (e.g. id_rsa)")
+	}
+}
+
+// TestNoNetproxyFallbackPorts_IsHTTPAndHTTPS pins the contract's fallback
+// port set to exactly {80, 443} -- both backends' --no-netproxy modes key
+// off this value; a silent change here would silently change enforcement on
+// both platforms without either _os.go file being touched.
+func TestNoNetproxyFallbackPorts_IsHTTPAndHTTPS(t *testing.T) {
+	got := NoNetproxyFallbackPorts()
+	want := map[int]bool{80: true, 443: true}
+	if len(got) != len(want) {
+		t.Fatalf("NoNetproxyFallbackPorts() = %v, want exactly %v", got, want)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Errorf("unexpected fallback port %d", p)
+		}
+	}
+}
+
+// TestPerFileGrants_KnownHostsIsReadOnlyPerFile verifies the FIX3 contract
+// shape: known_hosts must be a PerFile, ReadOnly grant (never ReadWrite --
+// see shield_contract.go's doc comment on why write is deliberately
+// withheld).
+func TestPerFileGrants_KnownHostsIsReadOnlyPerFile(t *testing.T) {
+	grants := PerFileGrants()
+	var found bool
+	for _, g := range grants {
+		if g.Path != ".ssh/known_hosts" {
+			continue
+		}
+		found = true
+		if !g.PerFile {
+			t.Errorf("known_hosts grant must have PerFile=true, got %+v", g)
+		}
+		if g.Mode != ReadOnly {
+			t.Errorf("known_hosts grant must have Mode=ReadOnly, got %+v", g)
+		}
+	}
+	if !found {
+		t.Fatal("PerFileGrants() missing .ssh/known_hosts")
+	}
+	if got := KnownHostsGrant(); got.Path != ".ssh/known_hosts" || got.Mode != ReadOnly || !got.PerFile {
+		t.Errorf("KnownHostsGrant() = %+v, want ReadOnly PerFile .ssh/known_hosts", got)
+	}
+}
+
+// TestAccessMode_String is a light sanity check on the AccessMode Stringer
+// used in test failure messages and any future --profile-print output.
+func TestAccessMode_String(t *testing.T) {
+	if ReadOnly.String() != "read-only" {
+		t.Errorf("ReadOnly.String() = %q, want %q", ReadOnly.String(), "read-only")
+	}
+	if ReadWrite.String() != "read-write" {
+		t.Errorf("ReadWrite.String() = %q, want %q", ReadWrite.String(), "read-write")
+	}
+}

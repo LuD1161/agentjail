@@ -19,6 +19,27 @@ import (
 
 const sandboxExecPath = "/usr/bin/sandbox-exec"
 
+// buildBaseEnv constructs the sandboxed agent's base environment: clean
+// allowlist (sandbox.BuildCleanEnv) then defence-in-depth strip
+// (sandbox.StripEnv), in that order.
+//
+// FIX1 (ADR 0039, security): prior to this fix, both runShield and execAgent
+// called sandbox.StripEnv directly on hostEnv. StripEnv only removes names
+// matching secrets.env_blocklist (a denylist) -- every OTHER host env var,
+// including any ad-hoc, non-blocklisted secret a user had exported in their
+// shell (e.g. `export MY_SECRET=...`), passed straight through to the
+// sandboxed agent. BuildCleanEnv is the primary, allowlist-based defence
+// (only known-safe variable names survive); StripEnv now runs as the
+// second, defence-in-depth layer -- matching Linux's ordering in
+// shield_linux.go. hostEnv is a parameter (not read internally via
+// os.Environ()) so tests can inject a synthetic host environment and assert
+// an arbitrary secret does not survive.
+func buildBaseEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
+	env := sandbox.BuildCleanEnv(hostEnv, cfg)
+	env = sandbox.StripEnv(env, cfg)
+	return env
+}
+
 // sensitiveWritePaths returns the baseline set of paths that should be denied
 // for writes.  This mirrors the is_sensitive_path predicates in
 // agentpolicy/policies/file_policy.rego — both lists must be kept in sync.
@@ -53,29 +74,22 @@ func sensitiveWritePaths(home string) []string {
 // sensitiveWriteRegexes returns sbpl regex patterns for file extensions /
 // basename patterns that should also be denied for writes.
 //
+// FIX4 (ADR 0039): sourced from the shared contract's SensitiveFilePatterns()
+// rather than a literal list duplicated in this file -- Linux names the
+// filename-regex capability Unsupported (Landlock has no basename
+// primitive) instead of faking it.
+//
 // Note: Apple sandbox-exec uses a non-standard regex engine that does not
 // tolerate a literal '-' at the end of a bracket expression (e.g. [a-z0-9_-]).
 // Use POSIX character classes ([[:alnum:]]) or omit the hyphen where possible.
 func sensitiveWriteRegexes() []string {
-	return []string{
-		// .env, .env.local, .env.production, etc.
-		// Intentionally omits hyphen in char class to stay sandbox-exec-compatible.
-		`\.env(\.[a-zA-Z0-9_]+)?$`,
-		`(^|/)\.envrc$`,
-		`\.(pem|p12|pfx|jks|keystore|key)$`,
-		`(^|/)id_(rsa|ed25519|ecdsa|dsa)$`,
-		`(^|/)credentials$`,
-		`(^|/)secrets$`,
-		`(^|/)\.netrc$`,
-		// Anchored home-file patterns: exact-match only ($ prevents catching .npmrc.bak).
-		// These match only the home-anchored forms; project-local .npmrc is NOT caught
-		// because the subpath entries above only block under ~/.docker, ~/.kube, ~/.cargo.
-		`/Users/[^/]+/\.npmrc$`,
-		`/Users/[^/]+/\.pypirc$`,
-		`/Users/[^/]+/\.git-credentials$`,
-		// Protect agentjail daemon/shield plists from being overwritten
-		`/Users/[^/]+/Library/LaunchAgents/com\.agentjail\.`,
+	var out []string
+	for _, p := range SensitiveFilePatterns() {
+		if p.Write {
+			out = append(out, p.Regex)
+		}
 	}
+	return out
 }
 
 // sensitiveReadPaths returns the subset of sensitive paths that should also
@@ -97,16 +111,40 @@ func sensitiveReadPaths(home string) []string {
 }
 
 // sensitiveReadRegexes returns sbpl regex patterns denied for reads.
+//
+// FIX4 (ADR 0039): sourced from the shared contract's SensitiveFilePatterns()
+// -- see sensitiveWriteRegexes above.
 func sensitiveReadRegexes() []string {
-	return []string{
-		`(^|/)id_(rsa|ed25519|ecdsa|dsa)$`,
-		`\.(pem|p12|pfx|jks|keystore|key)$`,
-		`(^|/)credentials$`,
-		`(^|/)\.netrc$`,
-		// Anchored home-file patterns: exact-match only ($ prevents catching .npmrc.bak).
-		`/Users/[^/]+/\.npmrc$`,
-		`/Users/[^/]+/\.pypirc$`,
-		`/Users/[^/]+/\.git-credentials$`,
+	var out []string
+	for _, p := range SensitiveFilePatterns() {
+		if p.Read {
+			out = append(out, p.Regex)
+		}
+	}
+	return out
+}
+
+// darwinCapabilities reports which shared-contract capabilities the darwin
+// backend cannot fully honor, and why (FIX4, ADR 0039). CapFilenamePatternDeny
+// is NOT listed here -- darwin fully honors it via sbpl (regex #"...") in
+// both deny blocks (sensitiveWriteRegexes/sensitiveReadRegexes, sourced from
+// SensitiveFilePatterns()). CapLoopbackScopedBind IS listed: Approach A
+// (shipped, see the OAuth callback bind block in generateSBProfileWithIPs)
+// binds `(local tcp "*:<port>")`, which is ANY-interface, not loopback-only.
+// Approach B was attempted and measured NOT to enforce loopback-only either
+// (see TestDarwinLoopbackScopedBindForm_NotEnforced) and
+// `(local ip "127.0.0.1:*")` is rejected outright by sandbox-exec's parser
+// ("host must be * or localhost"). No sbpl form was found that restricts a
+// bind/inbound rule to the loopback interface only.
+func darwinCapabilities() BackendCapability {
+	return BackendCapability{
+		Backend: "darwin",
+		Unsupported: map[CapabilityKey]UnsupportedReason{
+			CapLoopbackScopedBind: "sbpl (local tcp \"*:<port>\") binds any interface; " +
+				"(local ip \"127.0.0.1:*\") is rejected by sandbox-exec (\"host must be * or localhost\") " +
+				"and (local tcp \"localhost:*\") was measured to still allow 0.0.0.0 bind -- " +
+				"no proven sbpl form restricts bind to loopback only",
+		},
 	}
 }
 
@@ -258,6 +296,35 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	sb.WriteString("    (subpath \"/Library/Keychains\"))\n")
 	sb.WriteString("\n")
 
+	// --- FIX3 (ADR 0039): per-file read carve-outs from the shared contract ---
+	// The ~/.ssh subpath deny above (sensitiveReadPaths) blocks the whole
+	// tree, including known_hosts, which the agent legitimately needs to
+	// read for SSH host-key verification. Emit an explicit (allow
+	// file-read* (literal ...)) for every ReadOnly PerFile grant in
+	// PerFileGrants() AFTER the deny block (last-match-wins), same pattern as
+	// the trust-store carve-outs above. Never emit file-write* here: adding a
+	// new host key needs ~/.ssh directory write, which stays denied.
+	for _, g := range PerFileGrants() {
+		if !g.PerFile || g.Mode != ReadOnly {
+			continue
+		}
+		fmt.Fprintf(&sb, "(allow file-read*\n    (literal %q))\n", home+"/"+g.Path)
+	}
+	sb.WriteString("\n")
+
+	// AgentPaths.HomeRO / AgentPaths.Runtimes are consumed here only to keep
+	// them wired against future drift protection (a future capability test
+	// could assert their consumption). They are currently no-ops on darwin:
+	// this profile is allow-by-default ((allow default) at the top), so
+	// anything not explicitly denied -- including every HomeRO/Runtimes
+	// path -- is already readable without an explicit carve-out. Do NOT
+	// treat this loop as "enforced" the way the Linux allowlist enforces
+	// HomeRO; it exists so a future change to the darwin base policy (e.g.
+	// switching away from `(allow default)`) fails loudly instead of
+	// silently losing these reads.
+	_ = agentPaths().HomeRO
+	_ = agentPaths().Runtimes
+
 	// --- network egress block ---
 	if withNetproxy {
 		// Netproxy mode: agent may only reach localhost (where the proxy lives).
@@ -311,14 +378,44 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	sb.WriteString("\n")
 
 	if !withNetproxy {
-		// Port-only mode: allow outbound TCP on HTTPS (443) and HTTP (80).
+		// Port-only mode: allow outbound TCP on the shared fallback ports
+		// (HTTPS 443, HTTP 80). FIX4 (ADR 0039): sourced from the contract's
+		// NoNetproxyFallbackPorts() so this stays in lockstep with Linux's
+		// --no-netproxy Landlock CONNECT restriction (shield_linux.go).
 		// Note: sbpl cannot distinguish api.github.com from attacker.com at the
 		// same port.  This is the documented Tier 1.5 limitation.
-		sb.WriteString("(allow network-outbound\n")
-		sb.WriteString("    (remote tcp \"*:443\"))\n")
-		sb.WriteString("(allow network-outbound\n")
-		sb.WriteString("    (remote tcp \"*:80\"))\n")
+		for _, port := range NoNetproxyFallbackPorts() {
+			fmt.Fprintf(&sb, "(allow network-outbound\n    (remote tcp \"*:%d\"))\n", port)
+		}
 		sb.WriteString("\n")
+	}
+
+	// --- FIX2 (ADR 0039): TCP bind for MCP OAuth redirect callbacks + local
+	// IPC ---
+	// Approach A (shipped): per resolved OAuth callback port, allow both
+	// network-bind and network-inbound on that port. `(local tcp "*:<port>")`
+	// binds ANY interface, NOT loopback-only -- sandbox-exec has no proven
+	// sbpl form that restricts a bind to 127.0.0.1 only (see
+	// shield_darwin_fixes_test.go TestDarwinLoopbackScopedBindForm_NotEnforced
+	// and ADR 0039).
+	// External inbound connections to these ports are still only reachable if
+	// something outside the sandbox routes to the host, which is outside sbpl's
+	// threat model; the sandbox boundary here is "the agent process may accept
+	// a local OAuth redirect", not "this port is exposed to the network".
+	//
+	// Same practical limitation as Linux: a brand-new MCP connector's FIRST
+	// OAuth flow may pick an unresolved ephemeral port (not yet in
+	// ~/.claude/.credentials.json), so the very first auth for a new
+	// connector may need one unshielded run.
+	if home != "" {
+		oauthPorts := resolveOAuthCallbackPorts(home + "/.claude/.credentials.json")
+		for _, port := range oauthPorts {
+			fmt.Fprintf(&sb, "(allow network-bind\n    (local tcp \"*:%d\"))\n", port)
+			fmt.Fprintf(&sb, "(allow network-inbound\n    (local tcp \"*:%d\"))\n", port)
+		}
+		if len(oauthPorts) > 0 {
+			sb.WriteString("\n")
+		}
 	}
 
 	// Default deny for all remaining network traffic.
@@ -435,8 +532,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	argv = append(argv, agentPath)
 	argv = append(argv, agentArgs...)
 
-	// Build the environment: inherit everything + strip ambient creds + set proxy vars + granted secrets.
-	env := sandbox.StripEnv(os.Environ(), cfg)
+	// Build the environment: clean allowlist + strip defence-in-depth + proxy
+	// vars + granted secrets.
+	env := buildBaseEnv(os.Environ(), cfg)
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
@@ -462,7 +560,10 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
 // is absent (fail-open path).  Env stripping still applies.
 func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool) {
-	env := sandbox.StripEnv(os.Environ(), cfg)
+	// FIX1 (ADR 0039): same clean-then-strip ordering as runShield's sandbox
+	// path -- the fail-open fallback must not leak a broader environment
+	// than the sandboxed path does.
+	env := buildBaseEnv(os.Environ(), cfg)
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)

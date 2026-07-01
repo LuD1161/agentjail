@@ -145,6 +145,14 @@ On kernels < 6.7, Landlock network ABI is unavailable. A warning is printed and
 FS-only Landlock is applied (network egress is not restricted by Landlock). Use
 Tier 2 (microVM) or Tier 3 (eBPF) for network-level control on older kernels.
 
+**`--no-netproxy` on Linux (ABI v4+, kernel 6.7+):** restricted, not
+unrestricted (ADR 0039). Landlock's CONNECT rights are limited to the shared
+`NoNetproxyFallbackPorts()` set (80, 443) instead of the netproxy port -- the
+same fallback ports macOS's `--no-netproxy` mode allows. TCP bind is left
+unhandled in this mode so it does not regress dynamic (not-yet-resolved) MCP
+OAuth callback ports. There is still no per-host enforcement in this mode
+(port-level only, same limitation as macOS `--no-netproxy`).
+
 ---
 
 ## CLI reference
@@ -312,7 +320,7 @@ Enforced by `agentjail-netproxy` on macOS and Linux. Wildcards follow cert-style
 | Landlock unsupported (Linux < 5.13) | **Fail-open** with loud warning |
 | Landlock setup error (other) | **Fail-closed**: refuses to run unless `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` |
 | `policy.yaml` missing or unreadable | Falls back to built-in defaults |
-| `agentjail-netproxy` not found | Falls back to no per-host enforcement with warning (macOS: port-based filtering; Linux: unrestricted network) |
+| `agentjail-netproxy` not found | macOS: falls back to port-based filtering on 80/443 with a warning. Linux ABI v4+: CONNECT stays restricted to the (now unreachable) netproxy port -- no working egress until netproxy is available; run with `--no-netproxy` explicitly to get the fallback-port CONNECT restriction described above instead. Linux < ABI v4: network unrestricted. |
 | Unsupported platform | **Fail-open** with warning |
 
 ---

@@ -86,8 +86,11 @@ so a fresh install with no `policy.yaml` yet still gets essentials.
 sbpl IP allow-rules and the startup INFO log) was switched to the same
 `EffectiveAllowedHosts()` call, so the shield's resolved/logged set stays
 consistent with what netproxy actually enforces. (Linux's shield has no
-per-host resolution step of its own -- Landlock has no network ABI, so
-netproxy is the sole enforcement point on Linux.)
+per-host resolution step of its own -- Landlock's network ABI (v4+, kernel
+6.7+, see ADR 0021) is port-scoped only, with no hostname/IP concept, so
+netproxy remains the sole *per-host* enforcement point on Linux. See
+[ADR 0039](0039-complete-shared-sandbox-contract.md) for the full
+port-level Landlock network model, including the `--no-netproxy` fallback.)
 
 ### OPA serialization
 

@@ -4,16 +4,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -56,6 +53,75 @@ type landlockNetPortAttr struct {
 	Port          uint64
 }
 
+// LandlockNetPlan is the pure, inspectable network-rule plan applyLandlock
+// will translate into landlock_add_rule calls. buildLandlockNetPlan builds
+// this as data, with NO landlock_* syscalls, so tests can assert the plan
+// honors the shared contract (NoNetproxyFallbackPorts, resolved OAuth bind
+// ports) without triggering Landlock's irreversible restrict_self. See ADR
+// 0039 and FIX4's "inspectable rule-plan" requirement.
+type LandlockNetPlan struct {
+	// ABI is the probed Landlock ABI version this plan was built for.
+	ABI int
+	// Handled is true if this plan asks Landlock to handle network access at
+	// all (false on ABI < 4, where the network access-rights bits don't
+	// exist yet and ruleset creation must not request them).
+	Handled bool
+	// HandleBindTCP is true if NET_BIND_TCP is included in the ruleset's
+	// handled mask. Deliberately false in the --no-netproxy fallback case
+	// (netproxyPort <= 0): including it would deny every unlisted bind,
+	// which would regress dynamic (not-yet-in-credentials) OAuth callback
+	// ports that Landlock cannot special-case ahead of time.
+	HandleBindTCP bool
+	// ConnectPorts are the ports the agent is allowed to TCP CONNECT to.
+	ConnectPorts []int
+	// BindPorts are the ports the agent is allowed to TCP bind to (only
+	// meaningful when HandleBindTCP is true).
+	BindPorts []int
+	// Unsupported names, precisely, which shared-contract capabilities this
+	// backend cannot honor and why -- never a silent drop. Always populated
+	// regardless of network mode: Landlock has no filename/basename
+	// primitive, and Landlock network rules are port-scoped only (no
+	// per-interface/address restriction), on every ABI version.
+	Unsupported map[CapabilityKey]UnsupportedReason
+}
+
+// buildLandlockNetPlan is the pure function FIX4 requires: it decides what
+// network rules applyLandlock should add, as data, without calling any
+// landlock_* syscall.
+//
+//   - netproxyPort > 0 (netproxy enabled): CONNECT restricted to netproxyPort
+//     only; BIND restricted to the resolved OAuth callback ports (oauthPorts).
+//   - netproxyPort <= 0 (--no-netproxy): CONNECT restricted to the shared
+//     contract's NoNetproxyFallbackPorts() ({80, 443}); BIND is left
+//     unhandled (see HandleBindTCP doc above).
+//   - abi < 4: network access rights don't exist in this kernel's Landlock
+//     ABI; Handled stays false and no network rules are added (FS-only
+//     Landlock, unchanged pre-ABI-v4 behavior).
+func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockNetPlan {
+	plan := LandlockNetPlan{
+		ABI: abi,
+		Unsupported: map[CapabilityKey]UnsupportedReason{
+			CapFilenamePatternDeny: "landlock-has-no-filename-regex; enforced by hook layer (agentpolicy/policies/file_policy.rego)",
+			CapLoopbackScopedBind:  "landlock net rules (LANDLOCK_RULE_NET_PORT) are port-scoped only; there is no per-interface/address restriction, so a granted bind/connect port is reachable on any interface, not loopback-only",
+		},
+	}
+	if abi < 4 {
+		return plan
+	}
+	if netproxyPort > 0 {
+		plan.Handled = true
+		plan.HandleBindTCP = true
+		plan.ConnectPorts = []int{netproxyPort}
+		plan.BindPorts = oauthPorts
+		return plan
+	}
+	// --no-netproxy fallback: restrict CONNECT to the shared contract's
+	// fallback ports; leave BIND unhandled.
+	plan.Handled = true
+	plan.ConnectPorts = NoNetproxyFallbackPorts()
+	return plan
+}
+
 // runShield is the Linux implementation of the shield launcher.
 //
 // It uses the Landlock LSM (Linux 5.13+, June 2021) to restrict the process
@@ -71,8 +137,12 @@ type landlockNetPortAttr struct {
 // (Linux 6.7, Jan 2024).  When netproxy is enabled and the kernel supports
 // ABI v4+, the agent is restricted to TCP connect only on the netproxy port
 // (9100).  All other TCP connect is denied, including IMDS (169.254.169.254)
-// and direct egress.  On kernels < 6.7, network ABI is unavailable; a
-// warning is printed and FS-only Landlock is applied (current behavior).
+// and direct egress.  When --no-netproxy is set and ABI v4+ is available,
+// CONNECT is instead restricted to the shared contract's
+// NoNetproxyFallbackPorts() (80, 443) -- see buildLandlockNetPlan and ADR
+// 0039; this replaced a prior "completely unrestricted" fallback.  On
+// kernels < 6.7, network ABI is unavailable; a warning is printed and
+// FS-only Landlock is applied (current behavior).
 //
 // Landlock caveat: truncate(2) is only covered as of ABI v3 (Linux 6.2).
 // On kernels < 6.2 an agent can truncate sensitive files.  We document this
@@ -98,8 +168,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// (applied below) restricts the shield + agent, not the netproxy child
 	// which was already forked before restriction.
 	netproxyPort := 0
-	var netproxyCmd *exec.Cmd  // non-nil only if WE started the proxy (we must clean it up)
-	netproxyReady := false     // true if a proxy is available (ours or pre-existing)
+	var netproxyCmd *exec.Cmd // non-nil only if WE started the proxy (we must clean it up)
+	netproxyReady := false    // true if a proxy is available (ours or pre-existing)
 	if !noNetproxy {
 		netproxyPort = netproxyDefaultPort
 		netproxyBin, findErr := findNetproxyBinary()
@@ -144,7 +214,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			fmt.Fprintln(os.Stderr, "  Deny all other TCP connect (IMDS, direct egress)")
 			fmt.Fprintln(os.Stderr, "  On kernel < 6.7: warning printed, FS-only Landlock applied")
 		} else {
-			fmt.Fprintln(os.Stderr, "Network: not restricted (--no-netproxy; FS-only Landlock)")
+			// FIX4 (ADR 0039): --no-netproxy is no longer "unrestricted" on
+			// ABI v4+ kernels -- CONNECT is restricted to the shared fallback
+			// ports (contract NoNetproxyFallbackPorts). Bind stays unhandled
+			// so dynamic OAuth callback binds are not regressed.
+			fmt.Fprintf(os.Stderr, "Network (--no-netproxy, ABI v4+, kernel 6.7+):\n")
+			fmt.Fprintf(os.Stderr, "  Allow TCP connect to ports %v only (no per-host enforcement)\n", NoNetproxyFallbackPorts())
+			fmt.Fprintln(os.Stderr, "  Deny all other TCP connect; TCP bind left unhandled by Landlock")
+			fmt.Fprintln(os.Stderr, "  On kernel < 6.7: network ABI unavailable, FS-only Landlock applied")
 		}
 		fmt.Fprintln(os.Stderr, "=======================================================")
 		cleanupNetproxy(netproxyCmd)
@@ -326,15 +403,22 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		handled |= unix.LANDLOCK_ACCESS_FS_IOCTL_DEV // 6.10
 	}
 
-	// Network access handling (ABI v4+, Linux 6.7+).
-	// When netproxyPort > 0, we handle CONNECT_TCP (deny all unless explicitly
-	// allowed) and BIND_TCP (deny all — agent never needs to bind).  Only a
-	// rule for netproxyPort is added, so the agent can only connect to the
-	// netproxy.  On kernels < 6.7, handledNet stays 0 (no network restriction).
+	// Network access handling (ABI v4+, Linux 6.7+). FIX4 (ADR 0039):
+	// resolved via the pure, inspectable buildLandlockNetPlan -- see its doc
+	// comment for the netproxy-enabled vs. --no-netproxy-fallback vs.
+	// ABI<4 cases. home is resolved early (moved up from further below) so
+	// OAuth callback ports can be read before the ruleset is created.
+	home, _ := os.UserHomeDir()
+	var oauthPorts []int
+	if home != "" {
+		oauthPorts = resolveOAuthCallbackPorts(filepath.Join(home, ".claude", ".credentials.json"))
+	}
+	netPlan := buildLandlockNetPlan(int(abi), netproxyPort, oauthPorts)
 	handledNet := uint64(0)
-	if netproxyPort > 0 {
-		if abi >= 4 {
-			handledNet = unix.LANDLOCK_ACCESS_NET_CONNECT_TCP | unix.LANDLOCK_ACCESS_NET_BIND_TCP
+	if netPlan.Handled {
+		handledNet = unix.LANDLOCK_ACCESS_NET_CONNECT_TCP
+		if netPlan.HandleBindTCP {
+			handledNet |= unix.LANDLOCK_ACCESS_NET_BIND_TCP
 		}
 	}
 
@@ -397,7 +481,6 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		return nil
 	}
 
-	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 
 	// Allow read-write on /tmp and cwd.
@@ -512,36 +595,33 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		}
 	}
 
-	// Network rules: allow TCP connect to the netproxy port only (ABI v4+).
-	if netproxyPort > 0 && abi >= 4 {
-		netAttr := landlockNetPortAttr{
-			AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_CONNECT_TCP),
-			Port:          uint64(netproxyPort),
+	// Network rules: apply netPlan (built above, before ruleset creation) --
+	// CONNECT ports first, then BIND ports (only present when
+	// netPlan.HandleBindTCP; see buildLandlockNetPlan). Landlock is
+	// irreversible, so a bind port not in netPlan.BindPorts (e.g. a
+	// brand-new MCP's first, not-yet-in-credentials OAuth callback) requires
+	// out-of-jail initial auth via `claude mcp login`.
+	if netPlan.Handled {
+		for _, port := range netPlan.ConnectPorts {
+			netAttr := landlockNetPortAttr{
+				AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_CONNECT_TCP),
+				Port:          uint64(port),
+			}
+			if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
+				uintptr(rulesetFd), uintptr(landlockRuleNetPort),
+				uintptr(unsafe.Pointer(&netAttr)), 0, 0, 0); e != 0 {
+				return fmt.Errorf("landlock_add_rule(net connect port %d): %w", port, e)
+			}
 		}
-		if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
-			uintptr(rulesetFd), uintptr(landlockRuleNetPort),
-			uintptr(unsafe.Pointer(&netAttr)), 0, 0, 0); e != 0 {
-			return fmt.Errorf("landlock_add_rule(net port %d): %w", netproxyPort, e)
-		}
-
-		// Allow TCP bind on ports used by MCP OAuth redirect callbacks.
-		// These ports are read from ~/.claude/.credentials.json at
-		// startup so the agent can complete OAuth re-authentication
-		// flows inside the sandbox. Landlock is irreversible, so ports
-		// for new MCPs (not yet in credentials) require out-of-jail
-		// initial auth via `claude mcp login`.
-		if home != "" {
-			oauthPorts := resolveOAuthCallbackPorts(filepath.Join(home, ".claude", ".credentials.json"))
-			for _, port := range oauthPorts {
-				bindAttr := landlockNetPortAttr{
-					AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_BIND_TCP),
-					Port:          uint64(port),
-				}
-				if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
-					uintptr(rulesetFd), uintptr(landlockRuleNetPort),
-					uintptr(unsafe.Pointer(&bindAttr)), 0, 0, 0); e != 0 {
-					fmt.Fprintf(os.Stderr, "agentjail-shield: skip OAuth bind port %d: %v\n", port, e)
-				}
+		for _, port := range netPlan.BindPorts {
+			bindAttr := landlockNetPortAttr{
+				AllowedAccess: uint64(unix.LANDLOCK_ACCESS_NET_BIND_TCP),
+				Port:          uint64(port),
+			}
+			if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
+				uintptr(rulesetFd), uintptr(landlockRuleNetPort),
+				uintptr(unsafe.Pointer(&bindAttr)), 0, 0, 0); e != 0 {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: skip OAuth bind port %d: %v\n", port, e)
 			}
 		}
 	}
@@ -577,67 +657,9 @@ func stepFail(noColor bool, msg string) {
 	}
 }
 
-// resolveMCPServerPaths reads ~/.claude.json and returns the command paths
-// of configured MCP servers.
-func resolveMCPServerPaths(claudeJSON string) []string {
-	data, err := os.ReadFile(claudeJSON)
-	if err != nil {
-		return nil
-	}
-	var cfg struct {
-		MCPServers map[string]struct {
-			Command string `json:"command"`
-		} `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil
-	}
-	var paths []string
-	for _, s := range cfg.MCPServers {
-		if s.Command != "" && filepath.IsAbs(s.Command) {
-			paths = append(paths, s.Command)
-		}
-	}
-	return paths
-}
-
-// resolveOAuthCallbackPorts reads ~/.claude/.credentials.json and returns the
-// localhost ports used by MCP OAuth redirect URIs (e.g. http://localhost:52819/callback).
-// Returns deduplicated, valid port numbers only.
-func resolveOAuthCallbackPorts(credentialsJSON string) []int {
-	data, err := os.ReadFile(credentialsJSON)
-	if err != nil {
-		return nil
-	}
-	var creds struct {
-		MCPOAuth map[string]struct {
-			RedirectURI string `json:"redirectUri"`
-		} `json:"mcpOAuth"`
-	}
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return nil
-	}
-	seen := make(map[int]bool)
-	var ports []int
-	for _, entry := range creds.MCPOAuth {
-		if entry.RedirectURI == "" {
-			continue
-		}
-		u, err := url.Parse(entry.RedirectURI)
-		if err != nil || u.Hostname() != "localhost" {
-			continue
-		}
-		port, err := strconv.Atoi(u.Port())
-		if err != nil || port <= 0 || port > 65535 {
-			continue
-		}
-		if !seen[port] {
-			seen[port] = true
-			ports = append(ports, port)
-		}
-	}
-	return ports
-}
+// resolveMCPServerPaths and resolveOAuthCallbackPorts moved to
+// shield_contract.go (tag-free) so both backends share the same resolution
+// logic. See ADR 0034 / ADR 0039.
 
 // findTopLevelDir walks up from dir to find the first directory under parent.
 // For dir="/home/user/.headroom-venv/bin" and parent="/home/user", returns

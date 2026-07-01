@@ -96,6 +96,22 @@ Claude Code's own login/token-refresh flow works. See
 is a shield-layer grant for the shielded agent's own process only; the hook
 layer still denies an agent's explicit tool-driven read of that path.
 
+**Note on `~/.ssh/known_hosts` (ADR 0039, FIX3):** unlike the rest of
+`~/.ssh`, `known_hosts` is granted **read-only** on macOS (an explicit
+`(allow file-read* (literal ...))` carve-out after the `~/.ssh` deny) so SSH
+host-key verification works under the sandbox. It is never write-granted --
+adding a new host key needs `~/.ssh` directory write, which stays denied.
+
+**Note on MCP OAuth callback ports (ADR 0039, FIX2):** macOS grants TCP
+bind + inbound for each port resolved from
+`~/.claude/.credentials.json`'s `mcpOAuth` redirect URIs, so completing an
+already-known MCP OAuth flow works under the sandbox (matching Linux's
+existing Landlock bind allowance). These rules bind any interface, not
+loopback-only -- see [ADR 0039](../../docs/adr/0039-complete-shared-sandbox-contract.md)
+for why a loopback-scoped form was attempted and not shipped. A brand-new
+MCP connector's first OAuth flow (port not yet in `.credentials.json`) may
+still need one unshielded run.
+
 **Note on project-local files:** The exact home-file patterns (`~/.npmrc`, `~/.pypirc`,
 `~/.git-credentials`) use anchored regex (`/Users/<user>/.<file>$`) so project-local copies
 (e.g. `/Users/dev/myproject/.npmrc`) are **not** blocked by these rules.  The `~/.docker/`,
@@ -184,9 +200,14 @@ Neither replaces the other.
 
 ## Network egress
 
-> macOS only (Tier 1.5 / 1.75).  Linux: Landlock has no network ABI; a
-> warning is printed at startup and egress is unrestricted.  eBPF enforcement
-> is Tier 3.
+> Per-host enforcement (via agentjail-netproxy) works on both macOS and Linux
+> (Tier 1.75). Kernel-level port restriction differs: macOS always applies
+> its sbpl network rules; Linux requires Landlock ABI v4+ (kernel 6.7+) --
+> on older kernels a warning is printed at startup and egress is
+> unrestricted by the kernel sandbox (the hook layer still applies). See
+> [ADR 0021](../../docs/adr/0021-landlock-network-rules.md) and
+> [ADR 0039](../../docs/adr/0039-complete-shared-sandbox-contract.md).
+> Full network-level control regardless of kernel version is Tier 3 (eBPF).
 
 On macOS, agentjail-shield adds a **default-deny network** rule to the sbpl
 profile and (by default) launches **agentjail-netproxy** to enforce per-host
@@ -244,6 +265,13 @@ denied with `(deny network*)`.
 **Important:** Port-only mode cannot distinguish `api.github.com` from
 `attacker.com` at the network layer.  Both use port 443.
 
+**Linux `--no-netproxy` (ADR 0039):** on Landlock ABI v4+ (kernel 6.7+), TCP
+CONNECT is restricted to the same fallback ports (80, 443) via
+`LANDLOCK_ACCESS_NET_CONNECT_TCP` -- no longer left completely unrestricted.
+TCP bind is left unhandled in this mode (so a dynamic, not-yet-resolved MCP
+OAuth callback port is not regressed). On kernels < ABI v4, network is
+unrestricted by Landlock, same as before.
+
 ### Default `allowed_hosts` list
 
 `network.allowed_hosts` splits into two layers (ADR 0038):
@@ -293,6 +321,20 @@ The netproxy hot-reloads on SIGHUP — no need to restart the shield session.
 In port-only mode, the shield must be restarted for changes to take effect.
 
 ---
+
+## Shared contract (ADR 0034, ADR 0039)
+
+`shield_contract.go` is the tag-free, OS-agnostic source of truth both
+backends translate: `SensitiveFilePatterns()` (filename/extension regex
+denies), `NoNetproxyFallbackPorts()` (80, 443), `PerFileGrants()`
+(`known_hosts`, read-only), and the relocated `resolveOAuthCallbackPorts` /
+`resolveMCPServerPaths` resolvers. Genuine per-platform gaps -- Landlock has
+no filename-regex primitive, neither backend can scope a bind to loopback
+only -- are named `UnsupportedReason` values (`CapFilenamePatternDeny`,
+`CapLoopbackScopedBind`) covered by a capability/parity test
+(`shield_contract_test.go`), not silently dropped. See
+[ADR 0039](../../docs/adr/0039-complete-shared-sandbox-contract.md) for the
+full rationale.
 
 ## Building
 
