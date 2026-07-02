@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -206,17 +207,37 @@ func ensureSessionProxy(netproxyPath, proxyAddr, sessionID, cwd string, policy p
 	return cmd, tok, nil
 }
 
-// spawnNetproxy starts agentjail-netproxy as a child process.
+// spawnNetproxy starts agentjail-netproxy as a child process. It logs per-CONNECT
+// decisions (allow/deny) and upstream dial errors at info level to
+// ~/.agentjail/netproxy.log so the proxy is observable -- the shield execs into
+// the agent, so an in-memory stderr buffer would be lost the moment the session
+// starts. netproxy runs outside the sandbox, so it can write the log file.
 func spawnNetproxy(netproxyPath, proxyAddr string) (*exec.Cmd, error) {
 	cmd := exec.Command(netproxyPath,
 		"--addr="+proxyAddr,
-		"--log-level=error",
+		"--log-level=info",
 	)
-	cmd.Stderr = &proxyStderrWriter{}
+	cmd.Stderr = netproxyLogWriter()
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start netproxy: %w", err)
 	}
 	return cmd, nil
+}
+
+// netproxyLogWriter returns an appending file at ~/.agentjail/netproxy.log for
+// the netproxy's stderr, or the discard-buffer fallback if the file cannot be
+// opened.
+func netproxyLogWriter() io.Writer {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return &proxyStderrWriter{}
+	}
+	logPath := filepath.Join(home, ".agentjail", "netproxy.log")
+	f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if ferr != nil {
+		return &proxyStderrWriter{}
+	}
+	return f
 }
 
 // waitForControlSocket polls until the netproxy's control socket answers a
