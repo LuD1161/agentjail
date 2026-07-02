@@ -64,6 +64,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -eu
 
@@ -82,7 +83,7 @@ jobs:
           security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d '"')
           security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
 
-          IDENTITY="Developer ID Application: Aseem Shrey (${APPLE_TEAM_ID})"
+          IDENTITY="${APPLE_SIGNING_IDENTITY}"
 
           # Sign each binary
           for bin in dist/agentjail dist/agentjail-hook dist/agentjail-daemon dist/agentjail-shield dist/agentjail-netproxy; do

@@ -34,8 +34,10 @@ smoke: ## run the end-to-end smoke tests (hook pipeline + OS sandbox)
 e2e: ## full new-user E2E test (build, daemon, hook, store, replay, UI, filters, try)
 	bash test/e2e-newuser.sh
 
-APPLE_TEAM_ID ?= Q98Z3744J2
-APPLE_IDENTITY ?= Developer ID Application: Aseem Shrey ($(APPLE_TEAM_ID))
+# Full codesign identity, e.g. "Developer ID Application: NAME (TEAMID)".
+# Kept out of the tree: set the APPLE_SIGNING_IDENTITY env var (the matching
+# Developer ID certificate must be present in your login keychain).
+APPLE_IDENTITY ?= $(APPLE_SIGNING_IDENTITY)
 
 sign:  ## codesign macOS binaries (requires Developer ID certificate in keychain)
 ifeq ($(shell uname),Darwin)
