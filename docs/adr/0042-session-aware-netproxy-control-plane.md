@@ -104,9 +104,11 @@ Known limitations / follow-ups:
   netproxy service (or refcount) is a follow-up.
 - **24h lease cap.** A single session running longer than 24h would lose its
   registration; re-registration/heartbeat is a follow-up.
-- **Audit sink.** `session_registered`/`session_expired` currently fire to a
-  `NopEmitter`; wiring netproxy to the store-backed `audit.Emitter` (or routing
-  via the daemon) per the store-singleton rule is a follow-up.
+- **Audit sink.** `session_registered`/`session_expired` are emitted to the
+  store-backed `audit.Emitter`: netproxy opens the same WAL SQLite the daemon
+  owns (netproxy runs outside the sandbox, so the open succeeds) and falls back
+  to a `NopEmitter` if the DB is unavailable, so a missing/locked DB never stops
+  the proxy from enforcing egress.
 - **Non-HTTP protocols.** This is HTTP CONNECT only; Postgres/Redis/SSH remain
   blocked by the OS sandbox (port-9100-only). Enabling them is AGE-81 (SOCKS5,
   then the WireGuard tunnel), which will replace the token-in-Proxy-Authorization

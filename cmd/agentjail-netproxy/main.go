@@ -42,6 +42,7 @@ import (
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
+	"github.com/LuD1161/agentjail/internal/store"
 )
 
 const (
@@ -448,9 +449,22 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// NopEmitter for now; the store-backed audit.Emitter is wired in a later
-	// commit (session register/expiry are best-effort audit events).
-	p := newProxy(*addr, newSessionRegistry(), audit.NopEmitter{}, logger)
+	// Store-backed audit emitter (session register/expiry are best-effort). We
+	// open the same WAL SQLite the daemon owns; netproxy runs outside the
+	// sandbox, so the open succeeds. If it is unavailable, fall back to a no-op
+	// so a missing/locked DB never stops the proxy from enforcing egress.
+	var emitter audit.Emitter = audit.NopEmitter{}
+	if home, _ := os.UserHomeDir(); home != "" {
+		dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+		if st, err := store.Open(dbPath); err == nil {
+			emitter = st
+			defer st.Close()
+		} else {
+			logger.Warn("audit store unavailable; session events not persisted", "err", err)
+		}
+	}
+
+	p := newProxy(*addr, newSessionRegistry(), emitter, logger)
 	if err := p.run(ctx); err != nil {
 		logger.Error("proxy exited with error", "err", err)
 		os.Exit(1)
