@@ -10,7 +10,7 @@ import (
 
 // MCPServerEntry combines a server config with provenance metadata.
 type MCPServerEntry struct {
-	Name    string          // display name (e.g. "fff", "plugin_claude-mem_mcp-search")
+	Name    string          // display name (e.g. "chrome-devtools", "plugin_claude-mem_mcp-search")
 	Source  string          // "claude", "cursor", "codex", "plugin"
 	Scope   string          // "global" or "project"
 	Trust   string          // "official-marketplace", "third-party-marketplace", "user-installed"

@@ -1,12 +1,4 @@
-# Agent Handoff TODO
-
-## Current State
-
-- Repo root: `/DATA/openclaw/Repos/agentjail`
-- Branch: `main` (4 commits ahead of `origin/main`, squashed from 36)
-- Remote status: local only. Do not push unless explicitly asked.
-- Go `1.26.3` installed at `/usr/local/go`.
-- Full verification passed: `go build && go vet && go test && make smoke && make licenses`
+# TODO / Roadmap
 
 ## What Is Implemented
 
@@ -50,52 +42,14 @@
 - Pooled SQLite connection (one per server, not per request)
 - Audit events section in the UI
 - `--edit-policy` opt-in for policy enable/disable (read-only by default)
-- Chrome CDP tested (8 screenshots, all interactions verified)
-
-### ADRs
-- 0016 — Rego at both tiers / Tier 2 microsandbox substrate
-- 0017 — AWS pack Tier 1 scope
-- 0018 — SQLite local store
-- 0019 — Redaction policy
-- 0020 — Environment audit at launch
-- 0021 — Landlock network rules
-- 0022 — Netproxy on Linux
-- 0023 — Secret server
-- 0024 — Env stripping at launch
-
-## How A New Agent Should Pick Up
-
-1. Read these files first:
-   ```
-   docs/ARCHITECTURE.md
-   docs/ENGINEERING.md
-   TODO.md
-   ```
-
-2. Confirm state:
-   ```sh
-   git status --short --branch
-   git log --oneline -10
-   ```
-
-3. Do not push unless the user explicitly asks.
-
-4. Before committing, run:
-   ```sh
-   go build ./...
-   go vet ./...
-   go test ./...
-   make smoke
-   make licenses
-   ```
 
 ## Remaining TODOs
 
-### Can't test locally
-- Linux network smoke coverage on kernel 6.7+ (this host is kernel 6.1 / Landlock ABI v2).
+### Needs a specific environment to test
+- Linux network smoke coverage on kernel 6.7+ (Landlock ABI v4).
 - macOS shield paths (Landlock/netproxy/shield_darwin).
 
 ### Future work
-- Time-based policy allowances (AGE-57: temporary grants with expiry).
-- Netproxy zombie cleanup improvements (AGE-33).
-- Tier 2 microVM integration with microsandbox Go SDK.
+- Time-based policy allowances (temporary grants with expiry).
+- Netproxy zombie cleanup improvements.
+- Tier 2 microVM integration with the microsandbox Go SDK.

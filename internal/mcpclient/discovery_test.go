@@ -21,23 +21,28 @@ func TestDiscoverServersWithConfig(t *testing.T) {
 			e.Name, e.Source, e.Config.Type, e.Config.Command, e.Config.URL)
 	}
 
-	// Check that fff is discovered (known to be in ~/.claude.json).
-	found := false
+	// The exact set of servers is environment-dependent, so assert the shape
+	// of each discovered entry rather than requiring a specific server.
 	for _, e := range entries {
-		if e.Name == "fff" {
-			found = true
-			if e.Source != "claude" {
-				t.Errorf("fff source = %q, want 'claude'", e.Source)
-			}
-			if e.Config.Type != "stdio" {
-				t.Errorf("fff type = %q, want 'stdio'", e.Config.Type)
-			}
+		if e.Name == "" {
+			t.Error("discovered server has empty Name")
+		}
+		if e.Source == "" {
+			t.Errorf("server %q has empty Source", e.Name)
+		}
+		if e.Config.Type == "" {
+			t.Errorf("server %q has empty Type", e.Name)
+		}
+		// A stdio server must carry a command; an http/sse server a URL.
+		switch e.Config.Type {
+		case "stdio":
 			if e.Config.Command == "" {
-				t.Error("fff command is empty")
+				t.Errorf("stdio server %q has empty Command", e.Name)
+			}
+		case "http", "sse":
+			if e.Config.URL == "" {
+				t.Errorf("%s server %q has empty URL", e.Config.Type, e.Name)
 			}
 		}
-	}
-	if !found {
-		t.Error("expected to find 'fff' server in discovery results")
 	}
 }

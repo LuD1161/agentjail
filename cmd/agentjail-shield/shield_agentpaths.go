@@ -38,7 +38,7 @@ func agentPaths() AgentPaths {
 			".claude",     // Claude Code config, sessions, plugins
 			".claude-mem", // claude-mem MCP plugin database
 			".cache",      // Claude CLI cache (node, updates)
-			".local",      // Claude binary, gryph audit DB, tool installs
+			".local",      // Claude binary, tool installs
 			".vscode",     // VS Code settings
 		},
 		HomeRO: []string{
@@ -58,7 +58,6 @@ func agentPaths() AgentPaths {
 			//                Linux-effective narrowing with no macOS change.
 			".npm-global", // npm global modules (plugins may need this)
 			".config",     // XDG config (MCP server configs, etc.)
-			".openclaw",   // openclaw skills and config
 			".codex",      // codex skills and config
 			".nvm",        // Node version manager
 			".fnm",        // Fast node manager
