@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/fsnotify/fsnotify"
 )
 
 // Target describes one hook config file to monitor.
@@ -63,13 +64,84 @@ func New(logger *slog.Logger, emitter audit.Emitter) *Watcher {
 	return &Watcher{targets: targets, logger: logger, emitter: emitter}
 }
 
-// Run starts the polling loop. Blocks until ctx is cancelled.
+// Run watches target config files for changes using fsnotify with a 30-second
+// fallback poll for filesystems that lack inotify support (e.g. NFS).
+// Blocks until ctx is cancelled.
 func (w *Watcher) Run(ctx context.Context) {
 	if len(w.targets) == 0 {
 		return
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	// Build a set of target paths for fast event matching.
+	targetSet := make(map[string]struct{}, len(w.targets))
+	for _, t := range w.targets {
+		targetSet[t.path] = struct{}{}
+	}
+
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		w.logger.Warn("hookwatch: fsnotify unavailable, falling back to polling only", "error", err)
+		w.runPollingOnly(ctx)
+		return
+	}
+	defer fsw.Close()
+
+	// Watch parent directories (fsnotify watches dirs, not individual files,
+	// which also handles atomic rename patterns).
+	watched := make(map[string]struct{})
+	for _, t := range w.targets {
+		dir := filepath.Dir(t.path)
+		if _, ok := watched[dir]; ok {
+			continue
+		}
+		if err := fsw.Add(dir); err != nil {
+			w.logger.Warn("hookwatch: cannot watch directory", "dir", dir, "error", err)
+		} else {
+			watched[dir] = struct{}{}
+		}
+	}
+
+	// Fallback poll every 30 seconds for NFS and similar.
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case event, ok := <-fsw.Events:
+			if !ok {
+				return
+			}
+			// Only act on Write or Create for a target file.
+			if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+				continue
+			}
+			abs, err := filepath.Abs(event.Name)
+			if err != nil {
+				abs = event.Name
+			}
+			if _, isTarget := targetSet[abs]; !isTarget {
+				continue
+			}
+			w.checkTarget(abs)
+
+		case err, ok := <-fsw.Errors:
+			if !ok {
+				return
+			}
+			w.logger.Warn("hookwatch: fsnotify error", "error", err)
+
+		case <-ticker.C:
+			w.check()
+		}
+	}
+}
+
+// runPollingOnly is the fallback when fsnotify cannot be initialised.
+func (w *Watcher) runPollingOnly(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -78,6 +150,37 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			w.check()
+		}
+	}
+}
+
+// checkTarget runs the check logic for a single target identified by path.
+func (w *Watcher) checkTarget(path string) {
+	for i := range w.targets {
+		if w.targets[i].path == path {
+			t := &w.targets[i]
+			info, err := os.Stat(t.path)
+			if err != nil {
+				w.logger.Warn("hookwatch: config file missing", "path", t.path, "agent", t.agentID)
+				return
+			}
+
+			if !info.ModTime().After(t.lastMod) {
+				return // no actual change (duplicate event)
+			}
+			t.lastMod = info.ModTime()
+
+			if !w.hasAgentjailHook(t.path) {
+				w.logger.Warn("hookwatch: agentjail hook removed from config", "path", t.path, "agent", t.agentID)
+				_ = w.emitter.Emit(context.Background(), audit.Event{
+					EventType: audit.HookTampered,
+					Entity:    t.path,
+					Detail:    map[string]string{"agent": t.agentID},
+					Actor:     "daemon:hookwatch",
+				})
+				w.reinjectHook(t)
+			}
+			return
 		}
 	}
 }

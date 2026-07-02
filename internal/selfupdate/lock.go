@@ -2,33 +2,35 @@ package selfupdate
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
-	"syscall"
+
+	"github.com/gofrs/flock"
 )
 
 // AcquireUpdateLock acquires an exclusive, non-blocking file lock on
-// <basePath>/update.lock. Returns the locked file handle (caller must
+// <basePath>/update.lock. Returns the locked flock handle (caller must
 // pass to ReleaseUpdateLock when done). Returns error if another process
 // holds the lock.
-func AcquireUpdateLock(basePath string) (*os.File, error) {
+func AcquireUpdateLock(basePath string) (*flock.Flock, error) {
 	lockPath := filepath.Join(basePath, "update.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	fl := flock.New(lockPath)
+	locked, err := fl.TryLock()
 	if err != nil {
-		return nil, fmt.Errorf("open lock file: %w", err)
+		return nil, fmt.Errorf("acquire lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("acquire lock (another update in progress?): %w", err)
+	if !locked {
+		return nil, fmt.Errorf("acquire lock (another update in progress?): lock held by another process")
 	}
-	return f, nil
+	return fl, nil
 }
 
-// ReleaseUpdateLock releases the file lock and closes the file.
-func ReleaseUpdateLock(f *os.File) error {
-	if f == nil {
+// ReleaseUpdateLock releases the file lock and closes the underlying file.
+func ReleaseUpdateLock(fl *flock.Flock) error {
+	if fl == nil {
 		return nil
 	}
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return f.Close()
+	if err := fl.Unlock(); err != nil {
+		return err
+	}
+	return fl.Close()
 }
