@@ -210,6 +210,24 @@ func runLandlockAgentjailChild() {
 		fmt.Fprintf(os.Stdout, "sock_connect=ERR:%v\n", cerr)
 	}
 
+	// Probe 3: connect() ~/.agentjail/run/netproxy-ctl.sock -- must be DENIED.
+	// This is the Phase 3 (ADR 0044) grant control plane: session register and
+	// grant list/approve/deny all ride this socket. Unlike daemon.sock it gets
+	// NO single-file write grant, so the read-only ~/.agentjail grant withholds
+	// the write access AF_UNIX connect() needs -> EACCES. If this ever succeeded
+	// the sandboxed agent could register sessions or approve its own grants.
+	ctlPath := filepath.Join(home, ".agentjail", "run", "netproxy-ctl.sock")
+	cconn, ccerr := net.Dial("unix", ctlPath)
+	if ccerr == nil {
+		cconn.Close()
+		fmt.Fprintln(os.Stdout, "ctl_connect=ok")
+	} else if errors.Is(ccerr, unix.EACCES) || errors.Is(ccerr, unix.EPERM) ||
+		strings.Contains(ccerr.Error(), "permission denied") {
+		fmt.Fprintln(os.Stdout, "ctl_connect=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "ctl_connect=ERR:%v\n", ccerr)
+	}
+
 	os.Exit(0)
 }
 
@@ -333,6 +351,31 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 		}
 	}()
 
+	// Live listener at $HOME/.agentjail/run/netproxy-ctl.sock so the inode
+	// exists (connect would succeed but for Landlock). The read-only ~/.agentjail
+	// grant has NO single-file write grant here, so the child's connect() must be
+	// denied -- proving the Phase 3 (ADR 0044) grant control plane is agent-
+	// unreachable while daemon.sock stays reachable.
+	runDir := filepath.Join(ajDir, "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", runDir, err)
+	}
+	ctlPath := filepath.Join(runDir, "netproxy-ctl.sock")
+	ctlLn, err := net.Listen("unix", ctlPath)
+	if err != nil {
+		t.Fatalf("listen %s: %v", ctlPath, err)
+	}
+	defer ctlLn.Close()
+	go func() {
+		for {
+			c, err := ctlLn.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
@@ -354,6 +397,9 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 	}
 	if !strings.Contains(output, "sock_connect=ok") {
 		t.Errorf("expected sock_connect=ok (hook must still connect ~/.agentjail/daemon.sock), got:\n%s", output)
+	}
+	if !strings.Contains(output, "ctl_connect=EACCES") {
+		t.Errorf("expected ctl_connect=EACCES (agent must NOT reach the netproxy grant control socket -- no self-register/self-approve), got:\n%s", output)
 	}
 }
 
