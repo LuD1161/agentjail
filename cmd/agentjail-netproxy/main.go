@@ -1,26 +1,31 @@
 // Package main is agentjail-netproxy — a localhost HTTPS forward proxy that
-// enforces per-host egress filtering for sandboxed coding agents.
+// enforces PER-SESSION egress filtering for sandboxed coding agents.
 //
-// Agents running under agentjail-shield are restricted by sbpl to reach only
-// localhost.  This proxy is started as a child of the shield on localhost:9100.
-// The agent sets HTTPS_PROXY=http://127.0.0.1:9100 (or the shield sets it),
-// so all HTTPS CONNECT requests flow through here.  The proxy enforces
-// network.allowed_hosts from ~/.agentjail/policy.yaml.
+// One netproxy serves every shielded session on 127.0.0.1:9100. Agents running
+// under agentjail-shield are restricted by the OS sandbox to reach only this
+// port. Each session registers a per-session allowlist over the control socket
+// (see control.go) and is identified on the data plane by an unguessable Token
+// carried as the Proxy-Authorization credential (Basic, token as the username).
+// The proxy keys the effective allowlist by that Token -- there is NO global
+// fallback, so a CONNECT with a missing/unknown/expired token is denied.
 //
 // Design choices:
-//   - stdlib only — no external deps; same module as the root go.mod
-//   - CONNECT-only — we only need to tunnel HTTPS; plain HTTP GET would be 405
+//   - stdlib only — no external deps beyond the repo module
+//   - CONNECT-only — we tunnel HTTPS; plain HTTP GET is 405
 //   - Wildcard matching: *.example.com matches foo.example.com but not example.com
-//   - Reload on SIGHUP: same pattern as agentjail-daemon
+//   - Per-session allowlists via the control plane (no SIGHUP global reload;
+//     a policy change is a fresh session launch that re-registers)
 //   - Connection cap: 256 concurrent tunnels; 503 when full (fd safety)
 //   - Hot path: io.Copy in two goroutines; exits cleanly when either side closes
 //
+// See also: cmd/agentjail-netproxy/control.go (the control plane + registry)
+// See also: internal/proxyctl (the shared typed protocol)
 // See also: cmd/agentjail-shield/shield_darwin.go (the parent that launches us)
-// See also: docs/adr/0001-os-sandbox-enforcement-layer.md (shield context)
 package main
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -33,17 +38,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
-	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
 const (
 	maxConcurrentConns = 256
 	defaultAddr        = "127.0.0.1:9100"
+	// reapInterval is how often expired session leases are swept from the
+	// registry (they are already denied at lookup the instant they expire; the
+	// sweep frees memory and emits the expiry audit event).
+	reapInterval = time.Minute
+	// maxRequestHeaders bounds the header lines read per CONNECT request so a
+	// hostile client cannot stream headers forever (readLine also caps line size).
+	maxRequestHeaders = 100
 )
 
-// allowlist holds the current set of allowed hosts from policy.yaml.
-// It is replaced atomically on SIGHUP.
+// allowlist holds a set of allowed hosts. One is built per registered session
+// (see control.go); it is immutable for that session's lifetime.
 type allowlist struct {
 	mu    sync.RWMutex
 	hosts []string
@@ -96,8 +110,6 @@ func matchHost(pattern, host string) bool {
 	if !strings.HasPrefix(pattern, "*.") {
 		return pattern == host
 	}
-	// Wildcard: strip the "*." prefix and check that host ends with ".suffix"
-	// AND has at least one more label to the left.
 	suffix := pattern[2:] // e.g. "example.com"
 	if host == suffix {
 		return false // bare domain — wildcard requires a subdomain
@@ -105,89 +117,40 @@ func matchHost(pattern, host string) bool {
 	return strings.HasSuffix(host, "."+suffix)
 }
 
-// loadPolicy reads the policy file and returns the EFFECTIVE allowed host
-// list -- the non-removable essential provider hosts merged with the user's
-// editable Network.AllowedHosts. This is the enforcement point: netproxy is
-// what actually gates egress on both OSes, so essential hosts are only
-// genuinely non-removable if this function returns them regardless of what
-// policy.yaml says (including a MISSING policy file, which still gets the
-// full default via LoadPolicyForEnforcement).
-//
-// On a parse error it returns (nil, err) -- the caller decides how to react
-// (loadInitial treats it as fatal; reloadPolicy logs and keeps the last-good
-// allowlist). This is deliberately fail-loud, not fail-open: a broken
-// policy.yaml must never be silently treated as "no hosts allowed" or "all
-// hosts allowed" by this function -- see ADR 0040 and ADR 0041. A missing
-// file is not an error here -- LoadPolicyForEnforcement treats it as
-// Default().
-func loadPolicy(path string) ([]string, error) {
-	cfg, err := config.LoadPolicyForEnforcement(path)
-	if err != nil {
-		return nil, err
-	}
-	if cfg == nil {
-		return config.EssentialAllowedHosts(), nil
-	}
-	return cfg.EffectiveAllowedHosts(), nil
-}
-
-// proxy is the forward proxy server.
+// proxy is the forward proxy server. It holds the session registry (the sole
+// source of per-session allowlists) and the audit emitter used by the control
+// plane and the lease reaper.
 type proxy struct {
-	addr       string
-	policyPath string
-	al         *allowlist
-	connCount  atomic.Int64
-	logger     *slog.Logger
+	addr      string
+	registry  *sessionRegistry
+	emitter   audit.Emitter
+	connCount atomic.Int64
+	logger    *slog.Logger
 }
 
-func newProxy(addr, policyPath string, logger *slog.Logger) *proxy {
+func newProxy(addr string, registry *sessionRegistry, emitter audit.Emitter, logger *slog.Logger) *proxy {
 	return &proxy{
-		addr:       addr,
-		policyPath: policyPath,
-		al:         &allowlist{},
-		logger:     logger,
+		addr:     addr,
+		registry: registry,
+		emitter:  emitter,
+		logger:   logger,
 	}
 }
 
-// reloadPolicy is used for SIGHUP reloads only (see loadInitial for startup).
-// On error, it deliberately keeps the last-good allowlist in place and logs
-// the failure -- a broken policy.yaml after a hot reload must not fall open
-// (drop the allowlist to empty/permissive) or crash the running proxy; the
-// proxy keeps enforcing whatever it last successfully loaded. See ADR 0040.
-func (p *proxy) reloadPolicy() {
-	hosts, err := loadPolicy(p.policyPath)
-	if err != nil {
-		p.logger.Error("policy reload failed -- keeping last-good allowlist", "path", p.policyPath, "err", err)
-		return
-	}
-	p.al.load(hosts)
-	p.logger.Info("policy reloaded", "path", p.policyPath, "allowed_hosts_count", len(hosts))
-}
-
-// loadInitial performs the startup policy load. Unlike reloadPolicy (used
-// for SIGHUP, where there is a last-good allowlist to fall back on), a
-// failure here has no prior good state to keep -- so it is fatal: the proxy
-// must refuse to start rather than come up with an empty/fall-open
-// allowlist. A missing policy.yaml is not an error (loadPolicy uses
-// config.LoadPolicyForEnforcement, which returns Default() for that case);
-// only a PRESENT but malformed file reaches this branch. See ADR 0040 and
-// ADR 0041.
-func (p *proxy) loadInitial() error {
-	hosts, err := loadPolicy(p.policyPath)
-	if err != nil {
-		return fmt.Errorf("initial policy load failed for %s: %w", p.policyPath, err)
-	}
-	p.al.load(hosts)
-	p.logger.Info("policy loaded", "path", p.policyPath, "allowed_hosts_count", len(hosts))
-	return nil
-}
-
+// run acquires the control-plane singleton, serves the control socket, starts
+// the lease reaper, and runs the data-plane accept loop. Acquiring the control
+// socket is the authoritative singleton gate: if a live proxy already owns it,
+// run returns an error and this netproxy refuses to start (the launching shield
+// is expected to have fingerprinted and reused the existing proxy instead of
+// spawning us).
 func (p *proxy) run(ctx context.Context) error {
-	// Initial policy load. Fatal on error (see loadInitial doc comment) --
-	// unlike reloadPolicy, there is no last-good state to fall back on.
-	if err := p.loadInitial(); err != nil {
-		return err
+	cs, err := newControlServer(proxyctl.ControlSocketPath(), p.registry, p.emitter, version, p.logger)
+	if err != nil {
+		return fmt.Errorf("acquire control plane: %w", err)
 	}
+	defer cs.close()
+	go cs.serve(ctx)
+	go p.reapLoop(ctx)
 
 	ln, err := net.Listen("tcp", p.addr)
 	if err != nil {
@@ -195,22 +158,7 @@ func (p *proxy) run(ctx context.Context) error {
 	}
 	defer ln.Close()
 
-	p.logger.Info("agentjail-netproxy listening", "addr", p.addr, "policy", p.policyPath)
-
-	// SIGHUP → reload policy.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGHUP)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-sigCh:
-				p.logger.Info("SIGHUP received — reloading policy")
-				p.reloadPolicy()
-			}
-		}
-	}()
+	p.logger.Info("agentjail-netproxy listening", "addr", p.addr, "control_socket", cs.sockPath)
 
 	// Context cancellation closes the listener.
 	go func() {
@@ -245,20 +193,34 @@ func (p *proxy) run(ctx context.Context) error {
 	}
 }
 
+// reapLoop periodically sweeps expired session leases and audits each expiry.
+func (p *proxy) reapLoop(ctx context.Context) {
+	t := time.NewTicker(reapInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			expired := p.registry.reap(time.Now())
+			for range expired {
+				_ = p.emitter.Emit(ctx, audit.Event{EventType: audit.NetproxySessionExpired, Actor: "netproxy"})
+			}
+			if len(expired) > 0 {
+				p.logger.Info("reaped expired sessions", "count", len(expired), "live_sessions", p.registry.count())
+			}
+		}
+	}
+}
+
 // handleConn reads one HTTP request from conn and dispatches it.
-// Only CONNECT is supported; anything else gets 405.
+// Only CONNECT is supported; anything else gets 405. A CONNECT must carry a
+// valid session token in Proxy-Authorization; otherwise it is denied.
 func (p *proxy) handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	clientAddr := conn.RemoteAddr().String()
 
-	// Read the request line manually.  We expect:
-	//   CONNECT host:port HTTP/1.1\r\n
-	//   [headers]\r\n
-	//   \r\n
-	//
-	// We read byte-by-byte into a line buffer to avoid importing bufio
-	// (stdlib only constraint is not that strict, but keeping it simple).
 	line, err := readLine(conn)
 	if err != nil {
 		p.logger.Warn("read request line failed", "client", clientAddr, "err", err)
@@ -272,15 +234,27 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
-	// Drain remaining headers until empty line.
-	if err := drainHeaders(conn); err != nil {
-		p.logger.Warn("drain headers failed", "client", clientAddr, "err", err)
+	// Read headers, capturing the session token from Proxy-Authorization.
+	token, err := readHeadersCaptureAuth(conn)
+	if err != nil {
+		p.logger.Warn("read headers failed", "client", clientAddr, "err", err)
 		return
 	}
 
 	if method != "CONNECT" {
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nAllow: CONNECT\r\nContent-Type: text/plain\r\n\r\nagentjail-netproxy only supports HTTPS CONNECT tunneling\n")
 		p.logger.Warn("non-CONNECT request", "client", clientAddr, "method", method)
+		return
+	}
+
+	// Per-session auth: the token selects this session's allowlist. Missing,
+	// malformed, unknown, or expired -> deny. There is NO global fallback.
+	// Never log the token.
+	al, ok := p.registry.lookup(proxyctl.Token(token), time.Now())
+	if !ok {
+		_, _ = fmt.Fprintf(conn,
+			"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"agentjail\"\r\nX-Agentjail-Deny: session-token\r\nContent-Type: text/plain\r\n\r\nmissing or unknown agentjail session token\n")
+		p.logger.Warn("deny: unknown/missing session token", "client", clientAddr, "had_token", token != "")
 		return
 	}
 
@@ -292,7 +266,7 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
-	allowed := p.al.allowed(host)
+	allowed := al.allowed(host)
 	decision := "allow"
 	if !allowed {
 		decision = "deny"
@@ -307,7 +281,7 @@ func (p *proxy) handleConn(conn net.Conn) {
 
 	if !allowed {
 		_, _ = fmt.Fprintf(conn,
-			"HTTP/1.1 403 Forbidden\r\nX-Agentjail-Deny: host=%s\r\nContent-Type: text/plain\r\n\r\nhost not in network.allowed_hosts\n",
+			"HTTP/1.1 403 Forbidden\r\nX-Agentjail-Deny: host=%s\r\nContent-Type: text/plain\r\n\r\nhost not in this session's network.allowed_hosts\n",
 			host,
 		)
 		return
@@ -329,7 +303,6 @@ func (p *proxy) handleConn(conn net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() {
 		_, _ = io.Copy(upstream, conn)
-		// Half-close upstream write side so it sees EOF.
 		if tc, ok := upstream.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
 		}
@@ -342,7 +315,6 @@ func (p *proxy) handleConn(conn net.Conn) {
 		}
 		done <- struct{}{}
 	}()
-	// Wait for both directions to finish.
 	<-done
 	<-done
 }
@@ -359,7 +331,6 @@ func readLine(r io.Reader) (string, error) {
 			return string(buf), err
 		}
 		if b[0] == '\n' {
-			// Strip trailing \r if present.
 			line := strings.TrimRight(string(buf), "\r")
 			return line, nil
 		}
@@ -368,17 +339,54 @@ func readLine(r io.Reader) (string, error) {
 	return "", fmt.Errorf("request line too long (> %d bytes)", maxLine)
 }
 
-// drainHeaders reads and discards HTTP headers until an empty line.
-func drainHeaders(r io.Reader) error {
-	for {
+// readHeadersCaptureAuth reads HTTP headers until an empty line, returning the
+// session token parsed from a Proxy-Authorization: Basic header (empty if none).
+// It bounds the number of header lines it will read.
+func readHeadersCaptureAuth(r io.Reader) (token string, err error) {
+	for i := 0; i < maxRequestHeaders; i++ {
 		line, err := readLine(r)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if line == "" {
-			return nil // blank line = end of headers
+			return token, nil // blank line = end of headers
+		}
+		if name, val, ok := splitHeader(line); ok && strings.EqualFold(name, "Proxy-Authorization") {
+			if tk, ok := parseBasicToken(val); ok {
+				token = tk
+			}
 		}
 	}
+	return "", fmt.Errorf("too many request headers (> %d)", maxRequestHeaders)
+}
+
+// splitHeader splits "Name: value" into its parts (value left-trimmed).
+func splitHeader(line string) (name, value string, ok bool) {
+	i := strings.IndexByte(line, ':')
+	if i < 0 {
+		return "", "", false
+	}
+	return line[:i], strings.TrimSpace(line[i+1:]), true
+}
+
+// parseBasicToken extracts the username (= the agentjail session token) from a
+// "Basic <base64(token:)>" Proxy-Authorization value. The password half is
+// ignored; agentjail uses the username as the bearer token.
+func parseBasicToken(v string) (string, bool) {
+	const scheme = "basic "
+	v = strings.TrimSpace(v)
+	if len(v) < len(scheme) || !strings.EqualFold(v[:len(scheme)], scheme) {
+		return "", false
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(v[len(scheme):]))
+	if err != nil {
+		return "", false
+	}
+	creds := string(dec)
+	if i := strings.IndexByte(creds, ':'); i >= 0 {
+		return creds[:i], true
+	}
+	return creds, true
 }
 
 // parseRequestLine splits "METHOD target HTTP/1.x" into its components.
@@ -391,6 +399,9 @@ func parseRequestLine(line string) (method, target, proto string, ok bool) {
 	return parts[0], parts[1], parts[2], true
 }
 
+// defaultPolicyPath is retained only as the default for the deprecated --policy
+// flag (policy is now resolved per-session by the shield and registered over
+// the control socket; netproxy no longer reads policy.yaml).
 func defaultPolicyPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -401,17 +412,20 @@ func defaultPolicyPath() string {
 
 func main() {
 	addr := flag.String("addr", defaultAddr, "listen address (default 127.0.0.1:9100)")
-	policyPath := flag.String("policy", defaultPolicyPath(), "path to policy.yaml")
+	// Deprecated: retained so existing shield invocations that pass --policy do
+	// not error. netproxy no longer reads policy.yaml; the shield resolves the
+	// per-session allowlist and registers it over the control socket.
+	_ = flag.String("policy", defaultPolicyPath(), "DEPRECATED: ignored (policy is resolved per-session by the shield)")
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-netproxy [--addr=HOST:PORT] [--policy=PATH] [--log-level=LEVEL]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-netproxy [--addr=HOST:PORT] [--log-level=LEVEL]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --addr=HOST:PORT    listen address (default 127.0.0.1:9100)")
-		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml")
 		fmt.Fprintln(os.Stderr, "  --log-level=LEVEL   log level: debug, info, warn, error (default info)")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "HTTPS forward proxy that enforces network.allowed_hosts from policy.yaml.")
-		fmt.Fprintln(os.Stderr, "Only HTTP CONNECT is supported (HTTPS tunneling).")
+		fmt.Fprintln(os.Stderr, "Per-session HTTPS forward proxy. Each shielded session registers its")
+		fmt.Fprintln(os.Stderr, "allowlist over the control socket and is identified by a token carried")
+		fmt.Fprintln(os.Stderr, "in Proxy-Authorization. Only HTTP CONNECT is supported (HTTPS tunneling).")
 		os.Exit(64)
 	}
 	flag.Parse()
@@ -434,7 +448,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	p := newProxy(*addr, *policyPath, logger)
+	// NopEmitter for now; the store-backed audit.Emitter is wired in a later
+	// commit (session register/expiry are best-effort audit events).
+	p := newProxy(*addr, newSessionRegistry(), audit.NopEmitter{}, logger)
 	if err := p.run(ctx); err != nil {
 		logger.Error("proxy exited with error", "err", err)
 		os.Exit(1)

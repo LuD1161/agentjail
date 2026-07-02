@@ -49,9 +49,11 @@ const maxControlMsgBytes = 64 * 1024
 // of the control socket, alongside proxyctl's controlSocketName.
 const controlLockName = "netproxy-ctl.lock"
 
-// session is one registered shielded session's enforcement state.
+// session is one registered shielded session's enforcement state. al is the
+// prebuilt (normalized) allowlist for this session's hosts, so the data plane
+// reuses the same tested host-matching as the former global allowlist.
 type session struct {
-	policy      proxyctl.SessionPolicy
+	al          *allowlist
 	leaseExpiry time.Time
 }
 
@@ -78,14 +80,17 @@ func (r *sessionRegistry) register(tok proxyctl.Token, pol proxyctl.SessionPolic
 	if ttl <= 0 || ttl > maxLease {
 		ttl = maxLease
 	}
+	al := &allowlist{}
+	al.load(pol.AllowedHosts)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sessions[tok] = &session{policy: pol, leaseExpiry: now.Add(ttl)}
+	r.sessions[tok] = &session{al: al, leaseExpiry: now.Add(ttl)}
 }
 
-// lookup returns the token's allowed hosts if it is registered and its lease has
-// not expired. A missing or expired token returns (nil, false) -> deny.
-func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) ([]string, bool) {
+// lookup returns the token's allowlist if it is registered and its lease has not
+// expired. A missing or expired token returns (nil, false) -> deny (fail
+// closed, no global fallback).
+func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) (*allowlist, bool) {
 	if tok == "" {
 		return nil, false
 	}
@@ -95,7 +100,7 @@ func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) ([]string, b
 	if !ok || now.After(s.leaseExpiry) {
 		return nil, false
 	}
-	return s.policy.AllowedHosts, true
+	return s.al, true
 }
 
 // reap deletes every session whose lease has expired and returns the tokens

@@ -38,9 +38,9 @@ func TestSessionRegistryLifecycle(t *testing.T) {
 	tok := proxyctl.Token("sess-a")
 	r.register(tok, proxyctl.SessionPolicy{AllowedHosts: []string{"api.github.com"}}, time.Hour, now)
 
-	hosts, ok := r.lookup(tok, now.Add(time.Minute))
-	if !ok || len(hosts) != 1 || hosts[0] != "api.github.com" {
-		t.Fatalf("lookup within lease: got %v ok=%v", hosts, ok)
+	al, ok := r.lookup(tok, now.Add(time.Minute))
+	if !ok || !al.allowed("api.github.com") || al.allowed("evil.com") {
+		t.Fatalf("lookup within lease: ok=%v al=%v", ok, al)
 	}
 	// Different token -> deny, no bleed.
 	if _, ok := r.lookup(proxyctl.Token("sess-b"), now); ok {
@@ -146,9 +146,9 @@ func TestControlServerRegisterThenLookup(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("register failed: %+v", resp)
 	}
-	hosts, ok := cs.registry.lookup("tok-xyz", time.Now())
-	if !ok || len(hosts) != 2 {
-		t.Fatalf("registry lookup after register: %v ok=%v", hosts, ok)
+	al, ok := cs.registry.lookup("tok-xyz", time.Now())
+	if !ok || !al.allowed("api.github.com") || !al.allowed("foo.claude.ai") {
+		t.Fatalf("registry lookup after register: ok=%v al=%v", ok, al)
 	}
 }
 

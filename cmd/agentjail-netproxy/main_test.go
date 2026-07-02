@@ -2,21 +2,18 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/signal"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
 // ---- TestHostMatch_* — host matching logic ----
@@ -28,7 +25,7 @@ func TestHostMatch_ExactMatch(t *testing.T) {
 		want    bool
 	}{
 		{"api.github.com", "api.github.com", true},
-		{"api.github.com", "api.GITHUB.COM", true},  // case-insensitive after normalize
+		{"api.github.com", "api.GITHUB.COM", true}, // case-insensitive after normalize
 		{"api.github.com", "www.github.com", false},
 		{"api.github.com", "github.com", false},
 		{"api.github.com", "evil.api.github.com", false},
@@ -47,15 +44,10 @@ func TestHostMatch_Wildcard(t *testing.T) {
 		host    string
 		want    bool
 	}{
-		// Standard wildcard: one level below
 		{"*.example.com", "foo.example.com", true},
-		// Multi-level below also matches (*.example.com ≥ one label)
 		{"*.example.com", "foo.bar.example.com", true},
-		// Bare domain must NOT match the wildcard
 		{"*.example.com", "example.com", false},
-		// Different domain
 		{"*.example.com", "foo.notexample.com", false},
-		// Wildcard itself with no host prefix
 		{"*.github.com", "github.com", false},
 		{"*.github.com", "api.github.com", true},
 	}
@@ -70,11 +62,9 @@ func TestHostMatch_Wildcard(t *testing.T) {
 func TestHostMatch_PortStripped(t *testing.T) {
 	al := &allowlist{}
 	al.load([]string{"api.github.com"})
-	// normalizeHost strips port before matching
 	if !al.allowed("api.github.com") {
 		t.Error("expected api.github.com allowed without port")
 	}
-	// Pass host without port (caller has already split via net.SplitHostPort)
 	if al.allowed("attacker.example.com") {
 		t.Error("expected attacker.example.com denied")
 	}
@@ -82,95 +72,67 @@ func TestHostMatch_PortStripped(t *testing.T) {
 
 func TestHostMatch_IDNEquivalence(t *testing.T) {
 	al := &allowlist{}
-	al.load([]string{"API.GitHub.COM"}) // upper-case in config
+	al.load([]string{"API.GitHub.COM"})
 	if !al.allowed("api.github.com") {
 		t.Error("case-insensitive IDN matching failed")
 	}
 }
 
 func TestHostMatch_TrailingDot(t *testing.T) {
-	// Some DNS clients add a trailing root label dot; we strip it.
 	got := normalizeHost("api.github.com.")
 	if got != "api.github.com" {
 		t.Errorf("normalizeHost with trailing dot = %q; want %q", got, "api.github.com")
 	}
 }
 
-// ---- TestCONNECTRequest_AllowedHost ----
+// ---- helpers ----
 
-// TestCONNECTRequest_AllowedHost verifies that a CONNECT request for an
-// allowed host tunnels successfully to a real (in-process) test server.
-func TestCONNECTRequest_AllowedHost(t *testing.T) {
-	// Upstream: a plain TCP echo server.
-	upstream := startEchoServer(t)
-	upstreamHost, upstreamPort, _ := net.SplitHostPort(upstream.Addr().String())
+// discardLogger returns a slog.Logger that drops all output.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
-	// Allow the upstream host.
-	al := &allowlist{}
-	al.load([]string{upstreamHost})
+// testToken is the session token every data-plane test registers.
+const testToken = proxyctl.Token("test-session-token")
 
-	// Start the proxy on a random port.
-	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+// newProxyForHosts builds a proxy whose single registered session (testToken)
+// allows exactly the given hosts. This is how the data plane is exercised now
+// that there is no global allowlist -- every CONNECT must carry a token.
+func newProxyForHosts(hosts []string) *proxy {
+	reg := newSessionRegistry()
+	reg.register(testToken, proxyctl.SessionPolicy{AllowedHosts: hosts}, time.Hour, time.Now())
+	return &proxy{registry: reg, logger: discardLogger()}
+}
+
+// connectReq formats a CONNECT request line + headers carrying the session
+// token as the Proxy-Authorization Basic username (empty tok => no auth header).
+func connectReq(target string, tok proxyctl.Token) string {
+	if tok == "" {
+		return fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	}
+	auth := base64.StdEncoding.EncodeToString([]byte(string(tok) + ":"))
+	return fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)
+}
+
+// serveProxy runs the proxy's accept loop over a fresh listener and returns the
+// dialable address.
+func serveProxy(t *testing.T, p *proxy) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("proxy listen: %v", err)
 	}
-
-	p := &proxy{
-		addr:   proxyLn.Addr().String(),
-		al:     al,
-		logger: discardLogger(),
-	}
 	go func() {
 		for {
-			conn, err := proxyLn.Accept()
+			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
 			go p.handleConn(conn)
 		}
 	}()
-	t.Cleanup(func() { proxyLn.Close() })
-
-	// Connect to the proxy and send a CONNECT request.
-	client, err := net.Dial("tcp", proxyLn.Addr().String())
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
-	defer client.Close()
-
-	target := net.JoinHostPort(upstreamHost, upstreamPort)
-	fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
-
-	// Read the response line.
-	reader := bufio.NewReader(client)
-	responseLine, err := reader.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read response: %v", err)
-	}
-	if !strings.Contains(responseLine, "200") {
-		t.Fatalf("expected 200 response, got: %q", responseLine)
-	}
-	// Drain the empty blank line after the status line.
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || strings.TrimSpace(line) == "" {
-			break
-		}
-	}
-
-	// Send something through the tunnel to the echo server.
-	msg := "hello-tunnel\n"
-	_, _ = fmt.Fprint(client, msg)
-
-	// Read echo back.
-	echoed := make([]byte, len(msg))
-	n, err := io.ReadFull(reader, echoed)
-	if err != nil || n != len(msg) {
-		t.Fatalf("echo read: n=%d err=%v", n, err)
-	}
-	if string(echoed) != msg {
-		t.Errorf("echo mismatch: got %q, want %q", string(echoed), msg)
-	}
+	t.Cleanup(func() { ln.Close() })
+	return ln.Addr().String()
 }
 
 // startEchoServer starts a plain TCP echo server and returns its listener.
@@ -188,7 +150,7 @@ func startEchoServer(t *testing.T) net.Listener {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				_, _ = io.Copy(c, c) // echo
+				_, _ = io.Copy(c, c)
 			}(conn)
 		}
 	}()
@@ -196,39 +158,68 @@ func startEchoServer(t *testing.T) net.Listener {
 	return ln
 }
 
-// TestCONNECTRequest_DeniedHost verifies that a CONNECT to a non-allowed host
-// returns 403 with the X-Agentjail-Deny header.
-func TestCONNECTRequest_DeniedHost(t *testing.T) {
-	al := &allowlist{}
-	al.load([]string{"api.github.com"}) // attacker.example.com is NOT in the list
+// ---- CONNECT data-plane tests (per-session token) ----
 
-	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("proxy listen: %v", err)
-	}
-	p := &proxy{al: al, logger: discardLogger()}
-	go func() {
-		for {
-			conn, err := proxyLn.Accept()
-			if err != nil {
-				return
-			}
-			go p.handleConn(conn)
-		}
-	}()
-	t.Cleanup(func() { proxyLn.Close() })
+// TestCONNECTRequest_AllowedHost verifies a CONNECT for an allowed host tunnels
+// successfully when the request carries the session's token.
+func TestCONNECTRequest_AllowedHost(t *testing.T) {
+	upstream := startEchoServer(t)
+	upstreamHost, upstreamPort, _ := net.SplitHostPort(upstream.Addr().String())
 
-	client, err := net.Dial("tcp", proxyLn.Addr().String())
+	p := newProxyForHosts([]string{upstreamHost})
+	proxyAddr := serveProxy(t, p)
+
+	client, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
 
-	fmt.Fprintf(client, "CONNECT attacker.example.com:443 HTTP/1.1\r\nHost: attacker.example.com\r\n\r\n")
+	target := net.JoinHostPort(upstreamHost, upstreamPort)
+	fmt.Fprint(client, connectReq(target, testToken))
 
 	reader := bufio.NewReader(client)
-	// Read the full response.
-	resp, err := http.ReadResponse(reader, nil)
+	responseLine, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if !strings.Contains(responseLine, "200") {
+		t.Fatalf("expected 200 response, got: %q", responseLine)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+
+	msg := "hello-tunnel\n"
+	_, _ = fmt.Fprint(client, msg)
+	echoed := make([]byte, len(msg))
+	n, err := io.ReadFull(reader, echoed)
+	if err != nil || n != len(msg) {
+		t.Fatalf("echo read: n=%d err=%v", n, err)
+	}
+	if string(echoed) != msg {
+		t.Errorf("echo mismatch: got %q, want %q", string(echoed), msg)
+	}
+}
+
+// TestCONNECTRequest_DeniedHost verifies a CONNECT (with a valid token) to a
+// host outside that session's allowlist returns 403.
+func TestCONNECTRequest_DeniedHost(t *testing.T) {
+	p := newProxyForHosts([]string{"api.github.com"})
+	proxyAddr := serveProxy(t, p)
+
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+
+	fmt.Fprint(client, connectReq("attacker.example.com:443", testToken))
+
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
@@ -237,8 +228,7 @@ func TestCONNECTRequest_DeniedHost(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", resp.StatusCode)
 	}
-	deny := resp.Header.Get("X-Agentjail-Deny")
-	if !strings.Contains(deny, "attacker.example.com") {
+	if deny := resp.Header.Get("X-Agentjail-Deny"); !strings.Contains(deny, "attacker.example.com") {
 		t.Errorf("X-Agentjail-Deny header missing host: %q", deny)
 	}
 	body, _ := io.ReadAll(resp.Body)
@@ -247,202 +237,112 @@ func TestCONNECTRequest_DeniedHost(t *testing.T) {
 	}
 }
 
-// TestCONNECTRequest_Malformed verifies that a malformed request line returns 400.
-func TestCONNECTRequest_Malformed(t *testing.T) {
-	al := &allowlist{}
-	al.load(nil)
+// TestCONNECTRequest_MissingToken proves there is NO global fallback: a CONNECT
+// to an otherwise-allowed host with no Proxy-Authorization is denied (407).
+func TestCONNECTRequest_MissingToken(t *testing.T) {
+	p := newProxyForHosts([]string{"api.github.com"})
+	proxyAddr := serveProxy(t, p)
 
-	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("proxy listen: %v", err)
-	}
-	p := &proxy{al: al, logger: discardLogger()}
-	go func() {
-		for {
-			conn, err := proxyLn.Accept()
-			if err != nil {
-				return
-			}
-			go p.handleConn(conn)
-		}
-	}()
-	t.Cleanup(func() { proxyLn.Close() })
-
-	client, err := net.Dial("tcp", proxyLn.Addr().String())
+	client, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
 
-	// Send a malformed line (no spaces, no HTTP version)
-	fmt.Fprintf(client, "GARBAGE\r\n\r\n")
+	fmt.Fprint(client, connectReq("api.github.com:443", "")) // no token
 
-	reader := bufio.NewReader(client)
-	resp, err := http.ReadResponse(reader, nil)
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("missing token: expected 407, got %d", resp.StatusCode)
+	}
+}
 
+// TestCONNECTRequest_UnknownToken verifies an unregistered token is denied
+// (407), never falling back to any allowlist.
+func TestCONNECTRequest_UnknownToken(t *testing.T) {
+	p := newProxyForHosts([]string{"api.github.com"})
+	proxyAddr := serveProxy(t, p)
+
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+
+	fmt.Fprint(client, connectReq("api.github.com:443", proxyctl.Token("not-a-real-token")))
+
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("unknown token: expected 407, got %d", resp.StatusCode)
+	}
+}
+
+// TestCONNECTRequest_Malformed verifies a malformed request line returns 400
+// (before any auth check).
+func TestCONNECTRequest_Malformed(t *testing.T) {
+	p := newProxyForHosts(nil)
+	proxyAddr := serveProxy(t, p)
+
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+
+	fmt.Fprint(client, "GARBAGE\r\n\r\n")
+
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
 }
 
-// TestCONNECTRequest_NonCONNECTMethod verifies that plain HTTP GET returns 405.
+// TestCONNECTRequest_NonCONNECTMethod verifies plain HTTP GET returns 405
+// (before the auth check).
 func TestCONNECTRequest_NonCONNECTMethod(t *testing.T) {
-	al := &allowlist{}
-	al.load(nil)
+	p := newProxyForHosts(nil)
+	proxyAddr := serveProxy(t, p)
 
-	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("proxy listen: %v", err)
-	}
-	p := &proxy{al: al, logger: discardLogger()}
-	go func() {
-		for {
-			conn, err := proxyLn.Accept()
-			if err != nil {
-				return
-			}
-			go p.handleConn(conn)
-		}
-	}()
-	t.Cleanup(func() { proxyLn.Close() })
-
-	client, err := net.Dial("tcp", proxyLn.Addr().String())
+	client, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
 
-	fmt.Fprintf(client, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	fmt.Fprint(client, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
 
-	reader := bufio.NewReader(client)
-	resp, err := http.ReadResponse(reader, nil)
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", resp.StatusCode)
 	}
 }
 
-// TestReloadOnSIGHUP verifies that sending SIGHUP to the proxy causes it to
-// re-read the policy file, picking up a changed allowed_hosts list.
-func TestReloadOnSIGHUP(t *testing.T) {
-	// Write a policy file that initially allows "api.github.com".
-	policyDir := t.TempDir()
-	policyFile := filepath.Join(policyDir, "policy.yaml")
-	writePolicy(t, policyFile, []string{"api.github.com"})
-
-	// Build a proxy that points at this policy file.
-	p := newProxy("127.0.0.1:0", policyFile, discardLogger())
-	// Load the initial policy manually (run() would do this, but we want
-	// to test the reload path without starting the full server).
-	p.reloadPolicy()
-
-	// Confirm api.github.com is allowed.
-	if !p.al.allowed("api.github.com") {
-		t.Fatal("api.github.com should be allowed initially")
-	}
-	// Confirm attacker.example.com is denied.
-	if p.al.allowed("attacker.example.com") {
-		t.Fatal("attacker.example.com should be denied initially")
-	}
-
-	// Update the policy file to also allow attacker.example.com.
-	writePolicy(t, policyFile, []string{"api.github.com", "attacker.example.com"})
-
-	// Simulate SIGHUP by calling reloadPolicy directly (the signal path is
-	// tested indirectly in the integration test below).
-	p.reloadPolicy()
-
-	// Now attacker.example.com should be allowed (bad policy, but we're
-	// testing reload, not policy correctness).
-	if !p.al.allowed("attacker.example.com") {
-		t.Error("attacker.example.com should be allowed after reload")
-	}
-}
-
-// TestReloadOnSIGHUP_Signal verifies that a SIGHUP routed through the proxy's
-// internal signal channel causes a policy reload.  We simulate this by wiring
-// a buffered channel that the proxy goroutine selects on, which is the same
-// code path that a real SIGHUP signal drives.
-func TestReloadOnSIGHUP_Signal(t *testing.T) {
-	policyDir := t.TempDir()
-	policyFile := filepath.Join(policyDir, "policy.yaml")
-	writePolicy(t, policyFile, []string{"api.github.com"})
-
-	p := newProxy("127.0.0.1:0", policyFile, discardLogger())
-	p.reloadPolicy()
-
-	if p.al.allowed("newhost.example.com") {
-		t.Fatal("newhost.example.com should not be allowed before reload")
-	}
-
-	// Update the policy file to add the new host.
-	writePolicy(t, policyFile, []string{"api.github.com", "newhost.example.com"})
-
-	// Drive the reload path directly (matches what the SIGHUP goroutine does).
-	p.reloadPolicy()
-
-	if !p.al.allowed("newhost.example.com") {
-		t.Error("reloadPolicy did not pick up new host; SIGHUP path broken")
-	}
-
-	// Also test the real OS signal path using signal.Notify on our own channel.
-	// We must capture SIGHUP before sending so Go's runtime doesn't terminate.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGHUP)
-	defer signal.Stop(sigCh)
-
-	// Reset the allowlist to the initial state.
-	writePolicy(t, policyFile, []string{"api.github.com"})
-	p.reloadPolicy()
-
-	// Update again.
-	writePolicy(t, policyFile, []string{"api.github.com", "signalhost.example.com"})
-
-	// Send SIGHUP — our channel captures it so the process does not die.
-	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
-		t.Fatalf("kill SIGHUP: %v", err)
-	}
-	// Wait for signal delivery.
-	select {
-	case <-sigCh:
-		// Signal received — now drive the reload (same as the SIGHUP goroutine).
-		p.reloadPolicy()
-	case <-time.After(2 * time.Second):
-		t.Fatal("SIGHUP not delivered within 2s")
-	}
-
-	if !p.al.allowed("signalhost.example.com") {
-		t.Error("post-SIGHUP reload did not pick up new host")
-	}
-}
-
-// TestProxyConnsCapAt256 verifies that when maxConcurrentConns is exceeded
-// the proxy returns 503.  We use a real TCP listener with the full run()
-// path so the cap check in the accept loop fires.
+// TestProxyConnsCapAt256 verifies that when maxConcurrentConns is exceeded the
+// proxy returns 503, rejecting at the accept loop before handleConn.
 func TestProxyConnsCapAt256(t *testing.T) {
-	al := &allowlist{}
-	al.load(nil)
-
+	p := &proxy{registry: newSessionRegistry(), logger: discardLogger()}
 	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("proxy listen: %v", err)
 	}
-	p := &proxy{al: al, logger: discardLogger()}
+	p.connCount.Store(maxConcurrentConns) // already at the cap
 
-	// Simulate already at the cap by pre-loading the counter.
-	// The run() loop does Add(1) after Accept; if the result > maxConcurrentConns
-	// it sends 503.  Pre-set to maxConcurrentConns so the next Add(1) triggers.
-	p.connCount.Store(maxConcurrentConns)
-
-	// Run the accept loop manually (same logic as run() inner accept code).
 	go func() {
 		for {
 			conn, err := proxyLn.Accept()
@@ -464,50 +364,25 @@ func TestProxyConnsCapAt256(t *testing.T) {
 	}()
 	t.Cleanup(func() { proxyLn.Close() })
 
-	// Connect to the proxy.
 	client, err := net.Dial("tcp", proxyLn.Addr().String())
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
 
-	// Send a CONNECT request — but the cap should reject us first.
-	fmt.Fprintf(client, "CONNECT attacker.example.com:443 HTTP/1.1\r\nHost: attacker.example.com\r\n\r\n")
+	fmt.Fprint(client, connectReq("attacker.example.com:443", testToken))
 
-	reader := bufio.NewReader(client)
-	resp, err := http.ReadResponse(reader, nil)
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", resp.StatusCode)
 	}
 }
 
-// ---- helpers ----
-
-// discardLogger returns a slog.Logger that drops all output.
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-// writePolicy writes a policy.yaml with the given allowed_hosts list.
-func writePolicy(t *testing.T, path string, hosts []string) {
-	t.Helper()
-	lines := []string{"network:"}
-	lines = append(lines, "  allowed_hosts:")
-	for _, h := range hosts {
-		lines = append(lines, "    - "+h)
-	}
-	content := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
-}
-
-// ---- parseRequestLine unit tests ----
+// ---- parse helpers ----
 
 func TestParseRequestLine_Valid(t *testing.T) {
 	method, target, proto, ok := parseRequestLine("CONNECT api.github.com:443 HTTP/1.1")
@@ -520,137 +395,62 @@ func TestParseRequestLine_Valid(t *testing.T) {
 }
 
 func TestParseRequestLine_TooFewParts(t *testing.T) {
-	_, _, _, ok := parseRequestLine("CONNECT")
-	if ok {
+	if _, _, _, ok := parseRequestLine("CONNECT"); ok {
 		t.Error("expected !ok for single token")
 	}
 }
 
 func TestParseRequestLine_Empty(t *testing.T) {
-	_, _, _, ok := parseRequestLine("")
-	if ok {
+	if _, _, _, ok := parseRequestLine(""); ok {
 		t.Error("expected !ok for empty line")
 	}
 }
 
-// ---- loadPolicy ----
-
-// TestLoadPolicy_ReadsAllowedHosts verifies loadPolicy returns the EFFECTIVE
-// allowlist: the file's explicit hosts plus the non-removable essentials
-// (config.EssentialAllowedHosts), even though the file only lists two hosts.
-func TestLoadPolicy_ReadsAllowedHosts(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "policy.yaml")
-	writePolicy(t, f, []string{"api.github.com", "registry.npmjs.org"})
-
-	hosts, err := loadPolicy(f)
-	if err != nil {
-		t.Fatalf("loadPolicy: %v", err)
+func TestParseBasicToken(t *testing.T) {
+	tok := proxyctl.Token("abc123XYZ")
+	enc := base64.StdEncoding.EncodeToString([]byte(string(tok) + ":"))
+	got, ok := parseBasicToken("Basic " + enc)
+	if !ok || got != string(tok) {
+		t.Errorf("parseBasicToken = %q ok=%v; want %q", got, ok, tok)
 	}
-	want := len(config.EssentialAllowedHosts()) + 2
-	if len(hosts) != want {
-		t.Errorf("expected %d hosts (essentials + 2 explicit), got %d: %v", want, len(hosts), hosts)
+	// Case-insensitive scheme.
+	if got, ok := parseBasicToken("basic " + enc); !ok || got != string(tok) {
+		t.Errorf("lowercase scheme failed: %q ok=%v", got, ok)
 	}
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
+	// Non-Basic and garbage are rejected.
+	if _, ok := parseBasicToken("Bearer xyz"); ok {
+		t.Error("Bearer should not parse as Basic")
 	}
-	for _, h := range []string{"api.github.com", "registry.npmjs.org", "api.anthropic.com"} {
-		if !hostSet[h] {
-			t.Errorf("expected loadPolicy to include %q, got %v", h, hosts)
-		}
+	if _, ok := parseBasicToken("Basic !!!notbase64"); ok {
+		t.Error("invalid base64 should not parse")
 	}
 }
 
-// TestLoadPolicy_AllowedHostsOmitsEssentialStillAllows verifies that a
-// policy whose allowed_hosts omits an essential provider host (e.g.
-// api.anthropic.com) still allows it through loadPolicy -- essentials are
-// non-removable at the netproxy enforcement point.
-func TestLoadPolicy_AllowedHostsOmitsEssentialStillAllows(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "policy.yaml")
-	writePolicy(t, f, []string{"my.corp.internal"})
-
-	hosts, err := loadPolicy(f)
-	if err != nil {
-		t.Fatalf("loadPolicy: %v", err)
-	}
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
-	}
-	if !hostSet["api.anthropic.com"] {
-		t.Errorf("expected loadPolicy to still allow api.anthropic.com despite policy omitting it, got %v", hosts)
-	}
-	if !hostSet["my.corp.internal"] {
-		t.Errorf("expected loadPolicy to allow the explicit my.corp.internal host, got %v", hosts)
-	}
-}
-
-// TestLoadPolicy_FileNotFound verifies that a missing policy file is not an
-// error -- loadPolicy falls back to defaults (config.LoadOrDefault) so the
-// proxy is never in a fail-closed-with-error state, and essentials are still
-// present.
-func TestLoadPolicy_FileNotFound(t *testing.T) {
-	hosts, err := loadPolicy("/nonexistent/path/policy.yaml")
-	if err != nil {
-		t.Fatalf("loadPolicy with missing file should not error, got: %v", err)
-	}
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
-	}
-	if !hostSet["api.anthropic.com"] {
-		t.Errorf("expected loadPolicy to allow essentials with a missing policy file, got %v", hosts)
-	}
-}
-
-// ---- integration: verify proxy can do an actual HTTPS CONNECT via httptest ----
+// ---- integration: full tunnel via httptest ----
 
 // TestCONNECTRequest_HTTPSViaTestServer verifies the full tunnel using an
-// httptest.Server that speaks HTTP (post-TLS; we verify the proxy wires bytes).
+// httptest.Server (post-CONNECT the proxy just wires bytes).
 func TestCONNECTRequest_HTTPSViaTestServer(t *testing.T) {
-	// Upstream server returns a fixed response.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 		fmt.Fprintln(w, "agentjail-netproxy tunnel works")
 	}))
 	defer ts.Close()
 
-	// The httptest server listens on 127.0.0.1:PORT.
 	host, port, _ := net.SplitHostPort(ts.Listener.Addr().String())
+	p := newProxyForHosts([]string{host})
+	proxyAddr := serveProxy(t, p)
 
-	al := &allowlist{}
-	al.load([]string{host})
-
-	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("proxy listen: %v", err)
-	}
-	p := &proxy{al: al, logger: discardLogger()}
-	go func() {
-		for {
-			conn, err := proxyLn.Accept()
-			if err != nil {
-				return
-			}
-			go p.handleConn(conn)
-		}
-	}()
-	t.Cleanup(func() { proxyLn.Close() })
-
-	// Connect to the proxy.
-	client, err := net.Dial("tcp", proxyLn.Addr().String())
+	client, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
 
 	target := net.JoinHostPort(host, port)
-	fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	fmt.Fprint(client, connectReq(target, testToken))
 
 	reader := bufio.NewReader(client)
-	// Read status line + blank line.
 	statusLine, _ := reader.ReadString('\n')
 	if !strings.Contains(statusLine, "200") {
 		t.Fatalf("expected 200 Connection established, got %q", statusLine)
@@ -662,20 +462,13 @@ func TestCONNECTRequest_HTTPSViaTestServer(t *testing.T) {
 		}
 	}
 
-	// Send an HTTP GET through the tunnel (to the plain HTTP test server).
 	fmt.Fprintf(client, "GET / HTTP/1.0\r\nHost: %s\r\n\r\n", host)
-
-	// Read the HTTP response from the upstream server.
 	resp, err := http.ReadResponse(reader, nil)
 	if err != nil {
 		t.Fatalf("read upstream response: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusTeapot {
 		t.Errorf("expected 418, got %d", resp.StatusCode)
 	}
-
-	// Suppress unused import warning for config if not used directly in tests.
-	_ = config.Default()
 }
