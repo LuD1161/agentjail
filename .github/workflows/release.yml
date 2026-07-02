@@ -56,6 +56,63 @@ jobs:
             go build -ldflags "${LDFLAGS}" -o "dist/${bin}" "./cmd/${bin}"
           done
 
+      - name: codesign + notarize (macOS only)
+        if: matrix.goos == 'darwin' && env.APPLE_CERTIFICATE_P12 != ''
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+
+          # Import certificate into a temporary keychain
+          KEYCHAIN="build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 3600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+
+          echo "${APPLE_CERTIFICATE_P12}" | base64 -d > /tmp/certificate.p12
+          security import /tmp/certificate.p12 -k "${KEYCHAIN}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          rm -f /tmp/certificate.p12
+
+          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+
+          IDENTITY="Developer ID Application: Aseem Shrey (${APPLE_TEAM_ID})"
+
+          # Sign each binary
+          for bin in dist/agentjail dist/agentjail-hook dist/agentjail-daemon dist/agentjail-shield dist/agentjail-netproxy; do
+            echo "signing $(basename ${bin})..."
+            codesign --force --options runtime --sign "${IDENTITY}" \
+              --timestamp "${bin}"
+          done
+
+          # Create a zip for notarization (notarytool requires zip/dmg/pkg)
+          ditto -c -k --keepParent dist /tmp/agentjail-notarize.zip
+
+          # Submit for notarization and wait
+          echo "submitting for notarization..."
+          xcrun notarytool submit /tmp/agentjail-notarize.zip \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_ID_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait --timeout 10m
+
+          rm -f /tmp/agentjail-notarize.zip
+
+          # Verify signatures
+          for bin in dist/agentjail dist/agentjail-hook dist/agentjail-daemon dist/agentjail-shield dist/agentjail-netproxy; do
+            echo "verifying $(basename ${bin})..."
+            codesign --verify --verbose=2 "${bin}"
+          done
+
+          # Clean up keychain
+          security delete-keychain "${KEYCHAIN}"
+
       - name: package tarball
         run: |
           VERSION="${GITHUB_REF_NAME}"
@@ -100,7 +157,7 @@ jobs:
           name: agentjail-${{ matrix.platform }}
           path: dist/
 
-      - name: extract + verify Gatekeeper-clean
+      - name: extract + verify Gatekeeper-clean + signature
         run: |
           set -eu
           TARBALL=$(ls dist/agentjail-*-${{ matrix.platform }}.tar.gz)
@@ -109,6 +166,16 @@ jobs:
           tar -xzf "${TARBALL}" -C extracted
           chmod +x test/macos-gatekeeper/verify.sh
           test/macos-gatekeeper/verify.sh "extracted/agentjail"
+
+          # Verify code signature if binaries are signed
+          for bin in extracted/agentjail extracted/agentjail-hook extracted/agentjail-daemon extracted/agentjail-shield extracted/agentjail-netproxy; do
+            if codesign --verify "${bin}" 2>/dev/null; then
+              echo "✓ $(basename ${bin}): signed and valid"
+              codesign -dvv "${bin}" 2>&1 | grep -E "Authority|TeamIdentifier" || true
+            else
+              echo "⚠ $(basename ${bin}): not signed (expected if APPLE_CERTIFICATE_P12 secret is not set)"
+            fi
+          done
 
   release:
     name: create GitHub release
