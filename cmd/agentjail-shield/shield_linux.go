@@ -156,13 +156,33 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	ctx := context.Background()
 	noColor := os.Getenv("NO_COLOR") != ""
 	if noColor {
 		fmt.Fprintln(os.Stderr, "  agentjail — setting up sandbox...")
 	} else {
 		fmt.Fprintln(os.Stderr, "  \033[38;5;208magentjail\033[0m — setting up sandbox...")
+	}
+
+	// Tunnel mode: try to start the WireGuard gateway. If it succeeds,
+	// skip netproxy entirely. If it fails, fall back to netproxy.
+	if tunnelMode {
+		tunnelSessionID := generateSessionID()
+		gw, cancel, ready := startTunnel(ctx, tunnelSessionID)
+		if ready {
+			noNetproxy = true
+			defer cleanupTunnel(gw, cancel, tunnelSessionID)
+			if noColor {
+				fmt.Fprintln(os.Stderr, "  ✓ WireGuard tunnel gateway started")
+			} else {
+				fmt.Fprintln(os.Stderr, "  \033[32m✓\033[0m WireGuard tunnel gateway started")
+			}
+		} else {
+			_ = gw
+			_ = cancel
+			fmt.Fprintln(os.Stderr, "  ⚠ tunnel not available, falling back to netproxy")
+		}
 	}
 
 	// Start netproxy as a child process BEFORE applying Landlock — netproxy

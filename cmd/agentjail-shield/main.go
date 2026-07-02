@@ -64,6 +64,7 @@ func main() {
 	// See ADR 0046.
 	netproxyEnable := flag.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
 	noNetproxy := flag.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
+	tunnelMode := flag.Bool("tunnel", false, "use WireGuard tunnel gateway for transparent traffic interception (Linux only, requires agentjail-daemon)")
 	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	flag.Usage = func() {
@@ -194,7 +195,7 @@ func main() {
 	}
 
 	// Delegate to the OS-specific sandbox implementation.
-	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *policyPath, startTime, emitter)
+	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode, *policyPath, startTime, emitter)
 }
 
 // resolveNoNetproxy computes the effective "netproxy disabled" value from the
