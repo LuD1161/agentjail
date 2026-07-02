@@ -105,6 +105,18 @@ const (
 	// agent); the grant verb is additionally denied to agents by command
 	// policy. Not wired until Phase 3.
 	ReqGrant RequestType = "grant"
+	// ReqGrantList lists the pending grant requests netproxy currently holds
+	// in memory, across all sessions. Control-socket only. Carries no Token
+	// -- callers see the pending set, not who can approve it.
+	ReqGrantList RequestType = "grant_list"
+	// ReqGrantApprove claims a pending grant request by GrantID and applies it
+	// to the owning session's allowlist. Control-socket only; netproxy
+	// resolves session->Token from its own in-memory registration -- the
+	// caller supplies no Token and no session identity, only the GrantID.
+	ReqGrantApprove RequestType = "grant_approve"
+	// ReqGrantDeny discards a pending grant request by GrantID without
+	// applying it. Control-socket only, same GrantID-only shape as approve.
+	ReqGrantDeny RequestType = "grant_deny"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
@@ -112,6 +124,15 @@ type Request struct {
 	Type RequestType `json:"type"`
 	// Token is required for register/grant; omitted for fingerprint.
 	Token Token `json:"token,omitempty"`
+	// SessionID is a NON-SECRET handle for register (the Claude Code hook
+	// session id, or a fresh opaque handle minted by the shield). It exists
+	// so a human approving a grant can disambiguate sessions; it carries no
+	// authority on its own -- the Token remains the data-plane bearer.
+	SessionID string `json:"session_id,omitempty"`
+	// Cwd is the session's working directory at register time, for register.
+	// Display-only: shown in `agentjail grants` so a human can tell sessions
+	// apart. Never used for authorization.
+	Cwd string `json:"cwd,omitempty"`
 	// Policy is the resolved session policy for register.
 	Policy *SessionPolicy `json:"policy,omitempty"`
 	// LeaseTTLMs is the hard absolute lease lifetime for register, in
@@ -121,6 +142,11 @@ type Request struct {
 	Hosts []string `json:"hosts,omitempty"`
 	// GrantTTLMs is the hard TTL for a grant (Phase 3).
 	GrantTTLMs int64 `json:"grant_ttl_ms,omitempty"`
+	// GrantID identifies a single pending grant request for grant_approve /
+	// grant_deny. This is the ONLY identifying field those two verbs carry --
+	// no Token, no session identity -- netproxy resolves session->Token from
+	// its own in-memory pending map by GrantID.
+	GrantID string `json:"grant_id,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).
@@ -129,6 +155,23 @@ type Response struct {
 	Error string `json:"error,omitempty"`
 	// Fingerprint is populated on a successful fingerprint response.
 	Fingerprint *Fingerprint `json:"fingerprint,omitempty"`
+	// Grants is populated on a successful grant_list response. It NEVER
+	// carries a Token -- see GrantInfo.
+	Grants []GrantInfo `json:"grants,omitempty"`
+}
+
+// GrantInfo describes one pending grant request for `agentjail grants`. It is
+// deliberately Token-less: the list response is safe to print to a human
+// terminal and must never leak the session's data-plane bearer.
+type GrantInfo struct {
+	GrantID string `json:"grant_id"`
+	Host    string `json:"host"`
+	TTLMs   int64  `json:"ttl_ms"`
+	// Cwd is the requesting session's working directory, display-only.
+	Cwd string `json:"cwd,omitempty"`
+	// Reason is the agent-supplied justification, display-only and bounded
+	// by MaxReasonLen.
+	Reason string `json:"reason,omitempty"`
 }
 
 // MaxControlMsgBytes bounds a single control-plane message (request or
@@ -141,3 +184,20 @@ const MaxControlMsgBytes = 64 * 1024
 // traffic, bounding the blast radius of a leaked token and preventing an
 // agent-spawned background process from keeping a session alive indefinitely.
 const MaxLeaseTTLMs int64 = 24 * 60 * 60 * 1000
+
+// Runtime host grant bounds (Phase 3, AGE-93). These cap the sentinel
+// endpoint (internal/netproxy) and the CLI so a sandboxed agent cannot exceed
+// memory or audit volume by spamming grant requests.
+const (
+	// MaxReasonLen bounds the agent-supplied --reason string.
+	MaxReasonLen = 256
+	// MaxGrantTTLMs is the hard ceiling on a single grant's TTL (24h), same
+	// horizon as MaxLeaseTTLMs.
+	MaxGrantTTLMs int64 = 24 * 60 * 60 * 1000
+	// MaxPendingPerSession bounds how many outstanding grant requests a
+	// single session may have filed at once.
+	MaxPendingPerSession = 16
+	// MaxPendingGlobal bounds the total outstanding grant requests across all
+	// sessions netproxy is serving.
+	MaxPendingGlobal = 256
+)
