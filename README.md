@@ -438,6 +438,7 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 ## Docs
 
 - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) - architecture overview
+- [`docs/FLOW.md`](./docs/FLOW.md) - how a shielded session flows + the allowed-hosts model
 - [`docs/SANDBOX.md`](./docs/SANDBOX.md) - sandbox (`agentjail-shield`) user guide
 - [`docs/adr/`](./docs/adr/) - architecture decision records
 - [`docs/TELEMETRY.md`](./docs/TELEMETRY.md) - telemetry details

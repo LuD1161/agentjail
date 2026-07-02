@@ -226,7 +226,15 @@ works — see [ADR 0037](./adr/0037-macos-keychain-access-shielded-agent.md);
 the hook layer still denies an agent's own direct reads of that path. When
 `agentjail-netproxy` is running (default), the
 agent is restricted to localhost-only outbound TCP and all HTTPS traffic flows
-through the proxy, which enforces `network.allowed_hosts` from `policy.yaml`.
+through the proxy, which enforces the *effective* allowlist from `policy.yaml`.
+The effective allowlist is three tiers -- non-removable essentials (provider
+auth + `mcp-proxy.anthropic.com`), hosts auto-derived from the MCP servers you
+allow (`mcp.allowed`), then your editable `network.allowed_hosts` -- computed by
+`EffectiveAllowedHosts()`. A malformed `policy.yaml` or a failed `netproxy` make
+the shield refuse to launch (fail loud / fail closed) rather than silently
+weaken enforcement. See [ADR 0040](./adr/0040-mcp-derived-hosts-and-fail-loud-config.md)
+and [ADR 0041](./adr/0041-hostpattern-cursor-hosts-netproxy-fail-closed.md);
+for the end-to-end walkthrough see [`docs/FLOW.md`](./FLOW.md).
 
 **Linux (Landlock):** allowlist-based. Grants read-write to `/tmp` and the
 project CWD, read-only to system directories and `$HOME`, and denies everything
@@ -380,6 +388,7 @@ claude  # every tool call is now policy-checked
 
 ## Related Docs
 
+- [`docs/FLOW.md`](./FLOW.md) -- plain-language walkthrough of a shielded session and the allowed-hosts model
 - [`docs/PRINCIPLES.md`](./PRINCIPLES.md) — design constraints and trade-offs
 - [`agentpolicy/docs/DECISION_RPC.md`](../agentpolicy/docs/DECISION_RPC.md) — daemon RPC protocol
 - [`docs/adr/`](./adr/) — architectural decision records
