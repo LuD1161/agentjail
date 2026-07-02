@@ -46,5 +46,17 @@ func ControlSocketDir() string {
 	if err != nil || home == "" {
 		return "/tmp/agentjail-run"
 	}
+	return ControlSocketDirForHome(home)
+}
+
+// ControlSocketDirForHome is ControlSocketDir with an explicit home directory.
+// The macOS sbpl generator uses this so its network-outbound deny targets the
+// same path regardless of how home is resolved (and so tests are deterministic).
+func ControlSocketDirForHome(home string) string {
 	return filepath.Join(home, ".agentjail", "run")
+}
+
+// ControlSocketPathForHome is ControlSocketPath with an explicit home directory.
+func ControlSocketPathForHome(home string) string {
+	return filepath.Join(ControlSocketDirForHome(home), controlSocketName)
 }

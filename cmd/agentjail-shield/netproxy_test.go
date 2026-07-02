@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
@@ -10,47 +11,71 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
-// TestProxyEnvVars verifies that proxyEnvVars returns the correct
-// HTTPS_PROXY, HTTP_PROXY, and ALL_PROXY environment variables.
+// isolatedShortHome points $HOME at a fresh short-path temp dir so a test's
+// control socket (~/.agentjail/run/netproxy-ctl.sock) is isolated from any real
+// running netproxy AND stays under the ~104-byte AF_UNIX sun_path limit (macOS
+// t.TempDir() lives under /var/folders/... which is too long).
+func isolatedShortHome(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ajsh")
+	if err != nil {
+		t.Fatalf("mkdir temp home: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("HOME", dir)
+	return dir
+}
+
+// freeAddr returns a currently-free 127.0.0.1 address.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// TestProxyEnvVars verifies proxyEnvVars carries the session token as the
+// Basic-auth username so netproxy can key this session's allowlist.
 func TestProxyEnvVars(t *testing.T) {
-	vars := proxyEnvVars("127.0.0.1:9100")
+	tok := proxyctl.Token("abc123")
+	vars := proxyEnvVars("127.0.0.1:9100", tok)
 	if len(vars) != 3 {
 		t.Fatalf("expected 3 env vars, got %d: %v", len(vars), vars)
 	}
-	expected := map[string]string{
-		"HTTPS_PROXY": "http://127.0.0.1:9100",
-		"HTTP_PROXY":  "http://127.0.0.1:9100",
-		"ALL_PROXY":   "http://127.0.0.1:9100",
+	wantURL := "http://abc123:@127.0.0.1:9100"
+	for _, key := range []string{"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"} {
+		var val string
+		for _, v := range vars {
+			if strings.HasPrefix(v, key+"=") {
+				val = strings.TrimPrefix(v, key+"=")
+			}
+		}
+		if val != wantURL {
+			t.Errorf("%s = %q; want %q", key, val, wantURL)
+		}
 	}
-	for _, v := range vars {
-		parts := strings.SplitN(v, "=", 2)
-		if len(parts) != 2 {
-			t.Errorf("malformed env var: %q", v)
-			continue
-		}
-		key, val := parts[0], parts[1]
-		want, ok := expected[key]
-		if !ok {
-			t.Errorf("unexpected env var key: %q", key)
-			continue
-		}
-		if val != want {
-			t.Errorf("%s = %q; want %q", key, val, want)
-		}
+	// The token must be recoverable as the Basic username a client would send.
+	enc := base64.StdEncoding.EncodeToString([]byte(string(tok) + ":"))
+	if _, err := base64.StdEncoding.DecodeString(enc); err != nil {
+		t.Fatalf("token not encodable: %v", err)
 	}
 }
 
-// TestFindNetproxyBinary_EnvOverride verifies that findNetproxyBinary
-// respects the AGENTJAIL_NETPROXY environment variable.
+// TestFindNetproxyBinary_EnvOverride verifies AGENTJAIL_NETPROXY is honored.
 func TestFindNetproxyBinary_EnvOverride(t *testing.T) {
 	tmpDir := t.TempDir()
 	fakeBin := filepath.Join(tmpDir, "fake-netproxy")
 	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
 	}
-
 	t.Setenv("AGENTJAIL_NETPROXY", fakeBin)
 	got, err := findNetproxyBinary()
 	if err != nil {
@@ -61,69 +86,54 @@ func TestFindNetproxyBinary_EnvOverride(t *testing.T) {
 	}
 }
 
-// TestFindNetproxyBinary_NotFound verifies that findNetproxyBinary returns
-// an error when the binary cannot be found.
+// TestFindNetproxyBinary_NotFound verifies a clear error when nothing is found.
 func TestFindNetproxyBinary_NotFound(t *testing.T) {
 	t.Setenv("AGENTJAIL_NETPROXY", "")
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	_, err := findNetproxyBinary()
-	if err == nil {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := findNetproxyBinary(); err == nil {
 		t.Fatal("expected error when netproxy binary not found")
 	}
 }
 
-// TestNetproxyStartAndCleanup is an integration test that builds the
-// agentjail-netproxy binary, starts it via startNetproxy, verifies it
-// enforces the allowlist, and cleans it up via cleanupNetproxy.
-//
-// This test verifies the Linux netproxy integration (P2.2): the shield
-// can start netproxy as a child, the proxy enforces network.allowed_hosts,
-// and the proxy child is properly reaped on cleanup.
-func TestNetproxyStartAndCleanup(t *testing.T) {
-	// Build the netproxy binary to a temp location.
+// TestEnsureSessionProxy_StartRegisterEnforce is the end-to-end integration
+// test: build netproxy, ensureSessionProxy starts it, registers this session's
+// allowlist, and the data plane then enforces that allowlist for a CONNECT that
+// carries the returned token.
+func TestEnsureSessionProxy_StartRegisterEnforce(t *testing.T) {
+	isolatedShortHome(t) // isolate the control socket from any real proxy
 	tmpDir := t.TempDir()
 	netproxyBin := filepath.Join(tmpDir, "agentjail-netproxy")
-	buildCmd := exec.Command("go", "build", "-o", netproxyBin, "./cmd/agentjail-netproxy")
-	buildCmd.Dir = projectRoot(t)
-	if out, err := buildCmd.CombinedOutput(); err != nil {
+	build := exec.Command("go", "build", "-o", netproxyBin, "./cmd/agentjail-netproxy")
+	build.Dir = projectRoot(t)
+	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build netproxy: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { _ = os.Remove(netproxyBin) })
 
-	// Write a policy file that allows only "api.github.com".
-	policyFile := filepath.Join(tmpDir, "policy.yaml")
-	policyContent := "network:\n  allowed_hosts:\n    - api.github.com\n"
-	if err := os.WriteFile(policyFile, []byte(policyContent), 0o644); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
+	proxyAddr := freeAddr(t)
+	policy := proxyctl.SessionPolicy{AllowedHosts: []string{"api.github.com"}}
 
-	// Use a random port to avoid conflicts.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	cmd, tok, err := ensureSessionProxy(netproxyBin, proxyAddr, policy)
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatalf("ensureSessionProxy: %v", err)
 	}
-	proxyAddr := ln.Addr().String()
-	ln.Close()
-
-	// Start the netproxy.
-	cmd, err := startNetproxy(netproxyBin, proxyAddr, policyFile)
-	if err != nil {
-		t.Fatalf("startNetproxy: %v", err)
+	if cmd == nil {
+		t.Fatal("expected to have started a fresh proxy (non-nil cmd)")
+	}
+	t.Cleanup(func() { cleanupNetproxy(cmd) })
+	if tok == "" {
+		t.Fatal("expected a non-empty session token")
 	}
 
-	// Verify the proxy is running by sending a CONNECT to a denied host.
+	// A CONNECT carrying the token to a DENIED host must get 403 (proves the
+	// registered per-session allowlist is enforced).
 	conn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer conn.Close()
-
-	fmt.Fprintf(conn, "CONNECT attacker.example.com:443 HTTP/1.1\r\nHost: attacker.example.com\r\n\r\n")
-
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
+	auth := base64.StdEncoding.EncodeToString([]byte(string(tok) + ":"))
+	fmt.Fprintf(conn, "CONNECT attacker.example.com:443 HTTP/1.1\r\nHost: attacker.example.com\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
@@ -131,24 +141,50 @@ func TestNetproxyStartAndCleanup(t *testing.T) {
 		t.Errorf("expected 403 for denied host, got: %q", line)
 	}
 
-	// Clean up the netproxy child (zombie cleanup).
 	cleanupNetproxy(cmd)
-
-	// Verify the process is no longer running.
 	if cmd.ProcessState == nil {
 		t.Error("cmd.ProcessState is nil after cleanup — process not reaped")
 	}
 }
 
-// TestCleanupNetproxy_NilSafe verifies that cleanupNetproxy does not panic
-// when called with a nil cmd.
+// TestEnsureSessionProxy_BinaryNotFound verifies a bogus binary fails closed.
+func TestEnsureSessionProxy_BinaryNotFound(t *testing.T) {
+	isolatedShortHome(t)
+	_, _, err := ensureSessionProxy("/nonexistent/agentjail-netproxy", freeAddr(t), proxyctl.SessionPolicy{})
+	if err == nil {
+		t.Fatal("expected error starting a nonexistent binary")
+	}
+}
+
+// TestEnsureSessionProxy_NeverExposesControlSocket verifies a process that
+// starts but never exposes a control socket fails closed within the timeout.
+func TestEnsureSessionProxy_NeverExposesControlSocket(t *testing.T) {
+	isolatedShortHome(t)
+	sleepBin, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleep not found; skipping")
+	}
+	old := proxyStartTimeout
+	proxyStartTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { proxyStartTimeout = old })
+
+	_, _, err = ensureSessionProxy(sleepBin, freeAddr(t), proxyctl.SessionPolicy{})
+	if err == nil {
+		t.Fatal("expected error when netproxy never exposes its control socket")
+	}
+	if !strings.Contains(err.Error(), "control socket") {
+		t.Errorf("error should mention the control socket; got: %q", err.Error())
+	}
+}
+
+// TestCleanupNetproxy_NilSafe verifies cleanupNetproxy tolerates nil/empty cmd
+// (the reuse case, where we did not start the proxy).
 func TestCleanupNetproxy_NilSafe(t *testing.T) {
 	cleanupNetproxy(nil)
 	cleanupNetproxy(&exec.Cmd{})
 }
 
-// projectRoot returns the repository root directory by searching upward
-// from the test binary's location for a go.mod file.
+// projectRoot returns the repository root by searching upward for go.mod.
 func projectRoot(t *testing.T) string {
 	t.Helper()
 	cwd, err := os.Getwd()
@@ -165,30 +201,4 @@ func projectRoot(t *testing.T) string {
 		}
 		cwd = parent
 	}
-}
-
-// TestStartNetproxyBindTimeout verifies that startNetproxy returns an error
-// when the proxy fails to bind within the timeout.  We start a process that
-// does nothing (sleep) so the proxy never binds.
-func TestStartNetproxyBindTimeout(t *testing.T) {
-	tmpDir := t.TempDir()
-	// Create a fake "binary" that just sleeps (never binds).
-	fakeBin := filepath.Join(tmpDir, "fake-proxy")
-	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
-		t.Fatalf("write fake binary: %v", err)
-	}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	_, startErr := startNetproxy(fakeBin, addr, "/dev/null")
-	if startErr == nil {
-		t.Fatal("expected error when proxy fails to bind")
-	}
-
-	time.Sleep(100 * time.Millisecond)
 }

@@ -337,8 +337,12 @@ func TestSandboxBlocksSensitiveWrite(t *testing.T) {
 	_ = os.Remove(testFile)
 	t.Cleanup(func() { os.Remove(testFile) })
 
-	// Run the shield wrapping a shell that tries to write to ~/.ssh/
-	cmd := exec.Command(shieldBin, "--",
+	// Run the shield wrapping a shell that tries to write to ~/.ssh/.
+	// --no-netproxy: this test exercises the FILE sandbox only; without it the
+	// shield would try to start/register netproxy and fail closed if :9100 is
+	// occupied by an unverifiable listener (see ensureSessionProxy), which is
+	// unrelated to the file-write behavior under test.
+	cmd := exec.Command(shieldBin, "--no-netproxy", "--",
 		"sh", "-c", fmt.Sprintf("printf 'x' > %s 2>&1; echo exit=$?", testFile))
 	out, _ := cmd.CombinedOutput()
 	output := string(out)
@@ -373,7 +377,11 @@ func TestSandboxAllowsSafeWrite(t *testing.T) {
 	_ = os.Remove(testFile)
 	t.Cleanup(func() { os.Remove(testFile) })
 
-	cmd := exec.Command(shieldBin, "--",
+	// --no-netproxy: this test exercises the FILE sandbox only (safe write to
+	// /tmp). Without it the shield would try to start/register netproxy and,
+	// if :9100 is occupied by an unverifiable listener, fail closed -- unrelated
+	// to the write-allow behavior under test.
+	cmd := exec.Command(shieldBin, "--no-netproxy", "--",
 		"sh", "-c", fmt.Sprintf("printf 'hello' > %s && echo written_ok", testFile))
 	out, err := cmd.CombinedOutput()
 	output := string(out)
@@ -474,33 +482,23 @@ func TestSBProfile_NoNetproxy(t *testing.T) {
 }
 
 // TestFindNetproxyBinary_NotFound lives in netproxy_test.go (cross-platform).
+// ensureSessionProxy (start / register / fail-closed) is likewise tested
+// cross-platform in netproxy_test.go.
 
-// TestStartNetproxy_NotFound verifies that startNetproxy returns a clear error
-// when the binary path is bogus.
-func TestStartNetproxy_NotFound(t *testing.T) {
-	_, err := startNetproxy("/nonexistent/agentjail-netproxy", "127.0.0.1:9199", "/tmp/policy.yaml")
-	if err == nil {
-		t.Fatal("expected error starting nonexistent binary")
-	}
-	t.Logf("got expected error: %v", err)
-}
+// TestGenerateSBProfile_DeniesControlSocket verifies the netproxy-mode profile
+// explicitly denies the agent the netproxy control socket. Seatbelt's
+// (allow default) base would otherwise permit the AF_UNIX connect, letting the
+// sandboxed agent reach the control plane and widen its own allowlist.
+func TestGenerateSBProfile_DeniesControlSocket(t *testing.T) {
+	cfg := config.Default()
+	home := "/Users/me"
+	profile := generateSBProfileWithNetproxy(cfg, home)
 
-// TestStartNetproxy_NeverBinds verifies that startNetproxy returns a clear error
-// when the binary starts but never listens on the expected port.
-func TestStartNetproxy_NeverBinds(t *testing.T) {
-	// Use 'sleep' as a fake binary that doesn't bind.
-	sleepBin, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("sleep not found; skipping")
+	wantDeny := `(deny network-outbound
+    (literal "/Users/me/.agentjail/run/netproxy-ctl.sock"))`
+	if !strings.Contains(profile, wantDeny) {
+		t.Errorf("netproxy profile must deny the control socket; missing:\n%s\n\ngot:\n%s", wantDeny, profile)
 	}
-	_, err = startNetproxy(sleepBin, "127.0.0.1:9198", "/tmp/policy.yaml")
-	if err == nil {
-		t.Fatal("expected error when netproxy doesn't bind")
-	}
-	if !strings.Contains(err.Error(), "200ms") {
-		t.Errorf("error should mention 200ms timeout; got: %q", err.Error())
-	}
-	t.Logf("got expected error: %v", err)
 }
 
 // TestNoNetproxyFlag_PortOnlyProfile verifies that the --no-netproxy flag

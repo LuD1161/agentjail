@@ -14,6 +14,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
@@ -438,6 +439,17 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 		}
 	}
 
+	// Deny the agent the netproxy control socket. Seatbelt models AF_UNIX
+	// connect() as a network op under the (allow default) base, so without an
+	// explicit deny the sandboxed agent could reach the control plane and
+	// register or widen a session's allowlist. The token in the agent's env is
+	// only a data-plane bearer; this deny is what keeps it from being a
+	// control-plane credential. (On Linux the equivalent is the read-only
+	// ~/.agentjail grant, which withholds the write AF_UNIX connect needs.)
+	// Emitted before the catch-all so the intent is explicit and auditable.
+	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", proxyctl.ControlSocketPathForHome(home))
+	sb.WriteString("\n")
+
 	// Default deny for all remaining network traffic.
 	// This blocks: C2 on non-standard ports (4444, 8888, etc.), raw IP/ICMP
 	// exfil, non-DNS UDP, arbitrary TCP on unlisted ports.
@@ -475,10 +487,13 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	}
 
 	var netproxyCmd *exec.Cmd
+	var sessionToken proxyctl.Token
 	withNetproxy := false
+	var netproxyBin string
 
 	if !noNetproxy {
-		netproxyBin, findErr := findNetproxyBinary()
+		var findErr error
+		netproxyBin, findErr = findNetproxyBinary()
 		if findErr != nil {
 			// Fail-closed default (ADR 0041): netproxy was requested (no
 			// --no-netproxy) but its binary could not be located. Aborting
@@ -487,15 +502,13 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			// enforced" from silently diverging.
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not locate agentjail-netproxy binary: %v", findErr))
 		}
-		cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
-		if startErr != nil {
-			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start netproxy: %v", startErr))
-		}
-		netproxyCmd = cmd
 		withNetproxy = true
 	}
 
-	// Generate sbpl profile.
+	// Generate sbpl profile. This only needs to know netproxy mode is active
+	// (it emits the control-socket deny + localhost-only egress); it does not
+	// need the proxy to be running yet, so we generate before starting it and
+	// avoid spawning a proxy just to print the profile.
 	var profile string
 	if withNetproxy {
 		profile = generateSBProfileWithNetproxy(cfg, home)
@@ -507,14 +520,26 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		fmt.Fprintf(os.Stderr, "=== agentjail-shield: generated sbpl profile ===\n")
 		fmt.Fprint(os.Stderr, profile)
 		fmt.Fprintf(os.Stderr, "=================================================\n")
-		if netproxyCmd != nil {
-			_ = netproxyCmd.Process.Kill()
-		}
 		os.Exit(0)
 	}
 
+	// Start + register this session with the (possibly shared) netproxy now --
+	// after the profile-print early-exit, before exec. ensureSessionProxy runs
+	// in the shield BEFORE the sandbox is applied via sandbox-exec, so it can
+	// reach the control socket; the agent (post-exec) is denied it by the
+	// (deny network-outbound (literal <control socket>)) rule in the profile.
+	// Incompatible/unverifiable proxy -> fail closed inside ensureSessionProxy.
+	if withNetproxy {
+		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, sessionPolicyFromConfig(cfg))
+		if startErr != nil {
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start/register netproxy: %v", startErr))
+		}
+		netproxyCmd = cmd
+		sessionToken = tok
+	}
+
 	// Kill netproxy child before we exec (syscall.Exec replaces this process,
-	// so defer runs here but not after exec).
+	// so defer runs here but not after exec). nil when we reused a shared proxy.
 	if netproxyCmd != nil {
 		defer func() {
 			_ = netproxyCmd.Process.Signal(syscall.SIGTERM)
@@ -534,7 +559,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			Detail:    map[string]string{"error": "sandbox-exec not found"},
 			Actor:     "shield",
 		})
-		execAgent(cfg, agentPath, agentArgs, withNetproxy)
+		execAgent(cfg, agentPath, agentArgs, withNetproxy, sessionToken)
 		return
 	}
 
@@ -551,8 +576,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	env := buildBaseEnv(os.Environ(), cfg)
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
-		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-host enforcement via netproxy)\n", netproxyDefaultAddr)
+		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-session enforcement via netproxy)\n", netproxyDefaultAddr)
 	}
 	grantEnvVars, _ := requestSecretGrants(cfg)
 	env = append(env, grantEnvVars...)
@@ -573,14 +598,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
 // is absent (fail-open path).  Env stripping still applies.
-func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool) {
+func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token) {
 	// FIX1 (ADR 0039): same clean-then-strip ordering as runShield's sandbox
 	// path -- the fail-open fallback must not leak a broader environment
 	// than the sandboxed path does.
 	env := buildBaseEnv(os.Environ(), cfg)
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
-		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
+		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}
 	grantEnvVars, _ := requestSecretGrants(cfg)
 	env = append(env, grantEnvVars...)

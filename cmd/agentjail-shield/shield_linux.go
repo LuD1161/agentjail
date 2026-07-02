@@ -18,6 +18,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 
 	"golang.org/x/sys/unix"
@@ -168,8 +169,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// (applied below) restricts the shield + agent, not the netproxy child
 	// which was already forked before restriction.
 	netproxyPort := 0
-	var netproxyCmd *exec.Cmd // non-nil only if WE started the proxy (we must clean it up)
-	netproxyReady := false    // true if a proxy is available (ours or pre-existing)
+	var netproxyCmd *exec.Cmd            // non-nil only if WE started the proxy (we must clean it up)
+	netproxyReady := false               // true if a proxy is available (ours or pre-existing)
+	var sessionToken proxyctl.Token      // this session's per-session proxy credential
 	if !noNetproxy {
 		netproxyPort = netproxyDefaultPort
 		netproxyBin, findErr := findNetproxyBinary()
@@ -181,11 +183,18 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			// "network.allowed_hosts is enforced" from silently diverging.
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not locate agentjail-netproxy binary: %v", findErr))
 		}
-		cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
+		// Register THIS session's resolved allowlist with the (possibly shared)
+		// netproxy and get back the token to inject. This runs BEFORE Landlock,
+		// so the shield can still reach the control socket; the agent (post-
+		// Landlock) cannot (the socket lives under the read-only ~/.agentjail
+		// grant, and AF_UNIX connect needs write). Incompatible/unverifiable
+		// proxy -> fail closed inside ensureSessionProxy.
+		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, sessionPolicyFromConfig(cfg))
 		if startErr != nil {
-			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start netproxy: %v", startErr))
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start/register netproxy: %v", startErr))
 		}
 		netproxyCmd = cmd // nil when reusing existing singleton
+		sessionToken = tok
 		netproxyReady = true
 	}
 
@@ -266,7 +275,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
 	env = sandbox.StripEnv(env, cfg)
 	if netproxyReady {
-		env = append(env, proxyEnvVars(netproxyDefaultAddr)...)
+		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	grantEnvVars, activeGrants := requestSecretGrants(cfg)
