@@ -94,31 +94,20 @@ func main() {
 		return
 	}
 
-	// Load policy config. Errors (e.g. file not found) are tolerated:
-	// we fall back to the built-in default baseline so the shield can
-	// start even when no policy.yaml has been written yet.
-	var cfg *config.PolicyConfig
-	loaded, err := config.Load(*policyPath)
+	// Load policy config via the canonical enforcement path
+	// (config.LoadPolicyForEnforcement): a MISSING file is tolerated --
+	// first run, before `agentjail install` has written a policy.yaml --
+	// and falls back to Merge(Default(), &PolicyConfig{}) (i.e. built-in
+	// defaults). A PRESENT but unparseable/invalid file is NOT tolerated:
+	// silently falling back to permissive built-in defaults on a typo (e.g.
+	// a stray tab, or a bad mcp.allowed glob) would swap the enforced
+	// policy out from under the user without any indication, which is
+	// worse than refusing to launch. See ADR 0040 and ADR 0041.
+	cfg, err := config.LoadPolicyForEnforcement(*policyPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail-shield: could not load policy (%s): %v — using built-in defaults\n", *policyPath, err)
-		cfg = config.Default()
-	} else {
-		// Merge loaded config with defaults so ExtraDeny/ExtraAllow are always
-		// initialised even when the file omits those keys.
-		defaults := config.Default()
-		if loaded.File.ExtraDeny == nil {
-			loaded.File.ExtraDeny = defaults.File.ExtraDeny
-		}
-		if loaded.File.ExtraAllow == nil {
-			loaded.File.ExtraAllow = defaults.File.ExtraAllow
-		}
-		if loaded.Secrets.EnvBlocklist == nil {
-			loaded.Secrets.EnvBlocklist = defaults.Secrets.EnvBlocklist
-		}
-		if loaded.Secrets.StripOnLaunch == nil {
-			loaded.Secrets.StripOnLaunch = defaults.Secrets.StripOnLaunch
-		}
-		cfg = loaded
+		fmt.Fprintf(os.Stderr, "agentjail-shield: policy file %s exists but could not be loaded: %v\n", *policyPath, err)
+		fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch the agent with a malformed policy file -- fix the file or remove it to use built-in defaults")
+		os.Exit(1)
 	}
 
 	// Resolve the agent binary from PATH before we exec so we get a clear

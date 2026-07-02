@@ -148,10 +148,18 @@ func darwinCapabilities() BackendCapability {
 	}
 }
 
-// resolveAllowedHosts resolves each hostname in cfg.EffectiveAllowedHosts()
+// resolveAllowedHosts resolves each EXACT hostname in cfg.EffectiveAllowedHosts()
 // (the non-removable essentials plus the editable Network.AllowedHosts) to
 // its current IP addresses.  Failures are logged to stderr as warnings and the
 // host is skipped — the launch is not aborted.
+//
+// Wildcard entries (e.g. "*.claude.ai", classified via config.ClassifyHost)
+// are skipped WITHOUT attempting a lookup: net.LookupHost("*.claude.ai") can
+// never succeed as a literal DNS name, so resolving it was pure "skipping"
+// log noise on every launch. sbpl cannot enforce wildcard hosts by IP either
+// way (this whole function is informational/best-effort for the sbpl layer;
+// the real hostname-based enforcement point is netproxy) -- so nothing is
+// lost by not attempting the doomed lookup.
 //
 // Returns a deduplicated list of IP address strings (e.g. "140.82.112.6").
 // Loopback addresses are not included here; they are always allowed by the
@@ -167,6 +175,10 @@ func resolveAllowedHosts(cfg *config.PolicyConfig) []string {
 	seen := make(map[string]struct{})
 	var ips []string
 	for _, host := range hosts {
+		hp := config.ClassifyHost(host)
+		if hp.Wildcard {
+			continue
+		}
 		addrs, err := net.LookupHost(host)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: could not resolve %s: %v — skipping\n", host, err)
@@ -460,25 +472,19 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	if !noNetproxy {
 		netproxyBin, findErr := findNetproxyBinary()
 		if findErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"agentjail-shield WARNING: %v\n"+
-					"  Falling back to port-based network filtering (no per-host enforcement).\n"+
-					"  Use --no-netproxy to suppress this warning.\n",
-				findErr,
-			)
-		} else {
-			cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
-			if startErr != nil {
-				fmt.Fprintf(os.Stderr,
-					"agentjail-shield WARNING: could not start netproxy: %v\n"+
-						"  Falling back to port-based network filtering.\n",
-					startErr,
-				)
-			} else {
-				netproxyCmd = cmd
-				withNetproxy = true
-			}
+			// Fail-closed default (ADR 0041): netproxy was requested (no
+			// --no-netproxy) but its binary could not be located. Aborting
+			// here, rather than silently downgrading to port-only egress,
+			// keeps "the shield is running" and "network.allowed_hosts is
+			// enforced" from silently diverging.
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not locate agentjail-netproxy binary: %v", findErr))
 		}
+		cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
+		if startErr != nil {
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start netproxy: %v", startErr))
+		}
+		netproxyCmd = cmd
+		withNetproxy = true
 	}
 
 	// Generate sbpl profile.

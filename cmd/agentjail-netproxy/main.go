@@ -111,14 +111,17 @@ func matchHost(pattern, host string) bool {
 // what actually gates egress on both OSes, so essential hosts are only
 // genuinely non-removable if this function returns them regardless of what
 // policy.yaml says (including a MISSING policy file, which still gets the
-// full default via LoadOrDefault).
+// full default via LoadPolicyForEnforcement).
 //
-// On a parse error it returns an empty slice (fail-open for the proxy -- if
-// we can't read the policy, deny all would break the agent entirely; caller
-// should log the error). A missing file is not an error here -- LoadOrDefault
-// treats it as Default().
+// On a parse error it returns (nil, err) -- the caller decides how to react
+// (loadInitial treats it as fatal; reloadPolicy logs and keeps the last-good
+// allowlist). This is deliberately fail-loud, not fail-open: a broken
+// policy.yaml must never be silently treated as "no hosts allowed" or "all
+// hosts allowed" by this function -- see ADR 0040 and ADR 0041. A missing
+// file is not an error here -- LoadPolicyForEnforcement treats it as
+// Default().
 func loadPolicy(path string) ([]string, error) {
-	cfg, err := config.LoadOrDefault(path)
+	cfg, err := config.LoadPolicyForEnforcement(path)
 	if err != nil {
 		return nil, err
 	}
@@ -146,19 +149,45 @@ func newProxy(addr, policyPath string, logger *slog.Logger) *proxy {
 	}
 }
 
+// reloadPolicy is used for SIGHUP reloads only (see loadInitial for startup).
+// On error, it deliberately keeps the last-good allowlist in place and logs
+// the failure -- a broken policy.yaml after a hot reload must not fall open
+// (drop the allowlist to empty/permissive) or crash the running proxy; the
+// proxy keeps enforcing whatever it last successfully loaded. See ADR 0040.
 func (p *proxy) reloadPolicy() {
 	hosts, err := loadPolicy(p.policyPath)
 	if err != nil {
-		p.logger.Error("policy reload failed", "path", p.policyPath, "err", err)
+		p.logger.Error("policy reload failed -- keeping last-good allowlist", "path", p.policyPath, "err", err)
 		return
 	}
 	p.al.load(hosts)
 	p.logger.Info("policy reloaded", "path", p.policyPath, "allowed_hosts_count", len(hosts))
 }
 
+// loadInitial performs the startup policy load. Unlike reloadPolicy (used
+// for SIGHUP, where there is a last-good allowlist to fall back on), a
+// failure here has no prior good state to keep -- so it is fatal: the proxy
+// must refuse to start rather than come up with an empty/fall-open
+// allowlist. A missing policy.yaml is not an error (loadPolicy uses
+// config.LoadPolicyForEnforcement, which returns Default() for that case);
+// only a PRESENT but malformed file reaches this branch. See ADR 0040 and
+// ADR 0041.
+func (p *proxy) loadInitial() error {
+	hosts, err := loadPolicy(p.policyPath)
+	if err != nil {
+		return fmt.Errorf("initial policy load failed for %s: %w", p.policyPath, err)
+	}
+	p.al.load(hosts)
+	p.logger.Info("policy loaded", "path", p.policyPath, "allowed_hosts_count", len(hosts))
+	return nil
+}
+
 func (p *proxy) run(ctx context.Context) error {
-	// Initial policy load.
-	p.reloadPolicy()
+	// Initial policy load. Fatal on error (see loadInitial doc comment) --
+	// unlike reloadPolicy, there is no last-good state to fall back on.
+	if err := p.loadInitial(); err != nil {
+		return err
+	}
 
 	ln, err := net.Listen("tcp", p.addr)
 	if err != nil {

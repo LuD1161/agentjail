@@ -238,8 +238,11 @@ list from policy.yaml, additive, not a straight read of the raw YAML field:
 2. `~/.agentjail/bin/agentjail-netproxy`
 3. Sibling of the shield binary itself
 
-If the binary is not found, the shield falls back to port-based mode with a
-warning.
+If the binary is not found, or it fails to start, the shield fails closed
+(ADR 0041): it prints an error to stderr, emits an `audit.ShieldFailed`
+event, and refuses to launch the agent, instead of silently falling back to
+port-based mode. Pass `--no-netproxy` explicitly to opt into port-based mode
+up front.
 
 **Caveat:** Non-HTTP clients (raw socket code, gRPC without proxy support,
 `/dev/tcp` bash redirections) bypass the proxy entirely and will be denied by
@@ -274,7 +277,7 @@ unrestricted by Landlock, same as before.
 
 ### Default `allowed_hosts` list
 
-`network.allowed_hosts` splits into two layers (ADR 0038):
+`network.allowed_hosts` splits into three layers (ADR 0038, ADR 0040):
 
 - **Essential** (`config.EssentialAllowedHosts()`, hardcoded in Go, exact
   hostnames only, no wildcards) -- the minimal set an agent needs to
@@ -286,6 +289,7 @@ unrestricted by Landlock, same as before.
   api.anthropic.com
   claude.ai
   platform.claude.com
+  mcp-proxy.anthropic.com
   api.openai.com
   auth.openai.com
   chatgpt.com
@@ -293,16 +297,49 @@ unrestricted by Landlock, same as before.
   oauth2.googleapis.com
   ```
 
+  `mcp-proxy.anthropic.com` is essential because claude.ai's hosted
+  connectors (Gmail, Google Calendar, Google Drive, typefully) proxy their
+  MCP traffic through it -- those connectors break under the shield
+  without it, even though `claude.ai` itself is reachable.
+
+- **MCP-derived** (`config.MCPDerivedAllowedHosts(cfg.MCP)`) -- hosts for
+  any hosted MCP server that is currently allowed under `mcp.allowed` and
+  not matched by `mcp.blocked` (mirrors `mcp_policy.rego`'s
+  blocked-wins-over-allowed precedence exactly). The registry
+  (`config.HostedMCPRegistry()`) currently covers linear, typefully,
+  posthog, context7, notion, deepwiki, cloudflare, githubcopilot, and
+  huggingface. Non-removable **while** the MCP server stays allowed --
+  removing it from `mcp.allowed`, or blocking it, removes its hosts here on
+  the next load. This tier exists so a curated `allowed_hosts` (e.g.
+  trimmed to just `github.com` and `registry.npmjs.org`) does not silently
+  break an MCP server the user explicitly allowed.
+
 - **Extended** (`config.ExtendedDefaultAllowedHosts()`, seeded into
   `policy.yaml` at install time) -- the editable/removable default set:
   broad wildcards, Cursor CLI subdomains, telemetry, hosted MCP endpoints,
   package registries, git hosting, and documentation sites. See
-  `agentpolicy/default_policy.yaml` for the full, current list.
+  `agentpolicy/default_policy.yaml` for the full, current list. The hosted
+  MCP endpoints within this list are sourced from the same
+  `HostedMCPRegistry()` as the MCP-derived tier above -- one source of
+  truth, no duplicated host literals.
 
-agentjail-netproxy enforces the EFFECTIVE list (essential + extended,
-deduplicated) on both macOS and Linux. In port-only mode (`--no-netproxy`),
-the effective list's resolved IPs are logged at startup for audit visibility
-but are not enforced.
+agentjail-netproxy enforces the EFFECTIVE list (essential + MCP-derived +
+extended/editable, deduplicated, essentials first) on both macOS and Linux.
+In port-only mode (`--no-netproxy`), the effective list's resolved IPs are
+logged at startup for audit visibility but are not enforced.
+
+### Malformed `policy.yaml` refuses to launch (ADR 0040)
+
+A **missing** `policy.yaml` is the normal first-run state and falls back to
+built-in defaults, unchanged. A **present but malformed** `policy.yaml`
+(parse error, or a rejected `mcp.allowed`/`mcp.blocked`/`disabled_rules`
+glob) is different: the shield prints the file path and error to stderr and
+refuses to launch the agent (`os.Exit(1)`) instead of silently falling back
+to the permissive built-in defaults. `agentjail-netproxy`'s initial load
+fails the same way and the proxy never starts listening. On a SIGHUP reload
+of a now-broken file, netproxy keeps its last-good allowlist and logs an
+error -- it does not fall open (drop to an empty/permissive allowlist) or
+crash the already-running proxy.
 
 ### Adding custom hosts
 

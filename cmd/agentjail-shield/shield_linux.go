@@ -174,25 +174,19 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		netproxyPort = netproxyDefaultPort
 		netproxyBin, findErr := findNetproxyBinary()
 		if findErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"agentjail-shield WARNING: %v\n"+
-					"  Falling back to no per-host network enforcement.\n"+
-					"  Use --no-netproxy to suppress this warning.\n",
-				findErr,
-			)
-		} else {
-			cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
-			if startErr != nil {
-				fmt.Fprintf(os.Stderr,
-					"agentjail-shield WARNING: could not start netproxy: %v\n"+
-						"  Falling back to no per-host network enforcement.\n",
-					startErr,
-				)
-			} else {
-				netproxyCmd = cmd // nil when reusing existing singleton
-				netproxyReady = true
-			}
+			// Fail-closed default (ADR 0041): netproxy was requested (no
+			// --no-netproxy) but its binary could not be located. Aborting
+			// here, rather than silently downgrading to no per-host
+			// enforcement, keeps "the shield is running" and
+			// "network.allowed_hosts is enforced" from silently diverging.
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not locate agentjail-netproxy binary: %v", findErr))
 		}
+		cmd, startErr := startNetproxy(netproxyBin, netproxyDefaultAddr, policyPath)
+		if startErr != nil {
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start netproxy: %v", startErr))
+		}
+		netproxyCmd = cmd // nil when reusing existing singleton
+		netproxyReady = true
 	}
 
 	// netproxy started (or reused singleton)

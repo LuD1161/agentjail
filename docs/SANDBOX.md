@@ -106,10 +106,12 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 By default on macOS, agentjail-shield starts `agentjail-netproxy` as a child
 process on `127.0.0.1:9100` and restricts the agent to **localhost-only**
 outbound TCP. All HTTPS traffic flows through the proxy, which enforces the
-EFFECTIVE `network.allowed_hosts` -- non-removable essential provider hosts
-merged additively with the editable list from `~/.agentjail/policy.yaml`
-(ADR 0038). An omitted or even explicitly empty `allowed_hosts` in
-policy.yaml never blocks the agent's own provider.
+EFFECTIVE `network.allowed_hosts` -- three tiers, essentials first: the
+non-removable essential provider hosts, then the hosts implied by any
+currently-allowed hosted MCP server (non-removable while that MCP stays
+allowed), then the editable list from `~/.agentjail/policy.yaml` (ADR 0038,
+ADR 0040). An omitted or even explicitly empty `allowed_hosts` in
+policy.yaml never blocks the agent's own provider or an allowed MCP server.
 
 ```
 Agent (sandboxed, localhost-only TCP)
@@ -301,6 +303,25 @@ Enforced by `agentjail-netproxy` on macOS and Linux. Wildcards follow cert-style
 - `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`
 - `crates.io`, `proxy.golang.org`, `sum.golang.org`, `deno.land`
 
+**Three enforced tiers (ADR 0038, ADR 0040), essentials first:**
+
+1. **Essential** (`config.EssentialAllowedHosts()`) -- exact hostnames only,
+   never editable. Includes each provider's core hosts plus
+   `mcp-proxy.anthropic.com`, which claude.ai's hosted connectors (Gmail,
+   Google Calendar, Google Drive, typefully) proxy their MCP traffic
+   through.
+2. **MCP-derived** (`config.MCPDerivedAllowedHosts`) -- hosts for any hosted
+   MCP server (linear, typefully, posthog, context7, notion, deepwiki,
+   cloudflare, githubcopilot, huggingface -- see
+   `config.HostedMCPRegistry()`) that is currently allowed under
+   `mcp.allowed` and not matched by `mcp.blocked`. Non-removable *while*
+   that MCP server stays allowed -- allowing an MCP server is sufficient by
+   itself to reach its vetted hosts, without also editing `allowed_hosts`.
+   Removing the server from `mcp.allowed`, or blocking it, drops its hosts
+   here on the next load.
+3. **Editable** (`network.allowed_hosts` in `policy.yaml`) -- fully
+   removable/replaceable, as shown above.
+
 ---
 
 ## Environment variables
@@ -319,8 +340,9 @@ Enforced by `agentjail-netproxy` on macOS and Linux. Wildcards follow cert-style
 | `sandbox-exec` missing (macOS) | **Fail-open** with loud warning; agent runs unsandboxed; hook layer still active |
 | Landlock unsupported (Linux < 5.13) | **Fail-open** with loud warning |
 | Landlock setup error (other) | **Fail-closed**: refuses to run unless `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` |
-| `policy.yaml` missing or unreadable | Falls back to built-in defaults |
-| `agentjail-netproxy` not found | macOS: falls back to port-based filtering on 80/443 with a warning. Linux ABI v4+: CONNECT stays restricted to the (now unreachable) netproxy port -- no working egress until netproxy is available; run with `--no-netproxy` explicitly to get the fallback-port CONNECT restriction described above instead. Linux < ABI v4: network unrestricted. |
+| `policy.yaml` missing entirely | Falls back to built-in defaults (normal first-run state) |
+| `policy.yaml` present but malformed (parse or validation error, e.g. a stray tab or a bad `mcp.allowed` glob) | **Fail-closed** (ADR 0040): the shield prints the file path and error to stderr and refuses to launch the agent (`os.Exit(1)`) rather than silently falling back to the permissive built-in defaults. `agentjail-netproxy`'s initial load fails the same way; on a SIGHUP reload of a now-broken file, netproxy instead keeps its last-good allowlist and logs an error -- it does not fall open or crash the running proxy. |
+| `agentjail-netproxy` not found or fails to start | **Fail-closed** (ADR 0041): if netproxy was requested (no `--no-netproxy`), the shield prints an error to stderr, emits an `audit.ShieldFailed` event, and refuses to launch the agent (`os.Exit(1)`) rather than silently downgrading to port-only egress. Pass `--no-netproxy` explicitly to opt into the old port-based-filtering behavior (TCP 80/443 only, no per-host enforcement) instead. |
 | Unsupported platform | **Fail-open** with warning |
 
 ---

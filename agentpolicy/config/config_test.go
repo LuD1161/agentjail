@@ -624,8 +624,8 @@ func TestMergeDoesNotMutateBase(t *testing.T) {
 func TestMergeServersUnion(t *testing.T) {
 	base := &PolicyConfig{
 		MCP: MCPConfig{
-			Allowed:  []string{"fs"},
-			Blocked:  []string{},
+			Allowed: []string{"fs"},
+			Blocked: []string{},
 			Servers: map[string]MCPServerConfig{
 				"fs": {AllowedTools: []string{"read_file"}},
 			},
@@ -1316,5 +1316,473 @@ func TestMCPServerBlockedAskToolsYAMLRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(fs.AskTools, []string{"write_file"}) {
 		t.Errorf("round-trip ask_tools mismatch: %v", fs.AskTools)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HostedMCP registry / MCPDerivedAllowedHosts (ADR 0040)
+// ---------------------------------------------------------------------------
+
+func containsHost(hosts []string, want string) bool {
+	for _, h := range hosts {
+		if h == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestMCPDerivedAllowedHostsTableDriven(t *testing.T) {
+	cases := []struct {
+		name    string
+		allowed []string
+		blocked []string
+		want    []string // hosts that MUST be present
+		notWant []string // hosts that MUST NOT be present
+	}{
+		{
+			name:    "linear-server allowed",
+			allowed: []string{"linear-server"},
+			want:    []string{"mcp.linear.app", "api.linear.app"},
+		},
+		{
+			name:    "wildcard allowed, posthog blocked",
+			allowed: []string{"*"},
+			blocked: []string{"*posthog*"},
+			want:    []string{"mcp.linear.app", "api.linear.app"},
+			notWant: []string{"*.posthog.com"},
+		},
+		{
+			name:    "plugin_* alias prefix",
+			allowed: []string{"plugin_*"},
+			want:    []string{"*.posthog.com", "mcp.context7.com"},
+		},
+		{
+			name:    "linear* prefix matches linear",
+			allowed: []string{"linear*"},
+			want:    []string{"mcp.linear.app", "api.linear.app"},
+		},
+		{
+			name:    "custom block excludes context7",
+			allowed: []string{"*"},
+			blocked: []string{"*context7*"},
+			want:    []string{"mcp.linear.app"},
+			notWant: []string{"mcp.context7.com"},
+		},
+		{
+			name:    "wildcard allow, no blocked -> all registry hosts",
+			allowed: []string{"*"},
+			want:    HostedMCPAllowedHosts(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mcp := MCPConfig{Allowed: tc.allowed, Blocked: tc.blocked}
+			got := MCPDerivedAllowedHosts(mcp)
+			for _, w := range tc.want {
+				if !containsHost(got, w) {
+					t.Errorf("expected host %q present, got %v", w, got)
+				}
+			}
+			for _, nw := range tc.notWant {
+				if containsHost(got, nw) {
+					t.Errorf("expected host %q absent, got %v", nw, got)
+				}
+			}
+		})
+	}
+}
+
+// TestMCPDerivedAllowedHostsEmptyAllowed verifies an empty mcp.allowed
+// derives no hosts (safe default -- deny all MCP, imply no hosts).
+func TestMCPDerivedAllowedHostsEmptyAllowed(t *testing.T) {
+	got := MCPDerivedAllowedHosts(MCPConfig{})
+	if len(got) != 0 {
+		t.Errorf("expected no derived hosts for empty mcp.allowed, got %v", got)
+	}
+}
+
+// TestMCPDerivedAllowedHostsDedupStableOrder verifies dedup and registry-order
+// stability when overlapping patterns match the same entry multiple times.
+func TestMCPDerivedAllowedHostsDedupStableOrder(t *testing.T) {
+	mcp := MCPConfig{Allowed: []string{"linear", "linear-server", "linear*"}}
+	got := MCPDerivedAllowedHosts(mcp)
+	if !reflect.DeepEqual(got, []string{"mcp.linear.app", "api.linear.app"}) {
+		t.Errorf("expected deduped [mcp.linear.app api.linear.app], got %v", got)
+	}
+}
+
+// TestMCPDerivedAllowedHostsBadPatternNoPanic verifies a malformed glob is
+// treated defensively as "no match" rather than panicking (defense-in-depth;
+// Load already rejects malformed mcp.allowed/mcp.blocked patterns).
+func TestMCPDerivedAllowedHostsBadPatternNoPanic(t *testing.T) {
+	mcp := MCPConfig{Allowed: []string{"[bad"}}
+	got := MCPDerivedAllowedHosts(mcp)
+	if len(got) != 0 {
+		t.Errorf("expected no derived hosts for malformed pattern, got %v", got)
+	}
+}
+
+// TestHostedMCPRegistryDefensiveCopy verifies HostedMCPRegistry and
+// HostedMCPAllowedHosts return copies safe to mutate.
+func TestHostedMCPRegistryDefensiveCopy(t *testing.T) {
+	r1 := HostedMCPRegistry()
+	r1[0].Name = "tampered"
+	r1[0].Hosts[0] = "tampered"
+	r2 := HostedMCPRegistry()
+	if r2[0].Name == "tampered" || r2[0].Hosts[0] == "tampered" {
+		t.Fatalf("HostedMCPRegistry() shares backing storage across calls: %+v", r2[0])
+	}
+
+	h1 := HostedMCPAllowedHosts()
+	h1[0] = "tampered"
+	h2 := HostedMCPAllowedHosts()
+	if h2[0] == "tampered" {
+		t.Fatalf("HostedMCPAllowedHosts() shares backing storage across calls: %v", h2)
+	}
+}
+
+// TestExtendedDefaultHostedMCPSectionMatchesRegistry is the drift test: the
+// "Hosted MCP servers" subset of ExtendedDefaultAllowedHosts() must equal
+// HostedMCPAllowedHosts() exactly -- the hosts must live only in the
+// registry, never duplicated as literals in ExtendedDefaultAllowedHosts.
+func TestExtendedDefaultHostedMCPSectionMatchesRegistry(t *testing.T) {
+	extended := ExtendedDefaultAllowedHosts()
+	registryHosts := HostedMCPAllowedHosts()
+	registrySet := make(map[string]bool, len(registryHosts))
+	for _, h := range registryHosts {
+		registrySet[h] = true
+	}
+	extendedSet := make(map[string]bool, len(extended))
+	for _, h := range extended {
+		extendedSet[h] = true
+	}
+	for _, h := range registryHosts {
+		if !extendedSet[h] {
+			t.Errorf("ExtendedDefaultAllowedHosts() missing registry host %q", h)
+		}
+	}
+	// Every host that any registry entry's canonical name suggests it owns
+	// (matched against registry Hosts values exactly, not by substring
+	// heuristic) must come from the registry -- i.e. removing the registry
+	// hosts from Extended and re-adding them must reproduce Extended
+	// exactly, proving there is no second, stray copy of a registry host
+	// literal sitting elsewhere in ExtendedDefaultAllowedHosts.
+	rebuilt := make([]string, 0, len(extended))
+	seenRebuilt := make(map[string]bool)
+	for _, h := range extended {
+		if registrySet[h] {
+			continue // dropped; re-added exactly once below in registry order
+		}
+		if !seenRebuilt[h] {
+			seenRebuilt[h] = true
+			rebuilt = append(rebuilt, h)
+		}
+	}
+	if len(rebuilt)+len(registryHosts) != len(extendedSet) {
+		t.Errorf("ExtendedDefaultAllowedHosts() has %d unique hosts but only %d non-registry + %d registry hosts account for; suggests a duplicated hosted-MCP literal outside the registry",
+			len(extendedSet), len(rebuilt), len(registryHosts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EssentialAllowedHosts / EffectiveAllowedHosts: mcp-proxy.anthropic.com
+// ---------------------------------------------------------------------------
+
+// TestEssentialsIncludeMCPProxyAnthropic verifies mcp-proxy.anthropic.com is
+// present in EffectiveAllowedHosts() even with a custom allowed_hosts list
+// that omits it entirely.
+func TestEssentialsIncludeMCPProxyAnthropic(t *testing.T) {
+	found := false
+	for _, h := range EssentialAllowedHosts() {
+		if h == "mcp-proxy.anthropic.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("EssentialAllowedHosts() missing mcp-proxy.anthropic.com")
+	}
+
+	cfg := &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{"github.com", "registry.npmjs.org"}}}
+	effective := cfg.EffectiveAllowedHosts()
+	if !containsHost(effective, "mcp-proxy.anthropic.com") {
+		t.Errorf("EffectiveAllowedHosts() with a curated allowed_hosts omitting mcp-proxy.anthropic.com must still include it; got %v", effective)
+	}
+}
+
+// TestEssentialsIncludeChatOpenAI verifies chat.openai.com (legacy
+// OpenAI/Codex backend URL) is present in EssentialAllowedHosts() and
+// therefore in EffectiveAllowedHosts() even with a custom allowed_hosts list
+// that omits it entirely.
+func TestEssentialsIncludeChatOpenAI(t *testing.T) {
+	found := false
+	for _, h := range EssentialAllowedHosts() {
+		if h == "chat.openai.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("EssentialAllowedHosts() missing chat.openai.com")
+	}
+
+	cfg := &PolicyConfig{Network: NetworkConfig{AllowedHosts: []string{"github.com", "registry.npmjs.org"}}}
+	effective := cfg.EffectiveAllowedHosts()
+	if !containsHost(effective, "chat.openai.com") {
+		t.Errorf("EffectiveAllowedHosts() with a curated allowed_hosts omitting chat.openai.com must still include it; got %v", effective)
+	}
+}
+
+// TestEffectiveAllowedHostsEndToEndCuratedPlusMCP verifies the full three-tier
+// merge: a curated (narrow) editable allowed_hosts list, combined with
+// mcp.allowed for several hosted MCP servers, produces an effective set that
+// includes the MCP-derived hosts even though they are absent from the raw
+// editable list -- essentials first, then MCP-derived, then editable,
+// deduped and order-stable.
+func TestEffectiveAllowedHostsEndToEndCuratedPlusMCP(t *testing.T) {
+	cfg := &PolicyConfig{
+		Network: NetworkConfig{AllowedHosts: []string{"github.com", "registry.npmjs.org"}},
+		MCP: MCPConfig{
+			Allowed: []string{"linear-server", "plugin_context7_context7", "plugin_posthog_posthog"},
+		},
+	}
+	effective := cfg.EffectiveAllowedHosts()
+
+	for _, want := range []string{
+		"mcp.linear.app", "mcp.context7.com", "*.posthog.com",
+		"mcp-proxy.anthropic.com", "github.com", "registry.npmjs.org",
+	} {
+		if !containsHost(effective, want) {
+			t.Errorf("expected %q in EffectiveAllowedHosts(), got %v", want, effective)
+		}
+	}
+
+	// Order: essentials first.
+	essentials := EssentialAllowedHosts()
+	for i, e := range essentials {
+		if effective[i] != e {
+			t.Fatalf("expected essentials-first ordering at index %d: want %q got %q (full: %v)", i, e, effective[i], effective)
+		}
+	}
+
+	// Dedup: no repeats.
+	seen := make(map[string]int)
+	for _, h := range effective {
+		seen[h]++
+	}
+	for h, n := range seen {
+		if n > 1 {
+			t.Errorf("host %q appears %d times in EffectiveAllowedHosts(), want deduped", h, n)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// mcp.allowed / mcp.blocked glob validation at Load (ADR 0040 item 3)
+// ---------------------------------------------------------------------------
+
+func TestLoadRejectsMalformedMCPAllowedGlob(t *testing.T) {
+	src := `
+mcp:
+  allowed:
+    - "[bad"
+`
+	_, err := decode(strings.NewReader(src))
+	if err == nil {
+		t.Fatal("expected error for malformed mcp.allowed glob, got nil")
+	}
+}
+
+func TestLoadRejectsMalformedMCPBlockedGlob(t *testing.T) {
+	src := `
+mcp:
+  blocked:
+    - "[bad"
+`
+	_, err := decode(strings.NewReader(src))
+	if err == nil {
+		t.Fatal("expected error for malformed mcp.blocked glob, got nil")
+	}
+}
+
+func TestLoadAcceptsWellFormedMCPGlobs(t *testing.T) {
+	src := `
+mcp:
+  allowed:
+    - "linear*"
+    - "plugin_*"
+  blocked:
+    - "*stripe*"
+`
+	_, err := decode(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("unexpected error for well-formed mcp globs: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fail-loud: absent vs. malformed policy file (ADR 0040 item 4)
+// ---------------------------------------------------------------------------
+
+// TestLoadOrDefaultAbsentFileYieldsDefaults verifies a genuinely missing file
+// still yields Default() with a nil error (first-run behavior unchanged).
+func TestLoadOrDefaultAbsentFileYieldsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	missing := dir + "/does-not-exist.yaml"
+
+	cfg, err := LoadOrDefault(missing)
+	if err != nil {
+		t.Fatalf("expected nil error for absent file, got %v", err)
+	}
+	if !reflect.DeepEqual(cfg, Default()) {
+		t.Fatalf("expected Default() for absent file, got %+v", cfg)
+	}
+}
+
+// TestLoadOrDefaultMalformedPresentFileErrors verifies a PRESENT but
+// unparseable file returns an error rather than silently falling back to
+// Default() -- the fail-loud distinction the shield/netproxy launch paths
+// depend on.
+func TestLoadOrDefaultMalformedPresentFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/policy.yaml"
+	// A stray tab makes this invalid YAML.
+	if err := os.WriteFile(path, []byte("mcp:\n\tallowed: [\"x\"]\n"), 0o600); err != nil {
+		t.Fatalf("write temp policy file: %v", err)
+	}
+
+	_, err := LoadOrDefault(path)
+	if err == nil {
+		t.Fatal("expected error for present-but-malformed policy file, got nil")
+	}
+}
+
+// TestLoadOrDefaultPresentFileWithInvalidMCPGlobErrors verifies the same
+// fail-loud behavior for a structurally valid YAML file that fails the new
+// mcp.allowed glob validation.
+func TestLoadOrDefaultPresentFileWithInvalidMCPGlobErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/policy.yaml"
+	if err := os.WriteFile(path, []byte("mcp:\n  allowed:\n    - \"[bad\"\n"), 0o600); err != nil {
+		t.Fatalf("write temp policy file: %v", err)
+	}
+
+	_, err := LoadOrDefault(path)
+	if err == nil {
+		t.Fatal("expected error for present policy file with invalid mcp.allowed glob, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LoadPolicyForEnforcement (ADR 0041)
+// ---------------------------------------------------------------------------
+
+// TestLoadPolicyForEnforcementAbsentFile verifies an absent path yields
+// Merge(Default(), &PolicyConfig{}) with a nil error.
+func TestLoadPolicyForEnforcementAbsentFile(t *testing.T) {
+	dir := t.TempDir()
+	missing := dir + "/does-not-exist.yaml"
+
+	cfg, err := LoadPolicyForEnforcement(missing)
+	if err != nil {
+		t.Fatalf("expected nil error for absent file, got %v", err)
+	}
+	want := Merge(Default(), &PolicyConfig{})
+	if !reflect.DeepEqual(cfg.MCP.Blocked, want.MCP.Blocked) || !reflect.DeepEqual(cfg.Network.AllowedHosts, want.Network.AllowedHosts) {
+		t.Fatalf("expected merged defaults for absent file, got %+v", cfg)
+	}
+}
+
+// TestLoadPolicyForEnforcementMalformedFileErrors verifies a PRESENT but
+// invalid-YAML file (a literal TAB-indented list) returns an error --
+// fail-loud, never a silent fallback to defaults.
+func TestLoadPolicyForEnforcementMalformedFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/policy.yaml"
+	if err := os.WriteFile(path, []byte("mcp:\n\tallowed: [\"x\"]\n"), 0o600); err != nil {
+		t.Fatalf("write temp policy file: %v", err)
+	}
+
+	cfg, err := LoadPolicyForEnforcement(path)
+	if err == nil {
+		t.Fatal("expected error for present-but-malformed policy file, got nil")
+	}
+	if cfg != nil {
+		t.Errorf("expected nil *PolicyConfig on error, got %+v", cfg)
+	}
+}
+
+// TestLoadPolicyForEnforcementValidFile verifies a present, valid file is
+// merged over Default().
+func TestLoadPolicyForEnforcementValidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/policy.yaml"
+	src := "mcp:\n  allowed:\n    - \"linear-server\"\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatalf("write temp policy file: %v", err)
+	}
+
+	cfg, err := LoadPolicyForEnforcement(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.MCP.Allowed) != 1 || cfg.MCP.Allowed[0] != "linear-server" {
+		t.Errorf("expected MCP.Allowed=[linear-server], got %v", cfg.MCP.Allowed)
+	}
+	// Merged over Default(): default blocked patterns preserved.
+	if !reflect.DeepEqual(cfg.MCP.Blocked, Default().MCP.Blocked) {
+		t.Errorf("expected default blocked preserved, got %v", cfg.MCP.Blocked)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HostPattern / ClassifyHost (ADR 0041)
+// ---------------------------------------------------------------------------
+
+func TestClassifyHost(t *testing.T) {
+	cases := []struct {
+		host         string
+		wantWildcard bool
+	}{
+		{"*.claude.ai", true},
+		{"*.posthog.com", true},
+		{"*.huggingface.co", true},
+		{"api.linear.app", false},
+		{"api.anthropic.com", false},
+		{"mcp.linear.app", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.host, func(t *testing.T) {
+			hp := ClassifyHost(tc.host)
+			if hp.Pattern != tc.host {
+				t.Errorf("ClassifyHost(%q).Pattern = %q, want %q", tc.host, hp.Pattern, tc.host)
+			}
+			if hp.Wildcard != tc.wantWildcard {
+				t.Errorf("ClassifyHost(%q).Wildcard = %v, want %v", tc.host, hp.Wildcard, tc.wantWildcard)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cursor CLI hosts (ADR 0041)
+// ---------------------------------------------------------------------------
+
+// TestExtendedDefaultIncludesCursorLoginHosts verifies cursor.com and
+// www.cursor.com (Cursor CLI login/update flows) are present in the Cursor
+// block of ExtendedDefaultAllowedHosts, alongside the existing exact
+// *.cursor.sh API subdomains.
+func TestExtendedDefaultIncludesCursorLoginHosts(t *testing.T) {
+	extended := ExtendedDefaultAllowedHosts()
+	for _, want := range []string{"cursor.com", "www.cursor.com", "api2.cursor.sh", "authenticate.cursor.sh"} {
+		if !containsHost(extended, want) {
+			t.Errorf("ExtendedDefaultAllowedHosts() missing Cursor host %q; got %v", want, extended)
+		}
+	}
+	// Deliberately no broad *.cursor.sh wildcard.
+	for _, h := range extended {
+		if h == "*.cursor.sh" {
+			t.Errorf("ExtendedDefaultAllowedHosts() must not contain a broad *.cursor.sh wildcard")
+		}
 	}
 }

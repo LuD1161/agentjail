@@ -32,15 +32,15 @@ import (
 // serialised into OPA's data document via the OPA Go API (which accepts
 // map[string]any, not JSON-tagged structs directly).
 type PolicyConfig struct {
-	MCP      MCPConfig     `yaml:"mcp"`
-	File     FileConfig    `yaml:"file"`
-	Commands CommandConfig `yaml:"commands"`
-	Network  NetworkConfig `yaml:"network"`
-	Web      WebConfig     `yaml:"web"`
-	AWS      AWSConfig     `yaml:"aws"`
+	MCP         MCPConfig          `yaml:"mcp"`
+	File        FileConfig         `yaml:"file"`
+	Commands    CommandConfig      `yaml:"commands"`
+	Network     NetworkConfig      `yaml:"network"`
+	Web         WebConfig          `yaml:"web"`
+	AWS         AWSConfig          `yaml:"aws"`
 	Secrets     SecretsConfig      `yaml:"secrets"`
 	Credentials []CredentialConfig `yaml:"credentials"`
-	Skills      SkillsConfig      `yaml:"skills"`
+	Skills      SkillsConfig       `yaml:"skills"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -167,15 +167,29 @@ type NetworkConfig struct {
 // policy edit cannot silently) starve or reroute the agent's own provider
 // traffic. See ADR 0038.
 //
+// mcp-proxy.anthropic.com is included because claude.ai's hosted connectors
+// (Gmail, Google Calendar, Google Drive, typefully, and other claude.ai MCP
+// connectors) proxy their MCP traffic through it -- without it, those
+// connectors break under the shield even though claude.ai itself is
+// reachable. See ADR 0040.
+//
+// chat.openai.com is included because it is the legacy OpenAI/Codex backend
+// URL: Codex CLI still normalizes some auth/session requests against it even
+// though the primary API host is api.openai.com and chatgpt.com is the
+// current web host -- without it, Codex CLI auth can break under the shield.
+// See ADR 0041.
+//
 // Returns a defensive copy; callers may freely mutate the result.
 func EssentialAllowedHosts() []string {
 	return []string{
 		"api.anthropic.com",
 		"claude.ai",
 		"platform.claude.com",
+		"mcp-proxy.anthropic.com",
 		"api.openai.com",
 		"auth.openai.com",
 		"chatgpt.com",
+		"chat.openai.com",
 		"accounts.google.com",
 		"oauth2.googleapis.com",
 	}
@@ -195,7 +209,7 @@ func EssentialAllowedHosts() []string {
 //
 // Returns a defensive copy; callers may freely mutate the result.
 func ExtendedDefaultAllowedHosts() []string {
-	return []string{
+	out := []string{
 		// Anthropic (non-essential / broad)
 		"*.claude.ai",
 		"statsig.anthropic.com",
@@ -204,7 +218,9 @@ func ExtendedDefaultAllowedHosts() []string {
 		// Google (broad wildcard stays removable)
 		"*.googleapis.com",
 		// OpenAI Codex extras (core codex hosts are essential above)
-		// Cursor CLI (exact required subdomains, removable)
+		// Cursor CLI (login/update + exact API subdomains)
+		"cursor.com",
+		"www.cursor.com",
 		"api2.cursor.sh",
 		"api5.cursor.sh",
 		"agent.api5.cursor.sh",
@@ -213,17 +229,12 @@ func ExtendedDefaultAllowedHosts() []string {
 		"authenticator.cursor.sh",
 		"authentication.cursor.sh",
 		"prod.authentication.cursor.sh",
-		// Hosted MCP servers (the MCP call is still gated by mcp.allowed)
-		"api.linear.app",
-		"mcp.linear.app",
-		"*.posthog.com",
-		"api.typefully.com",
-		"api.githubcopilot.com",
-		"mcp.context7.com",
-		"mcp.deepwiki.com",
-		"mcp.notion.com",
-		"mcp.cloudflare.com",
-		"hf.co",
+	}
+	// Hosted MCP servers (the MCP call is still gated by mcp.allowed).
+	// Sourced from HostedMCPRegistry -- see HostedMCPAllowedHosts. The hosts
+	// live only in the registry, not duplicated here as literals (ADR 0040).
+	out = append(out, HostedMCPAllowedHosts()...)
+	out = append(out,
 		// Package registries
 		"registry.npmjs.org",
 		"registry.yarnpkg.com",
@@ -264,35 +275,47 @@ func ExtendedDefaultAllowedHosts() []string {
 		"learn.microsoft.com",
 		// agentjail anonymous telemetry (users may remove)
 		"us.i.posthog.com",
-	}
+	)
+	return out
 }
 
-// EffectiveAllowedHosts returns the enforced allowlist: the non-removable
-// essentials followed by the editable Network.AllowedHosts, deduplicated
-// with essentials taking priority (i.e. essentials always appear first,
-// order-stable, no duplicate entries). This is what netproxy and the shield
-// enforce, and what ToOPAData serializes -- never the raw
-// Network.AllowedHosts field alone.
+// EffectiveAllowedHosts returns the enforced allowlist, in three tiers,
+// essentials first, order-stable, deduplicated across all three:
+//
+//  1. Essentials (EssentialAllowedHosts) -- always present, non-removable.
+//  2. MCP-derived (MCPDerivedAllowedHosts) -- hosts for hosted MCP servers
+//     that are currently allowed under c.MCP. Non-removable WHILE the MCP
+//     stays allowed: removing the server from mcp.allowed, or blocking it,
+//     removes its hosts here on the next load. This tier exists so a
+//     curated Network.AllowedHosts that omits a hosted MCP's hosts (e.g. a
+//     user trims the extended default down to just git/npm) does not
+//     silently break an MCP server the user explicitly allowed.
+//  3. Editable (Network.AllowedHosts) -- the user's own list, fully
+//     removable/replaceable.
+//
+// This is what netproxy and the shield enforce, and what ToOPAData
+// serializes -- never the raw Network.AllowedHosts field alone. See ADR 0038
+// and ADR 0040.
 //
 // Returns a defensive copy; callers may freely mutate the result.
 func (c *PolicyConfig) EffectiveAllowedHosts() []string {
 	essentials := EssentialAllowedHosts()
-	seen := make(map[string]struct{}, len(essentials)+len(c.Network.AllowedHosts))
-	out := make([]string, 0, len(essentials)+len(c.Network.AllowedHosts))
-	for _, h := range essentials {
-		if _, ok := seen[h]; ok {
-			continue
+	derived := MCPDerivedAllowedHosts(c.MCP)
+	total := len(essentials) + len(derived) + len(c.Network.AllowedHosts)
+	seen := make(map[string]struct{}, total)
+	out := make([]string, 0, total)
+	appendDedup := func(hosts []string) {
+		for _, h := range hosts {
+			if _, ok := seen[h]; ok {
+				continue
+			}
+			seen[h] = struct{}{}
+			out = append(out, h)
 		}
-		seen[h] = struct{}{}
-		out = append(out, h)
 	}
-	for _, h := range c.Network.AllowedHosts {
-		if _, ok := seen[h]; ok {
-			continue
-		}
-		seen[h] = struct{}{}
-		out = append(out, h)
-	}
+	appendDedup(essentials)
+	appendDedup(derived)
+	appendDedup(c.Network.AllowedHosts)
 	return out
 }
 
@@ -379,15 +402,15 @@ type SecretGrant struct {
 // the real value from the agent's env, and injects it into upstream requests
 // that pass host/method/path validation.
 type CredentialConfig struct {
-	ID             string                   `yaml:"id"`
-	EnvVar         string                   `yaml:"env_var"`
-	Source         string                   `yaml:"source"`
-	AllowedHosts   []string                 `yaml:"allowed_hosts"`
-	AllowedMethods []string                 `yaml:"allowed_methods"`
-	AllowedPaths   []string                 `yaml:"allowed_paths"`
+	ID             string                    `yaml:"id"`
+	EnvVar         string                    `yaml:"env_var"`
+	Source         string                    `yaml:"source"`
+	AllowedHosts   []string                  `yaml:"allowed_hosts"`
+	AllowedMethods []string                  `yaml:"allowed_methods"`
+	AllowedPaths   []string                  `yaml:"allowed_paths"`
 	Injection      CredentialInjectionConfig `yaml:"injection"`
-	Violation      string                   `yaml:"violation"`
-	TTL            string                   `yaml:"ttl"`
+	Violation      string                    `yaml:"violation"`
+	TTL            string                    `yaml:"ttl"`
 }
 
 // CredentialInjectionConfig describes how a real credential is injected into
@@ -434,6 +457,28 @@ func validateDisabledRules(patterns []string) error {
 	return nil
 }
 
+// validateMCPGlobs checks that every entry in mcp.allowed and mcp.blocked is
+// a syntactically valid glob pattern, using the same path.Match probe as
+// validateDisabledRules -- MCP server names never contain "/", so path.Match
+// is equivalent to mcp_policy.rego's glob.match(pattern, [], name) here too.
+// A malformed mcp.allowed/mcp.blocked pattern causes Load/decode to return an
+// error, so it can never silently reach OPA evaluation (where mcp_policy.rego
+// would deny-by-default anyway, but only after the bad pattern were already
+// live in the enforced config) or MCPDerivedAllowedHosts.
+func validateMCPGlobs(mcp MCPConfig) error {
+	for _, p := range mcp.Allowed {
+		if _, err := path.Match(p, "probe"); err != nil {
+			return fmt.Errorf("mcp.allowed: invalid glob pattern %q: %w", p, err)
+		}
+	}
+	for _, p := range mcp.Blocked {
+		if _, err := path.Match(p, "probe"); err != nil {
+			return fmt.Errorf("mcp.blocked: invalid glob pattern %q: %w", p, err)
+		}
+	}
+	return nil
+}
+
 // decode is the inner parser shared by Load and tests.
 func decode(r io.Reader) (*PolicyConfig, error) {
 	cfg := &PolicyConfig{}
@@ -447,6 +492,9 @@ func decode(r io.Reader) (*PolicyConfig, error) {
 		return cfg, fmt.Errorf("decode policy config: %w", err)
 	}
 	if err := validateDisabledRules(cfg.DisabledRules); err != nil {
+		return cfg, err
+	}
+	if err := validateMCPGlobs(cfg.MCP); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -707,14 +755,60 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 }
 
 // LoadOrDefault loads and merges a PolicyConfig from path over Default().
-// If the file does not exist, Default() is returned with no error.
-// If the file exists but cannot be parsed, the error is returned.
+//
+// The absent-vs-malformed distinction is load-bearing (ADR 0040): a genuinely
+// missing policy.yaml is the normal first-run state and silently falls back
+// to Default() with no error. A PRESENT but unparseable/invalid file (e.g. a
+// stray tab, or a bad mcp.allowed glob caught by validateMCPGlobs) is a
+// different situation -- it means an operator or an attacker with file-write
+// access changed the enforced policy and it no longer parses -- so that case
+// returns the error instead of silently swapping in permissive defaults.
+// Callers on the enforcement path (agentjail-shield, agentjail-netproxy) MUST
+// treat a non-nil error here as fail-loud (refuse to launch / refuse to
+// (re)apply), never as "fall back to Default()".
+//
+//   - File does not exist: Default() is returned with a nil error.
+//   - File exists but Load fails (parse or validation error): the error is
+//     returned; the *PolicyConfig return value is nil.
 func LoadOrDefault(path string) (*PolicyConfig, error) {
 	cfg, err := Load(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Default(), nil
 		}
+		return nil, err
+	}
+	return Merge(Default(), cfg), nil
+}
+
+// LoadPolicyForEnforcement is the canonical load path for enforcement
+// binaries (agentjail-shield, agentjail-netproxy) -- as opposed to
+// LoadOrDefault, which is used throughout the CLI/UI for convenience reads.
+// The two currently share fail-loud semantics, but LoadPolicyForEnforcement
+// exists as its own named entry point so the "refuse to run with a broken
+// enforced policy" contract is explicit at every enforcement call site,
+// independent of how LoadOrDefault's internals evolve. See ADR 0041.
+//
+// Distinguishes the two cases explicitly via os.Stat rather than relying on
+// Load's wrapped error:
+//
+//   - File does not exist: returns Merge(Default(), &PolicyConfig{}) (i.e.
+//     built-in defaults) with a nil error -- the normal first-run state,
+//     before `agentjail install` has written a policy.yaml.
+//   - File exists but Stat/Load/validate fails: returns the error and a nil
+//     *PolicyConfig. Callers on the enforcement path MUST treat this as
+//     fail-loud (refuse to launch / refuse to (re)apply), never silently
+//     substitute Default().
+//   - File exists and loads cleanly: returns Merge(Default(), cfg).
+func LoadPolicyForEnforcement(path string) (*PolicyConfig, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return Merge(Default(), &PolicyConfig{}), nil
+		}
+		return nil, fmt.Errorf("stat policy config %s: %w", path, err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
 		return nil, err
 	}
 	return Merge(Default(), cfg), nil
