@@ -44,13 +44,20 @@ type Overlay struct {
 }
 
 func newOverlay(dir, path string, content []byte) *Overlay {
-	sum := sha256.Sum256(content)
 	return &Overlay{
 		Dir:         dir,
 		Path:        path,
 		Content:     content,
-		ContentHash: hex.EncodeToString(sum[:]),
+		ContentHash: HashContent(content),
 	}
+}
+
+// HashContent returns the lowercase hex sha256 of content -- the value trust is
+// keyed on. Exported so callers (e.g. `agentjail trust list`) can recompute a
+// file's hash to check whether a trusted overlay still matches.
+func HashContent(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
 
 // FindOverlay searches for a project overlay starting at startDir and walking
