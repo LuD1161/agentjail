@@ -162,9 +162,18 @@ func darwinCapabilities() BackendCapability {
 // the real hostname-based enforcement point is netproxy) -- so nothing is
 // lost by not attempting the doomed lookup.
 //
-// Returns a deduplicated list of IP address strings (e.g. "140.82.112.6").
-// Loopback addresses are not included here; they are always allowed by the
-// generated profile regardless.
+// Lookups run concurrently (bounded, see dnsResolveConcurrency in
+// shield_dnsresolve.go) with a per-host timeout and an overall batch
+// deadline, so one slow or unreachable DNS name cannot stall the whole
+// shield launch -- previously this loop called net.LookupHost serially with
+// no timeout, so a single hanging name blocked every subsequent host and,
+// transitively, `/mcp` and general startup.
+//
+// Returns a deduplicated, sorted list of IP address strings (e.g.
+// "140.82.112.6"), so the generated profile is reproducible across runs
+// regardless of lookup completion order. Loopback addresses are not
+// included here; they are always allowed by the generated profile
+// regardless.
 func resolveAllowedHosts(cfg *config.PolicyConfig) []string {
 	if cfg == nil {
 		return nil
@@ -173,36 +182,30 @@ func resolveAllowedHosts(cfg *config.PolicyConfig) []string {
 	if len(hosts) == 0 {
 		return nil
 	}
-	seen := make(map[string]struct{})
-	var ips []string
+	var exact []string
 	for _, host := range hosts {
 		hp := config.ClassifyHost(host)
 		if hp.Wildcard {
 			continue
 		}
-		addrs, err := net.LookupHost(host)
+		exact = append(exact, host)
+	}
+	if len(exact) == 0 {
+		return nil
+	}
+
+	resolver := &net.Resolver{}
+	lookup := func(ctx context.Context, host string) ([]string, error) {
+		addrs, err := resolver.LookupHost(ctx, host)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: could not resolve %s: %v — skipping\n", host, err)
-			continue
 		}
-		for _, addr := range addrs {
-			ip := net.ParseIP(addr)
-			if ip == nil {
-				continue
-			}
-			// Normalise to string representation; skip loopback (always allowed separately).
-			ipStr := ip.String()
-			if ip.IsLoopback() {
-				continue
-			}
-			if _, dup := seen[ipStr]; !dup {
-				seen[ipStr] = struct{}{}
-				ips = append(ips, ipStr)
-				fmt.Fprintf(os.Stderr, "agentjail-shield INFO: resolving allowed_hosts: %s → %s\n", host, ipStr)
-			}
-		}
+		return addrs, err
 	}
-	return ips
+	onResolved := func(host, ip string) {
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: resolving allowed_hosts: %s → %s\n", host, ip)
+	}
+	return resolveHostsToIPs(exact, lookup, onResolved)
 }
 
 // generateSBProfile generates an Apple Seatbelt (sbpl) profile that:

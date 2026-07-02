@@ -59,6 +59,11 @@ const (
 	// maxRequestHeaders bounds the header lines read per CONNECT request so a
 	// hostile client cannot stream headers forever (readLine also caps line size).
 	maxRequestHeaders = 100
+	// upstreamDialTimeout bounds how long a CONNECT waits to establish the
+	// upstream TCP connection. Without a timeout, a slow or unreachable
+	// upstream hangs the handling goroutine (and the client's tunnel request)
+	// indefinitely.
+	upstreamDialTimeout = 10 * time.Second
 )
 
 // Runtime host grant sentinel (AGE-93). The agent CLI (`agentjail allow host
@@ -339,8 +344,10 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
-	// Dial the upstream target.
-	upstream, err := net.Dial("tcp", target)
+	// Dial the upstream target. A timeout is required here -- an unreachable
+	// or slow-to-respond upstream must not hang this CONNECT (and the
+	// goroutine handling it) indefinitely.
+	upstream, err := net.DialTimeout("tcp", target, upstreamDialTimeout)
 	if err != nil {
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\ncould not connect to upstream: %v\n", err)
 		p.logger.Error("upstream dial failed", "target", target, "err", err)
