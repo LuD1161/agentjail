@@ -34,6 +34,10 @@ const (
 	// expiry regardless of traffic. Never put the session Token in Detail.
 	NetproxySessionRegistered = "netproxy.session_registered"
 	NetproxySessionExpired    = "netproxy.session_expired"
+	// Per-folder policy overlays (direnv-style trust gate). Emitted by the
+	// shield when it resolves a `./.agentjail/policy.yaml` for a session.
+	ProjectOverlayApplied          = "project_overlay.applied"
+	ProjectOverlayIgnoredUntrusted = "project_overlay.ignored_untrusted"
 )
 
 // Event is one audit log entry.

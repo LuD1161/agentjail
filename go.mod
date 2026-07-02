@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/LuD1161/agentjail/agentpolicy v0.0.0-00010101000000-000000000000
+	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
@@ -11,6 +12,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/open-policy-agent/opa v1.16.2
 	github.com/spf13/cobra v1.10.2
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/mod v0.37.0
 	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.43.0
@@ -21,9 +23,9 @@ replace github.com/LuD1161/agentjail/agentpolicy => ./agentpolicy
 
 require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/charmbracelet/bubbles v1.0.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
@@ -65,7 +67,6 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yashtewari/glob-intersection v0.2.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
