@@ -378,6 +378,17 @@ agentjail untrust                 # remove it
 
 A project's `./.agentjail/policy.yaml` is **ignored until you trust it** (direnv-style), can only *widen* egress (never drop essentials, un-block a blocked MCP, or clear rules), and trust auto-revokes if the file changes. The trust list is agent-unwritable, so a sandboxed agent can't self-trust. See [ADR 0043](./docs/adr/0043-per-folder-policy-overlay-trust-gate.md).
 
+**Runtime host grants (mid-session):**
+```sh
+agentjail allow host db.staging.internal --reason "..."   # agent: file a request, pending only
+agentjail grants                                          # human, unsandboxed: list pending
+agentjail grant approve <grant_id>                        # human: grant it for this session
+agentjail grant approve <grant_id> --persist               # also widen the trusted overlay
+agentjail grant deny <grant_id>
+```
+
+The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over the same agent-unreachable control socket that registers session allowlists, so the agent can never approve its own request. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).
+
 </details>
 
 ---

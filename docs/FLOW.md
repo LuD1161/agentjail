@@ -97,6 +97,37 @@ The shield registers the resolved (global + trusted-overlay) allowlist as that
 session's policy -- so two trusted repos get different egress through one proxy,
 with no bleed. See [ADR 0043](./adr/0043-per-folder-policy-overlay-trust-gate.md).
 
+## Runtime host grants (mid-session)
+
+Sometimes a session needs one more host right now, and relaunching just to add
+it to `policy.yaml` is overkill. `agentjail allow host <h>` lets the agent FILE
+a request for its own session; a human approves it from a second, unsandboxed
+terminal:
+
+```
+$ agentjail allow host db.staging.internal --reason "run migration check"
+  requested -- pending approval (grant_id 7f2c...)
+
+# from a normal (unsandboxed) terminal:
+$ agentjail grants
+  7f2c...  db.staging.internal  ttl=1h  cwd=~/work/backend  "run migration check"
+$ agentjail grant approve 7f2c...            # live for this session only
+$ agentjail grant approve 7f2c... --persist  # also widen ./.agentjail/policy.yaml
+```
+
+The request is filed through the same token-bound proxy channel the agent's
+own traffic already uses, so it can only ever request for its own session --
+there is nothing to hand it that would let it request on behalf of another
+session, and nothing the request itself grants. Filing a request is inert:
+netproxy just remembers "someone asked." The approve/deny/list verbs only run
+over `netproxy-ctl.sock`, the same agent-unreachable control socket that
+registers allowlists ([ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md))
+-- so the agent cannot approve its own request no matter what it does inside
+the sandbox. `--persist` reuses the
+[ADR 0043](./adr/0043-per-folder-policy-overlay-trust-gate.md) trust gate to
+write the host into the repo's trusted overlay so future sessions inherit it.
+See [ADR 0044](./adr/0044-runtime-host-grants.md).
+
 ## How a network request is allowed or blocked
 
 ```
@@ -135,9 +166,12 @@ at launch (no `SIGHUP` reload); see
 | Agent tries to reach the control socket | Denied: read-only `~/.agentjail` grant (Linux) / sbpl `network-outbound` deny (macOS); the injected token is a data-plane bearer only |
 | A cloned repo ships `./.agentjail/policy.yaml` | Ignored until `agentjail trust` (direnv-style); it can only widen, never weaken; editing it revokes trust |
 | Agent tries to self-trust a project overlay | Denied: `~/.agentjail/trusted.yaml` is agent-unwritable (enforcement-tested) |
+| Agent files a runtime grant request (`agentjail allow host`) | Inert until approved -- files an in-memory pending entry for its OWN session only, grants nothing by itself |
+| A human approves a pending grant from a trusted terminal | Live for that session (TTL-bounded); `--persist` also widens the trusted overlay |
+| Agent tries to approve its own grant | Denied: `grant.approve`/`grant.deny`/`grant.list` only run over `netproxy-ctl.sock`, agent-unreachable on both OSes |
 
 ## Related docs
 
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) -- full architecture (hook, daemon, OPA, tiers)
 - [`SANDBOX.md`](./SANDBOX.md) -- `agentjail-shield` user guide and network enforcement detail
-- [ADR 0040](./adr/0040-mcp-derived-hosts-and-fail-loud-config.md), [ADR 0041](./adr/0041-hostpattern-cursor-hosts-netproxy-fail-closed.md)
+- [ADR 0040](./adr/0040-mcp-derived-hosts-and-fail-loud-config.md), [ADR 0041](./adr/0041-hostpattern-cursor-hosts-netproxy-fail-closed.md), [ADR 0044](./adr/0044-runtime-host-grants.md)

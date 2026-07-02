@@ -134,6 +134,13 @@ The shield automatically sets `HTTPS_PROXY`, `HTTP_PROXY`, and `ALL_PROXY`
 registers allowlists is denied to the agent. See
 [ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md).
 
+A blocked host can be granted to the running session at runtime: the agent
+files a request with `agentjail allow host <h>` through its own proxy
+connection, and a human approves it with `agentjail grant approve <grant_id>`
+from an unsandboxed terminal. Approve/deny/list are only reachable over the
+same control socket the agent is denied above, so the agent cannot approve
+its own request. See [ADR 0044](./adr/0044-runtime-host-grants.md).
+
 ### macOS without netproxy (`--no-netproxy`)
 
 With `--no-netproxy`, the sbpl profile allows outbound TCP on ports 443 and 80
