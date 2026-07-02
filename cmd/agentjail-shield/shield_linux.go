@@ -189,7 +189,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		// Landlock) cannot (the socket lives under the read-only ~/.agentjail
 		// grant, and AF_UNIX connect needs write). Incompatible/unverifiable
 		// proxy -> fail closed inside ensureSessionProxy.
-		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, sessionPolicyFromConfig(cfg))
+		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, resolveSessionPolicy(ctx, cfg, emitter))
 		if startErr != nil {
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start/register netproxy: %v", startErr))
 		}

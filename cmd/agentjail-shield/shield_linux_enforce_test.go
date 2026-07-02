@@ -180,6 +180,21 @@ func runLandlockAgentjailChild() {
 		fmt.Fprintf(os.Stdout, "policy_write=ERR:%v\n", werr)
 	}
 
+	// Probe 1b: write ~/.agentjail/trusted.yaml -- must be DENIED. The project-
+	// overlay trust store lives here; if the agent could write it, it could
+	// self-trust a malicious ./.agentjail/policy.yaml and widen its own egress.
+	// Same read-only grant -> EACCES.
+	trustPath := filepath.Join(home, ".agentjail", "trusted.yaml")
+	terr := os.WriteFile(trustPath, []byte("trusted:\n  - path: /evil\n"), 0600)
+	if terr == nil {
+		_ = os.Remove(trustPath)
+		fmt.Fprintln(os.Stdout, "trust_write=ok")
+	} else if errors.Is(terr, unix.EACCES) || errors.Is(terr, unix.EPERM) {
+		fmt.Fprintln(os.Stdout, "trust_write=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "trust_write=ERR:%v\n", terr)
+	}
+
 	// Probe 2: connect() ~/.agentjail/daemon.sock -- must be ALLOWED. The
 	// single-file write grant covers exactly the socket inode; on Linux the
 	// AF_UNIX connect() needs write access on it.
@@ -333,6 +348,9 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 
 	if !strings.Contains(output, "policy_write=EACCES") {
 		t.Errorf("expected policy_write=EACCES (agent must NOT write ~/.agentjail/policy.yaml), got:\n%s", output)
+	}
+	if !strings.Contains(output, "trust_write=EACCES") {
+		t.Errorf("expected trust_write=EACCES (agent must NOT write ~/.agentjail/trusted.yaml -- no self-trust), got:\n%s", output)
 	}
 	if !strings.Contains(output, "sock_connect=ok") {
 		t.Errorf("expected sock_connect=ok (hook must still connect ~/.agentjail/daemon.sock), got:\n%s", output)

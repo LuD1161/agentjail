@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -23,6 +24,8 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/projectpolicy"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
@@ -35,6 +38,46 @@ func sessionPolicyFromConfig(cfg *config.PolicyConfig) proxyctl.SessionPolicy {
 		return proxyctl.SessionPolicy{AllowedHosts: config.EssentialAllowedHosts()}
 	}
 	return proxyctl.SessionPolicy{AllowedHosts: cfg.EffectiveAllowedHosts()}
+}
+
+// resolveSessionPolicy builds the session allowlist, applying a per-folder
+// `./.agentjail/policy.yaml` overlay ONLY when the agent's working directory is
+// trusted (direnv-style). Untrusted or malformed overlays are ignored
+// (global-only) and audited. The overlay merge is additive-only, so a trusted
+// project can only WIDEN egress, never weaken a global restriction. Called
+// pre-sandbox in the shield, so the trust store (~/.agentjail/trusted.yaml,
+// agent-unwritable) is read out-of-band.
+func resolveSessionPolicy(ctx context.Context, cfg *config.PolicyConfig, emitter audit.Emitter) proxyctl.SessionPolicy {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return sessionPolicyFromConfig(cfg)
+	}
+	home, _ := os.UserHomeDir()
+	trustPath := projectpolicy.TrustStorePath(filepath.Join(home, projectpolicy.ProjectDirName))
+
+	res, rerr := projectpolicy.Resolve(cfg, cwd, home, trustPath)
+	if rerr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail-shield: project overlay resolve error (ignored): %v\n", rerr)
+	}
+	switch res.Status {
+	case projectpolicy.StatusApplied:
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: applied trusted project overlay %s\n", res.OverlayPath)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ProjectOverlayApplied,
+			Actor:     "shield",
+			Detail:    map[string]string{"overlay": res.OverlayPath},
+		})
+	case projectpolicy.StatusUntrusted:
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: ignoring UNTRUSTED project overlay %s -- run 'agentjail trust' to apply it\n", res.OverlayPath)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ProjectOverlayIgnoredUntrusted,
+			Actor:     "shield",
+			Detail:    map[string]string{"overlay": res.OverlayPath},
+		})
+	case projectpolicy.StatusInvalid:
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: ignoring malformed project overlay %s\n", res.OverlayPath)
+	}
+	return sessionPolicyFromConfig(res.Config)
 }
 
 // netproxyDefaultAddr is the address the netproxy listens on when started by
