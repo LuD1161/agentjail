@@ -29,6 +29,11 @@ const (
 	DaemonStopped         = "daemon.stopped"
 	DaemonFailopen        = "daemon.failopen"
 	UpdateCompleted       = "update.completed"
+	// Session-aware netproxy control plane (per-session allowlists). A session
+	// lease is registered by the shield over the control socket and reaped on
+	// expiry regardless of traffic. Never put the session Token in Detail.
+	NetproxySessionRegistered = "netproxy.session_registered"
+	NetproxySessionExpired    = "netproxy.session_expired"
 )
 
 // Event is one audit log entry.
