@@ -101,9 +101,17 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 
 ## Network enforcement
 
-### macOS with netproxy (default)
+> **Interim (ADR 0046):** per-host egress enforcement (`agentjail-netproxy`) is
+> **opt-in and OFF by default**. The credentialed proxy URL broke Claude Code's
+> MCP transport on macOS, and the transparent tunnel (AGE-81/AGE-96) will
+> supersede the proxy with real per-session isolation and no proxy env. Until
+> then the shield runs **port-only by default** (filesystem/process/keychain
+> sandbox stays fully on); pass `--netproxy` to turn per-host filtering on. The
+> "with netproxy" section below describes the `--netproxy` path.
 
-By default on macOS, agentjail-shield ensures a single shared
+### macOS with netproxy (`--netproxy`, opt-in)
+
+With `--netproxy`, agentjail-shield ensures a single shared
 `agentjail-netproxy` is running on `127.0.0.1:9100` and restricts the agent to
 **localhost-only** outbound TCP. The proxy is **session-aware**: the shield
 registers THIS session's EFFECTIVE `network.allowed_hosts` over a control socket
@@ -141,20 +149,22 @@ from an unsandboxed terminal. Approve/deny/list are only reachable over the
 same control socket the agent is denied above, so the agent cannot approve
 its own request. See [ADR 0044](./adr/0044-runtime-host-grants.md).
 
-### macOS without netproxy (`--no-netproxy`)
+### macOS without netproxy (default)
 
-With `--no-netproxy`, the sbpl profile allows outbound TCP on ports 443 and 80
-to **any** host. This is less secure (no per-host filtering) but works when the
-netproxy binary is unavailable or when the agent doesn't respect proxy
-environment variables.
+By default (no `--netproxy`), the sbpl profile allows outbound TCP on ports 443
+and 80 to **any** host. This is the interim default (ADR 0046): no per-host
+filtering, but it does not break MCP and requires no proxy env. Explicit
+`--no-netproxy` selects the same port-only mode.
 
 ### Linux
 
-On kernel 6.7+ (Landlock ABI v4), agentjail-shield restricts the agent's TCP
-connect to the netproxy port (9100) only, using `LANDLOCK_ACCESS_NET_CONNECT_TCP`.
-All other TCP connect is denied at the kernel level. The `agentjail-netproxy`
-child process then enforces `network.allowed_hosts` from `policy.yaml`, the same
-as on macOS.
+With `--netproxy` on kernel 6.7+ (Landlock ABI v4), agentjail-shield restricts
+the agent's TCP connect to the netproxy port (9100) only, using
+`LANDLOCK_ACCESS_NET_CONNECT_TCP`. All other TCP connect is denied at the kernel
+level. The `agentjail-netproxy` child process then enforces
+`network.allowed_hosts` from `policy.yaml`, the same as on macOS. Without
+`--netproxy` (the default, ADR 0046), Landlock CONNECT is limited to the
+port-only fallback set below.
 
 On kernels < 6.7, Landlock network ABI is unavailable. A warning is printed and
 FS-only Landlock is applied (network egress is not restricted by Landlock). Use
@@ -182,7 +192,8 @@ The `--` separator between shield flags and the agent command is **required**.
 |---|---|---|
 | `--policy=PATH` | `~/.agentjail/policy.yaml` | Path to the policy config file |
 | `--profile-print` | `false` | Print the generated sandbox profile to stderr and exit (does not run the agent) |
-| `--no-netproxy` | `false` | Disable `agentjail-netproxy`; revert to port-based network filtering |
+| `--netproxy` | `false` | Enable `agentjail-netproxy` per-host egress enforcement (opt-in; default off until the transparent tunnel lands -- ADR 0046) |
+| `--no-netproxy` | `false` | Explicitly select port-based filtering (now the default); retained for back-compat |
 | `--audit-json=PATH` | `""` | Write environment audit findings as JSON to PATH (use `-` for stdout) |
 | `--audit-strict` | `false` | Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1) |
 

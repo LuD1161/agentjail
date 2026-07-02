@@ -223,7 +223,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			// ABI v4+ kernels -- CONNECT is restricted to the shared fallback
 			// ports (contract NoNetproxyFallbackPorts). Bind stays unhandled
 			// so dynamic OAuth callback binds are not regressed.
-			fmt.Fprintf(os.Stderr, "Network (--no-netproxy, ABI v4+, kernel 6.7+):\n")
+			fmt.Fprintf(os.Stderr, "Network (port-only default, ABI v4+, kernel 6.7+):\n")
 			fmt.Fprintf(os.Stderr, "  Allow TCP connect to ports %v only (no per-host enforcement)\n", NoNetproxyFallbackPorts())
 			fmt.Fprintln(os.Stderr, "  Deny all other TCP connect; TCP bind left unhandled by Landlock")
 			fmt.Fprintln(os.Stderr, "  On kernel < 6.7: network ABI unavailable, FS-only Landlock applied")

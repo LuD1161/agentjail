@@ -19,9 +19,9 @@ import (
 // profile still looks "active" but the network allowlist the user configured
 // (network.allowed_hosts / mcp-derived hosts) is no longer enforced.
 //
-// --no-netproxy remains the explicit, intentional opt-out for port-only
-// mode; this function is never called in that path (callers only invoke it
-// when netproxy was supposed to start).
+// Egress enforcement is opt-in (--netproxy); this function is only reached
+// when the operator explicitly asked for netproxy and it could not start.
+// Omitting --netproxy (the default) runs port-only and never reaches here.
 //
 // An audit.ShieldFailed event is emitted before exit so the downgrade
 // attempt (and refusal) is visible in the audit log even though the shield
@@ -37,8 +37,8 @@ func abortOnNetproxyFailure(ctx context.Context, emitter audit.Emitter, reason s
 		"agentjail-shield ERROR: %s\n"+
 			"  Refusing to launch: netproxy is required for per-host network enforcement\n"+
 			"  and could not be started (fail-closed default -- see ADR 0041).\n"+
-			"  Use --no-netproxy to explicitly accept port-based filtering instead\n"+
-			"  (no per-host enforcement, TCP allowed on 80/443 only).\n",
+			"  Omit --netproxy to run port-only (the default: no per-host\n"+
+			"  enforcement, TCP allowed on 80/443 only).\n",
 		reason,
 	)
 	os.Exit(1)

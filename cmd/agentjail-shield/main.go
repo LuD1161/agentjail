@@ -53,15 +53,26 @@ func defaultPolicyPath() string {
 func main() {
 	policyPath := flag.String("policy", defaultPolicyPath(), "path to ~/.agentjail/policy.yaml")
 	profilePrint := flag.Bool("profile-print", false, "print the sandbox profile to stderr and exit without running the agent")
-	noNetproxy := flag.Bool("no-netproxy", false, "disable agentjail-netproxy; revert to port-based network filtering (no per-host enforcement)")
+	// Egress enforcement (agentjail-netproxy) is OPT-IN and OFF by default:
+	// the credentialed proxy URL breaks Claude Code's MCP HTTP transport on
+	// macOS, and the transparent tunnel (AGE-81/AGE-96) will supersede the
+	// proxy with real per-session isolation and no proxy env. Until then the
+	// shield runs port-only by default (filesystem/process/keychain sandbox
+	// stays fully on); pass --netproxy to turn per-host egress filtering back
+	// on. --no-netproxy is retained (now redundant with the default) so
+	// existing shims/scripts do not break; if both are given, disable wins.
+	// See ADR 0046.
+	netproxyEnable := flag.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
+	noNetproxy := flag.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
 	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1)")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--no-netproxy] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml (default: ~/.agentjail/policy.yaml)")
 		fmt.Fprintln(os.Stderr, "  --profile-print     print the generated sandbox profile to stderr and exit 0")
-		fmt.Fprintln(os.Stderr, "  --no-netproxy       disable the localhost HTTPS proxy; reverts to port-based network filtering")
+		fmt.Fprintln(os.Stderr, "  --netproxy          enable per-host egress enforcement via agentjail-netproxy (opt-in; default off)")
+		fmt.Fprintln(os.Stderr, "  --no-netproxy       (default) port-based network filtering only, no per-host enforcement")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
 		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings")
 		fmt.Fprintln(os.Stderr, "")
@@ -147,6 +158,18 @@ func main() {
 		})
 	}
 
+	// Egress enforcement is opt-in: netproxy runs only when --netproxy is
+	// passed and --no-netproxy is not. Default (neither flag) is port-only.
+	noNetproxyEffective := resolveNoNetproxy(*netproxyEnable, *noNetproxy)
+
 	// Delegate to the OS-specific sandbox implementation.
-	runShield(cfg, agentPath, agentArgs, *profilePrint, *noNetproxy, *policyPath, startTime, emitter)
+	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *policyPath, startTime, emitter)
+}
+
+// resolveNoNetproxy computes the effective "netproxy disabled" value from the
+// two flags. Egress enforcement is OPT-IN (ADR 0046): it is on only when
+// --netproxy is passed and --no-netproxy is not. The default (both false) is
+// port-only, and an explicit --no-netproxy always wins over --netproxy.
+func resolveNoNetproxy(netproxyEnable, noNetproxy bool) bool {
+	return !netproxyEnable || noNetproxy
 }

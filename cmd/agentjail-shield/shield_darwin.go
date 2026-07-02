@@ -366,13 +366,14 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %d IPs resolved for allowed_hosts (enforced via netproxy; sbpl restricts agent to localhost only)\n", len(allowedIPs))
 		}
 	} else {
-		// Port-only mode (--no-netproxy): inform that host-level filtering is absent.
+		// Port-only mode (default; opt in to per-host enforcement with --netproxy):
+		// inform that host-level filtering is absent.
 		// Apple Seatbelt (sbpl) limitation: the (remote tcp/udp "HOST:PORT") filter
 		// only accepts "*" or "localhost" as the HOST component.  Literal IP
 		// addresses are rejected by sandbox-exec.
 		// Consequence: sbpl cannot enforce host-level (IP-based) egress filtering.
 		if len(allowedIPs) > 0 {
-			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %d IPs resolved for allowed_hosts (informational; sbpl enforces port-based rules only — use netproxy for per-host enforcement)\n", len(allowedIPs))
+			fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %d IPs resolved for allowed_hosts (informational; sbpl enforces port-based rules only -- pass --netproxy for per-host enforcement)\n", len(allowedIPs))
 		}
 	}
 
@@ -498,9 +499,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		var findErr error
 		netproxyBin, findErr = findNetproxyBinary()
 		if findErr != nil {
-			// Fail-closed default (ADR 0041): netproxy was requested (no
-			// --no-netproxy) but its binary could not be located. Aborting
-			// here, rather than silently downgrading to port-only egress,
+			// Fail-closed default (ADR 0041): netproxy was explicitly
+			// requested (--netproxy) but its binary could not be located.
+			// Aborting here, rather than silently downgrading to port-only egress,
 			// keeps "the shield is running" and "network.allowed_hosts is
 			// enforced" from silently diverging.
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not locate agentjail-netproxy binary: %v", findErr))

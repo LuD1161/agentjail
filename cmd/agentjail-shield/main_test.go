@@ -67,3 +67,28 @@ func TestAgentNotFound(t *testing.T) {
 		t.Skip("unexpected binary found")
 	}
 }
+
+// TestResolveNoNetproxy pins the opt-in default (ADR 0046): egress enforcement
+// is on ONLY when --netproxy is passed and --no-netproxy is not; the default
+// (no flags) is port-only, and --no-netproxy always wins.
+func TestResolveNoNetproxy(t *testing.T) {
+	cases := []struct {
+		name           string
+		netproxyEnable bool
+		noNetproxy     bool
+		wantNoNetproxy bool
+	}{
+		{"default: both unset -> port-only", false, false, true},
+		{"--netproxy -> enforcement on", true, false, false},
+		{"--no-netproxy -> port-only", false, true, true},
+		{"--netproxy --no-netproxy -> disable wins", true, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveNoNetproxy(tc.netproxyEnable, tc.noNetproxy); got != tc.wantNoNetproxy {
+				t.Errorf("resolveNoNetproxy(%v, %v) = %v, want %v",
+					tc.netproxyEnable, tc.noNetproxy, got, tc.wantNoNetproxy)
+			}
+		})
+	}
+}

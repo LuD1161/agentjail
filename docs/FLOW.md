@@ -26,22 +26,27 @@ you run:  claude   (wrapped by agentjail-shield)
                  │
                  ▼
    ┌──────────────────────────────────┐
-   │ 3. ensure agentjail-netproxy      │  ONE shared per-host enforcer (localhost:9100).
-   │    (fingerprint + reuse OR start) │  Mint a session token, register THIS session's
-   │    register this session          │  resolved allowlist over the control socket.
-   │    if it fails -> STOP             │  (fail closed; --no-netproxy is the opt-out)
-   └──────────────────────────────────┘
+   │ 3. ensure agentjail-netproxy      │  ONLY with --netproxy (opt-in; OFF by
+   │    (fingerprint + reuse OR start) │  default in the interim -- ADR 0046).
+   │    register this session          │  Mint a session token, register THIS
+   │    if it fails -> STOP             │  session's allowlist over the control
+   └──────────────────────────────────┘  socket. (fail closed)
                  │
                  ▼
    ┌──────────────────────────────────────┐
-   │ 4. apply OS sandbox + env             │  file denies, env cleaned,
-   │    HTTPS_PROXY=<token>:@127.0.0.1:9100 │  agent forced through netproxy;
-   │    control socket denied to the agent  │  token selects this session's allowlist
-   └──────────────────────────────────────┘
+   │ 4. apply OS sandbox + env             │  file denies, env cleaned. With
+   │    HTTPS_PROXY=<token>:@127.0.0.1:9100 │  --netproxy: agent forced through
+   │    control socket denied to the agent  │  netproxy, token selects its allowlist.
+   └──────────────────────────────────────┘  Default: port-only egress (80/443).
                  │
                  ▼
          your agent runs, sandboxed
 ```
+
+> **Interim (ADR 0046):** steps 3-4's proxy path is opt-in (`--netproxy`). By
+> default the shield runs port-only (no per-host egress filtering); the
+> transparent tunnel (AGE-81/AGE-96) will restore transparent per-host
+> enforcement without the proxy env that breaks MCP.
 
 ## The allowed-hosts model -- three tiers
 

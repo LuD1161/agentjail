@@ -224,9 +224,12 @@ restricts network egress. `~/Library/Keychains` (user keychain root) is
 granted read+write by default so Claude Code's login/token-refresh flow
 works — see [ADR 0037](./adr/0037-macos-keychain-access-shielded-agent.md);
 the hook layer still denies an agent's own direct reads of that path. When
-`agentjail-netproxy` is running (default), the
+`agentjail-netproxy` is enabled (opt-in via `--netproxy`; OFF by default in the
+interim -- ADR 0046), the
 agent is restricted to localhost-only outbound TCP and all HTTPS traffic flows
 through the proxy, which enforces the *effective* allowlist from `policy.yaml`.
+By default (no `--netproxy`) egress is port-only (80/443, no per-host filtering)
+until the transparent tunnel (AGE-81/AGE-96) supersedes the proxy.
 The effective allowlist is three tiers -- non-removable essentials (provider
 auth + `mcp-proxy.anthropic.com`), hosts auto-derived from the MCP servers you
 allow (`mcp.allowed`), then your editable `network.allowed_hosts` -- computed by
