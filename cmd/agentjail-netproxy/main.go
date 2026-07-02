@@ -26,11 +26,14 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,6 +44,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/hostgrant"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/store"
 )
@@ -55,6 +59,22 @@ const (
 	// maxRequestHeaders bounds the header lines read per CONNECT request so a
 	// hostile client cannot stream headers forever (readLine also caps line size).
 	maxRequestHeaders = 100
+)
+
+// Runtime host grant sentinel (AGE-93). The agent CLI (`agentjail allow host
+// <h>`) issues a plain GET through its existing HTTPS_PROXY to this reserved
+// authority to FILE a grant request; it is never forwarded upstream --
+// handleConn intercepts it after the token/auth lookup but before the generic
+// method dispatch (see isGrantSentinel). Hitting the sentinel grants nothing
+// by itself, it only records intent for a human to approve/deny over the
+// control socket.
+const (
+	// grantSentinelHost is the reserved authority matched by the sentinel.
+	grantSentinelHost = "grant.agentjail.local"
+	// grantSentinelPath is the path prefix the sentinel matches.
+	grantSentinelPath = "/allow"
+	// defaultGrantTTL is used when the sentinel request omits ttl.
+	defaultGrantTTL = time.Hour
 )
 
 // allowlist holds a set of allowed hosts. One is built per registered session
@@ -127,14 +147,19 @@ type proxy struct {
 	emitter   audit.Emitter
 	connCount atomic.Int64
 	logger    *slog.Logger
+	// durableAudit is true only when emitter is backed by a real, writable
+	// store (never audit.NopEmitter). Threaded into the control server so
+	// grant_approve can fail closed when audit is unavailable (ADR 0044).
+	durableAudit bool
 }
 
-func newProxy(addr string, registry *sessionRegistry, emitter audit.Emitter, logger *slog.Logger) *proxy {
+func newProxy(addr string, registry *sessionRegistry, emitter audit.Emitter, durableAudit bool, logger *slog.Logger) *proxy {
 	return &proxy{
-		addr:     addr,
-		registry: registry,
-		emitter:  emitter,
-		logger:   logger,
+		addr:         addr,
+		registry:     registry,
+		emitter:      emitter,
+		durableAudit: durableAudit,
+		logger:       logger,
 	}
 }
 
@@ -145,7 +170,7 @@ func newProxy(addr string, registry *sessionRegistry, emitter audit.Emitter, log
 // is expected to have fingerprinted and reused the existing proxy instead of
 // spawning us).
 func (p *proxy) run(ctx context.Context) error {
-	cs, err := newControlServer(proxyctl.ControlSocketPath(), p.registry, p.emitter, version, p.logger)
+	cs, err := newControlServer(proxyctl.ControlSocketPath(), p.registry, p.emitter, p.durableAudit, version, p.logger)
 	if err != nil {
 		return fmt.Errorf("acquire control plane: %w", err)
 	}
@@ -194,7 +219,9 @@ func (p *proxy) run(ctx context.Context) error {
 	}
 }
 
-// reapLoop periodically sweeps expired session leases and audits each expiry.
+// reapLoop periodically sweeps expired session leases, expired runtime host
+// grants, and stale pending grant requests, auditing each (best-effort; see
+// ADR 0044 -- only grant_approved is fail-closed).
 func (p *proxy) reapLoop(ctx context.Context) {
 	t := time.NewTicker(reapInterval)
 	defer t.Stop()
@@ -203,12 +230,23 @@ func (p *proxy) reapLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			expired := p.registry.reap(time.Now())
-			for range expired {
+			res := p.registry.reap(time.Now())
+			for range res.ExpiredSessions {
 				_ = p.emitter.Emit(ctx, audit.Event{EventType: audit.NetproxySessionExpired, Actor: "netproxy"})
 			}
-			if len(expired) > 0 {
-				p.logger.Info("reaped expired sessions", "count", len(expired), "live_sessions", p.registry.count())
+			for _, g := range res.ExpiredGrants {
+				_ = p.emitter.Emit(ctx, audit.Event{
+					EventType: audit.NetproxyGrantExpired,
+					Actor:     "netproxy",
+					RefID:     g.GrantID,
+					Detail:    map[string]string{"host": g.Host},
+				})
+			}
+			if len(res.ExpiredSessions) > 0 || len(res.ExpiredGrants) > 0 {
+				p.logger.Info("reaped",
+					"expired_sessions", len(res.ExpiredSessions),
+					"expired_grants", len(res.ExpiredGrants),
+					"live_sessions", p.registry.count())
 			}
 		}
 	}
@@ -242,20 +280,33 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
-	if method != "CONNECT" {
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nAllow: CONNECT\r\nContent-Type: text/plain\r\n\r\nagentjail-netproxy only supports HTTPS CONNECT tunneling\n")
-		p.logger.Warn("non-CONNECT request", "client", clientAddr, "method", method)
-		return
-	}
-
 	// Per-session auth: the token selects this session's allowlist. Missing,
 	// malformed, unknown, or expired -> deny. There is NO global fallback.
-	// Never log the token.
-	al, ok := p.registry.lookup(proxyctl.Token(token), time.Now())
-	if !ok {
+	// Never log the token. This check runs BEFORE the method dispatch (Codex
+	// r3 #2) so the grant sentinel below -- and every other request -- is
+	// token-bound; only a valid session may even file a grant request.
+	tok := proxyctl.Token(token)
+	if !p.registry.sessionValid(tok, time.Now()) {
 		_, _ = fmt.Fprintf(conn,
 			"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"agentjail\"\r\nX-Agentjail-Deny: session-token\r\nContent-Type: text/plain\r\n\r\nmissing or unknown agentjail session token\n")
 		p.logger.Warn("deny: unknown/missing session token", "client", clientAddr, "had_token", token != "")
+		return
+	}
+
+	// Runtime host grant sentinel (AGE-93): a GET to grant.agentjail.local/allow
+	// files a pending grant request for THIS session and is never forwarded
+	// upstream. Matched before the generic method dispatch so it is not
+	// rejected as a non-CONNECT method; a CONNECT to the sentinel authority is
+	// NOT a grant request (method must be GET) -- it falls through to the
+	// normal CONNECT path below and is denied like any other unlisted host.
+	if isGrantSentinel(method, target) {
+		p.handleGrantSentinel(conn, tok, target, clientAddr)
+		return
+	}
+
+	if method != "CONNECT" {
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nAllow: CONNECT\r\nContent-Type: text/plain\r\n\r\nagentjail-netproxy only supports HTTPS CONNECT tunneling\n")
+		p.logger.Warn("non-CONNECT request", "client", clientAddr, "method", method)
 		return
 	}
 
@@ -267,7 +318,7 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
-	allowed := al.allowed(host)
+	allowed := p.registry.allowedHost(tok, host, time.Now())
 	decision := "allow"
 	if !allowed {
 		decision = "deny"
@@ -318,6 +369,92 @@ func (p *proxy) handleConn(conn net.Conn) {
 	}()
 	<-done
 	<-done
+}
+
+// isGrantSentinel reports whether method+target is a runtime host grant
+// request (AGE-93): a GET whose target authority is grantSentinelHost and
+// whose path starts with grantSentinelPath. A CONNECT to the same authority
+// is deliberately NOT a grant request -- only GET .../allow is (Codex r3 #2).
+func isGrantSentinel(method, target string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	return normalizeHost(u.Hostname()) == grantSentinelHost && strings.HasPrefix(u.Path, grantSentinelPath)
+}
+
+// handleGrantSentinel files a pending runtime host grant request for tok's
+// session and never forwards the request upstream. It validates the host
+// (hostgrant.Validate), clamps/validates the requested ttl, bounds reason,
+// enforces the per-session/global pending caps, and on success responds 202
+// with the minted grant_id. Reject: invalid host/ttl -> 400; over a pending
+// cap -> 429. The audit event (grant_requested) is best-effort -- the
+// fail-closed record is grant_approved, emitted later by a human decision.
+func (p *proxy) handleGrantSentinel(conn net.Conn, tok proxyctl.Token, target, clientAddr string) {
+	u, err := url.Parse(target)
+	if err != nil {
+		writeHTTPError(conn, http.StatusBadRequest, "bad sentinel request target")
+		return
+	}
+	q := u.Query()
+
+	host, verr := hostgrant.Validate(q.Get("host"))
+	if verr != nil {
+		writeHTTPError(conn, http.StatusBadRequest, fmt.Sprintf("invalid host: %v", verr))
+		return
+	}
+
+	ttl := defaultGrantTTL
+	if raw := q.Get("ttl"); raw != "" {
+		d, perr := time.ParseDuration(raw)
+		if perr != nil || d <= 0 {
+			writeHTTPError(conn, http.StatusBadRequest, fmt.Sprintf("invalid ttl: %q", raw))
+			return
+		}
+		ttl = d
+	}
+	ttlMs := ttl.Milliseconds()
+	if ttlMs > proxyctl.MaxGrantTTLMs {
+		ttlMs = proxyctl.MaxGrantTTLMs
+	}
+
+	reason := q.Get("reason")
+	if len(reason) > proxyctl.MaxReasonLen {
+		writeHTTPError(conn, http.StatusBadRequest, fmt.Sprintf("reason exceeds %d bytes", proxyctl.MaxReasonLen))
+		return
+	}
+
+	pg, err := p.registry.requestGrant(tok, host, ttlMs, reason, time.Now())
+	if err != nil {
+		switch {
+		case errors.Is(err, errPendingCapSession), errors.Is(err, errPendingCapGlobal):
+			writeHTTPError(conn, http.StatusTooManyRequests, err.Error())
+		default:
+			writeHTTPError(conn, http.StatusBadRequest, err.Error())
+		}
+		p.logger.Warn("grant request rejected", "client", clientAddr, "host", host, "err", err)
+		return
+	}
+
+	p.logger.Info("grant requested", "client", clientAddr, "grant_id", pg.GrantID, "host", pg.Host)
+	_ = p.emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.NetproxyGrantRequested,
+		Actor:     "netproxy",
+		RefID:     pg.GrantID,
+		Detail:    map[string]string{"host": pg.Host},
+	})
+
+	body := fmt.Sprintf(`{"grant_id":%q,"host":%q,"ttl_ms":%d}`, pg.GrantID, pg.Host, pg.TTLMs)
+	_, _ = fmt.Fprintf(conn, "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+}
+
+// writeHTTPError writes a minimal HTTP error response with the given status
+// and a plain-text body.
+func writeHTTPError(conn net.Conn, status int, msg string) {
+	_, _ = fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\n\r\n%s\n", status, http.StatusText(status), msg)
 }
 
 // readLine reads bytes from r until \n (or error), returning the line without
@@ -454,17 +591,22 @@ func main() {
 	// sandbox, so the open succeeds. If it is unavailable, fall back to a no-op
 	// so a missing/locked DB never stops the proxy from enforcing egress.
 	var emitter audit.Emitter = audit.NopEmitter{}
+	// durableAudit gates grant_approve (ADR 0044, Codex r3 #1): a live grant
+	// must never be applied without a durable audit record, so approve is
+	// refused whenever emitter is NOT backed by the real store below.
+	durableAudit := false
 	if home, _ := os.UserHomeDir(); home != "" {
 		dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
 		if st, err := store.Open(dbPath); err == nil {
 			emitter = st
+			durableAudit = true
 			defer st.Close()
 		} else {
 			logger.Warn("audit store unavailable; session events not persisted", "err", err)
 		}
 	}
 
-	p := newProxy(*addr, newSessionRegistry(), emitter, logger)
+	p := newProxy(*addr, newSessionRegistry(), emitter, durableAudit, logger)
 	if err := p.run(ctx); err != nil {
 		logger.Error("proxy exited with error", "err", err)
 		os.Exit(1)

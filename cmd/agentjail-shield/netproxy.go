@@ -145,13 +145,21 @@ func findNetproxyBinary() (string, error) {
 // *exec.Cmd is non-nil only if WE started the proxy (the caller must reap it on
 // exit); it is nil when we reused an already-running proxy.
 //
+// sessionID and cwd are non-secret, display-only identity (AGE-93; see
+// proxyctl.Request.SessionID / Cwd) so a human approving a runtime host grant
+// later (`agentjail grants`) can tell concurrent sessions apart. Neither
+// carries authority -- Token remains the sole data-plane bearer. Callers mint
+// a fresh opaque sessionID per launch (e.g. "shield-<pid>") since the shield
+// runs before any hook fires and has no Claude Code session id available in
+// its own environment.
+//
 // Fail-closed semantics (never silently weaken enforcement, never blind-kill
 // another session's proxy):
 //   - A running proxy with an INCOMPATIBLE control protocol -> error (refuse to
 //     launch); the user ends other sessions or restarts the proxy.
 //   - No control socket but :9100 occupied by an unverifiable listener -> error
 //     (refuse; do not kill by port).
-func ensureSessionProxy(netproxyPath, proxyAddr string, policy proxyctl.SessionPolicy) (*exec.Cmd, proxyctl.Token, error) {
+func ensureSessionProxy(netproxyPath, proxyAddr, sessionID, cwd string, policy proxyctl.SessionPolicy) (*exec.Cmd, proxyctl.Token, error) {
 	tok, err := proxyctl.NewToken()
 	if err != nil {
 		return nil, "", fmt.Errorf("mint session token: %w", err)
@@ -166,7 +174,7 @@ func ensureSessionProxy(netproxyPath, proxyAddr string, policy proxyctl.SessionP
 					"end other shielded sessions or restart the proxy (fail closed)",
 				fp.ProtocolVersion, proxyctl.CurrentProtocolVersion)
 		}
-		if err := proxyctl.Register(ctlPath, tok, policy, sessionLeaseTTL, registerTimeout); err != nil {
+		if err := proxyctl.Register(ctlPath, tok, sessionID, cwd, policy, sessionLeaseTTL, registerTimeout); err != nil {
 			return nil, "", fmt.Errorf("register session with running proxy: %w", err)
 		}
 		return nil, tok, nil // reuse; not ours to reap
@@ -191,7 +199,7 @@ func ensureSessionProxy(netproxyPath, proxyAddr string, policy proxyctl.SessionP
 		_ = cmd.Process.Kill()
 		return nil, "", fmt.Errorf("netproxy did not expose its control socket: %w", err)
 	}
-	if err := proxyctl.Register(ctlPath, tok, policy, sessionLeaseTTL, registerTimeout); err != nil {
+	if err := proxyctl.Register(ctlPath, tok, sessionID, cwd, policy, sessionLeaseTTL, registerTimeout); err != nil {
 		_ = cmd.Process.Kill()
 		return nil, "", fmt.Errorf("register session with new proxy: %w", err)
 	}

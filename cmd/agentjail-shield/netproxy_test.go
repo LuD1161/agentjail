@@ -112,7 +112,7 @@ func TestEnsureSessionProxy_StartRegisterEnforce(t *testing.T) {
 	proxyAddr := freeAddr(t)
 	policy := proxyctl.SessionPolicy{AllowedHosts: []string{"api.github.com"}}
 
-	cmd, tok, err := ensureSessionProxy(netproxyBin, proxyAddr, policy)
+	cmd, tok, err := ensureSessionProxy(netproxyBin, proxyAddr, "test-session", "/tmp/test", policy)
 	if err != nil {
 		t.Fatalf("ensureSessionProxy: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestEnsureSessionProxy_StartRegisterEnforce(t *testing.T) {
 // TestEnsureSessionProxy_BinaryNotFound verifies a bogus binary fails closed.
 func TestEnsureSessionProxy_BinaryNotFound(t *testing.T) {
 	isolatedShortHome(t)
-	_, _, err := ensureSessionProxy("/nonexistent/agentjail-netproxy", freeAddr(t), proxyctl.SessionPolicy{})
+	_, _, err := ensureSessionProxy("/nonexistent/agentjail-netproxy", freeAddr(t), "test-session", "/tmp/test", proxyctl.SessionPolicy{})
 	if err == nil {
 		t.Fatal("expected error starting a nonexistent binary")
 	}
@@ -168,7 +168,7 @@ func TestEnsureSessionProxy_NeverExposesControlSocket(t *testing.T) {
 	proxyStartTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { proxyStartTimeout = old })
 
-	_, _, err = ensureSessionProxy(sleepBin, freeAddr(t), proxyctl.SessionPolicy{})
+	_, _, err = ensureSessionProxy(sleepBin, freeAddr(t), "test-session", "/tmp/test", proxyctl.SessionPolicy{})
 	if err == nil {
 		t.Fatal("expected error when netproxy never exposes its control socket")
 	}

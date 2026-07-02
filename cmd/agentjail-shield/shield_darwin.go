@@ -530,7 +530,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// (deny network-outbound (literal <control socket>)) rule in the profile.
 	// Incompatible/unverifiable proxy -> fail closed inside ensureSessionProxy.
 	if withNetproxy {
-		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, resolveSessionPolicy(ctx, cfg, emitter))
+		shieldCwd, _ := os.Getwd()
+		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, fmt.Sprintf("shield-%d", os.Getpid()), shieldCwd, resolveSessionPolicy(ctx, cfg, emitter))
 		if startErr != nil {
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start/register netproxy: %v", startErr))
 		}

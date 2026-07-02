@@ -21,7 +21,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,34 +48,109 @@ var version = "dev"
 // of the control socket, alongside proxyctl's controlSocketName.
 const controlLockName = "netproxy-ctl.lock"
 
+// pendingGrant is one filed-but-undecided runtime host grant request (AGE-93).
+// It is created by the data-plane sentinel (see handleGrantSentinel in
+// main.go) and resolved by a human via grant_approve/grant_deny over the
+// control socket. Expires bounds how long an undecided request stays live
+// before the reaper prunes it as stale -- distinct from TTLMs, which is the
+// duration the eventual GRANT would last once approved.
+type pendingGrant struct {
+	GrantID string
+	Host    string
+	TTLMs   int64
+	Reason  string
+	Created time.Time
+	Expires time.Time
+}
+
+// grantedHost is one approved runtime host grant (AGE-93), additive to the
+// session's static allowlist until Expiry.
+type grantedHost struct {
+	Host    string
+	GrantID string
+	Expiry  time.Time
+}
+
+// pendingGrantTTL bounds how long an undecided grant request stays in the
+// pending set before the reaper treats it as stale and discards it. This is
+// independent of the grant's own requested TTL.
+const pendingGrantTTL = time.Hour
+
 // session is one registered shielded session's enforcement state. al is the
 // prebuilt (normalized) allowlist for this session's hosts, so the data plane
 // reuses the same tested host-matching as the former global allowlist.
+// sessionID and cwd are non-secret, display-only identity (see
+// proxyctl.Request.SessionID / Cwd); pending/granted hold this session's
+// runtime host grants (AGE-93). All fields other than al's own internal lock
+// are protected by the owning sessionRegistry's mutex.
 type session struct {
 	al          *allowlist
 	leaseExpiry time.Time
+	sessionID   string
+	cwd         string
+	pending     map[string]*pendingGrant // keyed by GrantID
+	granted     []grantedHost
+}
+
+// allowed reports whether host is permitted under this session: the static
+// allowlist or a non-expired runtime grant. Callers must hold the owning
+// registry's lock (read or write) -- granted is not independently guarded.
+func (s *session) allowed(host string, now time.Time) bool {
+	if s.al.allowed(host) {
+		return true
+	}
+	h := normalizeHost(host)
+	for _, g := range s.granted {
+		if now.After(g.Expiry) {
+			continue
+		}
+		if matchHost(normalizeHost(g.Host), h) {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionRegistry holds the per-Token session policies. It is the only source
 // of truth the data plane consults; a token that is absent or past its lease is
-// denied (fail closed, no global fallback).
+// denied (fail closed, no global fallback). grantIndex maps a pending
+// GrantID -> owning Token so grant_approve/grant_deny can resolve the owning
+// session from the GrantID alone, without the caller ever supplying a Token
+// or session identity (see proxyctl.Request.GrantID doc).
 type sessionRegistry struct {
-	mu       sync.RWMutex
-	sessions map[proxyctl.Token]*session
+	mu         sync.RWMutex
+	sessions   map[proxyctl.Token]*session
+	grantIndex map[string]proxyctl.Token
 }
 
 func newSessionRegistry() *sessionRegistry {
-	return &sessionRegistry{sessions: make(map[proxyctl.Token]*session)}
+	return &sessionRegistry{
+		sessions:   make(map[proxyctl.Token]*session),
+		grantIndex: make(map[string]proxyctl.Token),
+	}
 }
 
 // maxLease is the hard ceiling on any registration lease.
 var maxLease = time.Duration(proxyctl.MaxLeaseTTLMs) * time.Millisecond
 
+// Errors returned by the runtime host grant operations (AGE-93). Callers map
+// these to control-plane Response.Error strings; the data-plane sentinel maps
+// the cap errors to 429 and everything else to 400.
+var (
+	errUnknownSession    = errors.New("unknown or expired session")
+	errPendingCapSession = errors.New("too many pending grant requests for this session")
+	errPendingCapGlobal  = errors.New("too many pending grant requests across all sessions")
+	errGrantNotFound     = errors.New("grant not found or already decided")
+	errSessionDead       = errors.New("owning session lease is no longer live")
+)
+
 // register leases tok -> policy until now+ttl. A non-positive or over-cap ttl is
-// clamped to maxLease. Re-registering the same token replaces its policy and
-// extends the lease (a fresh launch re-registers; there is no stale global
-// state to inherit).
-func (r *sessionRegistry) register(tok proxyctl.Token, pol proxyctl.SessionPolicy, ttl time.Duration, now time.Time) {
+// clamped to maxLease. sessionID and cwd are non-secret, display-only identity
+// (see proxyctl.Request.SessionID / Cwd). Re-registering the same token
+// replaces its policy, identity, and lease, and clears any pending/granted
+// runtime host grants (a fresh launch re-registers; there is no stale state to
+// inherit).
+func (r *sessionRegistry) register(tok proxyctl.Token, sessionID, cwd string, pol proxyctl.SessionPolicy, ttl time.Duration, now time.Time) {
 	if ttl <= 0 || ttl > maxLease {
 		ttl = maxLease
 	}
@@ -80,13 +158,25 @@ func (r *sessionRegistry) register(tok proxyctl.Token, pol proxyctl.SessionPolic
 	al.load(pol.AllowedHosts)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sessions[tok] = &session{al: al, leaseExpiry: now.Add(ttl)}
+	if old, ok := r.sessions[tok]; ok {
+		for gid := range old.pending {
+			delete(r.grantIndex, gid)
+		}
+	}
+	r.sessions[tok] = &session{
+		al:          al,
+		leaseExpiry: now.Add(ttl),
+		sessionID:   sessionID,
+		cwd:         cwd,
+		pending:     make(map[string]*pendingGrant),
+	}
 }
 
-// lookup returns the token's allowlist if it is registered and its lease has not
+// lookup returns the token's session if it is registered and its lease has not
 // expired. A missing or expired token returns (nil, false) -> deny (fail
-// closed, no global fallback).
-func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) (*allowlist, bool) {
+// closed, no global fallback). The returned *session must only be read; its
+// pending/granted fields are mutated under the registry's lock elsewhere.
+func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) (*session, bool) {
 	if tok == "" {
 		return nil, false
 	}
@@ -96,23 +186,234 @@ func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) (*allowlist,
 	if !ok || now.After(s.leaseExpiry) {
 		return nil, false
 	}
-	return s.al, true
+	return s, true
 }
 
-// reap deletes every session whose lease has expired and returns the tokens
-// reaped (so the caller can audit expiry). The Token values are returned only
-// for counting/audit; callers must not log them.
-func (r *sessionRegistry) reap(now time.Time) []proxyctl.Token {
+// sessionValid reports whether tok is registered and its lease has not
+// expired, without exposing the session itself. Used by the data plane's
+// initial auth gate (see handleConn in main.go).
+func (r *sessionRegistry) sessionValid(tok proxyctl.Token, now time.Time) bool {
+	if tok == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.sessions[tok]
+	return ok && !now.After(s.leaseExpiry)
+}
+
+// allowedHost reports whether host is permitted for tok's session: the static
+// allowlist or a non-expired runtime grant. An unknown/expired token is
+// denied. This is the sole data-plane authorization check for CONNECT.
+func (r *sessionRegistry) allowedHost(tok proxyctl.Token, host string, now time.Time) bool {
+	if tok == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.sessions[tok]
+	if !ok || now.After(s.leaseExpiry) {
+		return false
+	}
+	return s.allowed(host, now)
+}
+
+// requestGrant records (or, for a same-session+host duplicate, coalesces into)
+// a pending runtime host grant request for tok's session. It enforces the
+// per-session (proxyctl.MaxPendingPerSession) and global
+// (proxyctl.MaxPendingGlobal) pending caps. host/ttlMs/reason are assumed
+// already validated and bounded by the caller (hostgrant.Validate,
+// proxyctl.MaxGrantTTLMs, proxyctl.MaxReasonLen).
+func (r *sessionRegistry) requestGrant(tok proxyctl.Token, host string, ttlMs int64, reason string, now time.Time) (pendingGrant, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var expired []proxyctl.Token
-	for t, s := range r.sessions {
-		if now.After(s.leaseExpiry) {
-			expired = append(expired, t)
-			delete(r.sessions, t)
+
+	s, ok := r.sessions[tok]
+	if !ok || now.After(s.leaseExpiry) {
+		return pendingGrant{}, errUnknownSession
+	}
+
+	// Duplicate coalescing: same session + host updates the existing pending
+	// entry (fresh TTL/reason/expiry) instead of adding a new one.
+	for _, pg := range s.pending {
+		if pg.Host == host {
+			pg.TTLMs = ttlMs
+			pg.Reason = reason
+			pg.Expires = now.Add(pendingGrantTTL)
+			return *pg, nil
 		}
 	}
-	return expired
+
+	if len(s.pending) >= proxyctl.MaxPendingPerSession {
+		return pendingGrant{}, errPendingCapSession
+	}
+	total := 0
+	for _, sess := range r.sessions {
+		total += len(sess.pending)
+	}
+	if total >= proxyctl.MaxPendingGlobal {
+		return pendingGrant{}, errPendingCapGlobal
+	}
+
+	gid, err := newGrantID()
+	if err != nil {
+		return pendingGrant{}, err
+	}
+	pg := &pendingGrant{
+		GrantID: gid,
+		Host:    host,
+		TTLMs:   ttlMs,
+		Reason:  reason,
+		Created: now,
+		Expires: now.Add(pendingGrantTTL),
+	}
+	s.pending[gid] = pg
+	r.grantIndex[gid] = tok
+	return *pg, nil
+}
+
+// listPending returns every pending grant request across all sessions, for
+// `agentjail grants`. Never carries a Token (see proxyctl.GrantInfo).
+func (r *sessionRegistry) listPending() []proxyctl.GrantInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []proxyctl.GrantInfo
+	for _, s := range r.sessions {
+		for _, pg := range s.pending {
+			out = append(out, proxyctl.GrantInfo{
+				GrantID: pg.GrantID,
+				Host:    pg.Host,
+				TTLMs:   pg.TTLMs,
+				Cwd:     s.cwd,
+				Reason:  pg.Reason,
+			})
+		}
+	}
+	return out
+}
+
+// approveGrant atomically claims the pending request identified by grantID:
+// it removes the entry from the pending set (and the grant index) BEFORE
+// calling emitAudit, so a concurrent second approve/deny for the same
+// grantID always loses the race and sees errGrantNotFound. It verifies the
+// owning session's lease is still live (else errSessionDead, and the claimed
+// entry is discarded rather than restored -- the session is gone regardless).
+// emitAudit is called BEFORE the grant is applied; if it returns an error the
+// grant is NOT applied (fail-closed audit, see ADR 0044) and that error is
+// returned to the caller. Only on a nil emitAudit result does the host get
+// appended to the session's granted set.
+func (r *sessionRegistry) approveGrant(grantID string, now time.Time, emitAudit func(host string) error) (host string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	tok, ok := r.grantIndex[grantID]
+	if !ok {
+		return "", errGrantNotFound
+	}
+	delete(r.grantIndex, grantID)
+
+	s, ok := r.sessions[tok]
+	if !ok {
+		return "", errSessionDead
+	}
+	pg, ok := s.pending[grantID]
+	if !ok {
+		return "", errGrantNotFound
+	}
+	delete(s.pending, grantID)
+
+	if now.After(s.leaseExpiry) {
+		return "", errSessionDead
+	}
+
+	if emitAudit != nil {
+		if aerr := emitAudit(pg.Host); aerr != nil {
+			return "", fmt.Errorf("audit unavailable, grant not applied: %w", aerr)
+		}
+	}
+
+	s.granted = append(s.granted, grantedHost{
+		Host:    pg.Host,
+		GrantID: pg.GrantID,
+		Expiry:  now.Add(time.Duration(pg.TTLMs) * time.Millisecond),
+	})
+	return pg.Host, nil
+}
+
+// denyGrant discards the pending request identified by grantID without
+// applying it. Same atomic-claim shape as approveGrant.
+func (r *sessionRegistry) denyGrant(grantID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	tok, ok := r.grantIndex[grantID]
+	if !ok {
+		return errGrantNotFound
+	}
+	delete(r.grantIndex, grantID)
+	if s, ok := r.sessions[tok]; ok {
+		delete(s.pending, grantID)
+	}
+	return nil
+}
+
+// newGrantID mints a fresh, non-secret GrantID. It is a display/reference
+// handle only -- it carries no authority (unlike Token) so it is safe to
+// print, log, and put in an audit RefID.
+func newGrantID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("mint grant id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// reapResult is what one reap() sweep pruned, for the caller to audit.
+type reapResult struct {
+	// ExpiredSessions is the Token of every session lease reaped. Token
+	// values are returned only for counting/audit; callers must not log them.
+	ExpiredSessions []proxyctl.Token
+	// ExpiredGrants is every granted host whose TTL lapsed.
+	ExpiredGrants []grantedHost
+}
+
+// reap deletes every session whose lease has expired and, for sessions that
+// remain live, prunes expired granted hosts and stale (past pendingGrantTTL)
+// pending requests. It returns what it pruned so the caller can audit each
+// expiry (session expiry best-effort; grant expiry best-effort per ADR 0044 --
+// only grant_approved is fail-closed).
+func (r *sessionRegistry) reap(now time.Time) reapResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var res reapResult
+	for t, s := range r.sessions {
+		if now.After(s.leaseExpiry) {
+			res.ExpiredSessions = append(res.ExpiredSessions, t)
+			for gid := range s.pending {
+				delete(r.grantIndex, gid)
+			}
+			delete(r.sessions, t)
+			continue
+		}
+
+		kept := s.granted[:0]
+		for _, g := range s.granted {
+			if now.After(g.Expiry) {
+				res.ExpiredGrants = append(res.ExpiredGrants, g)
+				continue
+			}
+			kept = append(kept, g)
+		}
+		s.granted = kept
+
+		for gid, pg := range s.pending {
+			if now.After(pg.Expires) {
+				delete(s.pending, gid)
+				delete(r.grantIndex, gid)
+			}
+		}
+	}
+	return res
 }
 
 // count returns the number of live registrations (for tests/observability).
@@ -122,16 +423,23 @@ func (r *sessionRegistry) count() int {
 	return len(r.sessions)
 }
 
-// controlServer serves the control socket: fingerprint + register (grant is
-// Phase 3). It holds the flock'd lockfile for singleton ownership.
+// controlServer serves the control socket: fingerprint, register, and the
+// Phase 3 runtime host grant verbs (grant_list/grant_approve/grant_deny). It
+// holds the flock'd lockfile for singleton ownership.
 type controlServer struct {
 	ln       *net.UnixListener
 	lock     *os.File
 	sockPath string
 	registry *sessionRegistry
 	emitter  audit.Emitter
-	logger   *slog.Logger
-	binVer   string
+	// durableAudit is true only when emitter is backed by a real, writable
+	// store (never audit.NopEmitter). grant_approve is refused (fail closed)
+	// when this is false -- a live grant must never be applied without a
+	// durable audit record (ADR 0044, Codex r3 #1). grant_requested and
+	// grant_expired remain best-effort regardless.
+	durableAudit bool
+	logger       *slog.Logger
+	binVer       string
 }
 
 // acquireControlSocket makes netproxy the singleton owner of the control socket.
@@ -183,19 +491,22 @@ func acquireControlSocket(sockPath string, logger *slog.Logger) (*net.UnixListen
 }
 
 // newControlServer acquires the control socket and returns a ready server.
-func newControlServer(sockPath string, registry *sessionRegistry, emitter audit.Emitter, binVer string, logger *slog.Logger) (*controlServer, error) {
+// durableAudit must be true only when emitter is backed by a real, writable
+// store -- see controlServer.durableAudit.
+func newControlServer(sockPath string, registry *sessionRegistry, emitter audit.Emitter, durableAudit bool, binVer string, logger *slog.Logger) (*controlServer, error) {
 	ln, lock, err := acquireControlSocket(sockPath, logger)
 	if err != nil {
 		return nil, err
 	}
 	return &controlServer{
-		ln:       ln,
-		lock:     lock,
-		sockPath: sockPath,
-		registry: registry,
-		emitter:  emitter,
-		logger:   logger,
-		binVer:   binVer,
+		ln:           ln,
+		lock:         lock,
+		sockPath:     sockPath,
+		registry:     registry,
+		emitter:      emitter,
+		durableAudit: durableAudit,
+		logger:       logger,
+		binVer:       binVer,
 	}, nil
 }
 
@@ -258,7 +569,7 @@ func (cs *controlServer) handle(conn net.Conn) {
 			cs.reply(conn, proxyctl.Response{OK: false, Error: "register requires token and policy"})
 			return
 		}
-		cs.registry.register(req.Token, *req.Policy, time.Duration(req.LeaseTTLMs)*time.Millisecond, time.Now())
+		cs.registry.register(req.Token, req.SessionID, req.Cwd, *req.Policy, time.Duration(req.LeaseTTLMs)*time.Millisecond, time.Now())
 		// State change -> Info + audit (best-effort). Token is NEVER included.
 		cs.logger.Info("session registered", "allowed_hosts_count", len(req.Policy.AllowedHosts), "live_sessions", cs.registry.count())
 		_ = cs.emitter.Emit(context.Background(), audit.Event{
@@ -268,8 +579,58 @@ func (cs *controlServer) handle(conn net.Conn) {
 		})
 		cs.reply(conn, proxyctl.Response{OK: true})
 
+	case proxyctl.ReqGrantList:
+		// Never carries a Token -- see proxyctl.GrantInfo.
+		cs.reply(conn, proxyctl.Response{OK: true, Grants: cs.registry.listPending()})
+
+	case proxyctl.ReqGrantApprove:
+		if req.GrantID == "" {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "grant_approve requires grant_id"})
+			return
+		}
+		// Fail-closed audit gate (ADR 0044, Codex r3 #1): a live grant must
+		// never be applied without a durable audit record. Refuse outright,
+		// before ever touching the pending set, so the request remains
+		// pending and can be retried once audit is available again.
+		if !cs.durableAudit {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "audit unavailable, refusing to approve grant (fail closed)"})
+			return
+		}
+		grantID := req.GrantID
+		host, err := cs.registry.approveGrant(grantID, time.Now(), func(h string) error {
+			return cs.emitter.Emit(context.Background(), audit.Event{
+				EventType: audit.NetproxyGrantApproved,
+				Actor:     "netproxy",
+				RefID:     grantID,
+				Detail:    map[string]string{"host": h},
+			})
+		})
+		if err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		cs.logger.Info("grant approved", "grant_id", grantID, "host", host)
+		cs.reply(conn, proxyctl.Response{OK: true})
+
+	case proxyctl.ReqGrantDeny:
+		if req.GrantID == "" {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "grant_deny requires grant_id"})
+			return
+		}
+		if err := cs.registry.denyGrant(req.GrantID); err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		cs.logger.Info("grant denied", "grant_id", req.GrantID)
+		_ = cs.emitter.Emit(context.Background(), audit.Event{
+			EventType: audit.NetproxyGrantDenied,
+			Actor:     "netproxy",
+			RefID:     req.GrantID,
+		})
+		cs.reply(conn, proxyctl.Response{OK: true})
+
 	default:
-		// ReqGrant and anything else are not served in Phase 1.
+		// ReqGrant (additive widen without approval flow) is not served.
 		cs.reply(conn, proxyctl.Response{OK: false, Error: fmt.Sprintf("unsupported control request %q", req.Type)})
 	}
 }

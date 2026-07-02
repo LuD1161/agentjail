@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
@@ -100,8 +101,8 @@ const testToken = proxyctl.Token("test-session-token")
 // that there is no global allowlist -- every CONNECT must carry a token.
 func newProxyForHosts(hosts []string) *proxy {
 	reg := newSessionRegistry()
-	reg.register(testToken, proxyctl.SessionPolicy{AllowedHosts: hosts}, time.Hour, time.Now())
-	return &proxy{registry: reg, logger: discardLogger()}
+	reg.register(testToken, "test-session", "/tmp/test-cwd", proxyctl.SessionPolicy{AllowedHosts: hosts}, time.Hour, time.Now())
+	return &proxy{registry: reg, emitter: audit.NopEmitter{}, logger: discardLogger()}
 }
 
 // connectReq formats a CONNECT request line + headers carrying the session
@@ -309,9 +310,37 @@ func TestCONNECTRequest_Malformed(t *testing.T) {
 	}
 }
 
-// TestCONNECTRequest_NonCONNECTMethod verifies plain HTTP GET returns 405
-// (before the auth check).
+// TestCONNECTRequest_NonCONNECTMethod verifies plain HTTP GET to an ordinary
+// (non-sentinel) host returns 405. The auth check now runs BEFORE the method
+// dispatch (Codex r3 #2, so the grant sentinel can be token-bound), so this
+// request must carry a valid token to reach the 405 path at all.
 func TestCONNECTRequest_NonCONNECTMethod(t *testing.T) {
+	p := newProxyForHosts(nil)
+	proxyAddr := serveProxy(t, p)
+
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+
+	auth := base64.StdEncoding.EncodeToString([]byte(string(testToken) + ":"))
+	fmt.Fprintf(client, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", resp.StatusCode)
+	}
+}
+
+// TestCONNECTRequest_NonCONNECTMethod_NoToken verifies that a non-sentinel GET
+// with NO token gets 407, not 405 -- the auth gate runs first for every
+// request, sentinel or not.
+func TestCONNECTRequest_NonCONNECTMethod_NoToken(t *testing.T) {
 	p := newProxyForHosts(nil)
 	proxyAddr := serveProxy(t, p)
 
@@ -328,8 +357,8 @@ func TestCONNECTRequest_NonCONNECTMethod(t *testing.T) {
 		t.Fatalf("read response: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("expected 407, got %d", resp.StatusCode)
 	}
 }
 
