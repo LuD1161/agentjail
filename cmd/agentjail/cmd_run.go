@@ -107,24 +107,15 @@ func runRunCmd(args []string) int {
 		ensureHooksInstalled(home, "claude-code")
 	}
 
-	// 4. Resolve the agent binary.
-	agentPath, err := exec.LookPath(agentName)
+	// 4. Resolve the REAL agent binary, skipping the agentjail shim directory.
+	// The shim dir (~/.agentjail/bin) must be FIRST on PATH for transparent
+	// `claude` interception, which would make a naive exec.LookPath resolve to
+	// the shim and loop. Scanning PATH while skipping the shim dir (and anything
+	// that resolves to the shim) works regardless of PATH order.
+	agentPath, err := resolveRealAgent(agentName, home)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %q not found in PATH: %v\n", agentName, err)
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return 127
-	}
-
-	// Guard: if the resolved path is our own PATH shim, that's a loop.
-	shimPath := filepath.Join(home, ".agentjail", "bin", agentName)
-	if resolvedShim, err := filepath.EvalSymlinks(shimPath); err == nil {
-		if resolvedAgent, err := filepath.EvalSymlinks(agentPath); err == nil {
-			if resolvedShim == resolvedAgent {
-				fmt.Fprintf(os.Stderr, "ERROR: %q resolved to the agentjail PATH shim at %s\n", agentName, shimPath)
-				fmt.Fprintln(os.Stderr, "  This would cause an infinite loop.")
-				fmt.Fprintln(os.Stderr, "  Ensure the real binary is on PATH before ~/.agentjail/bin.")
-				return 1
-			}
-		}
 	}
 
 	// 5. Exec through shield. This replaces the current process.
@@ -139,6 +130,39 @@ func runRunCmd(args []string) int {
 	}
 
 	return 0 // unreachable after exec
+}
+
+// resolveRealAgent finds the real agent binary on PATH, skipping the agentjail
+// shim directory (~/.agentjail/bin) and anything that resolves to the shim
+// itself. This lets `agentjail run` / `agentjail claude` work even when the shim
+// dir is first on PATH (the ordering transparent interception needs) without
+// resolving back to the shim and looping. Mirrors the shim script's own
+// find_real_claude logic (install_wrapper.go).
+func resolveRealAgent(agentName, home string) (string, error) {
+	shimDir := filepath.Clean(filepath.Join(home, ".agentjail", "bin"))
+	shimResolved, _ := filepath.EvalSymlinks(filepath.Join(shimDir, agentName))
+
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		if filepath.Clean(dir) == shimDir {
+			continue // never resolve into our own shim dir
+		}
+		cand := filepath.Join(dir, agentName)
+		info, err := os.Stat(cand)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		// Defensive: skip a symlink that points back at the shim.
+		if shimResolved != "" {
+			if r, err := filepath.EvalSymlinks(cand); err == nil && r == shimResolved {
+				continue
+			}
+		}
+		return cand, nil
+	}
+	return "", fmt.Errorf("%q not found on PATH (excluding the agentjail shim dir %s)", agentName, shimDir)
 }
 
 // findShieldBinary locates the agentjail-shield binary. It checks:
