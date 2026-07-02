@@ -34,6 +34,15 @@ const (
 	// expiry regardless of traffic. Never put the session Token in Detail.
 	NetproxySessionRegistered = "netproxy.session_registered"
 	NetproxySessionExpired    = "netproxy.session_expired"
+	// Runtime host grants (`/agentjail allow`, AGE-93). Requested is
+	// best-effort (filed by the agent-reachable data-plane sentinel);
+	// Approved/Denied are the human, control-socket decisions -- Approved is
+	// fail-closed (never emitted through a NopEmitter, see ADR 0044); Expired
+	// is emitted by the reaper when a granted host's TTL lapses.
+	NetproxyGrantRequested = "netproxy.grant_requested"
+	NetproxyGrantApproved  = "netproxy.grant_approved"
+	NetproxyGrantDenied    = "netproxy.grant_denied"
+	NetproxyGrantExpired   = "netproxy.grant_expired"
 	// Per-folder policy overlays (direnv-style trust gate). Emitted by the
 	// shield when it resolves a `./.agentjail/policy.yaml` for a session.
 	ProjectOverlayApplied          = "project_overlay.applied"
