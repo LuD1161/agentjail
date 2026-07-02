@@ -1,0 +1,23 @@
+id: db/deny-ddl
+info:
+  name: Block DDL operations
+  author: agentjail
+  severity: critical
+  tags: [database, safety]
+match:
+  protocol: [postgres, mongodb, mysql]
+  verb: [drop, truncate, alter]
+action: deny
+reason: "DDL operation {{.Verb}} blocked by policy"
+---
+id: db/ask-delete
+info:
+  name: Confirm DELETE operations
+  author: agentjail
+  severity: high
+  tags: [database, safety]
+match:
+  protocol: [postgres, mongodb, mysql, redis]
+  verb: [delete, flushall, flushdb]
+action: ask
+reason: "{{.Verb}} on {{.ResourceType}}/{{.ResourceName}} requires confirmation"

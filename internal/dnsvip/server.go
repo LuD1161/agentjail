@@ -44,7 +44,25 @@ func NewServer(addr string, registry *Registry) *Server {
 // is cancelled or Close is called. If a PacketConn was set via [PacketConn],
 // the server uses that instead of binding a new socket.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// started is closed by NotifyStartedFunc once the dns.Server has finished
+	// its internal init() and is ready to accept connections. The shutdown
+	// goroutine must not call Shutdown() before that point or it races with
+	// the init write in the dns library.
+	started := make(chan struct{})
+	s.dns.NotifyStartedFunc = func(_ context.Context) {
+		close(started)
+	}
+
 	go func() {
+		// Wait until the server is fully initialised before watching the
+		// context; otherwise Shutdown() races with dns.Server.init().
+		select {
+		case <-started:
+		case <-ctx.Done():
+			// Context cancelled before the server even started; nothing to
+			// shut down yet — ListenAndServe will return on its own.
+			return
+		}
 		<-ctx.Done()
 		s.dns.Shutdown(context.Background())
 	}()

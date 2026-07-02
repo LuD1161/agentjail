@@ -68,8 +68,17 @@ func (h *linuxNamespaceHandler) Create(req CreateNamespaceReq) (*CreateNamespace
 		return nil, fmt.Errorf("setup veth: %w", err)
 	}
 
-	// Track the namespace.
+	// Track the namespace. Re-check for a duplicate under the lock: two
+	// concurrent Create calls for the same session could both pass the
+	// existence check above (TOCTOU), so we must guard the insertion too.
 	h.mu.Lock()
+	if _, exists := h.active[req.SessionID]; exists {
+		h.mu.Unlock()
+		// Another goroutine won the race. Clean up our freshly created
+		// namespace and report the conflict.
+		_ = ns.Close()
+		return nil, fmt.Errorf("namespace already exists for session %q", req.SessionID)
+	}
 	h.active[req.SessionID] = &sessionNamespace{
 		ns:       ns,
 		hostVeth: hostVeth,

@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package daemon
 
@@ -24,8 +24,14 @@ func (h *stubNamespaceHandler) Create(_ CreateNamespaceReq) (*CreateNamespaceRes
 	return nil, errUnsupported
 }
 
-func (h *stubNamespaceHandler) Destroy(_ DestroyNamespaceReq) error {
-	return errUnsupported
+func (h *stubNamespaceHandler) Destroy(req DestroyNamespaceReq) error {
+	if req.SessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	// Create always returns errUnsupported on this platform, so no namespace
+	// can ever exist. Honour the idempotency contract: destroying a
+	// non-existent session returns nil.
+	return nil
 }
 
 func (h *stubNamespaceHandler) CleanupAll() {

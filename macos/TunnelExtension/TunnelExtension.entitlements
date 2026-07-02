@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Required to install and run as a system-level packet-tunnel extension.
+        The provisioning profile must also grant this entitlement.
+    -->
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+    </array>
+
+    <!--
+        Shared app group lets the extension exchange data (e.g. logs, state)
+        with the main AgentJail host app.  The group ID must match the one
+        declared in the host app's entitlements.
+        TeamIdentifierPrefix is substituted at sign-time: Q98Z3744J2.
+    -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>$(TeamIdentifierPrefix)com.openclaw.agentjail</string>
+    </array>
+
+    <!--
+        System extension entitlement (required since macOS 10.15).
+        The extension is distributed inside the host app bundle.
+    -->
+    <key>com.apple.developer.system-extension.install</key>
+    <true/>
+</dict>
+</plist>

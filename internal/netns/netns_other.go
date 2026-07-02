@@ -1,37 +1,37 @@
 //go:build !linux
 
-// Package netns creates unprivileged Linux network + mount namespaces for
-// agent isolation. On non-Linux platforms all operations return
-// ErrUnsupported.
 package netns
 
-import "fmt"
-
-// ErrUnsupported is returned on non-Linux platforms.
-var ErrUnsupported = fmt.Errorf("network namespaces require Linux")
-
-// Veth IP addressing constants (needed for compilation on all platforms).
-const (
-	VethHostIP = "10.77.0.1"
-	VethNsIP   = "10.77.0.2"
-	VethCIDR   = "/30"
+import (
+	"fmt"
+	"os/exec"
 )
+
+// ErrUnsupported is returned on platforms that don't support network namespaces.
+var ErrUnsupported = fmt.Errorf("network namespaces not supported on this platform")
 
 // Namespace is a stub on non-Linux platforms.
 type Namespace struct{}
 
-// Create returns ErrUnsupported on non-Linux.
-func Create() (*Namespace, error) {
+// Create returns ErrUnsupported on non-Linux platforms.
+func Create() (*Namespace, error) { return nil, ErrUnsupported }
+
+// ExecIn returns ErrUnsupported on non-Linux platforms.
+func (ns *Namespace) ExecIn(_ *exec.Cmd) error { return ErrUnsupported }
+
+// ExecInCombinedOutput returns ErrUnsupported on non-Linux platforms.
+func (ns *Namespace) ExecInCombinedOutput(_ *exec.Cmd) ([]byte, error) {
 	return nil, ErrUnsupported
 }
 
-// PID returns 0 on non-Linux.
+// InjectCA returns ErrUnsupported on non-Linux platforms.
+func (ns *Namespace) InjectCA(_ string) error { return ErrUnsupported }
+
+// SetupVeth returns ErrUnsupported on non-Linux platforms.
+func (ns *Namespace) SetupVeth() (string, string, error) { return "", "", ErrUnsupported }
+
+// PID returns 0 on non-Linux platforms.
 func (ns *Namespace) PID() int { return 0 }
 
-// SetupVeth returns ErrUnsupported on non-Linux.
-func (ns *Namespace) SetupVeth() (string, string, error) {
-	return "", "", ErrUnsupported
-}
-
-// Close is a no-op on non-Linux.
+// Close is a no-op on non-Linux platforms.
 func (ns *Namespace) Close() error { return nil }

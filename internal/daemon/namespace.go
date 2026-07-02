@@ -20,11 +20,16 @@ type CreateNamespaceReq struct {
 
 // CreateNamespaceResp is the response after successful namespace creation.
 type CreateNamespaceResp struct {
+	// Linux netns fields.
 	NamespacePID int    `json:"namespace_pid"`
 	HostVeth     string `json:"host_veth"`
 	NSVeth       string `json:"ns_veth"`
 	HostIP       string `json:"host_ip"`
 	NSIP         string `json:"ns_ip"`
+
+	// macOS utun fields (set by namespace_darwin.go; zero on Linux).
+	UTunName  string `json:"utun_name,omitempty"`
+	GatewayIP string `json:"gateway_ip,omitempty"`
 }
 
 // DestroyNamespaceReq is the request to tear down a previously created

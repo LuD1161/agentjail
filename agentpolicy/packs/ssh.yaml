@@ -1,0 +1,27 @@
+id: ssh/baseline
+info:
+  name: SSH Baseline Policy
+  author: agentjail
+  severity: info
+  description: >
+    Log all SSH connections with version metadata. SSH encrypts everything
+    after the key exchange, so only the version banner (software name/version
+    and optional OS comment) is observable. Use host-pattern rules to allow
+    or deny specific destinations.
+  tags: [ssh, baseline]
+match:
+  protocol: [ssh]
+action: allow
+reason: "SSH connect to {{.Host}} ({{.Service}})"
+---
+id: ssh/deny-prod
+info:
+  name: Block SSH to production hosts
+  author: agentjail
+  severity: critical
+  tags: [ssh, safety]
+match:
+  protocol: [ssh]
+  host: ["*-prod-*", "*.prod.*", "*.production.*"]
+action: deny
+reason: "SSH connections to production hosts blocked by policy"

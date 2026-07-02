@@ -1,0 +1,18 @@
+id: pii/block-outbound-ssn
+info:
+  name: Block SSN in outbound requests
+  author: agentjail
+  severity: critical
+  tags: [pii, compliance]
+match:
+  service: [anthropic, openai, google-ai]
+scan:
+  payload:
+    - type: regex
+      name: SSN
+      patterns: ['\b\d{3}-\d{2}-\d{4}\b']
+    - type: regex
+      name: "Credit Card (Visa)"
+      patterns: ['\b4[0-9]{12}(?:[0-9]{3})?\b']
+action: deny
+reason: "PII detected ({{range .ScanHits}}{{.RuleName}} {{end}}) in outbound LLM request"

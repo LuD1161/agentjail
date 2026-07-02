@@ -1,0 +1,26 @@
+id: k8s/deny-production-destructive
+info:
+  name: Block destructive ops in production
+  author: agentjail
+  severity: critical
+  tags: [kubernetes, production, safety]
+match:
+  service: [kubernetes]
+  verb: [delete, patch]
+  namespace: [production, prod, "prod-*"]
+action: deny
+reason: "Blocked {{.Verb}} on {{.ResourceType}}/{{.ResourceName}} in {{.Namespace}}"
+impact: "Would {{.Verb}} {{.ResourceType}}/{{.ResourceName}} in production namespace"
+---
+id: k8s/ask-production-write
+info:
+  name: Confirm writes to production
+  author: agentjail
+  severity: high
+  tags: [kubernetes, production]
+match:
+  service: [kubernetes]
+  verb: [create, update, patch]
+  namespace: [production, prod, "prod-*"]
+action: ask
+reason: "{{.Verb}} {{.ResourceType}} in {{.Namespace}} requires confirmation"
