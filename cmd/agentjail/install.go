@@ -60,9 +60,11 @@ const plistLabel = "com.agentjail.daemon"
 // plistFilename is the filename placed under ~/Library/LaunchAgents/.
 const plistFilename = "com.agentjail.daemon.plist"
 
-// hookBinaryName and daemonBinaryName are the binary filenames we install.
+// hookBinaryName, daemonBinaryName, and cliBinaryName are the binary
+// filenames we install.
 const hookBinaryName = "agentjail-hook"
 const daemonBinaryName = "agentjail-daemon"
+const cliBinaryName = "agentjail"
 
 // currentGOOS is the runtime OS. It is a variable (not a constant) so that
 // tests can override it to simulate non-darwin platforms without recompiling.
@@ -1032,6 +1034,7 @@ func buildAgentsEnv(home string) agents.Env {
 		Home:     home,
 		BinDir:   binDir,
 		HookBin:  filepath.Join(binDir, hookBinaryName),
+		CLIBin:   filepath.Join(binDir, cliBinaryName),
 		LookPath: exec.LookPath,
 	}
 }

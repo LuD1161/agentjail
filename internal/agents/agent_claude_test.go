@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,15 @@ func newClaudeEnv(t *testing.T) Env {
 		Home:    home,
 		HookBin: filepath.Join(home, ".agentjail", "bin", "agentjail-hook"),
 	}
+}
+
+// newClaudeEnvWithCLI builds an Env rooted at a fresh temp directory, with
+// CLIBin populated so Install also wires the statusLine entry.
+func newClaudeEnvWithCLI(t *testing.T) Env {
+	t.Helper()
+	env := newClaudeEnv(t)
+	env.CLIBin = filepath.Join(env.Home, ".agentjail", "bin", "agentjail")
+	return env
 }
 
 // mkClaudeDir creates ~/.claude/ inside env.Home.
@@ -400,5 +410,164 @@ func TestClaudeStatusAfterUninstall(t *testing.T) {
 	s := ag.Status(env)
 	if s.Installed {
 		t.Errorf("Status.Installed = true after Uninstall, want false")
+	}
+}
+
+// ---- claudeMergeStatusLineEntry ----------------------------------------------
+
+// readStatusLineCommand unmarshals data and returns the statusLine.command
+// field (empty string if absent).
+func readStatusLineCommand(t *testing.T, data []byte) string {
+	t.Helper()
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("readStatusLineCommand: unmarshal: %v", err)
+	}
+	sl, _ := root["statusLine"].(map[string]interface{})
+	if sl == nil {
+		return ""
+	}
+	cmd, _ := sl["command"].(string)
+	return cmd
+}
+
+// TestClaudeMergeStatusLineNoExisting verifies that when no statusLine is
+// present, claudeMergeStatusLineEntry sets ours.
+func TestClaudeMergeStatusLineNoExisting(t *testing.T) {
+	const cliBin = "/home/user/.agentjail/bin/agentjail"
+	updated, changed := claudeMergeStatusLineEntry(nil, cliBin)
+	if !changed {
+		t.Fatal("claudeMergeStatusLineEntry: changed = false, want true")
+	}
+	got := readStatusLineCommand(t, updated)
+	want := cliBin + " statusline"
+	if got != want {
+		t.Errorf("statusLine.command = %q, want %q", got, want)
+	}
+}
+
+// TestClaudeMergeStatusLineForeignPreserved verifies that an existing,
+// non-agentjail statusLine command is preserved via --chain.
+func TestClaudeMergeStatusLineForeignPreserved(t *testing.T) {
+	const cliBin = "/home/user/.agentjail/bin/agentjail"
+	const foreign = "/usr/local/bin/my-other-statusline"
+	initial := []byte(`{"statusLine":{"type":"command","command":"` + foreign + `"}}`)
+
+	updated, changed := claudeMergeStatusLineEntry(initial, cliBin)
+	if !changed {
+		t.Fatal("claudeMergeStatusLineEntry: changed = false, want true")
+	}
+	got := readStatusLineCommand(t, updated)
+	want := cliBin + " statusline --chain " + foreign
+	if got != want {
+		t.Errorf("statusLine.command = %q, want %q", got, want)
+	}
+}
+
+// TestClaudeMergeStatusLineOursRefreshed verifies that an existing agentjail
+// statusLine command is refreshed (not double-chained).
+func TestClaudeMergeStatusLineOursRefreshed(t *testing.T) {
+	const oldCliBin = "/opt/old-location/agentjail"
+	const newCliBin = "/home/user/.agentjail/bin/agentjail"
+	initial := []byte(`{"statusLine":{"type":"command","command":"` + oldCliBin + ` statusline"}}`)
+
+	updated, changed := claudeMergeStatusLineEntry(initial, newCliBin)
+	if !changed {
+		t.Fatal("claudeMergeStatusLineEntry: changed = false, want true")
+	}
+	got := readStatusLineCommand(t, updated)
+	want := newCliBin + " statusline"
+	if got != want {
+		t.Errorf("statusLine.command = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "--chain") {
+		t.Errorf("statusLine.command = %q, should not contain --chain when refreshing our own entry", got)
+	}
+}
+
+// TestClaudeMergeStatusLineIdempotent verifies that running the merge twice
+// with the same cliBin converges to the same result and reports no change on
+// the second run.
+func TestClaudeMergeStatusLineIdempotent(t *testing.T) {
+	const cliBin = "/home/user/.agentjail/bin/agentjail"
+
+	first, changed := claudeMergeStatusLineEntry(nil, cliBin)
+	if !changed {
+		t.Fatal("first merge: changed = false, want true")
+	}
+
+	second, changed := claudeMergeStatusLineEntry(first, cliBin)
+	if changed {
+		t.Fatal("second merge: changed = true, want false (idempotent)")
+	}
+	if string(second) != string(first) {
+		t.Errorf("second merge produced different output:\nfirst:  %s\nsecond: %s", first, second)
+	}
+}
+
+// TestClaudeMergeStatusLineIdempotentAfterForeignChain verifies idempotency
+// when the initial merge chained a foreign command: re-running with the same
+// cliBin against the already-chained result must not chain again.
+func TestClaudeMergeStatusLineIdempotentAfterForeignChain(t *testing.T) {
+	const cliBin = "/home/user/.agentjail/bin/agentjail"
+	const foreign = "/usr/local/bin/my-other-statusline"
+	initial := []byte(`{"statusLine":{"type":"command","command":"` + foreign + `"}}`)
+
+	first, changed := claudeMergeStatusLineEntry(initial, cliBin)
+	if !changed {
+		t.Fatal("first merge: changed = false, want true")
+	}
+
+	second, changed := claudeMergeStatusLineEntry(first, cliBin)
+	if changed {
+		t.Fatal("second merge: changed = true, want false (idempotent)")
+	}
+	got := readStatusLineCommand(t, second)
+	want := cliBin + " statusline --chain " + foreign
+	if got != want {
+		t.Errorf("statusLine.command = %q, want %q", got, want)
+	}
+}
+
+// ---- Install wiring of statusLine ---------------------------------------------
+
+// TestClaudeInstallSetsStatusLine verifies that Install, given env.CLIBin,
+// wires a statusLine entry pointing at "<CLIBin> statusline".
+func TestClaudeInstallSetsStatusLine(t *testing.T) {
+	env := newClaudeEnvWithCLI(t)
+	mkClaudeDir(t, env)
+
+	ag := ClaudeCode{}
+	if err := ag.Install(env); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	data := readSettings(t, env)
+	got := readStatusLineCommand(t, data)
+	want := env.CLIBin + " statusline"
+	if got != want {
+		t.Errorf("statusLine.command = %q, want %q", got, want)
+	}
+}
+
+// TestClaudeInstallStatusLineIdempotent verifies that running Install twice
+// with the same env.CLIBin leaves the statusLine entry unchanged.
+func TestClaudeInstallStatusLineIdempotent(t *testing.T) {
+	env := newClaudeEnvWithCLI(t)
+	mkClaudeDir(t, env)
+	ag := ClaudeCode{}
+
+	if err := ag.Install(env); err != nil {
+		t.Fatalf("first Install: %v", err)
+	}
+	first := readSettings(t, env)
+
+	if err := ag.Install(env); err != nil {
+		t.Fatalf("second Install: %v", err)
+	}
+	second := readSettings(t, env)
+
+	if string(first) != string(second) {
+		t.Errorf("Install is not idempotent for statusLine:\nfirst:  %s\nsecond: %s", first, second)
 	}
 }

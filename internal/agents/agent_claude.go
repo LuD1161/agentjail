@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ClaudeCode is the agent implementation for Anthropic's Claude Code.
@@ -49,8 +50,14 @@ func (ClaudeCode) Install(env Env) error {
 		}
 	}
 
-	updated, changed := claudeMergeHookEntry(existing, env.HookBin)
-	if !changed {
+	updated, hookChanged := claudeMergeHookEntry(existing, env.HookBin)
+
+	statusLineChanged := false
+	if env.CLIBin != "" {
+		updated, statusLineChanged = claudeMergeStatusLineEntry(updated, env.CLIBin)
+	}
+
+	if !hookChanged && !statusLineChanged {
 		// Already installed — nothing to do.
 		return nil
 	}
@@ -151,6 +158,73 @@ func claudeMergeHookEntry(settings []byte, hookCmd string) ([]byte, bool) {
 	}
 	out = append(out, '\n')
 	return out, true
+}
+
+// claudeStatuslineSuffix is appended to the agentjail CLI binary path to form
+// the command agentjail owns in Claude Code's statusLine setting.
+const claudeStatuslineSuffix = " statusline"
+
+// claudeMergeStatusLineEntry merges an agentjail statusLine entry into raw
+// settings JSON. It returns the updated JSON and whether a change was made.
+//
+// Behavior:
+//   - No existing statusLine: set ours (`<cliBin> statusline`).
+//   - Existing statusLine is structurally ours (its second field is
+//     literally "statusline", i.e. it was produced by a previous run of this
+//     function): refresh the binary path in place, preserving any trailing
+//     `--chain ...` it carries. This covers cliBin changing across installs
+//     (e.g. reinstalled to a new BinDir) without accumulating a chain and
+//     without losing a previously-preserved foreign command.
+//   - Existing statusLine belongs to something else entirely: preserve it by
+//     chaining via the `--chain` flag (`<cliBin> statusline --chain
+//     <existing cmd>`), so the user's own statusline output is never lost.
+//
+// If settings is nil or empty, a fresh object is created.
+func claudeMergeStatusLineEntry(settings []byte, cliBin string) ([]byte, bool) {
+	var root map[string]interface{}
+	if len(settings) > 0 {
+		if err := json.Unmarshal(settings, &root); err != nil {
+			// Caller should have validated; be safe and create fresh.
+			root = nil
+		}
+	}
+	if root == nil {
+		root = make(map[string]interface{})
+	}
+
+	ourCommand := cliBin + claudeStatuslineSuffix
+
+	existing, _ := root["statusLine"].(map[string]interface{})
+	newCommand := ourCommand
+	if existing != nil {
+		existingCmd, _ := existing["command"].(string)
+		if existingCmd != "" {
+			fields := strings.Fields(existingCmd)
+			if len(fields) >= 2 && fields[1] == "statusline" {
+				// Structurally ours: refresh the binary path but keep
+				// whatever trails "<bin> statusline" (e.g. "--chain foo").
+				remainder := strings.TrimPrefix(existingCmd, fields[0]+claudeStatuslineSuffix)
+				newCommand = ourCommand + remainder
+			} else {
+				// Foreign statusLine — preserve it by chaining.
+				newCommand = ourCommand + " --chain " + existingCmd
+			}
+			if newCommand == existingCmd {
+				// Already converged — nothing to do.
+				return settings, false
+			}
+		}
+	}
+
+	root["statusLine"] = map[string]interface{}{
+		"type":    "command",
+		"command": newCommand,
+	}
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return settings, false
+	}
+	return append(out, '\n'), true
 }
 
 // claudeRemoveHookEntry removes any PreToolUse entry whose command matches

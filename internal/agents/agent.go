@@ -64,6 +64,11 @@ type Env struct {
 	// register as their hook command.
 	HookBin string
 
+	// CLIBin is the absolute path to the agentjail CLI binary (the one that
+	// exposes `statusline` and other user-facing subcommands). It lives
+	// alongside HookBin in BinDir.
+	CLIBin string
+
 	// LookPath is an injectable replacement for exec.LookPath, used to
 	// search for agent binaries on PATH. If nil, callers should set it to
 	// exec.LookPath before use.
