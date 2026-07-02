@@ -103,30 +103,36 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 
 ### macOS with netproxy (default)
 
-By default on macOS, agentjail-shield starts `agentjail-netproxy` as a child
-process on `127.0.0.1:9100` and restricts the agent to **localhost-only**
-outbound TCP. All HTTPS traffic flows through the proxy, which enforces the
-EFFECTIVE `network.allowed_hosts` -- three tiers, essentials first: the
-non-removable essential provider hosts, then the hosts implied by any
-currently-allowed hosted MCP server (non-removable while that MCP stays
-allowed), then the editable list from `~/.agentjail/policy.yaml` (ADR 0038,
-ADR 0040). An omitted or even explicitly empty `allowed_hosts` in
-policy.yaml never blocks the agent's own provider or an allowed MCP server.
+By default on macOS, agentjail-shield ensures a single shared
+`agentjail-netproxy` is running on `127.0.0.1:9100` and restricts the agent to
+**localhost-only** outbound TCP. The proxy is **session-aware**: the shield
+registers THIS session's EFFECTIVE `network.allowed_hosts` over a control socket
+and injects an unguessable session token into `HTTPS_PROXY`, so the proxy keys a
+separate allowlist per session (no global list, no bleed between sessions). The
+effective allowlist is three tiers, essentials first: the non-removable
+essential provider hosts, then the hosts implied by any currently-allowed hosted
+MCP server (non-removable while that MCP stays allowed), then the editable list
+from `~/.agentjail/policy.yaml` (ADR 0038, ADR 0040). An omitted or even
+explicitly empty `allowed_hosts` never blocks the agent's own provider or an
+allowed MCP server.
 
 ```
 Agent (sandboxed, localhost-only TCP)
   │
-  │  HTTPS_PROXY=http://127.0.0.1:9100
+  │  HTTPS_PROXY=http://<session-token>:@127.0.0.1:9100
   ▼
-agentjail-netproxy (localhost:9100)
+agentjail-netproxy (localhost:9100, shared, session-aware)
   │
-  │  CONNECT host:port → check allowed_hosts → allow/deny
+  │  CONNECT host:port  (Proxy-Authorization: Basic <token>)
+  │  known token? → check THIS session's allowed_hosts → allow/deny
   ▼
 upstream (api.github.com, registry.npmjs.org, …)
 ```
 
-The shield automatically sets `HTTPS_PROXY`, `HTTP_PROXY`, and `ALL_PROXY` in
-the agent's environment.
+The shield automatically sets `HTTPS_PROXY`, `HTTP_PROXY`, and `ALL_PROXY`
+(carrying the session token) in the agent's environment. The control socket that
+registers allowlists is denied to the agent. See
+[ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md).
 
 ### macOS without netproxy (`--no-netproxy`)
 
