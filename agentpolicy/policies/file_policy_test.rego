@@ -254,6 +254,21 @@ test_agentjail_policy_yaml_denied if {
 	agentjail.decision.rule_id == agentjail_self with input as write_event("/Users/dev/.agentjail/policy.yaml")
 }
 
+# Reads of ~/.agentjail are ALLOWED (ADR 0045): the locked self rule denies only
+# Write/Edit, so a Read resolves to file_policy/agentjail_self_read (allow). An
+# agent can inspect policy.yaml / the audit DB for debugging while writes stay
+# locked.
+test_agentjail_policy_yaml_read_allowed if {
+	agentjail.decision.action == "allow" with input as read_event("/Users/dev/.agentjail/policy.yaml")
+	agentjail.decision.rule_id == "file_policy/agentjail_self_read" with input as read_event("/Users/dev/.agentjail/policy.yaml")
+}
+
+# Edit is a write and stays denied by the locked rule.
+test_agentjail_policy_yaml_edit_denied if {
+	agentjail.decision.action == "deny" with input as edit_event("/Users/dev/.agentjail/policy.yaml")
+	agentjail.decision.rule_id == agentjail_self with input as edit_event("/Users/dev/.agentjail/policy.yaml")
+}
+
 # Confirm that ~/.agentjail/ does NOT emit file_policy/sensitive_credential
 # (it only emits file_policy/agentjail_self — the two must not both fire).
 test_agentjail_dir_does_not_emit_sensitive_credential if {

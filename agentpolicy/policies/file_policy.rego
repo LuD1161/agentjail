@@ -369,15 +369,22 @@ is_sensitive_basename(p) if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 0 — agentjail self-protection: always deny (LOCKED rule).
-# Fires for any path under ~/.agentjail/. This rule_id is in locked_rules
-# (resolver.rego) so it can NEVER be suppressed by disabled_rules — even if
-# the user adds "file_policy/agentjail_self" to disabled_rules it will still
-# fire. This is the primary defense against an agent editing policy.yaml.
+# Rule 0 — agentjail self-protection: deny WRITES (LOCKED rule).
+# Fires for any Write/Edit to a path under ~/.agentjail/. This rule_id is in
+# locked_rules (resolver.rego) so it can NEVER be suppressed by disabled_rules —
+# even if the user adds "file_policy/agentjail_self" to disabled_rules it still
+# fires. This is the primary defense against an agent tampering with its own
+# enforcement state (policy.yaml, trusted.yaml, the audit DB).
+#
+# READS are intentionally NOT denied (ADR 0045): an agent may read ~/.agentjail
+# for debugging/observability (inspect policy.yaml, the audit DB, etc). Reads
+# cannot tamper, and the session bearer token is never on disk — it lives only
+# in netproxy memory (ADR 0044) — so read access leaks no secret. Writes stay
+# locked; the deny below only triggers on Write/Edit.
 # ---------------------------------------------------------------------------
 
 candidate contains r if {
-	input.tool_name in {"Write", "Edit", "Read"}
+	input.tool_name in {"Write", "Edit"}
 	p := file_path
 	is_agentjail_self(p)
 	msg := sprintf("access to ~/.agentjail path %q is denied (agentjail self-protection; rule is permanently locked)", [p])
@@ -387,6 +394,25 @@ candidate contains r if {
 		"rule_id": "file_policy/agentjail_self",
 		"reason":  msg,
 		"impact":  impact_msg,
+	}
+}
+
+# Rule 0b — reads of ~/.agentjail are explicitly ALLOWED (ADR 0045). Rule 0
+# above denies only Write/Edit; is_agentjail_self is already a
+# file_specific_matched clause (so file_policy/default "ask" is suppressed),
+# so without this a read would fall to the resolver default "ask". Emitting an
+# allow resolves a read cleanly to "allow", letting an agent inspect
+# policy.yaml / the audit DB for debugging. Writes stay locked; the session
+# bearer token is never on disk (ADR 0044), so reads leak no secret.
+candidate contains r if {
+	input.tool_name == "Read"
+	p := file_path
+	is_agentjail_self(p)
+	r := {
+		"action":  "allow",
+		"rule_id": "file_policy/agentjail_self_read",
+		"reason":  "read access to ~/.agentjail is permitted for observability (writes remain locked)",
+		"impact":  sprintf("would read agentjail path %q", [p]),
 	}
 }
 
