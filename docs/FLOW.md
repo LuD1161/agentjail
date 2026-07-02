@@ -68,6 +68,35 @@ shield, and the OPA policy data all read this single computed list.
 **Rule of thumb:** allow an MCP in `mcp.allowed` and its host is handled for you.
 You should not need to hand-edit `network.allowed_hosts` for MCP servers.
 
+## Per-folder overlays (trusted projects)
+
+A repo can carry its own `./.agentjail/policy.yaml` to widen its session's
+allowlist (e.g. add an internal DB host). Because that file lives in the repo and
+is attacker-controllable, it is **ignored until you trust it** -- direnv-style:
+
+```
+$ cd my-backend && claude
+  agentjail: ./.agentjail/policy.yaml found but NOT trusted -- ignoring it
+             run 'agentjail trust' to apply this project's policy
+$ agentjail trust        # shows what it adds, records the file's content hash
+$ claude                 # now the overlay applies for sessions started here
+```
+
+Rules that keep this safe:
+
+- **Additive-only.** A project overlay may only WIDEN (`network.allowed_hosts`,
+  `mcp.allowed`) or ADD blocks (`mcp.blocked`). It can never drop the essentials,
+  un-block a blocked MCP, or clear `disabled_rules`.
+- **Trust is hash-gated.** Editing the file after trusting it revokes trust until
+  you re-approve (`agentjail trust list` shows `CHANGED`). Discovery stops at the
+  git root and never treats the global `~/.agentjail` as a project.
+- **Tamper-proof.** `~/.agentjail/trusted.yaml` is agent-unwritable (the shield's
+  read-only `~/.agentjail` grant), so the agent cannot self-trust a project.
+
+The shield registers the resolved (global + trusted-overlay) allowlist as that
+session's policy -- so two trusted repos get different egress through one proxy,
+with no bleed. See [ADR 0043](./adr/0043-per-folder-policy-overlay-trust-gate.md).
+
 ## How a network request is allowed or blocked
 
 ```
@@ -104,6 +133,8 @@ at launch (no `SIGHUP` reload); see
 | Another session's proxy is already running | Fingerprinted; reused only if protocol-compatible, else refuse (never silently inherit a stale allowlist, never blind-kill it) |
 | Something unverifiable is on `:9100` | Refuses to launch (fail closed); does not route through or kill an unknown listener |
 | Agent tries to reach the control socket | Denied: read-only `~/.agentjail` grant (Linux) / sbpl `network-outbound` deny (macOS); the injected token is a data-plane bearer only |
+| A cloned repo ships `./.agentjail/policy.yaml` | Ignored until `agentjail trust` (direnv-style); it can only widen, never weaken; editing it revokes trust |
+| Agent tries to self-trust a project overlay | Denied: `~/.agentjail/trusted.yaml` is agent-unwritable (enforcement-tested) |
 
 ## Related docs
 

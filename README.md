@@ -368,6 +368,16 @@ agentjail mcp inventory           # full MCP surface map from configs, npm, pip,
 
 Install auto-seeds the allowlist from your existing MCP config (including Claude Code plugins). Changes require interactive terminal confirmation.
 
+**Per-folder policy (trusted projects):**
+```sh
+# a repo can widen its own session's allowlist via ./.agentjail/policy.yaml
+agentjail trust                   # approve THIS project's overlay (shows what it adds)
+agentjail trust list              # trusted overlays + ok / CHANGED / MISSING
+agentjail untrust                 # remove it
+```
+
+A project's `./.agentjail/policy.yaml` is **ignored until you trust it** (direnv-style), can only *widen* egress (never drop essentials, un-block a blocked MCP, or clear rules), and trust auto-revokes if the file changes. The trust list is agent-unwritable, so a sandboxed agent can't self-trust. See [ADR 0043](./docs/adr/0043-per-folder-policy-overlay-trust-gate.md).
+
 </details>
 
 ---
