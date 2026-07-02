@@ -131,6 +131,11 @@ type Response struct {
 	Fingerprint *Fingerprint `json:"fingerprint,omitempty"`
 }
 
+// MaxControlMsgBytes bounds a single control-plane message (request or
+// response) so neither peer can be forced to buffer unbounded data.
+// Registration payloads are small (a host list).
+const MaxControlMsgBytes = 64 * 1024
+
 // MaxLeaseTTLMs is the hard ceiling netproxy applies to any registration lease
 // (24h). A session token is reaped at lease expiry even under continuous
 // traffic, bounding the blast radius of a leaked token and preventing an

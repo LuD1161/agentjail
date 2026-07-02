@@ -41,10 +41,6 @@ import (
 // tolerates binary drift; only proxyctl.ProtocolVersion governs compatibility.
 var version = "dev"
 
-// maxControlMsgBytes bounds a single control-plane request so a malformed or
-// hostile writer cannot exhaust memory. Registration payloads are small.
-const maxControlMsgBytes = 64 * 1024
-
 // controlLockName is the flock'd lockfile that serializes singleton ownership
 // of the control socket, alongside proxyctl's controlSocketName.
 const controlLockName = "netproxy-ctl.lock"
@@ -242,7 +238,7 @@ func (cs *controlServer) handle(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	var req proxyctl.Request
-	if err := json.NewDecoder(io.LimitReader(conn, maxControlMsgBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(conn, proxyctl.MaxControlMsgBytes)).Decode(&req); err != nil {
 		cs.reply(conn, proxyctl.Response{OK: false, Error: "malformed control request"})
 		return
 	}
