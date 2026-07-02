@@ -911,3 +911,73 @@ test_bash_cat_tilde_multi_deny if {
 	d.action == "deny"
 	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
 }
+
+# ---------------------------------------------------------------------------
+# Phase 3 runtime host grants — mutation guard extension
+# (command_policy/no-policy-mutation). Defense-in-depth only; the hard
+# boundary is the agent-unreachable netproxy control socket (ADR 0042).
+# ---------------------------------------------------------------------------
+
+# POSITIVE: agentjail grant approve <id> → deny (human-only approval verb)
+test_mutation_guard_grant_approve_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail grant approve grant-abc123",
+		["agentjail"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE: agentjail grant deny <id> → deny (human-only approval verb)
+test_mutation_guard_grant_deny_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail grant deny grant-abc123",
+		["agentjail"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE: any agentjail invocation carrying --persist → deny
+test_mutation_guard_persist_flag_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail allow host example.com --persist",
+		["agentjail"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE: agentjail trust → deny (trusted-overlay mutation)
+test_mutation_guard_trust_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail trust",
+		["agentjail"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# POSITIVE: agentjail untrust → deny (trusted-overlay mutation)
+test_mutation_guard_untrust_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail untrust",
+		["agentjail"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+# NEGATIVE: agentjail allow host <h> (no --persist) → NOT denied. This is the
+# runtime grant REQUEST, which is inert without human approval on the
+# agent-unreachable control socket.
+test_mutation_guard_allow_host_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail allow host example.com",
+		["agentjail"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+# NEGATIVE: bare `agentjail grants` (list) → NOT denied; only approve/deny
+# subcommands are blocked.
+test_mutation_guard_grants_list_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail grants",
+		["agentjail"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}

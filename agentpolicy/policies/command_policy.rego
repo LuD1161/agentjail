@@ -292,6 +292,9 @@ candidate contains r if {
 # Blocked subcommand patterns:
 #   agentjail policy {disable,enable,add,remove}  — rule lifecycle mutations
 #   agentjail mcp {allow,block}                   — MCP allowlist mutations
+#   agentjail grant {approve,deny}                — runtime host-grant approval (human-only; ADR 0042)
+#   agentjail ... --persist                       — persisting a runtime grant into the trusted overlay
+#   agentjail trust / untrust                     — trusted-overlay hash mutation
 #   writes/redirects into ~/.agentjail/ (> ~/.agentjail/*, tee ~/.agentjail)
 #   editing policy.yaml via sed/awk/perl/python in-place over agentjail paths
 #
@@ -300,6 +303,8 @@ candidate contains r if {
 #   agentjail mcp list
 #   agentjail status
 #   agentjail logs
+#   agentjail grants          (bare list; only approve/deny subcommands are blocked)
+#   agentjail allow host <h>  (the runtime grant REQUEST — inert without human approval)
 #
 # This rule_id is in locked_rules (resolver.rego), so it can NEVER be
 # suppressed via disabled_rules.
@@ -341,6 +346,32 @@ _is_policy_mutation if {
 	# \bupdate\b then ensures the update subcommand is present.
 	_mentions_agentjail
 	regex.match(`\bupdate\b`, cmd)
+}
+
+# defense-in-depth: the hard boundary is the agent-unreachable netproxy
+# control socket (ADR 0042); regex here is bypassable. The socket is what
+# actually prevents an agent from approving/denying its own runtime host
+# grants or persisting them — this rule only stops a well-behaved agent from
+# typing the command in the first place.
+_is_policy_mutation if {
+	# agentjail grant approve|deny <grant_id> — runtime host-grant approval is
+	# human-only (netproxy-ctl.sock). "agentjail allow host <h>" (the REQUEST
+	# side) is deliberately NOT matched here — it's inert without approval.
+	_mentions_agentjail
+	regex.match(`\bgrant\s+(approve|deny)\b`, cmd)
+}
+
+_is_policy_mutation if {
+	# Any agentjail invocation carrying --persist (e.g. `agentjail grant
+	# approve <id> --persist`) — writes the repo's trusted overlay.
+	_mentions_agentjail
+	regex.match(`--persist\b`, cmd)
+}
+
+_is_policy_mutation if {
+	# agentjail trust / untrust — mutates the Phase-2 trusted-overlay hash.
+	_mentions_agentjail
+	regex.match(`\b(trust|untrust)\b`, cmd)
 }
 
 _is_policy_mutation if {
