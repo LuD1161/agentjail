@@ -36,6 +36,10 @@ func TestMain(m *testing.M) {
 		runLandlockNetChild()
 		os.Exit(0)
 	}
+	if os.Getenv("AGENTJAIL_LANDLOCK_AGENTJAIL_CHILD") == "1" {
+		runLandlockAgentjailChild()
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -133,6 +137,67 @@ func runLandlockNetChild() {
 	os.Exit(0)
 }
 
+// runLandlockAgentjailChild proves invariant 0 of the netproxy control-plane
+// plan (docs/adr/00NN): after Landlock, the sandboxed agent must be UNABLE to
+// write agentjail's own enforcement state (~/.agentjail/policy.yaml, the DB,
+// trusted.yaml) yet must still be ABLE to connect() the daemon socket so the
+// hook layer keeps enforcing. See shield_agentpaths.go: ~/.agentjail is granted
+// read-only, with a single-file write grant on ~/.agentjail/daemon.sock only.
+//
+// The parent (TestLandlockAgentjailStateEnforcement) sets $HOME to a throwaway
+// directory and pre-creates a listening socket at $HOME/.agentjail/daemon.sock,
+// so applyLandlock -- which resolves paths via $HOME -- grants exactly that
+// isolated tree and never touches the real ~/.agentjail.
+//
+// Results are printed one per line:
+//   - policy_write=EACCES (denied, expected) | =ok (LEAK) | =ERR:<msg>
+//   - sock_connect=ok (allowed, expected)    | =EACCES (hook would fail-open) | =ERR:<msg>
+func runLandlockAgentjailChild() {
+	// FS-only Landlock (no TCP restriction). AF_UNIX connect is mediated by the
+	// filesystem hook, not the TCP net rules, so netproxyPort is irrelevant here.
+	if err := applyLandlock(nil, 0); err != nil {
+		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		fmt.Fprintln(os.Stdout, "policy_write=ERR:no-home\nsock_connect=ERR:no-home")
+		os.Exit(0)
+	}
+
+	// Probe 1: write ~/.agentjail/policy.yaml -- must be DENIED. ~/.agentjail is
+	// granted read-only, so creating (or overwriting) a file under it needs a
+	// write/make-reg right the grant withholds -> EACCES.
+	policyPath := filepath.Join(home, ".agentjail", "policy.yaml")
+	werr := os.WriteFile(policyPath, []byte("evil: true"), 0600)
+	if werr == nil {
+		_ = os.Remove(policyPath)
+		fmt.Fprintln(os.Stdout, "policy_write=ok")
+	} else if errors.Is(werr, unix.EACCES) || errors.Is(werr, unix.EPERM) {
+		fmt.Fprintln(os.Stdout, "policy_write=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "policy_write=ERR:%v\n", werr)
+	}
+
+	// Probe 2: connect() ~/.agentjail/daemon.sock -- must be ALLOWED. The
+	// single-file write grant covers exactly the socket inode; on Linux the
+	// AF_UNIX connect() needs write access on it.
+	sockPath := filepath.Join(home, ".agentjail", "daemon.sock")
+	conn, cerr := net.Dial("unix", sockPath)
+	if cerr == nil {
+		conn.Close()
+		fmt.Fprintln(os.Stdout, "sock_connect=ok")
+	} else if errors.Is(cerr, unix.EACCES) || errors.Is(cerr, unix.EPERM) ||
+		strings.Contains(cerr.Error(), "permission denied") {
+		fmt.Fprintln(os.Stdout, "sock_connect=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "sock_connect=ERR:%v\n", cerr)
+	}
+
+	os.Exit(0)
+}
+
 // landlockNetSupported probes whether the kernel supports the Landlock
 // network ABI (v4+, Linux 6.7+).  Returns true if ABI >= 4.
 func landlockNetSupported() bool {
@@ -193,6 +258,84 @@ func TestLandlockEnforcement(t *testing.T) {
 	}
 	if !strings.Contains(output, "home=EACCES") {
 		t.Errorf("expected home=EACCES in child output (Landlock did not deny home write), got:\n%s", output)
+	}
+}
+
+// TestLandlockAgentjailStateEnforcement verifies invariant 0: under Landlock
+// the agent cannot write ~/.agentjail/policy.yaml (its own enforcement state)
+// but can still connect() ~/.agentjail/daemon.sock (so the hook keeps working).
+//
+// It runs in a throwaway $HOME (under the real home, NOT /tmp or cwd, so those
+// rw-allowed subtrees don't mask the deny) with a live listener pre-created at
+// $HOME/.agentjail/daemon.sock, then re-execs the child probe.
+func TestLandlockAgentjailStateEnforcement(t *testing.T) {
+	_, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
+	if errno != 0 {
+		t.Skip("landlock unsupported on this kernel")
+	}
+
+	realHome, err := os.UserHomeDir()
+	if err != nil || realHome == "" {
+		t.Skip("cannot determine home directory")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Skip("cannot determine cwd")
+	}
+
+	// Throwaway HOME under the real home so applyLandlock's /tmp and cwd
+	// rw-grants cannot mask the ~/.agentjail write deny (same guard as
+	// TestLandlockEnforcement). MkdirTemp("", ...) would land in /tmp -- avoid.
+	tmpHome, err := os.MkdirTemp(realHome, ".agentjail-enforce-home-")
+	if err != nil {
+		t.Skipf("cannot create temp home under %s: %v", realHome, err)
+	}
+	defer os.RemoveAll(tmpHome)
+	if strings.HasPrefix(tmpHome, "/tmp") ||
+		strings.HasPrefix(tmpHome, cwd+string(os.PathSeparator)) || tmpHome == cwd {
+		t.Skip("temp home overlaps cwd/tmp; cannot isolate landlock denial")
+	}
+
+	ajDir := filepath.Join(tmpHome, ".agentjail")
+	if err := os.MkdirAll(ajDir, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", ajDir, err)
+	}
+	// Live listener at $HOME/.agentjail/daemon.sock so the socket inode exists
+	// for applyLandlock's single-file grant AND the child's connect() succeeds.
+	sockPath := filepath.Join(ajDir, "daemon.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen %s: %v", sockPath, err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cmd := exec.Command(exe)
+	// Override HOME so os.UserHomeDir() inside applyLandlock resolves to tmpHome.
+	cmd.Env = append(os.Environ(), "AGENTJAIL_LANDLOCK_AGENTJAIL_CHILD=1", "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+	if err != nil {
+		t.Fatalf("child process failed: %v\noutput:\n%s", err, output)
+	}
+
+	if !strings.Contains(output, "policy_write=EACCES") {
+		t.Errorf("expected policy_write=EACCES (agent must NOT write ~/.agentjail/policy.yaml), got:\n%s", output)
+	}
+	if !strings.Contains(output, "sock_connect=ok") {
+		t.Errorf("expected sock_connect=ok (hook must still connect ~/.agentjail/daemon.sock), got:\n%s", output)
 	}
 }
 

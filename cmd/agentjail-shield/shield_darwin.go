@@ -266,6 +266,14 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// write-denied on macOS even though Linux grants them read-write —
 	// e.g. ~/.agentjail (daemon socket/DB/policy) stays in sensitiveWritePaths
 	// above, so it must NOT get an allow carve-out here.
+	//
+	// NOTE: ~/.agentjail is no longer in HomeRW (it moved to HomeRO, with a
+	// narrow HomeFilesRW grant on daemon.sock only -- see shield_agentpaths.go),
+	// so this loop never encounters it today. The override entry is kept as
+	// belt-and-suspenders: if ~/.agentjail is ever re-added to HomeRW, the
+	// sbpl allow carve-out (last-match-wins) would otherwise override the
+	// sensitiveWritePaths deny and silently re-grant the agent write access to
+	// agentjail's own enforcement state. Do NOT remove without that guard.
 	darwinWriteDenyOverrides := map[string]bool{
 		".agentjail": true,
 	}

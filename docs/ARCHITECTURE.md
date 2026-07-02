@@ -238,8 +238,12 @@ for the end-to-end walkthrough see [`docs/FLOW.md`](./FLOW.md).
 
 **Linux (Landlock):** allowlist-based. Grants read-write to `/tmp` and the
 project CWD, read-only to system directories and `$HOME`, and denies everything
-else. Sensitive subdirectories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.agentjail`)
-are never allowlisted.
+else. Sensitive subdirectories (`~/.ssh`, `~/.aws`, `~/.gnupg`) are never
+allowlisted. `~/.agentjail` -- agentjail's own enforcement state -- is granted
+**read-only**, with a single-file write grant on `~/.agentjail/daemon.sock`
+alone: the sandboxed hook must `connect()` that socket (which on Linux needs
+write access to the socket inode) while `policy.yaml`, the SQLite DB, and (later)
+`trusted.yaml` stay unwritable so the agent cannot disable its own guardrail.
 
 **No special privileges required.** Both `sandbox-exec` and Landlock run as the
 invoking user — no sudo, no entitlement, no kernel module.
