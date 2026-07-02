@@ -311,7 +311,10 @@ func (p *proxy) handleConn(conn net.Conn) {
 
 	if method != "CONNECT" {
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 405 Method Not Allowed\r\nAllow: CONNECT\r\nContent-Type: text/plain\r\n\r\nagentjail-netproxy only supports HTTPS CONNECT tunneling\n")
-		p.logger.Warn("non-CONNECT request", "client", clientAddr, "method", method)
+		// Log the request target so we can see WHICH host a client tried to reach
+		// with a non-CONNECT method (e.g. a forward-proxy GET the tunnel-only
+		// netproxy cannot serve). Target is the request-target, not a secret.
+		p.logger.Warn("non-CONNECT request", "client", clientAddr, "method", method, "target", target)
 		return
 	}
 
