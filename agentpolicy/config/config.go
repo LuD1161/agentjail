@@ -587,6 +587,58 @@ func Default() *PolicyConfig {
 //   - TempRoots is always derived at runtime by the daemon; Merge copies
 //     the base value (which will be replaced at injection time anyway).
 //
+// MergeProjectOverlay applies an ADDITIVE-ONLY per-folder overlay on top of a
+// fully-resolved base policy. It is deliberately DISTINCT from Merge (which
+// replaces slices, letting an overlay shrink or clear a base list). A project
+// overlay -- a `./.agentjail/policy.yaml` walked up from the agent's CWD -- is
+// less trusted than the user's global policy, so it may only WIDEN allow-lists
+// and ADD to block-lists; it can never remove or weaken a base restriction:
+//
+//   - network.allowed_hosts: UNION(base, overlay) -- a trusted project may add hosts
+//   - mcp.allowed:           UNION(base, overlay) -- a trusted project may allow more MCPs
+//   - mcp.blocked:           UNION(base, overlay) -- overlay may add blocks (more restrictive)
+//
+// Everything else is taken from base UNCHANGED: the non-removable essentials
+// (via EffectiveAllowedHosts), disabled_rules, deny lists, per-server tool
+// policy, secrets, etc. Because mcp.blocked is unioned (never shrunk) and
+// blocked wins over allowed in mcp_policy.rego, widening mcp.allowed can never
+// un-block a blocked server. An overlay must only reach this function for a
+// TRUSTED project directory (see the trust gate); an untrusted overlay is
+// ignored upstream and never merged.
+//
+// Neither base nor overlay is mutated; a freshly allocated *PolicyConfig is
+// returned. A nil overlay returns a copy of base unchanged.
+func MergeProjectOverlay(base, overlay *PolicyConfig) *PolicyConfig {
+	if base == nil {
+		base = Default()
+	}
+	result := *base // shallow copy; the three widened fields below are replaced with fresh slices
+	if overlay == nil {
+		return &result
+	}
+	result.Network.AllowedHosts = unionPreserveOrder(base.Network.AllowedHosts, overlay.Network.AllowedHosts)
+	result.MCP.Allowed = unionPreserveOrder(base.MCP.Allowed, overlay.MCP.Allowed)
+	result.MCP.Blocked = unionPreserveOrder(base.MCP.Blocked, overlay.MCP.Blocked)
+	return &result
+}
+
+// unionPreserveOrder returns base's entries followed by overlay's new entries,
+// de-duplicated, order-preserving (base first). It never drops a base entry.
+func unionPreserveOrder(base, overlay []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(overlay))
+	out := make([]string, 0, len(base)+len(overlay))
+	for _, group := range [][]string{base, overlay} {
+		for _, s := range group {
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // Neither base nor overlay is mutated; Merge returns a freshly allocated
 // *PolicyConfig.
 func Merge(base, overlay *PolicyConfig) *PolicyConfig {
