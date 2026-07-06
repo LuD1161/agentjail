@@ -132,7 +132,7 @@ func SensitiveFilePatterns() []PatternDeny {
 // LANDLOCK_ACCESS_NET_CONNECT_TCP to these ports when the kernel supports
 // Landlock network ABI v4+ (6.7+).
 func NoNetproxyFallbackPorts() []int {
-	return []int{80, 443}
+	return []int{22, 80, 443}
 }
 
 // knownHostsGrant is the sole per-file grant in the contract today:

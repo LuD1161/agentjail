@@ -74,6 +74,10 @@ func (m *mockReadOnlyStore) ListAuditLog(_ context.Context, _ store.AuditLogFilt
 	return nil, nil
 }
 
+func (m *mockReadOnlyStore) ListGrantAuditLog(_ context.Context, _ int) ([]store.AuditLogEntry, error) {
+	return nil, nil
+}
+
 func (m *mockReadOnlyStore) Close() error { return nil }
 
 func TestResolveSessionPrefix_ExactMatch(t *testing.T) {

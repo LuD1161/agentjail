@@ -45,13 +45,13 @@ func TestSensitiveFilePatterns_CompileAndCoverBoth(t *testing.T) {
 	}
 }
 
-// TestNoNetproxyFallbackPorts_IsHTTPAndHTTPS pins the contract's fallback
-// port set to exactly {80, 443} -- both backends' --no-netproxy modes key
-// off this value; a silent change here would silently change enforcement on
-// both platforms without either _os.go file being touched.
+// TestNoNetproxyFallbackPorts pins the contract's fallback port set to
+// exactly {22, 80, 443} - both backends' --no-netproxy modes key off this
+// value; a silent change here would silently change enforcement on both
+// platforms without either _os.go file being touched.
 func TestNoNetproxyFallbackPorts_IsHTTPAndHTTPS(t *testing.T) {
 	got := NoNetproxyFallbackPorts()
-	want := map[int]bool{80: true, 443: true}
+	want := map[int]bool{22: true, 80: true, 443: true}
 	if len(got) != len(want) {
 		t.Fatalf("NoNetproxyFallbackPorts() = %v, want exactly %v", got, want)
 	}

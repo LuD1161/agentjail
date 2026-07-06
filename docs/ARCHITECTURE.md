@@ -260,8 +260,11 @@ else. Sensitive subdirectories (`~/.ssh`, `~/.aws`, `~/.gnupg`) are never
 allowlisted. `~/.agentjail` -- agentjail's own enforcement state -- is granted
 **read-only**, with a single-file write grant on `~/.agentjail/daemon.sock`
 alone: the sandboxed hook must `connect()` that socket (which on Linux needs
-write access to the socket inode) while `policy.yaml`, the SQLite DB, and (later)
+write access to the socket inode) while `policy.yaml`, the SQLite DB, and
 `trusted.yaml` stay unwritable so the agent cannot disable its own guardrail.
+`~/.agentjail/run/daemon-ctl.sock` (the grant control socket, ADR 0047) is
+deliberately excluded from the write grant -- the agent can file grant requests
+through `daemon.sock` but cannot approve them.
 
 **No special privileges required.** Both `sandbox-exec` and Landlock run as the
 invoking user — no sudo, no entitlement, no kernel module.
