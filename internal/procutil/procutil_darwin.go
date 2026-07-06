@@ -1,16 +1,15 @@
 //go:build darwin
 
-package main
+package procutil
 
 import (
-	"fmt"
 	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-func readProcessComm(pid int) string {
-	info, err := unix.SysctlKinfoProc(fmt.Sprintf("kern.proc.pid.%d", pid))
+func readComm(pid int) string {
+	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
 		return ""
 	}
@@ -22,8 +21,8 @@ func readProcessComm(pid int) string {
 	return strings.TrimSpace(string(comm[:n]))
 }
 
-func readProcessPPID(pid int) int {
-	info, err := unix.SysctlKinfoProc(fmt.Sprintf("kern.proc.pid.%d", pid))
+func readPPID(pid int) int {
+	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
 		return 0
 	}

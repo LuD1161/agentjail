@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package procutil
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func readProcessComm(pid int) string {
+func readComm(pid int) string {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
 	if err != nil {
 		return ""
@@ -16,7 +16,7 @@ func readProcessComm(pid int) string {
 	return strings.TrimSpace(string(data))
 }
 
-func readProcessPPID(pid int) int {
+func readPPID(pid int) int {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
 	if err != nil {
 		return 0
