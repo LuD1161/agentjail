@@ -58,7 +58,7 @@ func TestRequestGrant_PerSessionCap(t *testing.T) {
 	r := NewRegistry()
 	now := time.Now()
 
-	for i := 0; i < MaxPendingPerSession; i++ {
+	for i := range MaxPendingPerSession {
 		host := hostForIndex(i)
 		if _, err := r.RequestGrant("sess-1", "/cwd", host, 1000, "r", now); err != nil {
 			t.Fatalf("RequestGrant %d: %v", i, err)
