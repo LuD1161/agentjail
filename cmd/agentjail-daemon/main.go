@@ -214,7 +214,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		if req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
-			s.activeSessions.update(req.SessionID, req.AgentPID)
+			s.activeSessions.update(req.SessionID, req.AgentPID, req.CWD)
 		}
 
 		start := time.Now()
