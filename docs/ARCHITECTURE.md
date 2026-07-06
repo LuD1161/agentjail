@@ -50,6 +50,21 @@ The daemon is started on login (launchd plist on macOS, systemd user service on 
 
 Exit code 2 + stderr blocks immediately without requiring JSON output.
 
+### Fail-open guarantee
+
+The hook never blocks a coding agent when `agentjail-daemon` is unreachable.
+`agentjail-hook` connects to the daemon's Unix socket with a 30ms timeout; if
+the socket is missing, the daemon isn't running, or it doesn't respond in
+time, the tool call is allowed. This keeps a daemon crash or restart from
+freezing every agent on the box. The OS-level shield is independent of this
+path and keeps enforcing filesystem/network restrictions regardless of daemon
+state, so a fail-open hook decision doesn't relax sandbox enforcement. Every
+fail-open event is captured via telemetry so degraded daemon availability is
+visible rather than silent. This guarantee does not extend to credential
+paths: the shield's OS-level deny on sensitive paths (`~/.ssh`, `~/.aws`,
+etc.) is enforced by the sandbox itself, not the hook, so it holds even when
+the daemon is down.
+
 ---
 
 ## Hook Integration per Platform

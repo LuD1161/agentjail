@@ -34,6 +34,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -126,19 +127,58 @@ func defaultSocketPath() string {
 	return wire.DefaultSocketPath()
 }
 
-// failOpenMarker writes the structured fail-open marker to stderr and emits a
-// fail_open telemetry event immediately (synchronous, short timeout — we are
-// about to os.Exit(0) so blocking briefly is acceptable).
-// Format: "agentjail-hook: fail-open agent=<agent> reason=<category>"
+// failOpenWarnedSentinelPath returns the path to the one-time fail-open
+// warning sentinel. It lives next to the daemon socket (same agentjail state
+// directory), e.g. ~/.agentjail/fail-open-warned.
+//
+// This sentinel is intentionally not scoped to a single session or PID: the
+// hook process is short-lived (one invocation per tool call), so "once per
+// session" is approximated here by "once until the daemon comes back up".
+// The daemon is expected to remove this sentinel on successful startup (its
+// job, not the hook's) so the warning reappears the next time it goes down.
+func failOpenWarnedSentinelPath() string {
+	return filepath.Join(filepath.Dir(defaultSocketPath()), "fail-open-warned")
+}
+
+// hasWarnedFailOpen reports whether the fail-open sentinel already exists.
+// A plain stat call, no locking: the race between two concurrent hook
+// invocations both seeing "not warned" is benign (worst case, one extra
+// duplicate warning line).
+func hasWarnedFailOpen() bool {
+	_, err := os.Stat(failOpenWarnedSentinelPath())
+	return err == nil
+}
+
+// markFailOpenWarned creates the fail-open sentinel file, recording the PID
+// and timestamp of the hook invocation that first observed the daemon being
+// unreachable (useful for debugging how long the daemon has been down).
+func markFailOpenWarned() {
+	content := fmt.Sprintf("pid=%d time=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	_ = os.WriteFile(failOpenWarnedSentinelPath(), []byte(content), 0o600)
+}
+
+// failOpenFriendlyMessage is the user-facing message shown the first time a
+// hook invocation fails open in a session. Subsequent fail-opens stay silent
+// on stderr (though telemetry is still sent every time).
+const failOpenFriendlyMessage = "agentjail: daemon not running - policy enforcement disabled (run 'agentjail doctor' to diagnose)"
+
+// failOpenMarker emits a fail_open telemetry event immediately (synchronous,
+// short timeout - we are about to os.Exit(0) so blocking briefly is
+// acceptable), and writes a stderr warning only on the first fail-open
+// observed since the sentinel was last cleared (see failOpenWarnedSentinelPath).
 // Categories: read-stdin | parse-input | dial-daemon | read-response | parse-response
 //
-// TODO(Plan 009 Phase 5): emit audit.DaemonFailopen here. The hook process
-// doesn't hold the daemon's store, so this would require opening a short-lived
-// store (similar to appendAuditEvent in the CLI). Deferred to Phase 5 to keep
-// the hook's hot path lean.
+// Audit emission is intentionally skipped here: the audit store is owned by
+// the daemon process, and when the daemon is down (the only time we fail
+// open) there is no store to write to, nor a way to backfill it once the
+// daemon returns. Telemetry and stderr are the correct capture path.
 func failOpenMarker(agent, category string) {
-	fmt.Fprintf(os.Stderr, "agentjail-hook: fail-open agent=%s reason=%s\n", agent, category)
+	if !hasWarnedFailOpen() {
+		fmt.Fprintln(os.Stderr, failOpenFriendlyMessage)
+		markFailOpenWarned()
+	}
 	// Emit telemetry best-effort: short timeout, all errors silently discarded.
+	// Sent on every fail-open (not just the first) so frequency is observable.
 	if tp, err := defaultTelemetryPaths(); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -146,24 +186,36 @@ func failOpenMarker(agent, category string) {
 	}
 }
 
-// failOpenClaudeLike writes a structured fail-open marker to stderr and emits
-// the agent's allow response, then exits 0.
+// failOpenClaudeLike writes a structured fail-open marker to stderr (only on
+// the first fail-open in a session, see failOpenMarker) and emits the agent's
+// allow response, then exits 0.
 func failOpenClaudeLike(agent, category, detail string) {
+	firstWarning := !hasWarnedFailOpen()
 	failOpenMarker(agent, category)
-	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+	if firstWarning {
+		fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+	}
 	if agent == "codex" {
 		os.Exit(0)
 	}
-	writeAllow("daemon unreachable — fail-open")
+	writeAllow("daemon unreachable - fail-open")
 	os.Exit(0)
 }
 
-// failOpenCursor writes a structured fail-open marker to stderr and emits a
-// Cursor "allow" response to stdout, then exits 0.
+// failOpenCursor writes a structured fail-open marker to stderr (only on the
+// first fail-open in a session, see failOpenMarker) and emits a Cursor
+// "allow" response to stdout, then exits 0.
 func failOpenCursor(category, detail string) {
+	firstWarning := !hasWarnedFailOpen()
 	failOpenMarker("cursor", category)
-	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
-	writeCursorAllow()
+	if firstWarning {
+		fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+	}
+	if firstWarning {
+		writeCursorAllowWithMessage(failOpenFriendlyMessage)
+	} else {
+		writeCursorAllowWithMessage("")
+	}
 	os.Exit(0)
 }
 
@@ -220,6 +272,16 @@ func writeAsk(reason string) {
 // writeCursorAllow writes a Cursor "allow" response to stdout.
 func writeCursorAllow() {
 	out := cursorHookOutput{Permission: "allow"}
+	enc := json.NewEncoder(os.Stdout)
+	_ = enc.Encode(out)
+}
+
+// writeCursorAllowWithMessage writes a Cursor "allow" response to stdout with
+// an optional user_message. Used by failOpenCursor so the friendly fail-open
+// message is shown only on the first fail-open in a session; an empty
+// userMessage omits the field entirely.
+func writeCursorAllowWithMessage(userMessage string) {
+	out := cursorHookOutput{Permission: "allow", UserMessage: userMessage}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(out)
 }

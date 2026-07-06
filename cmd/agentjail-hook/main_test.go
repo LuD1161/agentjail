@@ -289,6 +289,11 @@ func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 	bin := buildHook(t, dir)
 	nonexistentSock := filepath.Join(shortSockDir(t), "no-daemon.sock")
 
+	// Isolate $HOME so the one-time fail-open warning sentinel
+	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
+	// real machine state from prior hook invocations.
+	t.Setenv("HOME", t.TempDir())
+
 	stdin := makeStdinJSON("Write", map[string]interface{}{
 		"path":    "/tmp/x.txt",
 		"content": "x",
@@ -304,11 +309,11 @@ func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 		t.Errorf("expected empty stdout for Codex fail-open, got %q", stdout)
 	}
 	stderrStr := string(stderr)
-	if !strings.Contains(stderrStr, "fail-open agent=codex") {
-		t.Errorf("stderr missing Codex fail-open marker; got %q", stderrStr)
+	if !strings.Contains(stderrStr, "daemon not running - policy enforcement disabled") {
+		t.Errorf("stderr missing fail-open friendly message; got %q", stderrStr)
 	}
-	if !strings.Contains(stderrStr, "reason=dial-daemon") {
-		t.Errorf("stderr missing reason=dial-daemon; got %q", stderrStr)
+	if !strings.Contains(stderrStr, "dial "+nonexistentSock) {
+		t.Errorf("stderr missing dial-daemon detail; got %q", stderrStr)
 	}
 }
 
@@ -317,6 +322,11 @@ func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 func TestHook_FailOpen(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildHook(t, dir)
+
+	// Isolate $HOME so the one-time fail-open warning sentinel
+	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
+	// real machine state from prior hook invocations.
+	t.Setenv("HOME", t.TempDir())
 
 	// Point the hook at a socket that does not exist.
 	nonexistentSock := filepath.Join(shortSockDir(t), "no-daemon.sock")
@@ -342,8 +352,9 @@ func TestHook_FailOpen(t *testing.T) {
 	if out.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Errorf("expected allow on fail-open, got %q", out.HookSpecificOutput.PermissionDecision)
 	}
-	if len(stderr) == 0 {
-		t.Error("expected warning on stderr when daemon absent")
+	stderrStr := string(stderr)
+	if !strings.Contains(stderrStr, "daemon not running - policy enforcement disabled") {
+		t.Errorf("expected fail-open friendly message on stderr, got %q", stderrStr)
 	}
 
 	// The binary itself completes quickly (30 ms dial timeout); this subprocess

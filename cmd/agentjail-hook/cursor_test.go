@@ -160,6 +160,11 @@ func TestCursorHook_DaemonUnreachable(t *testing.T) {
 	bin := buildHook(t, dir)
 	nonexistentSock := filepath.Join(dir, "no-daemon.sock")
 
+	// Isolate $HOME so the one-time fail-open warning sentinel
+	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
+	// real machine state from prior hook invocations.
+	t.Setenv("HOME", t.TempDir())
+
 	stdinBytes, err := os.ReadFile(filepath.Join("..", "..", "internal", "agents", "testdata", "cursor_before_shell_input.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -180,13 +185,13 @@ func TestCursorHook_DaemonUnreachable(t *testing.T) {
 		t.Errorf("permission = %q, want %q (fail-open)", out.Permission, "allow")
 	}
 
-	// Structured fail-open marker must appear on stderr.
+	// The one-time friendly fail-open message must appear on stderr.
 	stderrStr := string(stderr)
-	if !strings.Contains(stderrStr, "fail-open agent=cursor") {
-		t.Errorf("stderr missing fail-open marker; got: %q", stderrStr)
+	if !strings.Contains(stderrStr, "daemon not running - policy enforcement disabled") {
+		t.Errorf("stderr missing fail-open friendly message; got: %q", stderrStr)
 	}
-	if !strings.Contains(stderrStr, "reason=dial-daemon") {
-		t.Errorf("stderr missing reason=dial-daemon; got: %q", stderrStr)
+	if !strings.Contains(stderrStr, "dial "+nonexistentSock) {
+		t.Errorf("stderr missing dial-daemon detail; got: %q", stderrStr)
 	}
 }
 
@@ -319,6 +324,11 @@ func TestCursorHook_FailOpenMarkerOnStderr(t *testing.T) {
 	bin := buildHook(t, dir)
 	nonexistentSock := filepath.Join(dir, "absent.sock")
 
+	// Isolate $HOME so the one-time fail-open warning sentinel
+	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
+	// real machine state from prior hook invocations.
+	t.Setenv("HOME", t.TempDir())
+
 	stdinBytes, err := os.ReadFile(filepath.Join("..", "..", "internal", "agents", "testdata", "cursor_before_shell_input.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -328,9 +338,9 @@ func TestCursorHook_FailOpenMarkerOnStderr(t *testing.T) {
 		[]string{"AGENTJAIL_SOCKET=" + nonexistentSock}, []string{"--agent=cursor"})
 
 	stderrStr := string(stderr)
-	// Must contain the fail-open marker prefix.
-	if !strings.HasPrefix(stderrStr, "agentjail-hook: fail-open") {
-		t.Errorf("stderr does not start with fail-open marker; got: %q", stderrStr)
+	// Must contain the one-time friendly fail-open message.
+	if !strings.Contains(stderrStr, "daemon not running - policy enforcement disabled") {
+		t.Errorf("stderr missing fail-open friendly message; got: %q", stderrStr)
 	}
 }
 
