@@ -1022,6 +1022,11 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 	}
 	fmt.Fprintln(w, u.Step(6, 6, "daemon started", true))
 
+	// Refresh the PATH shim if one was previously installed. This ensures
+	// brew upgrade / curl|sh reinstall picks up the current template and
+	// does not retain stale flags from a dev build.
+	refreshPathShimIfExists(home)
+
 	return nil
 }
 

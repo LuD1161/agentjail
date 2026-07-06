@@ -238,6 +238,20 @@ func uninstallPathShim(home string) {
 	os.Remove(shimPath)
 }
 
+// refreshPathShimIfExists regenerates the PATH shim if one already exists
+// on disk. Called unconditionally during install so that brew upgrade and
+// curl|sh reinstall pick up the current binary's template instead of
+// retaining stale flags from a previous build.
+func refreshPathShimIfExists(home string) {
+	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
+	if _, err := os.Stat(shimPath); os.IsNotExist(err) {
+		return
+	}
+	if err := installPathShim(home); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail: warning: could not refresh PATH shim: %v\n", err)
+	}
+}
+
 // addToShellProfile adds the agentjail bin directory to PATH in the
 // appropriate shell profile. Idempotent — skips if already present.
 func addToShellProfile(home, binDir string) error {
