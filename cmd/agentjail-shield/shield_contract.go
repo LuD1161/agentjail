@@ -112,8 +112,7 @@ func SensitiveFilePatterns() []PatternDeny {
 		// Private key / keystore formats (write + read).
 		{Regex: `\.(pem|p12|pfx|jks|keystore|key)$`, Write: true, Read: true},
 		{Regex: `(^|/)id_(rsa|ed25519|ecdsa|dsa)$`, Write: true, Read: true},
-		{Regex: `(^|/)credentials$`, Write: true, Read: true},
-		{Regex: `(^|/)secrets$`, Write: true},
+		// credentials/secrets basename deny removed - hook-layer file_policy.rego covers these.
 		{Regex: `(^|/)\.netrc$`, Write: true, Read: true},
 		// Anchored home-file patterns: exact-match only ($ prevents catching
 		// .npmrc.bak). Only the home-anchored forms are matched; project-local

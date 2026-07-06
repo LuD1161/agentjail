@@ -2,6 +2,55 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.4.0 - 2026-07-05
+
+![v0.4.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.4.0-summary.svg)
+
+#### TL;DR
+
+- Session-aware network proxy (ADR 0042) - per-session allowlists over a control plane, replacing the global egress allowlist.
+- Per-folder project policy overlays (ADR 0043) - direnv-style trust gate with `agentjail trust`/`untrust` CLI commands.
+- Runtime host grants (ADR 0044) - `agentjail allow host` and `grants approve/deny` for interactive egress approval.
+- Shared sandbox contract for darwin/linux parity, plus macOS code signing and notarization in the release pipeline.
+
+### Added
+
+- **Session-aware network proxy** - control-plane server with session registry,
+  per-token data plane, and lease reaper; shield registers a per-session
+  allowlist with netproxy over the control plane instead of a global allowlist
+- **Per-folder project policy overlays** - direnv-style trust gate discovers
+  per-folder overlays; `agentjail trust`/`untrust`/`trust list` CLI commands;
+  shield applies the trusted overlay to the session allowlist additively
+- **Runtime host grants** - `agentjail allow host` and
+  `grants approve/deny (--persist)` CLI for interactive egress approval, backed
+  by a shared runtime host-grant validator and session identity fields
+- **macOS code signing and notarization** wired into the release pipeline
+- **Dev-deploy script** to build and swap local binaries during development
+- **Netproxy decision logging** to a file for observability, including target
+  host on non-CONNECT rejects
+
+### Changed
+
+- **Domain-driven interface-first architecture (ADR 0035)** - extracted
+  hookwatch, credential, sandbox, envaudit, and policyeval into internal
+  packages; `policyctl` domain service replaces 12 copy-pasted audit ceremonies
+- **Shared sandbox contract for darwin/linux parity** - hybrid
+  `allowed_hosts` model with non-removable essential hosts and
+  user-configurable extended hosts; `EffectiveAllowedHosts` enforces the split
+- **Netproxy egress enforcement is now opt-in** via `--netproxy`; host
+  resolution and upstream connectivity checks are bounded and parallelized
+- **`agentjail run`/`claude` resolves the real binary** past the shim; status
+  line now shows the build git hash and a "secured by agentjail" indicator
+
+### Security
+
+- **Policy denies agent-issued grant verbs** - `approve`/`deny`/`persist`/
+  `trust` cannot be invoked by the agent itself, only by the human operator
+- **Narrowed agent grant on `~/.agentjail`** to `daemon.sock` only; reads of
+  the agentjail state dir are allowed while writes stay locked
+- **macOS keychain access hardened for Claude Code** as part of darwin/linux
+  sandbox parity, alongside Phase 3 grant-boundary regression guards
+
 ## v0.3.1 — 2026-06-28
 
 ![v0.3.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.3.1-summary.svg)

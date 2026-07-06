@@ -34,14 +34,13 @@ open (does **not** stop a modern `Security.framework` caller). It broke the
 legitimate flow while providing no real containment against a determined
 Mach-IPC caller.
 
-This matches the finding in the [nono](https://github.com/nolabs-ai/nono)
-reference sandbox's security-model documentation: the keychain must be
-treated as a single coherent gate -- the file grant and the Mach grant have to
-move together, not be decided independently. nono's own history records
-that a narrow "only the two `login.keychain-db*` files" grant was
-empirically unreliable for token refresh (commit `3c8b675`), so nono grants
-the whole user `~/Library/Keychains` root for its `claude-code` profile -- the
-system keychain is never included in that grant.
+The keychain must be treated as a single coherent gate - the file grant and
+the Mach grant have to move together, not be decided independently. In
+practice, a narrow "only the two `login.keychain-db*` files" grant is
+empirically unreliable for token refresh because files are created and
+rotated in ways a static two-file allowlist misses. Granting the whole user
+`~/Library/Keychains` root (never the system keychain) is the reliable
+approach.
 
 ## Decision
 
@@ -52,11 +51,10 @@ default for the shielded agent's own process, by removing it from
 new explicit `(allow ...)` rule is needed for the user keychain root itself.
 
 We reject the narrower "grant only `login.keychain-db` + its `-wal`/`-shm`
-companions" alternative. nono tried this first and found it unreliable for
-Claude's token-refresh flow (files are created/rotated in ways a static
-two-file allowlist misses). Matching nono's `claude-code` profile -- the
-whole user keychain root, never the system keychain -- is the option with a
-working precedent.
+companions" alternative. Testing showed this is unreliable for Claude's
+token-refresh flow (files are created/rotated in ways a static two-file
+allowlist misses). Granting the whole user keychain root, never the system
+keychain, is the approach with a working precedent.
 
 The **hardened opt-out** (denying both the file path *and* the four keychain
 Mach services -- `com.apple.SecurityServer`, `com.apple.securityd`,

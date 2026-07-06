@@ -180,7 +180,7 @@ jobs:
 
   release:
     name: create GitHub release
-    needs: [build]
+    needs: [build, gatekeeper-verify]
     runs-on: ubuntu-latest
     permissions:
       contents: write
