@@ -1,6 +1,6 @@
 # 0047 - Daemon-hosted grant server with peer-PID binding
 
-Status: Proposed
+Status: Accepted
 
 ## Context
 
