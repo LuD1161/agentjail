@@ -43,6 +43,11 @@ const (
 	NetproxyGrantApproved  = "netproxy.grant_approved"
 	NetproxyGrantDenied    = "netproxy.grant_denied"
 	NetproxyGrantExpired   = "netproxy.grant_expired"
+	// Daemon-hosted runtime host grants (AGE-116, ADR 0047). Requested is
+	// best-effort; Denied is best-effort. Approval uses PolicyChangeRequested
+	// (fail-closed) and PolicyChanged (best-effort) instead of a separate event.
+	DaemonGrantRequested = "daemon.grant_requested"
+	DaemonGrantDenied    = "daemon.grant_denied"
 	// Per-folder policy overlays (direnv-style trust gate). Emitted by the
 	// shield when it resolves a `./.agentjail/policy.yaml` for a session.
 	ProjectOverlayApplied          = "project_overlay.applied"
