@@ -9,11 +9,11 @@
 
 ### Policy guardrails for coding agents - _your agent literally can't do that_
 
-A safety rail for Claude Code, Codex, and Cursor. It catches the accidental
-foot-gun **before it fires** - no changes to how you use your agent.
+A safety rail for Claude Code, Codex, and Cursor. <br>
+Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v0.4.0](https://img.shields.io/badge/v0.4.0-released-orange)
+&nbsp;![v0.5.0](https://img.shields.io/badge/v0.5.0-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.5.0** | Jul 6, 2026 | Daemon-hosted grant server (AGE-116). Policy simplification (AGE-114). Self-update and shield fixes. |
 | **v0.4.0** | Jul 5, 2026 | Session-aware network proxy. Per-folder project overlays. Runtime host grants. Shared sandbox contract. macOS code signing. |
 | **v0.3.0** | Jun 27, 2026 | Sessions subsystem (`agentjail sessions list`). Cobra CLI migration. Platform-specific procwalk. |
 | **v0.2.9** | Jun 26, 2026 | `agentjail mcp inventory`. Per-project policy resolution. Per-skill and per-tool policy CLI. |

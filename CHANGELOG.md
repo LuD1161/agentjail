@@ -2,6 +2,57 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.5.0 - 2026-07-06
+
+![v0.5.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.5.0-summary.svg)
+
+#### TL;DR
+
+- Daemon-hosted grant server - grants moved from netproxy to daemon with PID-based session binding, removing the `--netproxy` dependency for grant operations.
+- Policy simplification - removed overly broad `no-hook-self-disable` rule that caused false positives with plugins; replaced with targeted `file_policy/hook_config` ask rule.
+- Self-update and shield fixes - fail-open sentinel mechanism, launchctl daemon restart, SSH port 22 in sandbox fallback.
+
+### Added
+
+- **Daemon-hosted grant server** (ADR 0047) - grant control server on
+  `daemon-ctl.sock` with PID-based session binding via SO_PEERCRED (Linux) /
+  LOCAL_PEERPID (macOS); transactional claim-grant workflow with audit trail
+- **`agentjail grants --log`** flag to display grant audit history from the
+  daemon's SQLite store
+- **`file_policy/hook_config`** ask rule protecting `~/.claude/settings*.json`
+  from silent overwrites that could remove agentjail hooks
+- **`make dev-install`** target to build, install, sync policy rules, restart
+  daemon, and verify with SHA-256 checksums
+- **Fail-open one-time warning** sentinel mechanism so users know
+  when the hook is running in fail-open mode
+- **SSH port 22** allowed in sandbox fallback ports
+
+### Changed
+
+- **Grant commands auto-detect backend** - `agentjail grants` queries daemon
+  first, falls back to netproxy only when available; merged listing with SOURCE
+  column
+- **Peer PID extraction** via SO_PEERCRED/LOCAL_PEERPID for session binding
+  without agent-supplied identity
+- **Process walk helpers** extracted to shared `procutil` package
+
+### Fixed
+
+- **Removed `no-hook-self-disable`** rule that was blocking legitimate plugin
+  operations (claude-mem worker diagnostics) due to overly broad Bash regex
+  matching `>=` and `=>` as shell redirects
+- **PATH shim regenerated on upgrade** so brew/curl installs pick up
+  the current template
+- **Daemon restart via launchctl kickstart** instead of stop+start
+- **Landlock test updated** to use `daemon-ctl.sock` (was still referencing
+  old `netproxy-ctl.sock` path)
+
+### Security
+
+- **`daemon-ctl.sock` denied on macOS** via sbpl network-outbound deny,
+  mirroring the netproxy control socket isolation - agent cannot self-approve
+  grants
+
 ## v0.4.0 - 2026-07-05
 
 ![v0.4.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.4.0-summary.svg)
