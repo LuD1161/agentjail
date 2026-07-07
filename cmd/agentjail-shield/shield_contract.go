@@ -135,23 +135,20 @@ func NoNetproxyFallbackPorts() []int {
 	return []int{22, 80, 443}
 }
 
-// knownHostsGrant is the sole per-file grant in the contract today:
-// ~/.ssh/known_hosts is ReadOnly because host-key VERIFICATION only reads
-// it; adding a new host key (ssh-keyscan / first connect) writes via
-// temp-file+rename, which needs ~/.ssh directory write -- deliberately not
-// granted. See docs/adr/0039-complete-shared-sandbox-contract.md.
 var knownHostsGrant = PathGrant{Path: ".ssh/known_hosts", Mode: ReadOnly, PerFile: true}
 
+var perFileGrants = []PathGrant{
+	knownHostsGrant,
+	{Path: ".ssh/config", Mode: ReadOnly, PerFile: true},
+	{Path: ".aws/config", Mode: ReadOnly, PerFile: true},
+}
+
 // PerFileGrants returns the shared set of individual-file (not directory)
-// access grants the agent needs, distinct from AgentPaths.HomeRW/HomeRO
-// (directory subtrees) and AgentPaths.HomeFilesRW (Linux's existing
-// read-write single-file allowlist). darwin currently grants none of these
-// files at all (the ~/.ssh subpath deny covers the whole tree, including
-// known_hosts) -- this is the FIX3 gap PerFileGrants closes: darwin must
-// carve out an explicit read-only allow for each entry here, emitted AFTER
-// the ~/.ssh deny block (last-match-wins).
+// read-only grants inside otherwise-denied directories. darwin carves out
+// explicit allows AFTER the deny block (last-match-wins); Linux adds
+// per-inode read grants via Landlock.
 func PerFileGrants() []PathGrant {
-	return []PathGrant{knownHostsGrant}
+	return perFileGrants
 }
 
 // KnownHostsGrant returns the known_hosts PathGrant directly (convenience

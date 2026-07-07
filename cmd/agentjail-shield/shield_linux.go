@@ -463,7 +463,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			unix.LANDLOCK_ACCESS_FS_TRUNCATE |
 			unix.LANDLOCK_ACCESS_FS_IOCTL_DEV,
 	)
-	_ = uint64(unix.LANDLOCK_ACCESS_FS_READ_FILE) // roFileAccess reserved for future use
+	roFileAccess := uint64(unix.LANDLOCK_ACCESS_FS_READ_FILE)
 
 	// allowPath adds an allow rule for the given path with the specified access
 	// rights (masked by the handled set so we never request unknown bits).
@@ -516,6 +516,16 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		for _, name := range paths.HomeFilesRW {
 			p := filepath.Join(home, name)
 			if err := allowPath(p, rwFileAccess); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
+			}
+		}
+		// Per-file read-only grants inside otherwise-denied directories.
+		for _, g := range PerFileGrants() {
+			if !g.PerFile || g.Mode != ReadOnly {
+				continue
+			}
+			p := filepath.Join(home, g.Path)
+			if err := allowPath(p, roFileAccess); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 			}
 		}
