@@ -44,6 +44,7 @@
 #
 # Disposition rules (resolver picks most-restrictive: deny > ask > allow):
 #   0. is_agentjail_self(p)                                → deny  (file_policy/agentjail_self) [LOCKED]
+#   0c. is_hook_config(p) AND Write/Edit                   → ask   (file_policy/hook_config)
 #   1. is_protected_credential(p)                          → deny  (file_policy/sensitive_credential)
 #   2. is_sensitive_basename(p) AND in_project(p)          → ask   (file_policy/sensitive_in_project)
 #   3. is_sensitive_basename(p) AND NOT in_project(p)      → deny  (file_policy/sensitive_credential)
@@ -417,6 +418,29 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
+# Rule 0c — Hook config self-protection: ask on Write/Edit.
+# Prevents an agent from silently removing agentjail's hooks by overwriting
+# the agent harness settings file (e.g. ~/.claude/settings*.json). The user
+# can still approve legitimate edits. Reads are allowed (no secret in config).
+# ---------------------------------------------------------------------------
+
+is_hook_config(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.claude/settings[^/]*\.json$`, p)
+}
+
+candidate contains r if {
+	input.tool_name in {"Write", "Edit"}
+	p := file_path
+	is_hook_config(p)
+	msg := sprintf("write to agent hook configuration %q requires confirmation - verify agentjail hooks are preserved", [p])
+	r := {
+		"action":  "ask",
+		"rule_id": "file_policy/hook_config",
+		"reason":  msg,
+	}
+}
+
+# ---------------------------------------------------------------------------
 # Rule 1 — Protected credential: always deny.
 # Fires for is_protected_credential, regardless of cwd.
 # NOTE: ~/.agentjail is NOT in is_protected_credential — it fires Rule 0.
@@ -521,7 +545,7 @@ candidate contains r if {
 # Rule 6 — Agent harness internal paths: allow.
 # Claude Code stores session data, tool results, and image caches under
 # ~/.claude/projects/. These are agent-internal and safe to read/write.
-# ~/.claude/settings*.json writes are audited by the sandbox when shield is active.
+# ~/.claude/settings*.json writes are guarded by Rule 0c (hook_config ask).
 # ---------------------------------------------------------------------------
 
 is_agent_harness_path(p) if {
