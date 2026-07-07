@@ -383,9 +383,9 @@ A project's `./.agentjail/policy.yaml` is **ignored until you trust it** (direnv
 ```sh
 agentjail allow host db.staging.internal --reason "..."   # agent: file a request, pending only
 agentjail grants                                          # human, unsandboxed: list pending
-agentjail grant approve <grant_id>                        # human: grant it for this session
-agentjail grant approve <grant_id> --persist               # also widen the trusted overlay
+agentjail grant approve <grant_id>                        # approve and persist for future sessions
 agentjail grant deny <grant_id>
+agentjail grants --log                                    # show grant history from audit log
 ```
 
 The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over an agent-unreachable control socket, so the agent can never approve its own request. As of AGE-116 the daemon hosts this control plane on `daemon-ctl.sock`, so filing and approving a grant works in the default configuration -- no `--netproxy` required -- and an approval persists into the trusted overlay for future sessions automatically. Widening the *current* session's live egress mid-session still requires `--netproxy` (the session-aware proxy that actually enforces the allowlist); without it, an approval persists for next launch but does not retroactively open a socket this run. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).

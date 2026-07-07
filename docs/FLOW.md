@@ -125,19 +125,16 @@ hook already uses, so it can only ever request for its own session -- there is
 nothing to hand it that would let it request on behalf of another session, and
 nothing the request itself grants. Filing a request is inert: the daemon just
 remembers "someone asked." The approve/deny/list verbs only run over
-`daemon-ctl.sock` (AGE-116; the legacy `netproxy-ctl.sock` is still queried
-when a netproxy is running, so grants filed against an older session are not
-orphaned), the same agent-unreachable control socket that registers
-allowlists ([ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md)) --
+`daemon-ctl.sock` (AGE-116), an agent-unreachable control socket protected by
+the same mechanism as the legacy `netproxy-ctl.sock`
+([ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md)) --
 so the agent cannot approve its own request no matter what it does inside the
 sandbox.
 
 As of AGE-116 this whole flow -- file, approve, persist -- works in the
 default configuration with no `--netproxy` flag: the daemon persists an
 approved host into the owning session's trusted overlay automatically, so
-future sessions inherit it. `--persist` is now only meaningful for a grant
-filed against a legacy netproxy (a no-op for daemon-hosted grants, which
-always persist). Widening the *current, still-running* session's live egress
+future sessions inherit it. Widening the *current, still-running* session's live egress
 mid-session still needs `--netproxy`, since that is the component that
 actually enforces the per-session allowlist against outbound traffic; without
 it, approval affects the next launch, not the live process.
@@ -183,7 +180,7 @@ at launch (no `SIGHUP` reload); see
 | Agent tries to self-trust a project overlay | Denied: `~/.agentjail/trusted.yaml` is agent-unwritable (enforcement-tested) |
 | Agent files a runtime grant request (`agentjail allow host`) | Inert until approved -- files an in-memory pending entry for its OWN session only, grants nothing by itself |
 | A human approves a pending grant from a trusted terminal | Live for that session (TTL-bounded); `--persist` also widens the trusted overlay |
-| Agent tries to approve its own grant | Denied: `grant.approve`/`grant.deny`/`grant.list` only run over `daemon-ctl.sock` (AGE-116) / legacy `netproxy-ctl.sock`, agent-unreachable on both OSes |
+| Agent tries to approve its own grant | Denied: `grant.approve`/`grant.deny`/`grant.list` only run over `daemon-ctl.sock` (AGE-116), agent-unreachable on both OSes |
 
 ## Related docs
 
