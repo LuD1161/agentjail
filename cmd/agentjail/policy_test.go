@@ -18,8 +18,8 @@ import (
 )
 
 // TestLibraryRuleNames verifies the embedded library rules are all present.
-// no_daemon_kill and no_hook_self_disable are core rules (not opt-in library
-// rules) and must NOT appear in the library set.
+// no_daemon_kill is a core rule (not an opt-in library rule) and must NOT
+// appear in the library set.
 func TestLibraryRuleNames(t *testing.T) {
 	names := libraryRuleNames()
 	want := []string{
@@ -44,8 +44,8 @@ func TestLibraryRuleNames(t *testing.T) {
 // TestCoreRuleNames verifies the embedded core rules are all present.
 // resolver.rego is required: it is the single producer of data.agentjail.decision
 // and must be shipped alongside the candidate-contributing core files.
-// no_daemon_kill and no_hook_self_disable are promoted to core
-// (ADR 0014 follow-up #10) and must appear here.
+// no_daemon_kill is promoted to core (ADR 0014 follow-up #10) and must appear
+// here.
 func TestCoreRuleNames(t *testing.T) {
 	names := coreRuleNames()
 	want := []string{
@@ -55,7 +55,6 @@ func TestCoreRuleNames(t *testing.T) {
 		"internal_tools",
 		"mcp_policy",
 		"no_daemon_kill",
-		"no_hook_self_disable",
 		"resolver",
 		"web_policy",
 	}
@@ -92,8 +91,7 @@ func TestLibraryRuleContent_Unknown(t *testing.T) {
 }
 
 // TestIsLibraryRule verifies known/unknown distinctions.
-// no_daemon_kill and no_hook_self_disable are core rules and must NOT be
-// classified as library rules.
+// no_daemon_kill is a core rule and must NOT be classified as a library rule.
 func TestIsLibraryRule(t *testing.T) {
 	if !isLibraryRule("no_shell_init_write") {
 		t.Error("no_shell_init_write should be a library rule")
@@ -111,13 +109,10 @@ func TestIsLibraryRule(t *testing.T) {
 	if isLibraryRule("no_daemon_kill") {
 		t.Error("no_daemon_kill should NOT be a library rule (promoted to core)")
 	}
-	if isLibraryRule("no_hook_self_disable") {
-		t.Error("no_hook_self_disable should NOT be a library rule (promoted to core)")
-	}
 }
 
 // TestIsCoreRule verifies core rule classification.
-// no_daemon_kill and no_hook_self_disable are promoted to core.
+// no_daemon_kill is promoted to core.
 func TestIsCoreRule(t *testing.T) {
 	if !isCoreRule("file_policy") {
 		t.Error("file_policy should be a core rule")
@@ -134,9 +129,6 @@ func TestIsCoreRule(t *testing.T) {
 	// Promoted to core.
 	if !isCoreRule("no_daemon_kill") {
 		t.Error("no_daemon_kill should be a core rule (promoted from library)")
-	}
-	if !isCoreRule("no_hook_self_disable") {
-		t.Error("no_hook_self_disable should be a core rule (promoted from library)")
 	}
 }
 
@@ -617,7 +609,6 @@ func TestLockedSetMatchesRego(t *testing.T) {
 	// with --force because the daemon has launchd KeepAlive=true as a backstop.
 	regoLocked := map[string]bool{
 		"file_policy/agentjail_self":        true,
-		"library/no-hook-self-disable":      true,
 		"command_policy/no-policy-mutation": true,
 		"resolver/default":                  true,
 	}
@@ -714,7 +705,6 @@ func TestDisableLocked_Refused(t *testing.T) {
 
 	lockedIDs := []string{
 		"file_policy/agentjail_self",
-		"library/no-hook-self-disable",
 		"command_policy/no-policy-mutation",
 		"resolver/default",
 	}
@@ -1009,7 +999,6 @@ func TestLibraryStemConversions(t *testing.T) {
 		stem   string
 	}{
 		{"library/no-daemon-kill", "no_daemon_kill"},
-		{"library/no-hook-self-disable", "no_hook_self_disable"},
 		{"library/no-history-read", "no_history_read"},
 		{"library/no-shell-init-write", "no_shell_init_write"},
 		{"library/no-app-binary-write", "no_app_binary_write"},
@@ -1055,8 +1044,8 @@ func TestRegistryByID_KnownAndUnknown(t *testing.T) {
 // ADR 0014 follow-up #10 — promoted core rules tests
 // ---------------------------------------------------------------------------
 
-// TestPromotedCoreRules_InCoreNotLibrary verifies that no_daemon_kill and
-// no_hook_self_disable appear in coreRuleNames() and not in libraryRuleNames().
+// TestPromotedCoreRules_InCoreNotLibrary verifies that no_daemon_kill
+// appears in coreRuleNames() and not in libraryRuleNames().
 func TestPromotedCoreRules_InCoreNotLibrary(t *testing.T) {
 	coreNames := coreRuleNames()
 	libNames := libraryRuleNames()
@@ -1070,7 +1059,7 @@ func TestPromotedCoreRules_InCoreNotLibrary(t *testing.T) {
 		libSet[n] = true
 	}
 
-	for _, stem := range []string{"no_daemon_kill", "no_hook_self_disable"} {
+	for _, stem := range []string{"no_daemon_kill"} {
 		if !coreSet[stem] {
 			t.Errorf("%q must appear in coreRuleNames() — it is promoted to always-on core", stem)
 		}
@@ -1080,13 +1069,12 @@ func TestPromotedCoreRules_InCoreNotLibrary(t *testing.T) {
 	}
 }
 
-// TestPromotedCoreRules_RegistryIsCore verifies the rule registry marks both
-// promoted rules as RuleSourceCore. no-hook-self-disable remains locked;
-// no-daemon-kill is now unlocked (disableable with --force) because the daemon
-// has launchd KeepAlive=true as a backstop.
+// TestPromotedCoreRules_RegistryIsCore verifies the rule registry marks the
+// promoted rule as RuleSourceCore. no-daemon-kill is unlocked (disableable
+// with --force) because the daemon has launchd KeepAlive=true as a backstop.
 func TestPromotedCoreRules_RegistryIsCore(t *testing.T) {
-	// Both are core source.
-	for _, id := range []string{"library/no-daemon-kill", "library/no-hook-self-disable"} {
+	// Core source.
+	for _, id := range []string{"library/no-daemon-kill"} {
 		e, ok := RegistryByID(id)
 		if !ok {
 			t.Errorf("RegistryByID(%q) not found", id)
@@ -1095,15 +1083,6 @@ func TestPromotedCoreRules_RegistryIsCore(t *testing.T) {
 		if e.Source != RuleSourceCore {
 			t.Errorf("RegistryByID(%q).Source = %q, want core", id, e.Source)
 		}
-	}
-
-	// no-hook-self-disable must remain locked.
-	hookEntry, ok := RegistryByID("library/no-hook-self-disable")
-	if !ok {
-		t.Fatal("RegistryByID(library/no-hook-self-disable) not found")
-	}
-	if !hookEntry.Locked {
-		t.Error("RegistryByID(library/no-hook-self-disable).Locked = false, want true")
 	}
 
 	// no-daemon-kill is unlocked — users may opt out with --force.
@@ -1125,7 +1104,7 @@ func TestPromotedCoreRules_PolicyEnable_CoreMessage(t *testing.T) {
 
 	// Enabling a core rule by bare stem should fail (it's always on) with
 	// exit code 1, not 0 (which would mean it was treated as a library copy).
-	for _, stem := range []string{"no_daemon_kill", "no_hook_self_disable"} {
+	for _, stem := range []string{"no_daemon_kill"} {
 		code := runPolicyEnable(stem)
 		if code == 0 {
 			t.Errorf("runPolicyEnable(%q) = 0; should fail because it is a core rule (always on)", stem)
@@ -1134,9 +1113,8 @@ func TestPromotedCoreRules_PolicyEnable_CoreMessage(t *testing.T) {
 }
 
 // TestPromotedCoreRules_PolicyList_ShowsInCore verifies that the policy list
-// output includes no_daemon_kill and no_hook_self_disable in the Core Rules
-// section. no-hook-self-disable is locked; no-daemon-kill is unlocked
-// (disableable with --force).
+// output includes no_daemon_kill in the Core Rules section. no-daemon-kill is
+// unlocked (disableable with --force).
 func TestPromotedCoreRules_PolicyList_ShowsInCore(t *testing.T) {
 	home, _ := setupADR0047Home(t)
 	withFakeHome(t, home)
@@ -1148,15 +1126,15 @@ func TestPromotedCoreRules_PolicyList_ShowsInCore(t *testing.T) {
 	}
 	out := stripANSI(buf.String())
 
-	// Both rule_ids must appear in the output (they're in Core Rules section).
-	for _, id := range []string{"library/no-daemon-kill", "library/no-hook-self-disable"} {
+	// The rule_id must appear in the output (it's in Core Rules section).
+	for _, id := range []string{"library/no-daemon-kill"} {
 		if !strings.Contains(out, id) {
 			t.Errorf("policy list missing %q\nfull:\n%s", id, out)
 		}
 	}
 
-	// The 'locked' badge must appear at least once (from no-hook-self-disable +
-	// other locked rules). no-daemon-kill is no longer locked.
+	// The 'locked' badge must appear at least once (from other locked rules).
+	// no-daemon-kill is no longer locked.
 	if !strings.Contains(out, "locked") {
 		t.Errorf("policy list missing 'locked' badge\nfull:\n%s", out)
 	}

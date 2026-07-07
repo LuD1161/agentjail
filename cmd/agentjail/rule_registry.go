@@ -241,16 +241,6 @@ var ruleRegistry = []RuleEntry{
 		Description: "Block attempts to stop agentjail-daemon",
 		Locked:      false,
 	},
-	// Locked: protects agentjail hooks from being removed.
-	// Note: rule_id retains "library/" prefix for historical reasons; the rule
-	// is now always-on locked core — it is never opt-in.
-	{
-		ID:          "library/no-hook-self-disable",
-		Source:      RuleSourceCore,
-		Description: "Block attempts to remove or modify agentjail agent hooks",
-		Locked:      true,
-	},
-
 	// ------------------------------------------------------------------ //
 	// Library — optional hardening rules
 	// ------------------------------------------------------------------ //

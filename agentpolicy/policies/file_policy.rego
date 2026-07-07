@@ -521,7 +521,7 @@ candidate contains r if {
 # Rule 6 — Agent harness internal paths: allow.
 # Claude Code stores session data, tool results, and image caches under
 # ~/.claude/projects/. These are agent-internal and safe to read/write.
-# ~/.claude/settings*.json is still denied by no_hook_self_disable.
+# ~/.claude/settings*.json writes are audited by the sandbox when shield is active.
 # ---------------------------------------------------------------------------
 
 is_agent_harness_path(p) if {

@@ -39,13 +39,12 @@ func sourceRoot(t *testing.T) string {
 	return filepath.Join(dir, "..", "..", "agentpolicy", "policies")
 }
 
-// TestCoreFileParity asserts that each of the six hook-path core files is
+// TestCoreFileParity asserts that each of the five hook-path core files is
 // byte-identical between agentpolicy/policies/ (source of truth) and the
 // embedded mirror (allCoreRuleBytes()).
 //
-// no_daemon_kill and no_hook_self_disable were promoted from the library to
-// always-on locked core (ADR 0014 follow-up #10). They are now included in
-// this set.
+// no_daemon_kill was promoted from the library to always-on locked core
+// (ADR 0014 follow-up #10). It is included in this set.
 func TestCoreFileParity(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +59,6 @@ func TestCoreFileParity(t *testing.T) {
 		"internal_tools",
 		"web_policy",
 		"no_daemon_kill",
-		"no_hook_self_disable",
 		"resolver",
 	}
 

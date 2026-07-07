@@ -28,7 +28,7 @@
 # WHAT IT DOES NOT COVER (by design, to avoid eval_conflict_error)
 # ----------------------------------------------------------------
 #   - `launchctl bootout|unload|remove com.agentjail.*`  -> core no-launchctl-remove
-#   - writes to ~/.agentjail/ or the daemon plist          -> core file_policy + no-hook-self-disable
+#   - writes to ~/.agentjail/ or the daemon plist          -> core file_policy
 #   - `kill <pid>` after manually resolving the PID        -> not matchable by name; partly mitigated by launchd respawn
 #
 # ALWAYS ON (promoted from opt-in library to always-on locked core)

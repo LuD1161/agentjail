@@ -8,7 +8,7 @@
 // survive an update.  resolver.rego is the single producer of
 // data.agentjail.decision — all other files contribute candidates only.
 //
-// Library rules (no_shell_init_write, no_hook_self_disable, …) are opt-in.
+// Library rules (no_shell_init_write, …) are opt-in.
 // Enabling copies the embedded .rego to ~/.agentjail/rules/<name>.rego.
 // Disabling removes it. Both operations SIGHUP the daemon for zero-restart reload.
 //
@@ -709,7 +709,7 @@ func printPolicyUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Notes"))
 	notes := []string{
-		"Locked rules (file_policy/agentjail_self, library/no-daemon-kill, library/no-hook-self-disable,",
+		"Locked rules (file_policy/agentjail_self, library/no-daemon-kill,",
 		"  command_policy/no-policy-mutation, resolver/default) can NEVER be disabled — they protect",
 		"  agentjail's own integrity.",
 		"Core rules require --force AND interactive terminal confirmation to disable.",
@@ -787,8 +787,6 @@ func policyRuleDescription(name string) string {
 		return "Block attempts to stop agentjail-daemon"
 	case "no_history_read":
 		return "Block shell history reads"
-	case "no_hook_self_disable":
-		return "Block attempts to remove agent hooks"
 	case "no_launchctl":
 		return "Block persistence and background job launchers"
 	case "no_shell_eval":

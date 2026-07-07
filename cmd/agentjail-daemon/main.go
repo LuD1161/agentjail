@@ -352,7 +352,6 @@ var coreFileStems = map[string]bool{
 	"mcp_policy":           true,
 	"web_policy":           true,
 	"no_daemon_kill":       true,
-	"no_hook_self_disable": true,
 	"resolver":             true,
 }
 

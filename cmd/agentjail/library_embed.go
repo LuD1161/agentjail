@@ -3,18 +3,18 @@
 // The library/ subdirectory is a copy of agentpolicy/policies/library/ (non-test .rego
 // files only). The policies/ subdirectory is a BYTE-IDENTICAL mirror of the hook-path
 // core files from agentpolicy/policies/: command_policy, file_policy, mcp_policy,
-// no_daemon_kill, no_hook_self_disable, and resolver. All six are baked into the binary
+// no_daemon_kill, and resolver. All five are baked into the binary
 // at compile time via go:embed so the CLI works without a checkout of the agentpolicy tree.
 //
 // NOTE: default.rego is intentionally excluded — it belongs to package agentjail.default
 // (a legacy/credential-broker path) and is not part of the hook-wire decision path.
 //
-// no_daemon_kill and no_hook_self_disable were promoted from library to always-on locked
-// core (ADR 0014 follow-up #10). Their rule_ids retain the "library/" prefix for
+// no_daemon_kill was promoted from library to always-on locked
+// core (ADR 0014 follow-up #10). Its rule_id retains the "library/" prefix for
 // historical reasons.
 //
 // Whenever agentpolicy/policies/library/ or agentpolicy/policies/*.rego changes, run:
-//   cp agentpolicy/policies/{command_policy,file_policy,mcp_policy,no_daemon_kill,no_hook_self_disable,resolver}.rego \
+//   cp agentpolicy/policies/{command_policy,file_policy,mcp_policy,no_daemon_kill,resolver}.rego \
 //      cmd/agentjail/policies/
 // The embed_parity_test.go guard will catch any drift.
 package main

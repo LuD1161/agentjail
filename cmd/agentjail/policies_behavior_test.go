@@ -191,21 +191,6 @@ func TestMirrorPolicyDecisions(t *testing.T) {
 			toolInput: map[string]interface{}{"command": "launchctl stop com.agentjail.daemon"},
 			want:      "deny",
 		},
-		// ----- no_hook_self_disable (locked self-protection) -----
-		// Write/Edit to hook config files now produce "ask" (user can approve
-		// legitimate edits); Bash-based writes stay "deny".
-		{
-			name:      "Write ~/.claude/settings.json → ask (no_hook_self_disable)",
-			toolName:  "Write",
-			toolInput: map[string]interface{}{"file_path": "/Users/dev/.claude/settings.json"},
-			want:      "ask",
-		},
-		{
-			name:      "Write ~/.codex/config → ask (no_hook_self_disable)",
-			toolName:  "Write",
-			toolInput: map[string]interface{}{"file_path": "/Users/dev/.codex/config.toml"},
-			want:      "ask",
-		},
 	}
 
 	ctx := context.Background()
