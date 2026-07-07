@@ -1,4 +1,4 @@
-.PHONY: help build shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign
+.PHONY: help build dev-install shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign
 
 BIN ?= bin/agentjail
 
@@ -10,6 +10,46 @@ build: $(BIN)  ## build the laptop binary
 
 $(BIN):
 	go build -o $(BIN) ./cmd/agentjail
+
+INSTALL_DIR ?= $(HOME)/.agentjail/bin
+DEV_BINS    := bin/agentjail bin/agentjail-hook bin/agentjail-daemon
+
+dev-install: $(DEV_BINS)  ## build + install binaries, policy rules, and restart daemon; verify
+	@echo "Installing binaries..."
+	@mkdir -p $(INSTALL_DIR)
+	@for b in $(DEV_BINS); do \
+		name=$$(basename $$b); \
+		cp $$b $(INSTALL_DIR)/$$name; \
+		echo "  ✓ $$name"; \
+	done
+	@echo "Syncing policy rules..."
+	@bin/agentjail install --for claude-code 2>&1 | grep -E "✓|⚠" | head -6
+	@echo ""
+	@echo "Verifying installation..."
+	@ok=true; \
+	for b in $(DEV_BINS); do \
+		name=$$(basename $$b); \
+		installed=$(INSTALL_DIR)/$$name; \
+		if [ ! -f "$$installed" ]; then \
+			echo "  ✗ $$name missing from $(INSTALL_DIR)"; ok=false; \
+		else \
+			src_hash=$$(shasum -a 256 $$b | cut -d' ' -f1); \
+			dst_hash=$$(shasum -a 256 $$installed | cut -d' ' -f1); \
+			if [ "$$src_hash" = "$$dst_hash" ]; then \
+				echo "  ✓ $$name matches build"; \
+			else \
+				echo "  ✗ $$name hash mismatch (stale binary?)"; ok=false; \
+			fi; \
+		fi; \
+	done; \
+	$$ok && echo "" && echo "All binaries installed and verified. Restart Claude Code to activate." || \
+		(echo "" && echo "Some binaries failed verification." && exit 1)
+
+bin/agentjail-hook:
+	go build -o bin/agentjail-hook ./cmd/agentjail-hook
+
+bin/agentjail-daemon:
+	go build -o bin/agentjail-daemon ./cmd/agentjail-daemon
 
 shim:  ## build the C PATH shim into bin/agentjail-shim
 	$(MAKE) -C agentjail/native/shim build
