@@ -142,12 +142,16 @@ The shield automatically sets `HTTPS_PROXY`, `HTTP_PROXY`, and `ALL_PROXY`
 registers allowlists is denied to the agent. See
 [ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md).
 
-A blocked host can be granted to the running session at runtime: the agent
-files a request with `agentjail allow host <h>` through its own proxy
-connection, and a human approves it with `agentjail grant approve <grant_id>`
-from an unsandboxed terminal. Approve/deny/list are only reachable over the
-same control socket the agent is denied above, so the agent cannot approve
-its own request. See [ADR 0044](./adr/0044-runtime-host-grants.md).
+A blocked host can be granted at runtime: the agent files a request with
+`agentjail allow host <h>` through the daemon socket, and a human approves it
+with `agentjail grant approve <grant_id>` from an unsandboxed terminal.
+Approve/deny/list are only reachable over `daemon-ctl.sock` (agent-unreachable
+by the same mechanism as `netproxy-ctl.sock`), so the agent cannot approve its
+own request. In the default (no-netproxy) configuration, approval persists the
+host into the project overlay for future sessions. With `--netproxy`, approval
+also widens the live session's allowlist immediately.
+See [ADR 0044](./adr/0044-runtime-host-grants.md) and
+[ADR 0047](./adr/0047-daemon-grant-server.md).
 
 ### macOS without netproxy (default)
 

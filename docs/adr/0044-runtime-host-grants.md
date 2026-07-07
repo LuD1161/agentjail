@@ -149,9 +149,15 @@ Known limitations / follow-ups:
 
 This is AGE-93.
 
+**Note:** [ADR 0047] moved the grant control plane from netproxy to the
+always-running daemon so grants work without `--netproxy`. The request/approve
+model, fail-closed audit, and security invariants described here are preserved;
+the daemon adds peer-PID session binding and transactional persist-on-approve.
+
 See also: [ADR 0042] (session-aware netproxy control plane), [ADR 0043]
-(per-folder policy overlay trust gate), AGE-81 (WireGuard gateway), AGE-93
-(this feature).
+(per-folder policy overlay trust gate), [ADR 0047] (daemon grant server),
+AGE-81 (WireGuard gateway), AGE-93 (this feature).
 
 [ADR 0042]: ./0042-session-aware-netproxy-control-plane.md
 [ADR 0043]: ./0043-per-folder-policy-overlay-trust-gate.md
+[ADR 0047]: ./0047-daemon-grant-server.md
