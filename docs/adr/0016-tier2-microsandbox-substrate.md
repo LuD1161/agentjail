@@ -121,7 +121,7 @@ This matches the split the spikes already imply: libkrun for laptops, Firecracke
 | ADR 0004 credential broker | Strips ambient creds, issues scoped ones | Complements VM secret protection: broker for Tier 1.5 users, VM secret-swap for Tier 2 users |
 | ADR 0007 Windows deferral | No native Windows shield | Tier 2 WSL2 path gives Windows a containment story without a native sandbox port |
 
-The self-protection locked set (`file_policy/agentjail_self`, `library/no-daemon-kill`, `library/no-hook-self-disable`, `command_policy/no-policy-mutation`, `resolver/*`) still applies inside the VM — an agent that convinces the user to disable the sandbox is a threat the microVM does not address, and agentjail's locked rules do.
+The self-protection locked set (`file_policy/agentjail_self`, `library/no-daemon-kill`, `command_policy/no-policy-mutation`, `resolver/*`) still applies inside the VM — an agent that convinces the user to disable the sandbox is a threat the microVM does not address, and agentjail's locked rules do.
 
 ## Long-term / enterprise horizon
 

@@ -118,6 +118,10 @@ small **self-protection set is non-disableable**, defended on every vector:
 | Remove the agent hooks | `no_hook_self_disable` — promoted to **core, locked** |
 | Disable the resolver default | `resolver/*` locked |
 
+**Update (2026-07):** `no_hook_self_disable` was removed; hook config
+protection is now handled by `file_policy/hook_config` (ask on Write/Edit to
+`~/.claude/settings*.json`).
+
 The locked set is the **minimum that protects agentjail's own integrity** —
 nothing about the *user's* files/commands/MCPs is locked; those are all
 disableable. It is the `locked_rules` constant in `resolver.rego` (authoritative)
@@ -211,6 +215,10 @@ custom rule is added (§5), not by evaluating inputs.
    migrate `no_daemon_kill` to `candidate` and add the
    "only-resolver-declares-decision" hook-path guard test. Promote
    `no_daemon_kill` + `no_hook_self_disable` to locked core.
+
+   **Update (2026-07):** `no_hook_self_disable` was removed; hook config
+   protection is now handled by `file_policy/hook_config` (ask on Write/Edit
+   to `~/.claude/settings*.json`).
 2. `resolver.rego`: `effective_candidate` + `/`-bounded `rule_disabled` honoring
    the locked set; route `decision` through it; daemon logs suppressions. Rego
    tests: disabled-deny-with-allow, all-disabled→`resolver/default`,

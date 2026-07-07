@@ -318,15 +318,16 @@ For systemd-managed daemons (Linux), set via an environment override file:
 | `mcp_policy` | unknown MCP servers; default-blocked: `*stripe*`, `*payment*`, `*billing*` |
 | `command_policy` | `rm -rf`, `curl\|bash`, `sudo`, `git push --force`, `env\|curl`, `chmod 777`, and more |
 
-**5 locked self-protection rules** (can never be disabled):
+**4 locked self-protection rules** (can never be disabled):
 
 | Rule | Blocks |
 |--|--|
 | `file_policy/agentjail_self` | reads/writes to agentjail's own config and binaries |
-| `library/no-hook-self-disable` | writes to agent settings (removing its own hook) |
 | `library/no-daemon-kill` | `kill` / `pkill` targeting `agentjail-daemon` |
 | `command_policy/no-policy-mutation` | CLI commands that would mutate policy non-interactively |
 | `resolver/default` | the default deny resolver (fail-closed fallback) |
+
+`file_policy/hook_config` asks (does not block) on Write/Edit to `~/.claude/settings*.json` to prevent silent hook removal. It is not locked, so it can be disabled like any other rule; it does not cover `~/.codex/` or `~/.cursor/`.
 
 <details>
 <summary><b>7 opt-in library rules</b></summary>
@@ -357,7 +358,7 @@ agentjail policy disable file_policy/sensitive_in_project   # stop asking on in-
 agentjail policy enable  file_policy/sensitive_in_project   # turn it back on
 ```
 
-Disabling a **core** rule requires `--force` + interactive confirmation (agents are refused even with `--force`). The **locked self-protection set** (`file_policy/agentjail_self`, `library/no-hook-self-disable`, `library/no-daemon-kill`, `command_policy/no-policy-mutation`, `resolver/default`) can never be disabled.
+Disabling a **core** rule requires `--force` + interactive confirmation (agents are refused even with `--force`). The **locked self-protection set** (`file_policy/agentjail_self`, `library/no-daemon-kill`, `command_policy/no-policy-mutation`, `resolver/default`) can never be disabled.
 
 **Managing MCP servers:**
 ```sh

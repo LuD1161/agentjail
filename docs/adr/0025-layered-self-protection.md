@@ -9,8 +9,8 @@
 
 agentjail's self-protection mechanism — preventing an agent from disabling its
 own guardrails — was primarily implemented via regex pattern matching on Bash
-command strings (`command_policy/no-policy-mutation`, `library/no-hook-self-disable`,
-`library/no-daemon-kill`). This produced three classes of problems.
+command strings (`command_policy/no-policy-mutation`, `library/no-daemon-kill`).
+This produced three classes of problems.
 
 **False positives** blocked legitimate work:
 - `git add cmd/agentjail/update.go` was blocked because "agentjail" appeared
@@ -54,11 +54,10 @@ Specific changes to reduce false positives:
   in-place editing clause is removed — those paths are covered by the shield
   and the removal eliminates false positives without weakening real protection.
 
-- **`library/no-hook-self-disable`**: Write/Edit tool calls targeting hook
-  config files (`~/.claude/settings.json`, `~/.codex/hooks.json`, etc.) are
-  downgraded from **deny** to **ask** — users can approve legitimate config
-  edits. Bash-based writes to those files stay **deny** (there is no legitimate
-  reason an agent needs raw shell access to hook config).
+- **`file_policy/hook_config`** (replaces the removed `library/no-hook-self-disable`):
+  Write/Edit tool calls targeting `~/.claude/settings*.json` produce an
+  **ask** — users can approve legitimate config edits. This rule is not
+  locked and does not cover `~/.codex/` or `~/.cursor/`.
 
 - **`library/no-daemon-kill`**: removed from the locked set. The daemon runs
   under launchd/systemd with `KeepAlive=true`, so a kill is a speed bump, not

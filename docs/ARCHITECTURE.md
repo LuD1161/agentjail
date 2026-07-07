@@ -177,8 +177,8 @@ text.
   `disabled_rules` in `policy.yaml`, or via `agentjail policy disable <rule_id>`.
   `resolver.rego` drops disabled candidates from `effective_candidate`.
 - **Locked self-protection set** — a hardcoded constant in `resolver.rego`
-  (`file_policy/agentjail_self`, `library/no-hook-self-disable`,
-  `command_policy/no-policy-mutation`, `resolver/*`) can **never** be suppressed
+  (`file_policy/agentjail_self`, `command_policy/no-policy-mutation`,
+  `resolver/*`) can **never** be suppressed
   by `disabled_rules`, so no `policy.yaml` edit unlocks it. The CLI also requires
   `--force` + an interactive TTY confirm to disable a core rule, and logs mutations
   to `~/.agentjail/audit.log`. `library/no-daemon-kill` is on by default but

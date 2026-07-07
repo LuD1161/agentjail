@@ -1,5 +1,8 @@
 # Plan 002: Cover Linux home paths in sensitive-path & self-protection Rego rules
 
+> **Superseded (2026-07):** `no_hook_self_disable` was removed. Hook config
+> protection is now handled by `file_policy/hook_config` in `file_policy.rego`.
+
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the
 > next step. If anything in the "STOP conditions" section occurs, stop and
