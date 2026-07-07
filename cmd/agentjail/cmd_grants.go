@@ -14,12 +14,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/grantctl"
+	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -27,15 +31,28 @@ import (
 // on the daemon's control socket before giving up.
 const grantControlTimeout = 3 * time.Second
 
+// grantsLogLimit is the number of most-recent grant audit_log entries shown
+// by `agentjail grants --log` (AGE-116). A diagnostic/history view, not a
+// primary workflow -- kept small and non-configurable to keep it simple.
+const grantsLogLimit = 50
+
+var grantsLog bool
+
 var grantsCmd = &cobra.Command{
 	Use:   "grants",
 	Short: "List pending runtime host grant requests",
 	Long: `Lists the grant requests currently pending on the running daemon, across
 all shielded sessions being served. Requests are filed by a sandboxed agent
 via 'agentjail allow host <h>' and expire on their own if never approved.
-Approve or deny one with 'agentjail grant approve|deny <grant_id>'.`,
+Approve or deny one with 'agentjail grant approve|deny <grant_id>'.
+
+--log shows the history of approved/denied grants from the local SQLite
+audit log instead of the currently pending requests.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
+		if grantsLog {
+			os.Exit(runGrantsLog())
+		}
 		os.Exit(runGrantsList())
 	},
 }
@@ -68,6 +85,7 @@ var grantDenyCmd = &cobra.Command{
 }
 
 func init() {
+	grantsCmd.Flags().BoolVar(&grantsLog, "log", false, "show history of approved/denied grants from the SQLite audit log")
 	grantCmd.AddCommand(grantApproveCmd, grantDenyCmd)
 	rootCmd.AddCommand(grantsCmd)
 	rootCmd.AddCommand(grantCmd)
@@ -122,5 +140,77 @@ func runGrantDeny(grantID string) int {
 		return 1
 	}
 	fmt.Println("denied")
+	return 0
+}
+
+// grantLogStatus maps a grant audit_log event_type to the human-readable
+// STATUS shown in `agentjail grants --log`.
+var grantLogStatus = map[string]string{
+	"daemon.grant_requested":  "requested",
+	"daemon.grant_denied":     "denied",
+	"policy.change_requested": "approving",
+	"policy.changed":          "approved",
+}
+
+// grantLogDetail is the subset of the JSON audit_log.detail column that
+// `agentjail grants --log` cares about (see grantserver.go's Emit calls,
+// which set "host" and sometimes "cwd"/"overlay").
+type grantLogDetail struct {
+	Host string `json:"host"`
+}
+
+// runGrantsLog opens the SQLite event store read-only and prints the most
+// recent grant-related audit_log entries (requested/denied/approved),
+// newest first. This is a diagnostic/history view -- it does not talk to
+// the daemon's control socket at all, so it works even when no daemon is
+// running, as long as ~/.agentjail/agentjail.db exists.
+func runGrantsLog() int {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail grants --log: resolve home directory: %v\n", err)
+		return 1
+	}
+	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
+
+	st, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail grants --log: open %s: %v\n", dbPath, err)
+		return 1
+	}
+	defer st.Close()
+
+	entries, err := st.ListGrantAuditLog(context.Background(), grantsLogLimit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail grants --log: %v\n", err)
+		return 1
+	}
+	if len(entries) == 0 {
+		fmt.Println("no grant history found")
+		return 0
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "TIMESTAMP\tEVENT\tHOST\tGRANT_ID\tSTATUS")
+	for _, e := range entries {
+		host := "-"
+		var d grantLogDetail
+		if e.Detail != "" && json.Unmarshal([]byte(e.Detail), &d) == nil && d.Host != "" {
+			host = d.Host
+		}
+		grantID := e.RefID
+		if grantID == "" {
+			grantID = "-"
+		}
+		status, ok := grantLogStatus[e.EventType]
+		if !ok {
+			status = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			e.Ts.Local().Format(time.RFC3339), e.EventType, host, grantID, status)
+	}
+	if err := tw.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail grants --log: %v\n", err)
+		return 1
+	}
 	return 0
 }

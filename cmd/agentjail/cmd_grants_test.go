@@ -10,16 +10,10 @@ import (
 	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
-// fakeGrantCtlSocket is a minimal stand-in for the daemon's grant control
-// socket (daemon-ctl.sock, internal/grantctl wire protocol) so grant/grants
-// commands can be tested without a real daemon. It binds at
-// grantctl.ControlSocketPathForHome(home) so the commands find it via $HOME.
 type fakeGrantCtlSocket struct {
 	pending map[string]grantctl.GrantInfo
 }
 
-// shortHomeDir returns a fresh temp directory short enough for a Unix socket
-// path (sun_path capped at ~104 bytes).
 func shortHomeDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "ajgrant")
@@ -37,18 +31,15 @@ func startFakeGrantCtlSocket(t *testing.T, home string, grants []grantctl.GrantI
 		t.Fatalf("mkdir control socket dir: %v", err)
 	}
 	sockPath := grantctl.ControlSocketPathForHome(home)
-
 	f := &fakeGrantCtlSocket{pending: make(map[string]grantctl.GrantInfo)}
 	for _, g := range grants {
 		f.pending[g.GrantID] = g
 	}
-
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen on fake control socket: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -67,7 +58,6 @@ func (f *fakeGrantCtlSocket) serve(conn net.Conn) {
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		return
 	}
-
 	var resp grantctl.Response
 	switch req.Type {
 	case grantctl.ReqGrantList:
@@ -100,7 +90,6 @@ func TestRunGrantsList_NoPending(t *testing.T) {
 	home := shortHomeDir(t)
 	t.Setenv("HOME", home)
 	startFakeGrantCtlSocket(t, home, nil)
-
 	stdout, stderr, code := captureOutput(t, runGrantsList)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
@@ -116,7 +105,6 @@ func TestRunGrantsList_ListsPending(t *testing.T) {
 	startFakeGrantCtlSocket(t, home, []grantctl.GrantInfo{
 		{GrantID: "g-1", Host: "api.example.com", TTLMs: 3600000, CWD: "/repo/one", Reason: "need it"},
 	})
-
 	stdout, stderr, code := captureOutput(t, runGrantsList)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
@@ -131,7 +119,6 @@ func TestRunGrantsList_ListsPending(t *testing.T) {
 func TestRunGrantsList_NoDaemonRunning(t *testing.T) {
 	home := shortHomeDir(t)
 	t.Setenv("HOME", home)
-
 	_, stderr, code := captureOutput(t, runGrantsList)
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero when no daemon control socket exists")
@@ -147,10 +134,7 @@ func TestRunGrantDeny(t *testing.T) {
 	startFakeGrantCtlSocket(t, home, []grantctl.GrantInfo{
 		{GrantID: "g-deny", Host: "deny.example.com", TTLMs: 60000},
 	})
-
-	stdout, stderr, code := captureOutput(t, func() int {
-		return runGrantDeny("g-deny")
-	})
+	stdout, stderr, code := captureOutput(t, func() int { return runGrantDeny("g-deny") })
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
@@ -163,10 +147,7 @@ func TestRunGrantDeny_UnknownID(t *testing.T) {
 	home := shortHomeDir(t)
 	t.Setenv("HOME", home)
 	startFakeGrantCtlSocket(t, home, nil)
-
-	_, stderr, code := captureOutput(t, func() int {
-		return runGrantDeny("does-not-exist")
-	})
+	_, stderr, code := captureOutput(t, func() int { return runGrantDeny("does-not-exist") })
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero for an unknown grant_id")
 	}
@@ -181,10 +162,7 @@ func TestRunGrantApprove(t *testing.T) {
 	startFakeGrantCtlSocket(t, home, []grantctl.GrantInfo{
 		{GrantID: "g-approve", Host: "approve.example.com", TTLMs: 60000},
 	})
-
-	stdout, stderr, code := captureOutput(t, func() int {
-		return runGrantApprove("g-approve")
-	})
+	stdout, stderr, code := captureOutput(t, func() int { return runGrantApprove("g-approve") })
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
@@ -197,10 +175,7 @@ func TestRunGrantApprove_UnknownID(t *testing.T) {
 	home := shortHomeDir(t)
 	t.Setenv("HOME", home)
 	startFakeGrantCtlSocket(t, home, nil)
-
-	_, stderr, code := captureOutput(t, func() int {
-		return runGrantApprove("does-not-exist")
-	})
+	_, stderr, code := captureOutput(t, func() int { return runGrantApprove("does-not-exist") })
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero when the grant_id does not exist")
 	}
