@@ -21,6 +21,13 @@
 __pycache__/
 *.pyc
 
+# Web UI generated artifacts
+cmd/agentjail/ui/frontend/node_modules/
+cmd/agentjail/ui/static/dist/
+
+# dev-install build output
+/build/
+
 # Build artifacts (root-level binaries from `go build .`)
 /agentjail
 /agentjail-shield
