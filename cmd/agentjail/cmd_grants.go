@@ -7,10 +7,13 @@
 //	agentjail grant deny <grant_id>
 //
 // These commands are the HUMAN (approve) side of Phase 3 runtime host
-// grants: they talk to netproxy's control socket (netproxy-ctl.sock), which
-// is agent-unreachable by construction (see internal/proxyctl). A sandboxed
-// agent cannot run these -- it can only file a request via `agentjail allow
-// host` (cmd_allow.go). See docs/adr/0044 (Phase 3 runtime host grants).
+// grants. As of AGE-116, the daemon hosts the primary grant control plane
+// on daemon-ctl.sock (internal/grantctl); the legacy netproxy control socket
+// (netproxy-ctl.sock, internal/proxyctl) is still queried when present so
+// grants filed through an older netproxy are not orphaned during rollout.
+// Both are agent-unreachable by construction. A sandboxed agent cannot run
+// these -- it can only file a request via `agentjail allow host`
+// (cmd_allow.go). See docs/adr/0044 (Phase 3 runtime host grants).
 package main
 
 import (
@@ -22,22 +25,24 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/projectpolicy"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/spf13/cobra"
 )
 
 // grantControlTimeout bounds how long the human-facing grant commands wait
-// on netproxy's control socket before giving up.
+// on the daemon's or netproxy's control socket before giving up.
 const grantControlTimeout = 3 * time.Second
 
 var grantsCmd = &cobra.Command{
 	Use:   "grants",
 	Short: "List pending runtime host grant requests",
-	Long: `Lists the grant requests currently pending on the running netproxy, across
-all shielded sessions it is serving. Requests are filed by a sandboxed agent
-via 'agentjail allow host <h>' and expire on their own if never approved.
-Approve or deny one with 'agentjail grant approve|deny <grant_id>'.`,
+	Long: `Lists the grant requests currently pending on the running daemon (and, if
+present, a legacy netproxy), across all shielded sessions being served.
+Requests are filed by a sandboxed agent via 'agentjail allow host <h>' and
+expire on their own if never approved. Approve or deny one with 'agentjail
+grant approve|deny <grant_id>'.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		os.Exit(runGrantsList())
@@ -58,16 +63,20 @@ var grantApproveCmd = &cobra.Command{
 	Use:   "approve <grant_id>",
 	Short: "Approve a pending grant request, widening the live session's allowlist",
 	Long: `Approves the pending grant request identified by <grant_id> (see 'agentjail
-grants'). netproxy applies the host to the OWNING session's live allowlist
-for the request's TTL immediately.
+grants'). The daemon (or, for a legacy grant, netproxy) applies the host to
+the OWNING session's live allowlist for the request's TTL immediately.
+Daemon-side approvals persist the host into the owning session's
+./.agentjail/policy.yaml overlay automatically as part of approval.
 
 --persist ADDITIONALLY writes the host into that repo's ./.agentjail/policy.yaml
-overlay and re-trusts it, so future sessions inherit the grant. The overlay
-is resolved relative to --dir, which defaults to the current working
-directory -- run 'agentjail grant approve --persist' from the SAME repo the
-grant's cwd (shown by 'agentjail grants') points at, or pass --dir explicitly.
-If --persist fails, the live grant still stands; the command reports the
-persist failure and exits non-zero rather than silently succeeding.`,
+overlay and re-trusts it, so future sessions inherit the grant. It only
+applies to legacy netproxy grants (a no-op for daemon grants, which always
+persist). The overlay is resolved relative to --dir, which defaults to the
+current working directory -- run 'agentjail grant approve --persist' from the
+SAME repo the grant's cwd (shown by 'agentjail grants') points at, or pass
+--dir explicitly. If --persist fails, the live grant still stands; the
+command reports the persist failure and exits non-zero rather than silently
+succeeding.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		os.Exit(runGrantApprove(args[0], grantApprovePersist, grantApproveDir))
@@ -92,30 +101,87 @@ func init() {
 	rootCmd.AddCommand(grantCmd)
 }
 
+// grantRow is the display-normalized shape both backends' GrantInfo types
+// are flattened into before printing, plus SOURCE so a human can tell which
+// control plane (daemon or netproxy) is holding the request.
+type grantRow struct {
+	GrantID string
+	Host    string
+	TTLMs   int64
+	CWD     string
+	Reason  string
+	Source  string
+}
+
+// resolveGrantSocket returns the control socket path for grant operations
+// that only talk to one backend (approve/deny fallback). It prefers
+// netproxy-ctl.sock (live grants) when reachable; otherwise it falls back to
+// daemon-ctl.sock.
+func resolveGrantSocket() (sock string, isNetproxy bool) {
+	np := proxyctl.ControlSocketPath()
+	if grantctl.IsAvailable(np) {
+		return np, true
+	}
+	return grantctl.ControlSocketPath(), false
+}
+
+// runGrantsList queries BOTH the daemon's grant control socket
+// (daemon-ctl.sock, the primary backend as of AGE-116) and, if reachable,
+// the legacy netproxy control socket (netproxy-ctl.sock), merging the
+// results into one table with a SOURCE column. Either backend being
+// unreachable is not itself an error -- only both failing is.
 func runGrantsList() int {
-	sock := proxyctl.ControlSocketPath()
-	grants, err := proxyctl.GrantList(sock, grantControlTimeout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants: %v\n", err)
+	var rows []grantRow
+	var daemonErr, netproxyErr error
+
+	daemonGrants, dErr := grantctl.GrantList(grantctl.ControlSocketPath(), grantControlTimeout)
+	if dErr != nil {
+		daemonErr = dErr
+	} else {
+		for _, g := range daemonGrants {
+			rows = append(rows, grantRow{GrantID: g.GrantID, Host: g.Host, TTLMs: g.TTLMs, CWD: g.CWD, Reason: g.Reason, Source: "daemon"})
+		}
+	}
+
+	npSock := proxyctl.ControlSocketPath()
+	npAvailable := grantctl.IsAvailable(npSock)
+	if npAvailable {
+		npGrants, nErr := proxyctl.GrantList(npSock, grantControlTimeout)
+		if nErr != nil {
+			netproxyErr = nErr
+		} else {
+			for _, g := range npGrants {
+				rows = append(rows, grantRow{GrantID: g.GrantID, Host: g.Host, TTLMs: g.TTLMs, CWD: g.Cwd, Reason: g.Reason, Source: "netproxy"})
+			}
+		}
+	}
+
+	if daemonErr != nil && (!npAvailable || netproxyErr != nil) {
+		if netproxyErr != nil {
+			fmt.Fprintf(os.Stderr, "agentjail grants: daemon: %v; netproxy: %v\n", daemonErr, netproxyErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "agentjail grants: %v\n", daemonErr)
+		}
 		return 1
 	}
-	if len(grants) == 0 {
+
+	if len(rows) == 0 {
 		fmt.Println("no pending grant requests")
 		return 0
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "GRANT_ID\tHOST\tTTL\tCWD\tREASON")
-	for _, g := range grants {
+	fmt.Fprintln(tw, "GRANT_ID\tHOST\tTTL\tCWD\tREASON\tSOURCE")
+	for _, g := range rows {
 		reason := g.Reason
 		if reason == "" {
 			reason = "-"
 		}
-		cwd := g.Cwd
+		cwd := g.CWD
 		if cwd == "" {
 			cwd = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", g.GrantID, g.Host, time.Duration(g.TTLMs)*time.Millisecond, cwd, reason)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", g.GrantID, g.Host, time.Duration(g.TTLMs)*time.Millisecond, cwd, reason, g.Source)
 	}
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail grants: %v\n", err)
@@ -124,7 +190,35 @@ func runGrantsList() int {
 	return 0
 }
 
+// runGrantApprove tries the daemon's grant control socket first. A daemon
+// error containing "unbound" (grantctl/daemon's errGrantUnbound sentinel --
+// the grant was never bound to a session CWD, so there is nowhere to persist
+// the host) is terminal: it is NOT a "try the other backend" situation, it
+// means the grant cannot be approved anywhere. Any other daemon error (not
+// reachable, or "grant not found" because the request was filed against
+// netproxy instead) falls through to the legacy netproxy backend, preserving
+// the pre-AGE-116 --persist flow for netproxy-owned grants.
 func runGrantApprove(grantID string, persist bool, dir string) int {
+	daemonErr := grantctl.GrantApprove(grantctl.ControlSocketPath(), grantID, grantControlTimeout)
+	if daemonErr == nil {
+		fmt.Println("granted host to the live session")
+		if persist {
+			fmt.Println("note: --persist is a no-op for daemon grants; the daemon persists the host automatically on approval")
+		}
+		return 0
+	}
+	if strings.Contains(daemonErr.Error(), "unbound") {
+		fmt.Fprintf(os.Stderr, "agentjail grant approve: %v\n", daemonErr)
+		return 1
+	}
+
+	return runGrantApproveNetproxy(grantID, persist, dir)
+}
+
+// runGrantApproveNetproxy is the legacy netproxy approve path (pre-AGE-116
+// behavior): find the host via grant_list before claiming, approve, then
+// optionally persist into ./.agentjail/policy.yaml and re-trust it.
+func runGrantApproveNetproxy(grantID string, persist bool, dir string) int {
 	sock := proxyctl.ControlSocketPath()
 
 	// GrantApprove atomically claims the pending entry, so the host must be
@@ -175,7 +269,16 @@ func runGrantApprove(grantID string, persist bool, dir string) int {
 	return 0
 }
 
+// runGrantDeny tries the daemon's grant control socket first; if it reports
+// the grant is not found there (or the daemon is unreachable), falls
+// through to the legacy netproxy control socket. Deny never needs a bound
+// CWD, so there is no "unbound" terminal case here (unlike approve).
 func runGrantDeny(grantID string) int {
+	if err := grantctl.GrantDeny(grantctl.ControlSocketPath(), grantID, grantControlTimeout); err == nil {
+		fmt.Println("denied")
+		return 0
+	}
+
 	sock := proxyctl.ControlSocketPath()
 	if err := proxyctl.GrantDeny(sock, grantID, grantControlTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail grant deny: %v\n", err)

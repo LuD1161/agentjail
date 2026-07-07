@@ -1,83 +1,85 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"net/url"
+	"encoding/json"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
+
+	"github.com/LuD1161/agentjail/internal/grantctl"
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
-// fakeSentinelProxy is an httptest.Server that plays the role of the
-// netproxy data-plane proxy the sandboxed agent's HTTP_PROXY/HTTPS_PROXY
-// points at. runAllowHost is only expected to talk to it via the standard
-// proxy-env resolution (http.ProxyFromEnvironment) -- never a hardcoded
-// address -- matching the plan's Codex note.
-//
-// net/http caches http.ProxyFromEnvironment's env-var resolution ONCE per
-// process (sync.Once), so every test in this file MUST share a single
-// server and only vary its canned response -- a second httptest.Server with
-// a different env-set-after-first-call would be silently ignored.
-type fakeSentinelProxy struct {
-	mu      sync.Mutex
-	status  int
-	body    []byte
-	lastReq *http.Request
+// fakeDaemonSocket is a minimal stand-in for the daemon's agent-reachable
+// socket (daemon.sock, internal/wire) that only understands grant_request --
+// the one verb runAllowHost sends. It binds at exactly the path
+// wire.DefaultSocketPath() resolves to for the given home dir, so
+// runAllowHost (which hardcodes wire.DefaultSocketPath()) finds it via $HOME
+// alone, same pattern as fakeControlSocket in cmd_grants_test.go.
+type fakeDaemonSocket struct {
+	grantID string
+	refuse  string
+	lastReq grantctl.Request
 	calls   int
 }
 
-var (
-	sharedSentinelProxy     *fakeSentinelProxy
-	sharedSentinelProxyOnce sync.Once
-)
-
-// getSharedSentinelProxy lazily starts the one-and-only fake sentinel proxy
-// for the process and points HTTP(S)_PROXY at it. Safe to call from every
-// test in this file; the server outlives all of them (process exit cleans
-// it up) since http.ProxyFromEnvironment's cache would outlive a per-test
-// t.Cleanup anyway.
-func getSharedSentinelProxy(t *testing.T) *fakeSentinelProxy {
+func startFakeDaemonSocket(t *testing.T, home string, grantID, refuse string) *fakeDaemonSocket {
 	t.Helper()
-	sharedSentinelProxyOnce.Do(func() {
-		f := &fakeSentinelProxy{}
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			f.mu.Lock()
-			f.calls++
-			f.lastReq = r
-			status, body := f.status, f.body
-			f.mu.Unlock()
-			w.WriteHeader(status)
-			_, _ = w.Write(body)
-		}))
-		_ = os.Setenv("HTTP_PROXY", ts.URL)
-		_ = os.Setenv("http_proxy", ts.URL)
-		_ = os.Setenv("HTTPS_PROXY", ts.URL)
-		_ = os.Setenv("https_proxy", ts.URL)
-		_ = os.Setenv("NO_PROXY", "")
-		_ = os.Setenv("no_proxy", "")
-		sharedSentinelProxy = f
-	})
-	return sharedSentinelProxy
+	dir := filepath.Join(home, ".agentjail")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir daemon socket dir: %v", err)
+	}
+	sockPath := filepath.Join(dir, "daemon.sock")
+
+	f := &fakeDaemonSocket{grantID: grantID, refuse: refuse}
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen on fake daemon socket: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go f.serve(conn)
+		}
+	}()
+	return f
 }
 
-func (f *fakeSentinelProxy) set(status int, body string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.status = status
-	f.body = []byte(body)
-}
+func (f *fakeDaemonSocket) serve(conn net.Conn) {
+	defer conn.Close()
+	var req grantctl.Request
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		return
+	}
+	f.calls++
+	f.lastReq = req
 
-func (f *fakeSentinelProxy) callCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls
+	var resp grantctl.Response
+	switch req.Type {
+	case grantctl.ReqGrantRequest:
+		if f.refuse != "" {
+			resp = grantctl.Response{OK: false, Error: f.refuse}
+		} else {
+			resp = grantctl.Response{OK: true, GrantID: f.grantID}
+		}
+	default:
+		resp = grantctl.Response{OK: false, Error: "unsupported request type in fake daemon socket"}
+	}
+	_ = json.NewEncoder(conn).Encode(resp)
 }
 
 func TestRunAllowHost_PendingOnAccepted(t *testing.T) {
-	fake := getSharedSentinelProxy(t)
-	fake.set(http.StatusAccepted, `{"grant_id":"g-123","host":"api.example.com","ttl_ms":3600000}`)
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	fake := startFakeDaemonSocket(t, home, "g-123", "")
 
 	stdout, stderr, code := captureOutput(t, func() int {
 		return runAllowHost("api.example.com", "1h", "need it for tests")
@@ -93,68 +95,61 @@ func TestRunAllowHost_PendingOnAccepted(t *testing.T) {
 		t.Errorf("stdout missing grant_id: %q", stdout)
 	}
 
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
 	if fake.calls == 0 {
-		t.Fatal("sentinel proxy was never called")
+		t.Fatal("daemon socket was never called")
 	}
-	if fake.lastReq == nil {
-		t.Fatal("no request captured")
+	if fake.lastReq.Type != grantctl.ReqGrantRequest {
+		t.Errorf("request type = %q, want grant_request", fake.lastReq.Type)
 	}
-	if got := fake.lastReq.Method; got != http.MethodGet {
-		t.Errorf("method = %q, want GET", got)
+	if fake.lastReq.Host != "api.example.com" {
+		t.Errorf("host = %q, want api.example.com", fake.lastReq.Host)
 	}
-	if got := fake.lastReq.URL.Host; got != "grant.agentjail.local" {
-		t.Errorf("request authority = %q, want grant.agentjail.local", got)
+	if fake.lastReq.TTLMs != int64(3600000) {
+		t.Errorf("ttl_ms = %d, want 3600000 (1h)", fake.lastReq.TTLMs)
 	}
-	if got := fake.lastReq.URL.Path; got != "/allow" {
-		t.Errorf("request path = %q, want /allow", got)
-	}
-	q := fake.lastReq.URL.Query()
-	if got := q.Get("host"); got != "api.example.com" {
-		t.Errorf("host query param = %q, want api.example.com", got)
-	}
-	if got := q.Get("ttl"); got != "1h" {
-		t.Errorf("ttl query param = %q, want 1h", got)
-	}
-	if got := q.Get("reason"); got != "need it for tests" {
-		t.Errorf("reason query param = %q, want %q", got, "need it for tests")
+	if fake.lastReq.Reason != "need it for tests" {
+		t.Errorf("reason = %q, want %q", fake.lastReq.Reason, "need it for tests")
 	}
 }
 
 func TestRunAllowHost_ServerRefusal(t *testing.T) {
-	fake := getSharedSentinelProxy(t)
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	startFakeDaemonSocket(t, home, "", "pending cap exceeded")
 
-	cases := []struct {
-		name   string
-		status int
-		body   string
-	}{
-		{"bad_host", http.StatusBadRequest, "invalid host"},
-		{"unknown_token", http.StatusProxyAuthRequired, "unknown token"},
-		{"over_cap", http.StatusTooManyRequests, "pending cap exceeded"},
+	_, stderr, code := captureOutput(t, func() int {
+		return runAllowHost("api.example.com", "1h", "")
+	})
+	if code == 0 {
+		t.Fatal("exit code = 0, want non-zero when the daemon refuses the request")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fake.set(tc.status, tc.body)
-			_, stderr, code := captureOutput(t, func() int {
-				return runAllowHost("api.example.com", "1h", "")
-			})
-			if code == 0 {
-				t.Fatalf("exit code = 0, want non-zero for status %d", tc.status)
-			}
-			if !strings.Contains(stderr, tc.body) {
-				t.Errorf("stderr missing server message %q: %q", tc.body, stderr)
-			}
-		})
+	if !strings.Contains(stderr, "pending cap exceeded") {
+		t.Errorf("stderr missing server message: %q", stderr)
+	}
+}
+
+func TestRunAllowHost_NoDaemonRunning(t *testing.T) {
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	// No fake daemon socket started -- wire.DefaultSocketPath() resolves
+	// under an empty temp $HOME, so the dial must fail.
+
+	_, stderr, code := captureOutput(t, func() int {
+		return runAllowHost("api.example.com", "1h", "")
+	})
+	if code == 0 {
+		t.Fatal("exit code = 0, want non-zero when no daemon socket exists")
+	}
+	if stderr == "" {
+		t.Error("expected an error message on stderr")
 	}
 }
 
 func TestRunAllowHost_LocalValidationFailsBeforeNetwork(t *testing.T) {
-	fake := getSharedSentinelProxy(t)
-	fake.set(http.StatusAccepted, `{}`)
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	fake := startFakeDaemonSocket(t, home, "g-xyz", "")
 
-	before := fake.callCount()
 	_, stderr, code := captureOutput(t, func() int {
 		return runAllowHost("not-a-valid-bare-hostname", "1h", "")
 	})
@@ -164,16 +159,16 @@ func TestRunAllowHost_LocalValidationFailsBeforeNetwork(t *testing.T) {
 	if stderr == "" {
 		t.Error("expected a validation error message on stderr")
 	}
-	if fake.callCount() != before {
-		t.Errorf("sentinel proxy was called (%d times) even though local validation should have failed first", fake.callCount()-before)
+	if fake.calls != 0 {
+		t.Errorf("daemon socket was called (%d times) even though local validation should have failed first", fake.calls)
 	}
 }
 
 func TestRunAllowHost_InvalidTTL(t *testing.T) {
-	fake := getSharedSentinelProxy(t)
-	fake.set(http.StatusAccepted, `{}`)
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	fake := startFakeDaemonSocket(t, home, "g-xyz", "")
 
-	before := fake.callCount()
 	_, stderr, code := captureOutput(t, func() int {
 		return runAllowHost("api.example.com", "not-a-duration", "")
 	})
@@ -183,16 +178,16 @@ func TestRunAllowHost_InvalidTTL(t *testing.T) {
 	if !strings.Contains(stderr, "ttl") {
 		t.Errorf("stderr should mention ttl: %q", stderr)
 	}
-	if fake.callCount() != before {
-		t.Errorf("sentinel proxy was called even though --ttl should have failed validation first")
+	if fake.calls != 0 {
+		t.Errorf("daemon socket was called even though --ttl should have failed validation first")
 	}
 }
 
 func TestRunAllowHost_ReasonTooLong(t *testing.T) {
-	fake := getSharedSentinelProxy(t)
-	fake.set(http.StatusAccepted, `{}`)
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	fake := startFakeDaemonSocket(t, home, "g-xyz", "")
 
-	before := fake.callCount()
 	longReason := strings.Repeat("x", 257)
 	_, stderr, code := captureOutput(t, func() int {
 		return runAllowHost("api.example.com", "1h", longReason)
@@ -203,19 +198,28 @@ func TestRunAllowHost_ReasonTooLong(t *testing.T) {
 	if stderr == "" {
 		t.Error("expected an error message on stderr")
 	}
-	if fake.callCount() != before {
-		t.Errorf("sentinel proxy was called even though --reason should have failed validation first")
+	if fake.calls != 0 {
+		t.Errorf("daemon socket was called even though --reason should have failed validation first")
 	}
 }
 
-// TestSentinelURLIsWellFormed guards against a typo in the sentinel URL
-// constant regressing the whole request path.
-func TestSentinelURLIsWellFormed(t *testing.T) {
-	u, err := url.Parse(sentinelAllowURL)
-	if err != nil {
-		t.Fatalf("sentinelAllowURL does not parse: %v", err)
+// TestRunAllowHost_UsesWireDefaultSocketPath guards against a regression
+// back to a hardcoded/HTTP address: it asserts runAllowHost dials exactly
+// wire.DefaultSocketPath() by starting the fake socket at that exact path
+// and confirming the round trip succeeds.
+func TestRunAllowHost_UsesWireDefaultSocketPath(t *testing.T) {
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	sockPath := wire.DefaultSocketPath()
+	if !strings.HasPrefix(sockPath, home) {
+		t.Fatalf("wire.DefaultSocketPath() = %q, want under HOME %q", sockPath, home)
 	}
-	if u.Host != "grant.agentjail.local" || u.Path != "/allow" || u.Scheme != "http" {
-		t.Errorf("sentinelAllowURL = %q, want http://grant.agentjail.local/allow", sentinelAllowURL)
+	startFakeDaemonSocket(t, home, "g-verify", "")
+
+	_, stderr, code := captureOutput(t, func() int {
+		return runAllowHost("api.example.com", "1h", "")
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
 }
