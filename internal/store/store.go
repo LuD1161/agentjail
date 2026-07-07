@@ -148,6 +148,7 @@ type EventStore interface {
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
 	Emit(ctx context.Context, e audit.Event) error
 	ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error)
+	ListGrantAuditLog(ctx context.Context, limit int) ([]AuditLogEntry, error)
 	Close() error
 }
 
@@ -163,6 +164,7 @@ type ReadOnlyStore interface {
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
 	ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error)
+	ListGrantAuditLog(ctx context.Context, limit int) ([]AuditLogEntry, error)
 	ListDistinctCWDs(ctx context.Context) ([]string, error)
 	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	ListDistinctSkillInputs(ctx context.Context) ([]string, error)

@@ -853,6 +853,72 @@ func (s *sqliteStore) ListAuditLog(ctx context.Context, f AuditLogFilter) ([]Aud
 	return out, nil
 }
 
+// grantAuditEventTypes are the audit_log event types that make up the grant
+// approval/denial history shown by `agentjail grants --log` (AGE-116). Kept
+// in one place so the CLI and store agree on what counts as a "grant event".
+var grantAuditEventTypes = []string{
+	audit.DaemonGrantRequested,
+	audit.DaemonGrantDenied,
+	audit.PolicyChangeRequested,
+	audit.PolicyChanged,
+}
+
+// ListGrantAuditLog returns the most recent grant-related audit_log entries
+// (requested/denied/change_requested/changed), newest first. This is a
+// manual query (not sqlc) because it needs a dynamic IN-list over
+// grantAuditEventTypes plus an OR across ref_id/detail -- the kind of
+// variable-shape query AGENTS.md calls out as staying manual, while still
+// scanning into the typed AuditLogEntry struct rather than any/interface{}.
+func (s *sqliteStore) ListGrantAuditLog(ctx context.Context, limit int) ([]AuditLogEntry, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(grantAuditEventTypes)), ",")
+	q := fmt.Sprintf(`SELECT id, ts, event_type, entity, detail, actor, session_id, ref_id
+		FROM audit_log
+		WHERE event_type IN (%s)
+		  AND (ref_id != '' OR detail LIKE '%%host%%')
+		ORDER BY ts DESC LIMIT ?`, placeholders)
+
+	args := make([]interface{}, 0, len(grantAuditEventTypes)+1)
+	for _, t := range grantAuditEventTypes {
+		args = append(args, t)
+	}
+	args = append(args, clampLimit(limit))
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list grant audit log: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AuditLogEntry
+	for rows.Next() {
+		var (
+			id        int64
+			tsStr     string
+			eventType string
+			entity    sql.NullString
+			detail    sql.NullString
+			actor     sql.NullString
+			sessionID sql.NullString
+			refID     sql.NullString
+		)
+		if err := rows.Scan(&id, &tsStr, &eventType, &entity, &detail, &actor, &sessionID, &refID); err != nil {
+			return nil, fmt.Errorf("store: scan grant audit log: %w", err)
+		}
+		ts, _ := time.Parse(time.RFC3339Nano, tsStr)
+		out = append(out, AuditLogEntry{
+			ID:        id,
+			Ts:        ts,
+			EventType: eventType,
+			Entity:    entity.String,
+			Detail:    detail.String,
+			Actor:     actor.String,
+			SessionID: sessionID.String,
+			RefID:     refID.String,
+		})
+	}
+	return out, rows.Err()
+}
+
 // Close closes the database handle.
 func (s *sqliteStore) Close() error {
 	if s.db == nil {
@@ -871,6 +937,9 @@ func (r *sqliteROStore) ListDecisions(ctx context.Context, f Filter) ([]Decision
 }
 func (r *sqliteROStore) ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error) {
 	return r.inner.ListAuditEvents(ctx, f)
+}
+func (r *sqliteROStore) ListGrantAuditLog(ctx context.Context, limit int) ([]AuditLogEntry, error) {
+	return r.inner.ListGrantAuditLog(ctx, limit)
 }
 func (r *sqliteROStore) DecisionCount(ctx context.Context) (int64, error) {
 	return r.inner.DecisionCount(ctx)
