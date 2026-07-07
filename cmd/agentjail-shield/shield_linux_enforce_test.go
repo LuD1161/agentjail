@@ -210,13 +210,13 @@ func runLandlockAgentjailChild() {
 		fmt.Fprintf(os.Stdout, "sock_connect=ERR:%v\n", cerr)
 	}
 
-	// Probe 3: connect() ~/.agentjail/run/netproxy-ctl.sock -- must be DENIED.
-	// This is the Phase 3 (ADR 0044) grant control plane: session register and
+	// Probe 3: connect() ~/.agentjail/run/daemon-ctl.sock -- must be DENIED.
+	// This is the grant control plane (AGE-116): session register and
 	// grant list/approve/deny all ride this socket. Unlike daemon.sock it gets
 	// NO single-file write grant, so the read-only ~/.agentjail grant withholds
 	// the write access AF_UNIX connect() needs -> EACCES. If this ever succeeded
 	// the sandboxed agent could register sessions or approve its own grants.
-	ctlPath := filepath.Join(home, ".agentjail", "run", "netproxy-ctl.sock")
+	ctlPath := filepath.Join(home, ".agentjail", "run", "daemon-ctl.sock")
 	cconn, ccerr := net.Dial("unix", ctlPath)
 	if ccerr == nil {
 		cconn.Close()
@@ -351,16 +351,16 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 		}
 	}()
 
-	// Live listener at $HOME/.agentjail/run/netproxy-ctl.sock so the inode
-	// exists (connect would succeed but for Landlock). The read-only ~/.agentjail
-	// grant has NO single-file write grant here, so the child's connect() must be
-	// denied -- proving the Phase 3 (ADR 0044) grant control plane is agent-
+	// Live listener at $HOME/.agentjail/run/daemon-ctl.sock (AGE-116) so the
+	// inode exists (connect would succeed but for Landlock). The read-only
+	// ~/.agentjail grant has NO single-file write grant here, so the child's
+	// connect() must be denied -- proving the grant control plane is agent-
 	// unreachable while daemon.sock stays reachable.
 	runDir := filepath.Join(ajDir, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatalf("mkdir %s: %v", runDir, err)
 	}
-	ctlPath := filepath.Join(runDir, "netproxy-ctl.sock")
+	ctlPath := filepath.Join(runDir, "daemon-ctl.sock")
 	ctlLn, err := net.Listen("unix", ctlPath)
 	if err != nil {
 		t.Fatalf("listen %s: %v", ctlPath, err)
