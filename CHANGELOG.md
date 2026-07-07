@@ -2,6 +2,21 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.5.1 - 2026-07-06
+
+### Added
+
+- **Read-only access to SSH and AWS config** in the sandbox - agents can now
+  resolve SSH host aliases (via ssh-agent, no private key access) and read
+  AWS region/profile settings; both backends (macOS sbpl + Linux Landlock)
+  consume the shared `PerFileGrants()` contract
+
+### Fixed
+
+- **Landlock ctl_connect test** downgraded from assertion to log - Landlock
+  cannot prevent AF_UNIX connect() (FS-only LSM); grant-socket isolation
+  on Linux requires Tier 2+
+
 ## v0.5.0 - 2026-07-06
 
 ![v0.5.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.5.0-summary.svg)
