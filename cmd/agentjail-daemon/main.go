@@ -47,6 +47,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/policyeval"
@@ -88,6 +89,9 @@ type server struct {
 
 	// activeSessions tracks which session IDs have open connections.
 	activeSessions *activeTracker
+
+	// grantSrv handles runtime host grant requests (AGE-116). Nil-safe.
+	grantSrv *grantServer
 }
 
 // recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
@@ -199,6 +203,23 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+
+		// Route grant_request to the grant server (AGE-116).
+		if s.grantSrv != nil {
+			var probe struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(line, &probe) == nil && probe.Type == string(grantctl.ReqGrantRequest) {
+				var greq grantctl.Request
+				if err := json.Unmarshal(line, &greq); err != nil {
+					_ = enc.Encode(grantctl.Response{OK: false, Error: "malformed grant request"})
+					continue
+				}
+				resp := s.grantSrv.handleGrantRequest(conn, greq)
+				_ = enc.Encode(resp)
+				continue
+			}
 		}
 
 		var req policyeval.Request
@@ -661,6 +682,25 @@ func main() {
 	hookWatchdog := hookwatch.New(logger, hwEmitter)
 	go hookWatchdog.Run(ctx)
 
+	// Start grant control server on daemon-ctl.sock (AGE-116, ADR 0047).
+	{
+		ctlSockPath := grantctl.ControlSocketPath()
+		durableAudit := srv.eventStore != nil
+		var grantEmitter audit.Emitter = audit.NopEmitter{}
+		if srv.eventStore != nil {
+			grantEmitter = srv.eventStore
+		}
+		gs, gerr := newGrantServer(ctlSockPath, grantctl.NewRegistry(), grantEmitter, durableAudit, srv.activeSessions)
+		if gerr != nil {
+			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
+		} else {
+			srv.grantSrv = gs
+			go srv.grantSrv.serveCtl(ctx)
+			go srv.grantSrv.startReaper(ctx, 60*time.Second)
+			slog.Info("grant control server listening", "socket", ctlSockPath)
+		}
+	}
+
 	// Start listening before installing signal handlers so the socket is
 	// ready as soon as we log "listening".
 	ln, err := net.Listen("unix", *socketPath)
@@ -792,6 +832,9 @@ func main() {
 			}
 			if srv.eventStore != nil {
 				_ = srv.eventStore.Close()
+			}
+			if srv.grantSrv != nil {
+				srv.grantSrv.close()
 			}
 			// Remove the socket file so a fresh start won't see a stale one.
 			_ = os.Remove(*socketPath)
