@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
 // ---- Unit tests: sbpl profile generation ----
@@ -498,6 +499,21 @@ func TestGenerateSBProfile_DeniesControlSocket(t *testing.T) {
     (literal "/Users/me/.agentjail/run/netproxy-ctl.sock"))`
 	if !strings.Contains(profile, wantDeny) {
 		t.Errorf("netproxy profile must deny the control socket; missing:\n%s\n\ngot:\n%s", wantDeny, profile)
+	}
+}
+
+// TestGenerateSBProfile_DeniesGrantControlSocket verifies the generated sbpl
+// profile denies network-outbound to the daemon's grant control socket
+// (AGE-116), mirroring the netproxy-ctl.sock deny above.
+func TestGenerateSBProfile_DeniesGrantControlSocket(t *testing.T) {
+	cfg := config.Default()
+	home := "/Users/me"
+	profile := generateSBProfileWithNetproxy(cfg, home)
+
+	expected := grantctl.ControlSocketPathForHome(home)
+	wantDeny := fmt.Sprintf("(deny network-outbound\n    (literal %q))", expected)
+	if !strings.Contains(profile, wantDeny) {
+		t.Errorf("profile must deny the grant control socket; missing:\n%s\n\ngot:\n%s", wantDeny, profile)
 	}
 }
 

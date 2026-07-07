@@ -388,7 +388,7 @@ agentjail grant approve <grant_id> --persist               # also widen the trus
 agentjail grant deny <grant_id>
 ```
 
-The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over the same agent-unreachable control socket that registers session allowlists, so the agent can never approve its own request. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).
+The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over an agent-unreachable control socket, so the agent can never approve its own request. As of AGE-116 the daemon hosts this control plane on `daemon-ctl.sock`, so filing and approving a grant works in the default configuration -- no `--netproxy` required -- and an approval persists into the trusted overlay for future sessions automatically. Widening the *current* session's live egress mid-session still requires `--netproxy` (the session-aware proxy that actually enforces the allowlist); without it, an approval persists for next launch but does not retroactively open a socket this run. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).
 
 </details>
 

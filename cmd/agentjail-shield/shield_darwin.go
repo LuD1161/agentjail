@@ -14,6 +14,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
@@ -452,6 +453,11 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// ~/.agentjail grant, which withholds the write AF_UNIX connect needs.)
 	// Emitted before the catch-all so the intent is explicit and auditable.
 	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", proxyctl.ControlSocketPathForHome(home))
+	sb.WriteString("\n")
+
+	// AGE-116: daemon-ctl.sock is the daemon's grant control socket,
+	// agent-unreachable by the same mechanism as netproxy-ctl.sock above.
+	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", grantctl.ControlSocketPathForHome(home))
 	sb.WriteString("\n")
 
 	// Default deny for all remaining network traffic.
