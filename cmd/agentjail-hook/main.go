@@ -34,7 +34,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -137,7 +136,7 @@ func defaultSocketPath() string {
 // The daemon is expected to remove this sentinel on successful startup (its
 // job, not the hook's) so the warning reappears the next time it goes down.
 func failOpenWarnedSentinelPath() string {
-	return filepath.Join(filepath.Dir(defaultSocketPath()), "fail-open-warned")
+	return wire.FailOpenWarnedSentinelPath()
 }
 
 // hasWarnedFailOpen reports whether the fail-open sentinel already exists.

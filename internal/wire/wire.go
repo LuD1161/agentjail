@@ -59,6 +59,17 @@ func DefaultSocketPath() string {
 	return filepath.Join(home, ".agentjail", "daemon.sock")
 }
 
+// FailOpenWarnedSentinelPath returns the path to the one-time fail-open
+// warning sentinel (~/.agentjail/fail-open-warned), next to the default
+// daemon socket. agentjail-hook creates this file the first time it fails
+// open (daemon unreachable) so it only warns once per outage; the daemon
+// removes it on successful startup so the warning re-arms for the next
+// outage (U2). Both sides call this single function so the path can never
+// drift between them.
+func FailOpenWarnedSentinelPath() string {
+	return filepath.Join(filepath.Dir(DefaultSocketPath()), "fail-open-warned")
+}
+
 // EvalOne is the reusable daemon RPC client for agentjail CLI callers.
 //
 // It dials socketPath over a Unix domain socket using DialTimeout=timeout,
