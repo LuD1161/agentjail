@@ -572,6 +572,9 @@ func runClaude(agent string) {
 		if resp.RuleID == "mcp_policy/unknown" {
 			fmt.Fprintf(os.Stderr, "  run: agentjail mcp allow <server-name>   (see 'agentjail mcp list' for current state)\n")
 		}
+		if hint := denyRemediationHint(resp.RuleID); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		}
 		os.Exit(2)
 
 	case "ask":
@@ -655,6 +658,24 @@ func runCursor() {
 	}
 
 	os.Exit(0)
+}
+
+// denyRemediationHint returns a one-line "how to unblock" hint for a deny
+// decision, based on the rule_id's policy namespace. file_policy/* and
+// command_policy/* are the two largest deny classes and previously got no
+// remediation guidance at all (unlike mcp_policy/unknown and ask denials,
+// which already had hints — see the deny/ask branches in runClaude).
+// Returns "" for namespaces that already have a more specific hint, or that
+// have no generic override path (e.g. resolver defaults).
+func denyRemediationHint(ruleID string) string {
+	switch {
+	case strings.HasPrefix(ruleID, "file_policy/"):
+		return "  to allow: add the path to file.extra_allow in ~/.agentjail/policy.yaml, or run: agentjail policy disable " + ruleID
+	case strings.HasPrefix(ruleID, "command_policy/"):
+		return "  to allow: run: agentjail policy disable " + ruleID + "   (see 'agentjail policy' for other options)"
+	default:
+		return ""
+	}
 }
 
 // isWriteErr is a heuristic to distinguish write/send errors from read errors
