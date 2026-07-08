@@ -1,0 +1,57 @@
+# Lima template for agentjail Linux testbeds (follow-up).
+#
+# A testbed is a clean Ubuntu VM that behaves like a real end-user Linux box:
+# full kernel (Landlock, seccomp), systemd --user, no Go toolchain, no host
+# mounts. agentjail is installed from a release-layout tarball via install.sh,
+# never from source inside the guest.
+#
+# Image: Ubuntu LTS cloud image ("release" channel tracks the latest point
+# release; pin to a dated snapshot URL if reproducibility ever bites).
+
+minimumLimaVersion: "1.0.0"
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+
+cpus: 4
+memory: "4GiB"
+disk: "20GiB"
+
+# No host filesystem mounts: the whole point is isolation from the host.
+# Files travel via `limactl cp` (testbed.sh guest_push).
+mounts: []
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  # Base packages a plausible end-user dev box has, plus Claude Code's
+  # runtime (node) and the tools scenarios need (tmux, sqlite3).
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        curl ca-certificates git tmux sqlite3 openssh-client
+      # Claude Code requires node >= 22; Ubuntu 24.04's apt ships 18.
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y nodejs
+  # systemd --user must survive ssh disconnects for the agentjail daemon.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      loginctl enable-linger "{{.User}}" || true
+
+probes:
+  - description: "node is installed"
+    script: |
+      #!/bin/bash
+      set -eu
+      until command -v node >/dev/null 2>&1; do sleep 3; done

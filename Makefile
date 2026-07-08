@@ -1,4 +1,4 @@
-.PHONY: help build dev-install shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign
+.PHONY: help build dev-install shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball
 
 BIN ?= bin/agentjail
 
@@ -92,8 +92,29 @@ else
 	@echo "skip: codesign is macOS only"
 endif
 
+# dist-tarball builds all five binaries for a target platform and packs them
+# in the flat layout install.sh expects (binaries at tarball top level). Used
+# by test/testbed/testbed.sh provision to install a local build into a clean
+# VM through the REAL user path (install.sh LOCAL_TARBALL= seam).
+DIST_GOOS    ?= $(shell go env GOOS)
+DIST_GOARCH  ?= $(shell go env GOARCH)
+DIST_VERSION ?= dev-$(shell git rev-parse --short HEAD)
+DIST_BINS    := agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy
+
+dist-tarball:  ## build a release-layout tarball for testbed installs (DIST_GOOS/DIST_GOARCH to cross-build)
+	@mkdir -p dist/$(DIST_GOOS)-$(DIST_GOARCH)
+	@for bin in $(DIST_BINS); do \
+		echo "building $$bin ($(DIST_GOOS)/$(DIST_GOARCH))..."; \
+		GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) CGO_ENABLED=0 \
+		go build -ldflags "-X main.version=$(DIST_VERSION) -s -w" \
+			-o dist/$(DIST_GOOS)-$(DIST_GOARCH)/$$bin ./cmd/$$bin; \
+	done
+	@tar -czf dist/agentjail-$(DIST_VERSION)-$(DIST_GOOS)-$(DIST_GOARCH).tar.gz \
+		-C dist/$(DIST_GOOS)-$(DIST_GOARCH) $(DIST_BINS)
+	@echo "dist/agentjail-$(DIST_VERSION)-$(DIST_GOOS)-$(DIST_GOARCH).tar.gz"
+
 clean:  ## remove built binaries
-	rm -rf bin/
+	rm -rf bin/ dist/
 
 licenses:  ## regenerate THIRD_PARTY_LICENSES from compiled-in deps
 	./scripts/gen-third-party-licenses.sh
