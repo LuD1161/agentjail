@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/LuD1161/agentjail/internal/ui"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -42,6 +44,65 @@ func parseTopLevelFlags(in []string) (rest []string, agentSlug string) {
 	return rest, agentSlug
 }
 
+// cmdInfo is a name/description pair used to render the command list in
+// usage(). It intentionally carries no behavior -- see commandList().
+type cmdInfo struct {
+	name string
+	desc string
+}
+
+// maintenanceCommands names the subset of top-level commands that belong in
+// usage()'s "Maintenance" section rather than "Commands". This only controls
+// *placement*; every registered, non-hidden command is shown somewhere --
+// membership here can never cause a command to be omitted (see
+// commandLists).
+var maintenanceCommands = map[string]bool{
+	"update":    true,
+	"uninstall": true,
+	"version":   true,
+	"help":      true,
+}
+
+// commandLists derives the top-level command list from the live cobra
+// command tree (root.Commands()) instead of a hand-maintained slice, so
+// usage() can never drift out of sync with the commands that are actually
+// registered (see U5: usage() previously omitted sessions/skill/trust/
+// allow/grants because they were added to root.go but never mirrored here).
+// Hidden commands (e.g. "statusline") are excluded. The meta "help" command
+// is appended manually because cobra's SetHelpCommand does not surface it
+// via root.Commands().
+//
+// root is passed in (rather than referencing the package-level rootCmd
+// directly) to avoid a Go initialization cycle: rootCmd's own RunE closure
+// calls usage(), which calls commandLists() -- a direct reference to rootCmd
+// here would make rootCmd's initializer depend on itself.
+func commandLists(root *cobra.Command) (cmds, maintenance []cmdInfo) {
+	// cobra lazily registers its own "help" and "completion" commands inside
+	// Execute() (InitDefaultHelpCmd / InitDefaultCompletionCmd), so
+	// root.Commands() only contains them once Execute() has actually run
+	// (e.g. real invocations, not unit tests that call usage() directly).
+	// "completion" is boilerplate we don't want to surface here; "help" is
+	// added explicitly below so it appears consistently either way.
+	var all []cmdInfo
+	for _, c := range root.Commands() {
+		if c.Hidden || c.Name() == "completion" || c.Name() == "help" {
+			continue
+		}
+		all = append(all, cmdInfo{name: c.Name(), desc: c.Short})
+	}
+	all = append(all, cmdInfo{name: "help", desc: "Show help (agentjail help <topic> for details)"})
+	sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
+
+	for _, c := range all {
+		if maintenanceCommands[c.name] {
+			maintenance = append(maintenance, c)
+		} else {
+			cmds = append(cmds, c)
+		}
+	}
+	return cmds, maintenance
+}
+
 // usage writes styled usage information to w and returns.
 // Call with os.Stdout (exit 0) for explicit help requests, or os.Stderr
 // (exit 2) for missing/unknown-command errors.
@@ -61,39 +122,13 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Commands"))
 
-	type cmd struct {
-		name string
-		desc string
-	}
-	cmds := []cmd{
-		{"claude", "Run Claude Code inside the agentjail shield"},
-		{"run", "Run any command inside the agentjail shield"},
-		{"install", "Install hooks for supported coding agents"},
-		{"doctor", "Check agentjail installation health"},
-		{"status", "Show hook, daemon, and policy health"},
-		{"try", "Check whether an action would be allowed by policy (nothing is executed)"},
-		{"logs", "View policy decisions"},
-		{"replay", "Replay decisions from a saved session"},
-		{"policy", "Manage optional hardening rules"},
-		{"mcp", "Manage MCP server allow/block lists"},
-		{"secret", "Manage scoped secret grants"},
-		{"ui", "Open the local web UI"},
-		{"telemetry", "Manage anonymous usage statistics"},
-		{"feedback", "Send anonymous feedback to the maintainers"},
-	}
-
+	cmds, maintenance := commandLists(rootCmd)
 	for _, c := range cmds {
 		fmt.Fprintln(w, bodyIndent+u.KeyValue(c.name, c.desc, ""))
 	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Maintenance"))
-	maintenance := []cmd{
-		{"update", "Update agentjail binaries to the latest release"},
-		{"uninstall", "Remove hooks, daemon service, and local policy state"},
-		{"version", "Print version information"},
-		{"help", "Show help"},
-	}
 	for _, c := range maintenance {
 		fmt.Fprintln(w, bodyIndent+u.KeyValue(c.name, c.desc, ""))
 	}

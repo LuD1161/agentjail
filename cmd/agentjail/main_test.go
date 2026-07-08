@@ -34,6 +34,60 @@ func TestUsageContainsAllCommands(t *testing.T) {
 	}
 }
 
+// TestUsageIncludesGeneratedCommands guards against U5: usage() used to be a
+// hand-curated list that silently omitted commands as new ones were added to
+// root.go. Since usage() now derives its command list from rootCmd.Commands()
+// (see commandLists), this asserts that commands historically missing from
+// the old hardcoded list are present in the generated output.
+func TestUsageIncludesGeneratedCommands(t *testing.T) {
+	var buf bytes.Buffer
+	usage(&buf)
+	out := stripANSI(buf.String())
+
+	previouslyOmitted := []string{
+		"sessions",
+		"skill",
+		"trust",
+		"untrust",
+		"allow",
+		"grants",
+		"grant",
+	}
+	for _, cmd := range previouslyOmitted {
+		if !strings.Contains(out, cmd) {
+			t.Errorf("usage() output missing command %q (previously omitted from hand-curated list)", cmd)
+		}
+	}
+}
+
+// TestCommandListsMatchesRootCommands asserts commandLists() never drops a
+// registered, non-hidden top-level command -- the actual guarantee behind
+// U5's fix.
+func TestCommandListsMatchesRootCommands(t *testing.T) {
+	cmds, maintenance := commandLists(rootCmd)
+	got := map[string]bool{}
+	for _, c := range cmds {
+		got[c.name] = true
+	}
+	for _, c := range maintenance {
+		got[c.name] = true
+	}
+	for _, c := range rootCmd.Commands() {
+		// "completion" is cobra's own auto-generated command; commandLists()
+		// deliberately excludes it as boilerplate (see its comment). It may
+		// or may not be present in rootCmd.Commands() depending on whether
+		// an earlier test in this process already called Execute(), which
+		// lazily registers it -- so it must be excluded here too rather than
+		// asserted on.
+		if c.Hidden || c.Name() == "completion" {
+			continue
+		}
+		if !got[c.Name()] {
+			t.Errorf("commandLists() missing registered command %q", c.Name())
+		}
+	}
+}
+
 func TestUsagePremiumStructure(t *testing.T) {
 	var buf bytes.Buffer
 	usage(&buf)
