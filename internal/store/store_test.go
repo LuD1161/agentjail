@@ -74,6 +74,39 @@ func TestRedactToolInputSecrets(t *testing.T) {
 	}
 }
 
+func TestRedactToolInputAdditionalCredentialKeys(t *testing.T) {
+	in := map[string]interface{}{
+		"dsn":           "postgres://u:p@host/db",
+		"passwd":        "hunter2",
+		"pw":            "hunter2",
+		"authorization": "Bearer abc",
+		"bearer_token":  "abc",
+		"session_token": "abc",
+		"signature":     "sig-value",
+		"passphrase":    "correct-horse-battery-staple",
+		"api_key":       "sk-1234567890",
+		"private_key":   "-----BEGIN PRIVATE KEY-----",
+		"command":       "aws s3 ls",
+		"file_path":     "/tmp/x",
+	}
+	out := RedactToolInput(in)
+	for _, k := range []string{
+		"postgres://u:p@host/db", "hunter2", "Bearer abc", "abc",
+		"sig-value", "correct-horse-battery-staple", "sk-1234567890",
+		"-----BEGIN PRIVATE KEY-----",
+	} {
+		if strings.Contains(out, k) {
+			t.Errorf("secret value %q leaked into redacted output: %s", k, out)
+		}
+	}
+	if !strings.Contains(out, "aws s3 ls") {
+		t.Errorf("non-secret command redacted: %s", out)
+	}
+	if !strings.Contains(out, "/tmp/x") {
+		t.Errorf("non-secret file_path redacted: %s", out)
+	}
+}
+
 func TestRedactToolInputCaseInsensitive(t *testing.T) {
 	in := map[string]interface{}{"APIKEY": "x", "MyToken": "y", "PASSWORD": "z"}
 	out := RedactToolInput(in)

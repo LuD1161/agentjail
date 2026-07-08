@@ -172,8 +172,13 @@ type ReadOnlyStore interface {
 }
 
 // redactKeySubstrings are the case-insensitive substrings that mark a
-// tool_input key as secret-bearing (ADR 0019). Over-broad on purpose.
-var redactKeySubstrings = []string{"secret", "key", "token", "password", "cred"}
+// tool_input key as secret-bearing (ADR 0019). Over-broad on purpose. This
+// is the single source of truth: it backs both RedactToolInput (tool_input
+// persistence) and the audit_log Detail redaction boundary (ADR 0032).
+var redactKeySubstrings = []string{
+	"secret", "key", "token", "password", "cred",
+	"dsn", "passwd", "pw", "auth", "signature", "passphrase",
+}
 
 // maxRedactedLen is the byte cap on the persisted tool_input JSON.
 const maxRedactedLen = 4096
