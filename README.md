@@ -427,6 +427,34 @@ agentjail policy list
 
 ---
 
+## When the daemon is unreachable
+
+`agentjail-hook` is stdlib-only and dials the daemon with a 30 ms budget. If
+the daemon is down (crashed, OOM, not yet started), the default has always
+been to **fail open** — allow the call, so a dead daemon never blocks the
+agent. That default is now a configurable, tiered policy ([ADR 0050](./docs/adr/0050-daemon-unreachable-policy.md)):
+
+```yaml
+# ~/.agentjail/policy.yaml
+daemon_unreachable: degraded   # allow (default) | degraded (recommended) | deny
+```
+
+| Level | Behavior when the daemon can't be reached |
+|---|---|
+| `allow` (default) | Fail open — unchanged from prior releases. |
+| `degraded` (recommended) | Enforce a small offline denylist (self-protection: no writes under `~/.agentjail`, no reads of the secrets store, no `agentjail policy disable`-style mutation) via stdlib pattern-matching; allow everything else. |
+| `deny` | Fail closed — deny with restart instructions. For regulated/high-assurance setups. |
+
+Every fail-open occurrence now prints a loud, per-occurrence stderr banner
+naming the active level and the exact recovery command
+(`agentjail daemon restart`, diagnose with `agentjail doctor`) — replacing
+the old one-time warning. The daemon compiles the current level (and, for
+`degraded`, the offline rule set) into `~/.agentjail/hook-fallback.json` on
+startup and every config reload; a missing or unreadable sidecar always
+falls back to `allow`, so upgrading never changes behavior unless you opt in.
+
+---
+
 ## Telemetry
 
 Anonymous usage statistics (counts, OS/arch, version, rule IDs fired). **Never** sends file paths, commands, repo names, or environment contents.
