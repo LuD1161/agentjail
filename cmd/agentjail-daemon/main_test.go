@@ -90,8 +90,7 @@ func newTestServer(t *testing.T) (*server, string) {
 				}
 				return
 			}
-			srv.wg.Add(1)
-			go srv.handleConn(ctx, conn)
+			srv.acceptConn(ctx, conn)
 		}
 	}()
 
@@ -368,6 +367,102 @@ func TestDaemon_ConcurrentRequests(t *testing.T) {
 	}
 	for i := 0; i < goroutines; i++ {
 		<-errc
+	}
+}
+
+// TestAcceptConn_RejectsOverCapacity verifies the P9 bounded-concurrency
+// cap: once s.connSem is full, acceptConn closes the new connection
+// immediately (rather than blocking the accept loop or spawning an
+// unbounded goroutine) so a hostile/misbehaving peer opening many
+// connections cannot exhaust the daemon.
+func TestAcceptConn_RejectsOverCapacity(t *testing.T) {
+	srv := &server{connSem: make(chan struct{}, 1)}
+	// Fill the one slot so the next acceptConn call must be rejected.
+	srv.connSem <- struct{}{}
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	srv.acceptConn(context.Background(), serverConn)
+
+	// The rejected connection should be closed by the daemon: a read on the
+	// client side should observe EOF/closed-pipe rather than hang.
+	buf := make([]byte, 1)
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := clientConn.Read(buf); err == nil {
+		t.Fatal("expected rejected connection to be closed, got no error reading")
+	}
+}
+
+// TestAcceptConn_AdmitsUnderCapacity verifies acceptConn does dispatch to
+// handleConn (via the wg counter) when the semaphore has room.
+func TestAcceptConn_AdmitsUnderCapacity(t *testing.T) {
+	sockPath := filepath.Join(shortSockDir(t), "test.sock")
+	eng, err := policy.NewHookOPAEngine(context.Background(), [][2]string{{"test.rego", testRegoPolicy}})
+	if err != nil {
+		t.Fatalf("NewHookOPAEngine: %v", err)
+	}
+	srv := &server{
+		evaluator: policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), [][2]string{{"test.rego", testRegoPolicy}}, nil),
+		connSem:   make(chan struct{}, 4),
+	}
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		_ = ln.Close()
+		_ = os.Remove(sockPath)
+	})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			srv.acceptConn(ctx, conn)
+		}
+	}()
+
+	resp := sendRequest(t, sockPath, Request{
+		ID:        "under-capacity",
+		HookEvent: "PreToolUse",
+		ToolName:  "Read",
+		ToolInput: map[string]interface{}{"path": "/safe"},
+		SessionID: "s1",
+		CWD:       "/tmp",
+	})
+	if resp.Action != "allow" {
+		t.Errorf("expected normal request to be served when under capacity, got action=%q", resp.Action)
+	}
+}
+
+// TestHandleConn_IdleConnectionTimesOut verifies P9's idle read deadline: a
+// connection that is opened but never sends a request is closed by the
+// daemon rather than held open indefinitely. Shrinks agentConnIdleTimeout
+// for the duration of the test so this doesn't require a real multi-second
+// sleep.
+func TestHandleConn_IdleConnectionTimesOut(t *testing.T) {
+	orig := agentConnIdleTimeout
+	agentConnIdleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { agentConnIdleTimeout = orig })
+
+	_, sockPath := newTestServer(t)
+
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Send nothing. The daemon should close its end within ~agentConnIdleTimeout.
+	buf := make([]byte, 1)
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(buf); err == nil {
+		t.Fatal("expected idle connection to be closed by the daemon, got no error reading")
 	}
 }
 
@@ -854,8 +949,7 @@ func newTestServerWithPolicy(t *testing.T, regoSrc string) (*server, string) {
 				}
 				return
 			}
-			srv.wg.Add(1)
-			go srv.handleConn(ctx, conn)
+			srv.acceptConn(ctx, conn)
 		}
 	}()
 
