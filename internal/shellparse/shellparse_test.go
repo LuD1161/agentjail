@@ -40,6 +40,28 @@ func TestParse(t *testing.T) {
 		{"no_split_pipe_in_quotes", `awk '{print $1 | "sort"}'`, []string{"awk"}},
 		{"which_standalone", "which agentjail", []string{"which"}},
 		{"command_v_standalone", "command -v agentjail", []string{"command"}},
+		// P6 hardening: interpreter wrappers, process wrappers, newline
+		// splitting, and command substitution.
+		{"sh_dash_c", "sh -c 'agentjail policy disable no-sudo'", []string{"sh", "agentjail"}},
+		{"bash_dash_c", "bash -c 'agentjail policy disable no-sudo'", []string{"bash", "agentjail"}},
+		{"sh_dash_c_double_quoted", `sh -c "agentjail policy disable no-sudo"`, []string{"sh", "agentjail"}},
+		{"sh_dash_c_chained_script", "sh -c 'echo hi && agentjail policy disable x'", []string{"sh", "echo", "agentjail"}},
+		{"nohup_agentjail", "nohup agentjail policy disable x", []string{"nohup", "agentjail"}},
+		{"timeout_agentjail", "timeout 5 agentjail policy disable x", []string{"timeout", "agentjail"}},
+		{"timeout_with_duration_unit", "timeout 5s agentjail policy disable x", []string{"timeout", "agentjail"}},
+		{"newline_separated", "echo hi\nagentjail policy disable x", []string{"echo", "agentjail"}},
+		{"dollar_paren_substitution_whole_cmd", "$(agentjail policy disable x)", []string{"agentjail"}},
+		{"backtick_substitution_whole_cmd", "`agentjail policy disable x`", []string{"agentjail"}},
+		{"dollar_paren_substitution_embedded", "echo $(agentjail policy disable x)", []string{"echo", "agentjail"}},
+		{"backtick_substitution_embedded", "echo `agentjail policy disable x`", []string{"echo", "agentjail"}},
+		{"sudo_agentjail_disable", "sudo agentjail policy disable no-sudo", []string{"sudo", "agentjail"}},
+		{"xargs_agentjail", "echo x | xargs agentjail policy disable", []string{"echo", "xargs", "agentjail"}},
+		{"nice_agentjail", "nice -n 10 agentjail policy disable x", []string{"nice", "agentjail"}},
+		{"stdbuf_agentjail", "stdbuf -oL agentjail policy disable x", []string{"stdbuf", "agentjail"}},
+		{"setsid_agentjail", "setsid agentjail policy disable x", []string{"setsid", "agentjail"}},
+		{"command_exec_agentjail", "command agentjail policy disable x", []string{"command", "agentjail"}},
+		{"nested_wrapper_interpreter", "sudo sh -c 'agentjail policy disable x'", []string{"sudo", "sh", "agentjail"}},
+		{"semicolon_agentjail_second", "echo hi; agentjail policy disable x", []string{"echo", "agentjail"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
