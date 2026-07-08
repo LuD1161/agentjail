@@ -47,24 +47,33 @@ lima_guest_push() {
 }
 
 # ---- Tart driver (macOS) ---------------------------------------------------
-# NOTE: written on the Linux server, UNVALIDATED on real hardware yet.
-# The Mac-side agent validates/fixes these (see README.md "Mac side").
 
 TART_GOLDEN="${TART_GOLDEN:-golden-macos}"
 TART_SSH_USER="${TART_SSH_USER:-admin}"   # cirruslabs base images: admin/admin
-TART_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+TART_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
+
+# Non-interactive SSH auth: prefer key-based auth (baked into golden image).
+# Falls back to sshpass with the default password if available. If neither
+# works, ssh will prompt and hang - bake your pubkey into the golden image
+# per the README.
+_tart_ssh_prefix=()
+if [ -n "${TART_SSH_PASSWORD:-}" ]; then
+    command -v sshpass >/dev/null 2>&1 || die "TART_SSH_PASSWORD set but sshpass not found (brew install sshpass-mac)"
+    _tart_ssh_prefix=(sshpass -p "$TART_SSH_PASSWORD")
+fi
 
 tart_ip()     { tart ip "$(inst "$1")"; }
 tart_exists() { tart list | awk '{print $2}' | grep -qx "$(inst "$1")"; }
 
 tart_guest_exec() {
     local name=$1; shift
-    ssh "${TART_SSH_OPTS[@]}" "${TART_SSH_USER}@$(tart_ip "$name")" "$*"
+    # Run through a login shell so brew-installed tools (node, git) are on PATH.
+    ${_tart_ssh_prefix[@]+"${_tart_ssh_prefix[@]}"} ssh "${TART_SSH_OPTS[@]}" "${TART_SSH_USER}@$(tart_ip "$name")" "bash -lc $(printf '%q' "$*")"
 }
 
 tart_guest_push() {
     local name=$1 src=$2 dst=$3
-    scp "${TART_SSH_OPTS[@]}" "$src" "${TART_SSH_USER}@$(tart_ip "$name"):$dst"
+    ${_tart_ssh_prefix[@]+"${_tart_ssh_prefix[@]}"} scp "${TART_SSH_OPTS[@]}" "$src" "${TART_SSH_USER}@$(tart_ip "$name"):$dst"
 }
 
 # ---- Driver-dispatched helpers ---------------------------------------------

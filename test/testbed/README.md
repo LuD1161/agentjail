@@ -125,10 +125,18 @@ ssh admin@$IP   # password: admin
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 #   eval "$(/opt/homebrew/bin/brew shellenv)" && echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 #   brew install node tmux git sqlite
+#   # Bake host SSH pubkey for non-interactive guest_exec/scp:
+#   mkdir -p ~/.ssh && chmod 700 ~/.ssh
+#   echo "<your-pubkey-here>" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 # Then exit and freeze the golden:
 tart stop golden-macos
 rm -rf ~/.tart/cache        # reclaim the OCI pull cache (several GB)
 ```
+
+**SSH auth for `testbed.sh`:** the golden image should have your SSH
+pubkey in `~/.ssh/authorized_keys` so `guest_exec`/`guest_push` work
+non-interactively. If you skip the pubkey step, set `TART_SSH_PASSWORD=admin`
+and install `sshpass` (`brew install sshpass-mac`) as a fallback.
 
 Golden stays stopped forever; testbeds are instant APFS clones of it.
 OS updates: re-bake the golden, never update inside a testbed (huge deltas).
@@ -146,20 +154,17 @@ test/testbed/testbed.sh ssh mac-dev
 
 Known things to verify / likely fixes (commit them when done):
 
-- [ ] **SSH auth**: `lib.sh` uses `ssh admin@ip` — cirruslabs images accept
-      password `admin`; for non-interactive `guest_exec`/`scp` you'll likely
-      want `ssh-copy-id` during golden bake (add your pubkey to the golden so
-      all clones inherit it), or `sshpass`. Pick one, bake it into step 2.
-- [ ] **Shell profile**: `guest-provision.sh` appends the token export to
-      `~/.bashrc`; macOS default shell is zsh — make it write `~/.zprofile`
-      (or both) when on darwin.
-- [ ] **npm install**: on the vanilla image `npm i -g` may need
-      `sudo` (admin password) or brew-node prefix — verify.
-- [ ] **install.sh service install**: `agentjail install` installs a launchd
-      LaunchAgent — verify it loads inside the VM (`launchctl list | grep agentjail`).
-- [ ] **Gatekeeper**: locally-built (unsigned) binaries may need
-      `xattr -dr com.apple.quarantine ~/.agentjail/bin` or ad-hoc codesign
-      inside the guest — `test/macos-gatekeeper/verify.sh` has prior art.
+- [x] **SSH auth**: `lib.sh` supports key-based auth (bake pubkey into golden)
+      or `TART_SSH_PASSWORD=admin` with `sshpass-mac` as fallback. Login shell
+      (`bash -lc`) ensures brew PATH is available.
+- [x] **Shell profile**: `guest-provision.sh` writes token to `~/.zprofile`
+      on Darwin, `~/.bashrc` on Linux.
+- [x] **npm install**: `guest-provision.sh` skips `sudo` when brew is present
+      on macOS (brew-installed node owns its global prefix).
+- [x] **install.sh service install**: `e2e-smoke.sh` checks `launchctl list |
+      grep agentjail` on macOS, `systemctl --user is-active` on Linux.
+- [x] **Gatekeeper**: `guest-provision.sh` runs `xattr -dr com.apple.quarantine`
+      on `~/.agentjail/bin` after `install.sh` on Darwin.
 - [ ] **End-to-end check**: inside the testbed, `agentjail status` green,
       `claude` runs with the hook wired, a write to `~/.ssh/x` gets denied.
 
@@ -173,7 +178,7 @@ same as the Linux flow above. Commit fixes to this directory on the
 ### Pulling this on the Mac
 
 The Linux work is on `origin` (branch `security/2026-07-07-review-fixes`).
-On the laptop:
+On the laptop the same bare repo is named `origin` (not `origin`):
 
 ```sh
 cd ~/Repos/AgentJail-Repos/agentjail   # the local-dev working copy
