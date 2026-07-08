@@ -16,6 +16,16 @@ const (
 	// Must be large enough for TLS ClientHello SNI, Postgres startup,
 	// Redis RESP, MongoDB OpMsg header, and SSH version string.
 	peekSize = 1024
+
+	// maxManagedInspections bounds how many client→upstream chunks we
+	// re-inspect on a managed-port connection (S-D2). After this many chunks
+	// the remainder of the stream is relayed without re-inspection. This caps
+	// per-connection CPU so a long-lived managed connection cannot force
+	// unbounded parser+matcher work; each inspection is itself bounded to the
+	// first peekSize bytes of the chunk. 64 comfortably covers the handful of
+	// distinct statements a normal DB session issues while denying an attacker
+	// a cheap CPU-exhaustion primitive.
+	maxManagedInspections = 64
 )
 
 // handleConn processes a single intercepted TCP connection:
@@ -108,6 +118,19 @@ func (g *Gateway) handleConn(c net.Conn) {
 		}
 	}
 
+	// Step 4.5: VIP-pool loop guard (S-F3). The VIP→hostname mapping is
+	// attacker-influenced (a crafted mapping, or a hostname that resolves into
+	// the VIP CIDR). If the upstream we are about to dial is itself inside the
+	// pool, dialing it re-enters our own forwarder → an infinite interception
+	// loop / resource exhaustion. Resolve the target to concrete IPs and refuse
+	// if ANY lands in the pool (CIDR membership) or is a currently-allocated VIP
+	// (registry.Lookup). Deny by closing without relaying. A resolution failure
+	// is not a loop — let the dial below fail naturally.
+	if g.upstreamHitsVIPPool(hostname) {
+		log.Warn("upstream resolves into the VIP pool; denying (loop guard)")
+		return
+	}
+
 	log.Info("connection allowed, relaying")
 
 	// Step 5: Dial the real upstream and relay bidirectionally.
@@ -124,8 +147,48 @@ func (g *Gateway) handleConn(c net.Conn) {
 		return
 	}
 
-	// Bidirectional relay.
-	relay(c, upstream, log)
+	// Bidirectional relay. On a managed database port we re-inspect subsequent
+	// client→upstream messages so a benign first message cannot smuggle a later
+	// deny verb past policy (S-D2). Non-managed ports keep the plain relay to
+	// preserve availability.
+	if netpolicy.ManagedPort(dstPort) {
+		g.relayManaged(c, upstream, hostname, dstPort, log)
+	} else {
+		relay(c, upstream, log)
+	}
+}
+
+// upstreamHitsVIPPool resolves host to concrete IPs and reports whether any of
+// them is a VIP — either by CIDR membership in a pool (authoritative, covers
+// unallocated addresses) or by a live registry Lookup. Used by the S-F3 loop
+// guard before dialing an upstream. A resolution error returns false: an
+// unresolvable host is not a loop, and the subsequent dial will fail on its own.
+func (g *Gateway) upstreamHitsVIPPool(host string) bool {
+	ips, err := g.resolveIPs(host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if g.registry != nil && g.registry.IsVIP(ip) {
+			return true
+		}
+		if g.registry != nil {
+			if _, ok := g.registry.Lookup(ip); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolveIPs resolves a host (hostname or IP literal) to IP addresses. It is a
+// thin wrapper over net.LookupIP that tests can override via g.lookupIP; an IP
+// literal is returned as-is by net.LookupIP without any network I/O.
+func (g *Gateway) resolveIPs(host string) ([]net.IP, error) {
+	if g.lookupIP != nil {
+		return g.lookupIP(host)
+	}
+	return net.LookupIP(host)
 }
 
 // recognizeTCP wraps netpolicy.RecognizeTCP with a fallback for unrecognized
@@ -192,6 +255,104 @@ func relay(client, upstream net.Conn, log *slog.Logger) {
 		}
 		if tc, ok := upstream.(*net.TCPConn); ok {
 			tc.CloseWrite()
+		}
+	}()
+
+	wg.Wait()
+}
+
+// relayManaged is the S-D2 inspecting relay used for managed database ports. It
+// preserves the plain relay's bidirectionality and half-close semantics but, on
+// the client→upstream direction, re-inspects each read chunk before forwarding
+// it so a benign first message cannot smuggle a later deny verb (e.g. a Postgres
+// DROP after an opening SELECT) past policy.
+//
+// Re-inspection policy (deliberately asymmetric with the S-D1 first-message
+// fail-closed):
+//   - Each chunk is recognized with recognizeTCP over its first peekSize bytes.
+//   - If recognition succeeds AND the matcher returns deny → tear the connection
+//     down immediately (mid-stream deny).
+//   - If recognition succeeds with allow/ask → forward the chunk.
+//   - If recognition FAILS (recognizeTCP's generic fallback) → forward the chunk.
+//     Mid-stream, an arbitrary TCP segment is not guaranteed to start on a
+//     protocol message boundary, so an unrecognized continuation segment of an
+//     already-recognized benign message must NOT be denied (that would break
+//     legitimate multi-packet messages / availability). S-D1 still guards the
+//     FIRST message at connection establishment, where a boundary is guaranteed.
+//   - Inspection is bounded: after maxManagedInspections chunks the remainder is
+//     relayed without re-inspection to cap per-connection CPU.
+//
+// The client→upstream goroutine runs protocol parsers and the matcher on
+// attacker-controlled bytes, so it carries its own recover to keep S-F2 panic
+// isolation intact (a panic denies this connection, never crashes the process).
+func (g *Gateway) relayManaged(client, upstream net.Conn, hostname string, port int, log *slog.Logger) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// upstream → client (plain copy; upstream is trusted relative to the agent).
+	go func() {
+		defer wg.Done()
+		n, err := io.Copy(client, upstream)
+		if err != nil && log != nil {
+			log.Debug("managed relay upstream→client ended", "bytes", n, "err", err)
+		}
+		if tc, ok := client.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
+	}()
+
+	// client → upstream (inspecting).
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				if log != nil {
+					log.Error("managed relay recovered from panic; tearing down connection", "panic", r)
+				}
+				_ = upstream.Close()
+				_ = client.Close()
+			}
+		}()
+
+		buf := make([]byte, peekSize)
+		inspections := 0
+		for {
+			n, err := client.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				if inspections < maxManagedInspections {
+					inspections++
+					op, recognized := g.recognizeTCP(hostname, port, chunk)
+					if recognized && g.matcher != nil {
+						if res := g.matcher.Evaluate(op); res != nil && res.Action == "deny" {
+							if log != nil {
+								log.Warn("managed-port deny mid-stream; tearing down connection",
+									"protocol", op.Protocol,
+									"verb", op.Verb,
+								)
+							}
+							_ = upstream.Close()
+							_ = client.Close()
+							return
+						}
+					}
+				}
+				if _, werr := upstream.Write(chunk); werr != nil {
+					if log != nil {
+						log.Debug("managed relay client→upstream write ended", "err", werr)
+					}
+					return
+				}
+			}
+			if err != nil {
+				if err != io.EOF && log != nil {
+					log.Debug("managed relay client→upstream read ended", "err", err)
+				}
+				if tc, ok := upstream.(*net.TCPConn); ok {
+					tc.CloseWrite()
+				}
+				return
+			}
 		}
 	}()
 

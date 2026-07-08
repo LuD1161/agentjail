@@ -23,7 +23,37 @@ var (
 
 	ipv4Base = net.IP{10, 78, 0, 0}  // network address (skipped)
 	ipv6Base = net.ParseIP("fd78::") // prefix
+
+	// poolV4 and poolV6 are the CIDRs that bound the VIP pools. Any address
+	// inside these ranges is a VIP (allocated or not), so the gateway can
+	// authoritatively and cheaply reject an upstream dial that would loop back
+	// into the pool (S-F3 loop guard) without consulting the allocation maps.
+	// v4: 10.78.0.0/16 covers 10.78.0.0–10.78.255.255.
+	// v6: fd78::/112 covers fd78::0–fd78::ffff (the 16-bit offset space).
+	poolV4 = &net.IPNet{IP: net.IP{10, 78, 0, 0}, Mask: net.CIDRMask(16, 32)}
+	poolV6 = &net.IPNet{IP: net.ParseIP("fd78::"), Mask: net.CIDRMask(112, 128)}
 )
+
+// PoolV4 returns the IPv4 VIP pool CIDR (10.78.0.0/16).
+func PoolV4() *net.IPNet { return poolV4 }
+
+// PoolV6 returns the IPv6 VIP pool CIDR (fd78::/112).
+func PoolV6() *net.IPNet { return poolV6 }
+
+// IsVIP reports whether ip falls inside either VIP pool CIDR. This is the
+// authoritative, allocation-independent membership test: every VIP the registry
+// can ever hand out lives inside these CIDRs, so a true result means dialing ip
+// would re-enter the gateway's own forwarder. It does not require the VIP to be
+// currently allocated (see Lookup for that).
+func (r *Registry) IsVIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return poolV4.Contains(v4)
+	}
+	return poolV6.Contains(ip)
+}
 
 // entry holds both address families for a single hostname.
 type entry struct {

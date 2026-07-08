@@ -50,6 +50,11 @@ type Gateway struct {
 	mu       sync.Mutex
 	closed   bool
 	listener net.Listener
+
+	// lookupIP, when non-nil, overrides net.LookupIP for the S-F3 loop guard.
+	// Tests set it to drive resolution deterministically; production leaves it
+	// nil (resolveIPs falls back to net.LookupIP).
+	lookupIP func(host string) ([]net.IP, error)
 }
 
 // NewGateway creates a WireGuard tunnel gateway. It initializes the gVisor
