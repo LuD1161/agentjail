@@ -1,4 +1,4 @@
-.PHONY: help build dev-install shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball e2e-release
+.PHONY: help build dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball e2e-release
 
 BIN ?= bin/agentjail
 
@@ -44,6 +44,9 @@ dev-install: $(DEV_BINS)  ## build + install binaries, policy rules, and restart
 	done; \
 	$$ok && echo "" && echo "All binaries installed and verified. Restart Claude Code to activate." || \
 		(echo "" && echo "Some binaries failed verification." && exit 1)
+
+dev-deploy:  ## build all 5 binaries from the working tree + hot-swap the local install and restart daemon (run from a plain terminal)
+	./scripts/dev-deploy.sh
 
 bin/agentjail-hook:
 	go build -o bin/agentjail-hook ./cmd/agentjail-hook
