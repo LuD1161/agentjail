@@ -166,12 +166,40 @@ func (gs *grantServer) serveCtl(ctx context.Context) {
 	}
 }
 
+// peerUIDAllowed reports whether a connection to the privileged grant
+// control socket (daemon-ctl.sock) should be dispatched (P5). uidErr is the
+// error (if any) from extracting the peer's real UID via SO_PEERCRED /
+// LOCAL_PEERCRED -- fail closed on any error (unknown UID is never treated
+// as allowed). Otherwise the peer UID must exactly match daemonUID
+// (os.Getuid()): filesystem permissions on the socket path (0600, in a 0700
+// dir) are necessary but not sufficient -- any same-UID, non-sandboxed
+// process on the box can otherwise open the path and self-approve grants.
+func peerUIDAllowed(peerUID, daemonUID int, uidErr error) bool {
+	if uidErr != nil {
+		return false
+	}
+	return peerUID == daemonUID
+}
+
 // handleCtlConn reads one control request off the privileged grant control
 // socket and writes one response. Dispatches grant_list, grant_approve, and
 // grant_deny; anything else is rejected.
 func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Filesystem permissions on daemon-ctl.sock (0600, owner-only dir) are
+	// not sufficient authentication on their own -- any same-UID process
+	// that can open the socket path can reach this privileged verb set
+	// (grant_approve, in particular, mutates policy.yaml). Verify the
+	// connecting peer's real UID via SO_PEERCRED/LOCAL_PEERCRED before
+	// dispatching anything. This cannot be spoofed by the client: the
+	// kernel populates it from the actual connecting process.
+	peerUID, uidErr := extractPeerUID(conn)
+	if !peerUIDAllowed(peerUID, os.Getuid(), uidErr) {
+		slog.Warn("grant control: rejecting connection", "peer_uid", peerUID, "daemon_uid", os.Getuid(), "err", uidErr)
+		return
+	}
 
 	var req grantctl.Request
 	if err := json.NewDecoder(io.LimitReader(conn, grantctl.MaxControlMsgBytes)).Decode(&req); err != nil {
@@ -280,6 +308,36 @@ func (gs *grantServer) approve(grantID string) error {
 	return nil
 }
 
+// decideBoundCWD decides what directory (if any) a grant should be bound to,
+// given the session's self-reported CWD (spoofable -- just a JSON field an
+// agent sends on eval requests) and the kernel-verified CWD read from
+// /proc/<peerPID>/cwd for the process that filed the grant request
+// (verifyErr is the error from that read, if any).
+//
+//   - Verification succeeded and matches: trust it -- this is the normal,
+//     honest-agent case.
+//   - Verification succeeded and does NOT match: the agent claimed to be
+//     somewhere it verifiably was not. Refuse to bind (fail closed) rather
+//     than let an approval write a policy.yaml overlay into a directory
+//     chosen entirely by the agent's own say-so.
+//   - Verification was unavailable (verifyErr != nil, e.g. macOS, where
+//     resolvePeerCWD has no libproc-free implementation, or a transient
+//     /proc read race): fall back to the self-reported value. This is a
+//     known gap on platforms without a verified CWD primitive -- it
+//     preserves pre-fix (best-effort) behavior there rather than disabling
+//     grant binding entirely, but it means P10's guarantee is Linux-only
+//     today. A stricter policy (refuse whenever unverifiable) is a
+//     reasonable follow-up if grants need to be hardened on macOS too.
+func decideBoundCWD(selfReportedCWD, verifiedCWD string, verifyErr error) (cwd string, ok bool) {
+	if verifyErr != nil {
+		return selfReportedCWD, selfReportedCWD != ""
+	}
+	if verifiedCWD == "" || verifiedCWD != selfReportedCWD {
+		return "", false
+	}
+	return verifiedCWD, true
+}
+
 // handleGrantRequest is called inline from the daemon's agent-reachable
 // handleConn when a grant_request message arrives on daemon.sock. It
 // validates the request, resolves the requesting session via the peer PID
@@ -313,13 +371,25 @@ func (gs *grantServer) handleGrantRequest(conn net.Conn, req grantctl.Request) g
 		return grantctl.Response{OK: false, Error: gerr.Error()}
 	}
 
-	// Best-effort PID-based binding: if we can resolve the requesting
-	// session from the peer PID, record the daemon-observed CWD so a human
-	// approval can persist into the right directory even if the agent's
-	// self-reported CWD (req.CWD) is stale or absent.
+	// PID-based binding: resolve the requesting session from the peer PID
+	// (verified via SO_PEERCRED -- the kernel identifies the connecting
+	// process, so this cannot be spoofed) and cross-check its self-reported
+	// CWD (tracked in activeSessions from prior eval requests, which IS
+	// spoofable -- it's just a JSON field the agent sends) against the
+	// kernel-verified CWD read from /proc/<peerPID>/cwd. Only an exact match
+	// is trusted; anything else leaves the grant unbound rather than writing
+	// a policy.yaml overlay into a directory the agent merely claimed to be
+	// in (P10). approve() already refuses to persist an unbound grant
+	// (errGrantUnbound), so "leave unbound" is a safe, fail-closed fallback.
 	if peerPID, perr := extractPeerPID(conn); perr == nil && gs.activeSessions != nil {
-		if _, cwd, found := gs.activeSessions.findSessionByPID(peerPID); found {
-			gs.registry.SetBoundCWD(gi.GrantID, cwd)
+		if _, selfReportedCWD, found := gs.activeSessions.findSessionByPID(peerPID); found {
+			verifiedCWD, verr := resolvePeerCWD(peerPID)
+			if cwd, ok := decideBoundCWD(selfReportedCWD, verifiedCWD, verr); ok {
+				gs.registry.SetBoundCWD(gi.GrantID, cwd)
+			} else {
+				slog.Warn("grant_request: peer CWD could not be verified; leaving grant unbound",
+					"grant_id", gi.GrantID, "peer_pid", peerPID, "claimed_cwd", selfReportedCWD, "verify_err", verr)
+			}
 		}
 	}
 
