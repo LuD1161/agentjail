@@ -484,6 +484,25 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", grantctl.ControlSocketPathForHome(home))
 	sb.WriteString("\n")
 
+	// SSH agent socket: allow connect() to the ssh-agent listener so ssh can
+	// authenticate via the agent (signing-only) without ever reading a private
+	// key -- key files stay blocked by the file-read deny block above. Seatbelt
+	// models AF_UNIX connect() as network-outbound, so this must be an explicit
+	// allow BEFORE the (deny network*) catch-all. The path is runtime-dynamic
+	// (macOS launchd agents live under /private/tmp/com.apple.launchd.*/Listeners);
+	// it is read from SSH_AUTH_SOCK, which is passed through via
+	// EnvAllowlistBaseline. See internal/sandbox/env.go and shield_linux.go for
+	// the Landlock equivalent (a filesystem WRITE grant on the socket inode).
+	//
+	// (path ...) is the canonical exact-match predicate for a unix-socket
+	// destination (verified with sandbox-exec; nolabs-ai/nono uses the same
+	// form). The base is (allow default), so socket(2) creation is already
+	// permitted -- unlike a (deny default) profile we do not also need
+	// (allow system-socket (socket-domain AF_UNIX)).
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		fmt.Fprintf(&sb, "(allow network-outbound\n    (path %q))\n\n", sock)
+	}
+
 	// Default deny for all remaining network traffic.
 	// This blocks: C2 on non-standard ports (4444, 8888, etc.), raw IP/ICMP
 	// exfil, non-DNS UDP, arbitrary TCP on unlisted ports.
