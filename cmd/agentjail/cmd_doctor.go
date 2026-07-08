@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/sshagent"
 	"github.com/spf13/cobra"
 )
 
@@ -88,6 +90,17 @@ func runDoctor() int {
 	launchChecks := checkLaunchIntegration(home)
 	for _, c := range launchChecks {
 		printCheck(c)
+	}
+	fmt.Fprintln(os.Stdout)
+
+	// ── SSH ─────────────────────────────────────────────────────────────
+	fmt.Fprintln(os.Stdout, "SSH")
+	sshChecks := checkSSHAgent(home)
+	for _, c := range sshChecks {
+		printCheck(c)
+		if c.status == "fail" {
+			hasFailure = true
+		}
 	}
 	fmt.Fprintln(os.Stdout)
 
@@ -295,6 +308,51 @@ func checkLaunchIntegration(home string) []doctorCheck {
 	checks = append(checks, cursorStatus)
 
 	return checks
+}
+
+// checkSSHAgent probes ssh-agent readiness and reports whether an on-disk
+// SSH key is actually usable. The shield blocks direct key-file reads (ADR
+// 0001), so ssh access must go through ssh-agent forwarding — this check
+// surfaces a clear diagnosis instead of a cryptic "Permission denied
+// (publickey)" failure.
+func checkSSHAgent(home string) []doctorCheck {
+	_ = home // unused; sshagent.Probe locates ~/.ssh via os.UserHomeDir itself.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	st := sshagent.Probe(ctx)
+	return []doctorCheck{sshAgentCheck(st)}
+}
+
+// sshAgentCheck maps a probed sshagent.Status to a doctorCheck. It is a pure
+// function of Status so it can be tested with hand-built values without a
+// real ssh-agent.
+func sshAgentCheck(st sshagent.Status) doctorCheck {
+	if !st.KeysOnDisk {
+		return doctorCheck{
+			label:  "ssh-agent",
+			status: "skip",
+			detail: "no ssh keys in ~/.ssh — skipping",
+		}
+	}
+
+	if st.Readiness == sshagent.ReadinessReady {
+		return doctorCheck{
+			label:  "ssh-agent",
+			status: "ok",
+			detail: "key(s) loaded in agent",
+		}
+	}
+
+	// NeedsRemediation() is true here: keys are on disk but not loaded.
+	// This is user environment state, not an agentjail install defect, so
+	// it must never trip hasFailure — status stays "warn".
+	return doctorCheck{
+		label:  "ssh-agent",
+		status: "warn",
+		detail: "ssh keys on disk but not loaded in ssh-agent; the shield blocks key-file reads, so ssh needs the agent. Fix: " + st.Remediation(runtime.GOOS),
+	}
 }
 
 func checkVSCodeWrapper(home, app string) doctorCheck {
