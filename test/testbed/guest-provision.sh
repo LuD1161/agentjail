@@ -16,7 +16,13 @@ log() { echo "==> [guest] $*"; }
 
 if ! command -v claude >/dev/null 2>&1; then
     log "installing Claude Code via npm"
-    sudo npm install -g @anthropic-ai/claude-code
+    # brew-installed node on macOS owns its prefix - no sudo needed.
+    # System-packaged node on Linux needs sudo for global installs.
+    if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+        npm install -g @anthropic-ai/claude-code
+    else
+        sudo npm install -g @anthropic-ai/claude-code
+    fi
 else
     log "Claude Code already installed: $(claude --version 2>/dev/null || true)"
 fi
@@ -31,8 +37,13 @@ if [ -f /tmp/claude-token ]; then
     log "seeding CLAUDE_CODE_OAUTH_TOKEN"
     install -m 0600 /tmp/claude-token "$HOME/.claude-token"
     rm -f /tmp/claude-token
-    if ! grep -q CLAUDE_CODE_OAUTH_TOKEN "$HOME/.bashrc" 2>/dev/null; then
-        printf '\n# agentjail testbed: Claude Code login\nexport CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-token")"\n' >> "$HOME/.bashrc"
+    # macOS default shell is zsh (reads ~/.zprofile); Linux uses bash.
+    rcfile="$HOME/.bashrc"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        rcfile="$HOME/.zprofile"
+    fi
+    if ! grep -q CLAUDE_CODE_OAUTH_TOKEN "$rcfile" 2>/dev/null; then
+        printf '\n# agentjail testbed: Claude Code login\nexport CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-token")"\n' >> "$rcfile"
     fi
 else
     log "no token pushed — Claude Code installed but not logged in"
@@ -42,6 +53,13 @@ fi
 
 log "running install.sh with LOCAL_TARBALL (the real user path)"
 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
+
+# macOS Gatekeeper quarantines unsigned binaries copied from outside.
+# Strip the quarantine xattr so they can execute without code-signing.
+if [ "$(uname -s)" = "Darwin" ] && [ -d "$HOME/.agentjail/bin" ]; then
+    log "clearing Gatekeeper quarantine on agentjail binaries"
+    xattr -dr com.apple.quarantine "$HOME/.agentjail/bin" 2>/dev/null || true
+fi
 
 # install.sh already ran `agentjail install` (non-tty wires all detected
 # agents). Re-run explicitly for claude-code to be deterministic + idempotent.

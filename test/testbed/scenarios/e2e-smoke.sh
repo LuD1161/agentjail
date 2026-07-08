@@ -38,7 +38,12 @@ hook() { # <label> <expected-exit> <json>
 
 echo "=== install wiring ==="
 grep -q agentjail-hook "$HOME/.claude/settings.json" && ok "hook wired into ~/.claude/settings.json" || bad "hook not wired"
-systemctl --user is-active agentjail-daemon >/dev/null 2>&1 && ok "daemon active (systemd --user)" || bad "daemon not active"
+# macOS uses launchd (LaunchAgent plist); Linux uses systemd --user.
+if [ "$(uname -s)" = "Darwin" ]; then
+    launchctl list 2>/dev/null | grep -q agentjail && ok "daemon active (launchd)" || bad "daemon not active (launchctl list has no agentjail entry)"
+else
+    systemctl --user is-active agentjail-daemon >/dev/null 2>&1 && ok "daemon active (systemd --user)" || bad "daemon not active"
+fi
 
 echo "=== Tier 1: hook policy ==="
 hook "allow write inside project"      0 '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$PROJECT"'/note.txt","content":"hi"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
@@ -54,7 +59,7 @@ echo "=== Tier 2: shield kernel sandbox (cwd = project, like a real session) ===
 cd "$PROJECT" || { bad "no project dir"; }
 rm -f "$HOME/.ssh/id_rsa"; echo ORIG > "$HOME/.ssh/id_rsa"
 "$SHIELD" -- bash -c 'echo PWNED > ~/.ssh/id_rsa' >/dev/null 2>&1
-grep -q PWNED "$HOME/.ssh/id_rsa" && bad "shield: ~/.ssh write NOT blocked" || ok "shield blocks ~/.ssh write (Landlock EPERM)"
+grep -q PWNED "$HOME/.ssh/id_rsa" && bad "shield: ~/.ssh write NOT blocked" || ok "shield blocks ~/.ssh write"
 "$SHIELD" -- bash -c 'cat ~/.ssh/id_rsa' 2>/dev/null | grep -q ORIG && bad "shield: private-key read NOT blocked" || ok "shield blocks ~/.ssh read"
 "$SHIELD" -- bash -c 'echo ok > ./shield-ok.txt' >/dev/null 2>&1
 [ -f "$PROJECT/shield-ok.txt" ] && ok "shield allows project write" || bad "shield blocks project write"
