@@ -162,16 +162,17 @@ func main() {
 	// passed and --no-netproxy is not. Default (neither flag) is port-only.
 	noNetproxyEffective := resolveNoNetproxy(*netproxyEnable, *noNetproxy)
 
-	// Cloud-metadata (IMDS) egress guard (P2/M2, ADR 0049). In the default
-	// port-only mode neither backend can filter egress by destination IP
-	// (CapMetadataIPFilter, shield_contract.go), so 169.254.169.254 is
-	// reachable over the same allowlisted port 80 as any other host. Since
-	// there is no network-layer mitigation available, this probes
-	// reachability and either refuses to launch (--audit-strict) or emits a
-	// loud warning + audit finding (default) -- run before runShield/exec
-	// so a refusal never spawns the agent. --profile-print is exempted: it
-	// only prints the profile and exits, never execs the agent.
+	// Pre-exec guards, all exempted under --profile-print (which never execs
+	// the agent, only prints the profile and exits).
 	if !*profilePrint {
+		// Cloud-metadata (IMDS) egress guard (P2/M2, ADR 0049). In the default
+		// port-only mode neither backend can filter egress by destination IP
+		// (CapMetadataIPFilter, shield_contract.go), so 169.254.169.254 is
+		// reachable over the same allowlisted port 80 as any other host. Since
+		// there is no network-layer mitigation available, this probes
+		// reachability and either refuses to launch (--audit-strict) or emits a
+		// loud warning + audit finding (default) -- run before runShield/exec
+		// so a refusal never spawns the agent.
 		decision := decideMetadataEgress(probeMetadataReachable(), noNetproxyEffective, *auditStrict)
 		if decision.Applicable {
 			fmt.Fprintf(os.Stderr, "agentjail-shield: %s\n", decision.Message)
@@ -184,6 +185,12 @@ func main() {
 				os.Exit(1)
 			}
 		}
+
+		// Hook-registration reassertion (P11, see shield_hook_reassert.go). Run
+		// immediately before exec so every shielded launch starts with the
+		// agentjail PreToolUse hook guaranteed present in the agent's settings,
+		// regardless of what a previous session did to that file.
+		reassertAgentHook(ctx, agentCmd, emitter)
 	}
 
 	// Delegate to the OS-specific sandbox implementation.
