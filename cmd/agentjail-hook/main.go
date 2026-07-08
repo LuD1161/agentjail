@@ -201,15 +201,6 @@ func failOpenWarnedSentinelPath() string {
 	return wire.FailOpenWarnedSentinelPath()
 }
 
-// hasWarnedFailOpen reports whether the fail-open sentinel already exists.
-// A plain stat call, no locking: the race between two concurrent hook
-// invocations both seeing "not warned" is benign (worst case, one extra
-// duplicate warning line).
-func hasWarnedFailOpen() bool {
-	_, err := os.Stat(failOpenWarnedSentinelPath())
-	return err == nil
-}
-
 // markFailOpenWarned creates the fail-open sentinel file, recording the PID
 // and timestamp of the hook invocation that first observed the daemon being
 // unreachable (useful for debugging how long the daemon has been down).
@@ -218,15 +209,20 @@ func markFailOpenWarned() {
 	_ = os.WriteFile(failOpenWarnedSentinelPath(), []byte(content), 0o600)
 }
 
-// failOpenFriendlyMessage is the user-facing message shown the first time a
-// hook invocation fails open in a session. Subsequent fail-opens stay silent
-// on stderr (though telemetry is still sent every time).
+// failOpenFriendlyMessage is the user-facing message shown on every fail-open
+// occurrence at the "allow" level (see printFailOpenBanner in
+// hookfallback.go). Historically this was shown only once per session,
+// gated by the fail-open-warned sentinel; ADR 0050 replaced that with a
+// loud, per-occurrence notice at every daemon_unreachable level, since a
+// silent one-shot warning let protection stay off indefinitely unnoticed.
 const failOpenFriendlyMessage = "agentjail: daemon not running - policy enforcement disabled (run 'agentjail doctor' to diagnose)"
 
 // failOpenMarker emits a fail_open telemetry event immediately (synchronous,
 // short timeout - we are about to os.Exit(0) so blocking briefly is
-// acceptable), and writes a stderr warning only on the first fail-open
-// observed since the sentinel was last cleared (see failOpenWarnedSentinelPath).
+// acceptable). The fail-open-warned sentinel is still recorded (useful
+// forensics for `agentjail doctor` — how long has the daemon been down) but
+// no longer gates the stderr banner, which failOpenClaudeLike/failOpenCursor
+// print on every occurrence via printFailOpenBanner.
 // Categories: read-stdin | parse-input | dial-daemon | read-response | parse-response
 //
 // Audit emission is intentionally skipped here: the audit store is owned by
@@ -234,10 +230,7 @@ const failOpenFriendlyMessage = "agentjail: daemon not running - policy enforcem
 // open) there is no store to write to, nor a way to backfill it once the
 // daemon returns. Telemetry and stderr are the correct capture path.
 func failOpenMarker(agent, category string) {
-	if !hasWarnedFailOpen() {
-		fmt.Fprintln(os.Stderr, failOpenFriendlyMessage)
-		markFailOpenWarned()
-	}
+	markFailOpenWarned()
 	// Emit telemetry best-effort: short timeout, all errors silently discarded.
 	// Sent on every fail-open (not just the first) so frequency is observable.
 	if tp, err := defaultTelemetryPaths(); err == nil {
@@ -247,35 +240,51 @@ func failOpenMarker(agent, category string) {
 	}
 }
 
-// failOpenClaudeLike writes a structured fail-open marker to stderr (only on
-// the first fail-open in a session, see failOpenMarker) and emits the agent's
-// allow response, then exits 0.
-func failOpenClaudeLike(agent, category, detail string) {
-	firstWarning := !hasWarnedFailOpen()
+// failOpenClaudeLike is the Claude Code/Codex fail-open path. It loads the
+// daemon-written hook-fallback sidecar (ADR 0050), prints a loud
+// per-occurrence banner naming the current daemon_unreachable level, and
+// then renders the resolved decision in the agent's convention: "allow"
+// exits 0 as before; "deny" (from level=deny, or a degraded-mode offline
+// critical-rule match) exits 2 with a reason on stderr, exactly like a
+// daemon-rendered deny.
+//
+// toolName/toolInput/cwd carry the tool call's identity for degraded-mode
+// offline matching; toolName == "" (read-stdin/parse-input failures, before
+// the call's identity could ever be known) always resolves to "allow" under
+// degraded (nothing to match) while still failing closed under "deny".
+func failOpenClaudeLike(agent, category, detail, toolName string, toolInput map[string]interface{}, cwd string) {
+	fb, _ := loadHookFallback()
 	failOpenMarker(agent, category)
-	if firstWarning {
-		fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+	printFailOpenBanner(fb.Level)
+	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+
+	decision := resolveFailOpenDecision(fb, toolName, toolInput, cwd)
+	if decision.Deny {
+		fmt.Fprintf(os.Stderr, "agentjail: denied by policy (rule=%s): %s\n", decision.RuleID, decision.Reason)
+		os.Exit(2)
 	}
+
 	if agent == "codex" {
 		os.Exit(0)
 	}
-	writeAllow("daemon unreachable - fail-open")
+	writeAllow(decision.Reason)
 	os.Exit(0)
 }
 
-// failOpenCursor writes a structured fail-open marker to stderr (only on the
-// first fail-open in a session, see failOpenMarker) and emits a Cursor
-// "allow" response to stdout, then exits 0.
-func failOpenCursor(category, detail string) {
-	firstWarning := !hasWarnedFailOpen()
+// failOpenCursor is the Cursor fail-open path — the same sidecar-driven
+// decision as failOpenClaudeLike, rendered in Cursor's always-exit-0
+// stdout-JSON convention (permission: allow|deny).
+func failOpenCursor(category, detail, toolName string, toolInput map[string]interface{}, cwd string) {
+	fb, _ := loadHookFallback()
 	failOpenMarker("cursor", category)
-	if firstWarning {
-		fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
-	}
-	if firstWarning {
-		writeCursorAllowWithMessage(failOpenFriendlyMessage)
+	printFailOpenBanner(fb.Level)
+	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+
+	decision := resolveFailOpenDecision(fb, toolName, toolInput, cwd)
+	if decision.Deny {
+		writeCursorDeny(decision.Reason)
 	} else {
-		writeCursorAllowWithMessage("")
+		writeCursorAllowWithMessage(decision.Reason)
 	}
 	os.Exit(0)
 }
@@ -514,13 +523,13 @@ func runClaude(agent string) {
 	// 1. Read hook JSON from stdin.
 	stdinBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		failOpenClaudeLike(agent, "read-stdin", err.Error())
+		failOpenClaudeLike(agent, "read-stdin", err.Error(), "", nil, "")
 		return
 	}
 
 	var input hookInput
 	if err := json.Unmarshal(stdinBytes, &input); err != nil {
-		failOpenClaudeLike(agent, "parse-input", err.Error())
+		failOpenClaudeLike(agent, "parse-input", err.Error(), "", nil, "")
 		return
 	}
 
@@ -532,7 +541,7 @@ func runClaude(agent string) {
 	// 3. Connect to daemon with a short dial timeout (30 ms).
 	conn, err := dialDaemon(sockPath)
 	if err != nil {
-		failOpenClaudeLike(agent, "dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
+		failOpenClaudeLike(agent, "dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err), input.ToolName, input.ToolInput, input.CWD)
 		return
 	}
 	defer conn.Close()
@@ -557,7 +566,7 @@ func runClaude(agent string) {
 		if isWriteErr(err) {
 			cat = "dial-daemon"
 		}
-		failOpenClaudeLike(agent, cat, err.Error())
+		failOpenClaudeLike(agent, cat, err.Error(), input.ToolName, input.ToolInput, input.CWD)
 		return
 	}
 
@@ -613,14 +622,14 @@ func runCursor() {
 	// 1. Read hook JSON from stdin.
 	stdinBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		failOpenCursor("read-stdin", err.Error())
+		failOpenCursor("read-stdin", err.Error(), "", nil, "")
 		return
 	}
 
 	// 2. Parse Cursor-format input and map to daemonRequest.
 	req, err := parseCursorInput(stdinBytes)
 	if err != nil {
-		failOpenCursor("parse-input", err.Error())
+		failOpenCursor("parse-input", err.Error(), "", nil, "")
 		return
 	}
 	// parseCursorInput does not know the agent identity; set it here.
@@ -633,7 +642,7 @@ func runCursor() {
 	// 4. Connect to daemon.
 	conn, err := dialDaemon(sockPath)
 	if err != nil {
-		failOpenCursor("dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
+		failOpenCursor("dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err), req.ToolName, req.ToolInput, req.CWD)
 		return
 	}
 	defer conn.Close()
@@ -645,7 +654,7 @@ func runCursor() {
 		if isWriteErr(err) {
 			cat = "dial-daemon"
 		}
-		failOpenCursor(cat, err.Error())
+		failOpenCursor(cat, err.Error(), req.ToolName, req.ToolInput, req.CWD)
 		return
 	}
 
