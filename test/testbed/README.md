@@ -166,8 +166,24 @@ Known things to verify / likely fixes (commit them when done):
 
 `create → provision → ssh → agentjail status → claude` works on a fresh clone,
 same as the Linux flow above. Commit fixes to this directory on the
-`worktree-e2e-vm-test-engine` branch (signed, `git commit -s`, identity
+`security/2026-07-07-review-fixes` branch (signed, `git commit -s`, identity
 `You <you@example.com>`), then push to `origin`.
+
+### Pulling this on the Mac
+
+The Linux work is on `origin` (branch `security/2026-07-07-review-fixes`).
+On the laptop:
+
+```sh
+cd ~/Repos/AgentJail-Repos/agentjail   # the local-dev working copy
+git fetch origin
+git checkout security/2026-07-07-review-fixes
+git pull origin security/2026-07-07-review-fixes
+```
+
+Then follow "Mac side" steps 1–4 above. **You only need to do the Tart /
+macOS work** — Linux is already done and validated on a Linux host; do not
+re-run or re-implement the Lima side.
 
 ---
 
