@@ -1,6 +1,6 @@
 # ADR 0049: Host-veth vs. unprivileged userns + TUN-fd handoff for agent network interception
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
@@ -84,9 +84,13 @@ already borrowed the gateway from:
 - **Fallback:** where unprivileged user namespaces are disabled by host policy
   (some hardened/older distros set `kernel.unprivileged_userns_clone=0` or
   `user.max_user_namespaces=0`) or `/dev/net/tun` is unavailable, fall back to
-  the existing **netproxy** mode (as `--tunnel` already does today). The
-  privileged-daemon veth path (Mechanism A) is retained only as an explicit,
-  opt-in escape hatch for environments that require it — not the default.
+  the existing **netproxy** mode (as `--tunnel` already does today).
+- **Mechanism A (host-veth + privileged daemon) is deprecated and will not be
+  built.** AGE-103 (privileged namespace RPC + `install --service`) and AGE-140
+  (peer-UID + per-session auth on `daemon-ns.sock`) are **closed as obviated**.
+  The privileged socket is never `rpc.Register`ed; netproxy — not a privileged
+  daemon — is the sole fallback. The dormant veth/`daemon-ns.sock` code on
+  `feat/network-visibility` is dead and should be removed as Mechanism B lands.
 
 ## Consequences
 
@@ -120,9 +124,10 @@ already borrowed the gateway from:
   `internal/tunnel`, replacing the veth/daemon-RPC code paths already written.
 - **macOS still needs one-time approval.** Unavoidable on that platform; it is
   install-time and OS-mediated, not per-run.
-- **Two mechanisms to maintain** if the veth fallback is kept. Per ADR 0034 the
-  shared contract must drive both; the veth path should be a named, commented
-  exception, not a parallel implementation.
+- **Degraded fallback where userns is unavailable.** When unprivileged userns is
+  disabled, the agent gets netproxy (hostname-only egress control), not the
+  in-namespace deep inspection. This is an accepted, documented limitation
+  rather than a privileged escape hatch — `doctor` must surface it clearly.
 
 ## Related
 
