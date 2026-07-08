@@ -86,6 +86,8 @@ func runServer(args []string) {
 	}
 
 	gm := credentials.NewGrantManager()
+	stopCleanup := gm.StartCleanup(credentials.DefaultCleanupInterval)
+	defer stopCleanup()
 
 	// Open audit emitter (best-effort; fall back to NopEmitter).
 	var emitter audit.Emitter = audit.NopEmitter{}
@@ -219,6 +221,7 @@ func handleGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, em
 	if err != nil {
 		ttl = 15 * time.Minute
 	}
+	ttl = credentials.ClampTTL(ttl)
 
 	scope := req.Scope
 	if scope == "" {
