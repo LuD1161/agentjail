@@ -1,5 +1,6 @@
 # Build outputs
 /bin/
+/dist/
 
 # Editor / OS noise
 .DS_Store
