@@ -58,10 +58,50 @@ The profile is **deny-list based** (allow-by-default):
   an agent's own direct read of that path (e.g. a `cat` or `Read` tool call).
 - **Allows reads** of system trust stores (`/private/etc/ssl`,
   `/System/Library/Keychains`, `/Library/Keychains`) so TLS works
+- **Allows writes** to the per-user `$TMPDIR` (`/var/folders/<xx>/<yyy>/T`),
+  carved out after the `/var` deny with strict, fail-closed path
+  validation -- macOS tools (compilers, `xcrun`, Go's own build tooling)
+  write there, not to `/tmp`
+- **Allows local AF_UNIX sockets** to match Linux Landlock's `/tmp`
+  behavior: `bind()` on `/tmp`, `/private/tmp`, and the per-user temp dir;
+  `connect()` only within the per-user temp dir (narrower, see residual
+  boundary in [ADR 0054](./adr/0054-macos-shield-tempdir-afunix-parity.md))
 - **Restricts network egress** (see [Network enforcement](#network-enforcement))
 
 No sudo, no entitlement, no Developer ID required. `sandbox-exec` ships on
 every macOS since 10.5.
+
+### SSH and ssh-agent
+
+Private key FILE reads are blocked by design on both platforms --
+`~/.ssh/id_*` and friends match `SensitiveFilePatterns` and stay denied
+regardless of shield config. `ssh` still works under the shield through
+`ssh-agent`: `SSH_AUTH_SOCK` is passed through the sandbox's env
+allowlist, and the shield explicitly allows connecting to that socket
+(macOS: `network-outbound` on the resolved socket path; Linux: a dynamic
+Landlock rw grant for the socket path), so a sandboxed `ssh` can ask the
+agent to sign without ever touching the key file. See
+[ADR 0054](./adr/0054-macos-shield-tempdir-afunix-parity.md) for the
+underlying AF_UNIX mechanics.
+
+If a sandboxed `ssh` fails with "Operation not permitted" or a similar
+auth failure, the key is most likely not loaded into the agent yet -- it
+is not a sandbox misconfiguration. Load it once:
+
+```sh
+# macOS (persists across reboots via Keychain)
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+
+# Other platforms
+eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+```
+
+`agentjail doctor` proactively checks for this (keys present on disk but
+none loaded in the agent) and prints the same hint. The hook prints a
+one-shot version of the same advisory to stderr the first time it allows
+an ssh-ish command while the agent is empty. Neither ever suggests
+granting a read hole for the key file -- the fix is always to load the
+key into the agent.
 
 ### Linux — Landlock LSM
 
@@ -442,6 +482,7 @@ agentjail-shield -- sh -c "echo test > ~/.ssh/test_file"
 ## Further reading
 
 - [ADR 0001 — OS sandbox enforcement layer](./adr/0001-os-sandbox-enforcement-layer.md) — the decision record
+- [ADR 0054 - macOS shield temp-dir and AF_UNIX parity](./adr/0054-macos-shield-tempdir-afunix-parity.md) - why the temp-dir carve-out and AF_UNIX allows exist
 - [Architecture](./ARCHITECTURE.md) — how the sandbox fits into agentjail's isolation tiers
 - [Apple Seatbelt documentation](https://developer.apple.com/documentation/security) (limited official docs)
 - [Landlock documentation](https://docs.kernel.org/userspace-api/landlock.html)

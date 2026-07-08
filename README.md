@@ -485,6 +485,8 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 
 **Tier 2 - MicroVM:** microsandbox Go SDK integration for hardware-isolated agent execution on macOS (HVF), Linux (KVM), and Windows (WSL2).
 
+**SSH under the sandbox:** `ssh` works through `ssh-agent` - the agent socket is passed through and allowed, but private key files stay unreadable by design. If a sandboxed `ssh` fails with "Operation not permitted", the key probably isn't loaded: run `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` once (macOS). `agentjail doctor` flags a not-loaded key proactively. See [SANDBOX.md](./docs/SANDBOX.md#ssh-and-ssh-agent).
+
 </details>
 
 ---
