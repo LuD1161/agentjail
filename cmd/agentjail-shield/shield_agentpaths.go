@@ -42,7 +42,7 @@ func agentPaths() AgentPaths {
 			".vscode",     // VS Code settings
 		},
 		HomeRO: []string{
-			".agentjail",  // agentjail's OWN state: read/traverse only. The agent
+			".agentjail", // agentjail's OWN state: read/traverse only. The agent
 			//                must NOT write policy.yaml, the SQLite DB, or (Phase 2)
 			//                trusted.yaml -- those gate enforcement, so a writable
 			//                grant would let the agent disable its own guardrail
