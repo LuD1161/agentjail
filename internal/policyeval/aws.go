@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	ini "gopkg.in/ini.v1"
 )
 
 // awsProfileInfo is the per-profile account-resolution data parsed from
@@ -121,58 +123,40 @@ func (e *evaluator) loadAWSProfiles() map[string]awsProfileInfo {
 	return e.awsProfiles
 }
 
-// ParseAWSConfig parses an AWS config file (INI-like) into a profile->info map.
-// Sections are [default] or [profile <name>]; keys are key = value. Comments
-// (# or ;) and blank lines are ignored.
+// ParseAWSConfig parses an AWS config file (INI) into a profile->info map,
+// using the battle-tested gopkg.in/ini.v1 parser (AGE-106 item 7) so inline
+// comments, quoted/multi-line values, and comment-char edge cases are handled
+// per the INI spec rather than by a hand-rolled line scanner.
+//
+// Section-name mapping follows the AWS convention: the [default] section maps
+// to the "default" profile, [profile <name>] maps to "<name>", and every other
+// section (ini's own DEFAULT root, [sso-session ...], [services ...]) is
+// skipped. Only role_arn, sso_account_id, and source_profile are read.
 func ParseAWSConfig(content string) map[string]awsProfileInfo {
 	profiles := map[string]awsProfileInfo{}
-	current := ""
-	for _, raw := range strings.Split(content, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+	cfg, err := ini.Load([]byte(content))
+	if err != nil {
+		slog.Debug("aws config parse failed; AWS posture will use default_posture", "err", err)
+		return profiles
+	}
+	for _, sec := range cfg.Sections() {
+		var profile string
+		switch name := sec.Name(); {
+		case name == "default":
+			profile = "default"
+		case strings.HasPrefix(name, "profile "):
+			profile = strings.TrimSpace(strings.TrimPrefix(name, "profile "))
+		default:
+			continue // ini DEFAULT root, [sso-session ...], [services ...], etc.
+		}
+		if profile == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			inner := strings.TrimSpace(line[1 : len(line)-1])
-			if inner == "default" {
-				current = "default"
-			} else if strings.HasPrefix(inner, "profile ") {
-				current = strings.TrimSpace(inner[len("profile "):])
-			} else {
-				current = "" // non-profile section (e.g. sso-session), skip
-			}
-			continue
+		profiles[profile] = awsProfileInfo{
+			roleARN:       sec.Key("role_arn").String(),
+			ssoAccountID:  sec.Key("sso_account_id").String(),
+			sourceProfile: sec.Key("source_profile").String(),
 		}
-		if current == "" {
-			continue
-		}
-		key, val, ok := SplitAWSConfigKV(line)
-		if !ok {
-			continue
-		}
-		info := profiles[current]
-		switch key {
-		case "role_arn":
-			info.roleARN = val
-		case "sso_account_id":
-			info.ssoAccountID = val
-		case "source_profile":
-			info.sourceProfile = val
-		}
-		profiles[current] = info
 	}
 	return profiles
-}
-
-// SplitAWSConfigKV splits a "key = value" (or "key=value") line, trimming the
-// value of surrounding quotes/whitespace. Returns ok=false if no "=" present.
-func SplitAWSConfigKV(line string) (key, val string, ok bool) {
-	idx := strings.Index(line, "=")
-	if idx < 0 {
-		return "", "", false
-	}
-	key = strings.TrimSpace(line[:idx])
-	val = strings.TrimSpace(line[idx+1:])
-	val = strings.Trim(val, `"'`)
-	return key, val, true
 }
