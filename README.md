@@ -46,7 +46,7 @@ brew install LuD1161/tap/agentjail
 | **v0.5.0** | Jul 6, 2026 | Daemon-hosted grant server (AGE-116). Policy simplification (AGE-114). Self-update and shield fixes. |
 | **v0.4.0** | Jul 5, 2026 | Session-aware network proxy. Per-folder project overlays. Runtime host grants. Shared sandbox contract. macOS code signing. |
 | **v0.3.0** | Jun 27, 2026 | Sessions subsystem (`agentjail sessions list`). Cobra CLI migration. Platform-specific procwalk. |
-| **v0.2.9** | Jun 26, 2026 | `agentjail mcp inventory`. Per-project policy resolution. Per-skill and per-tool policy CLI. |
+| **v0.2.9** | Jun 26, 2026 | `agentjail mcp scan`. Per-project policy resolution. Per-skill and per-tool policy CLI. |
 | **v0.2.8** | Jun 23, 2026 | Granular MCP policy (`blocked_tools`/`ask_tools`). Live tool discovery. Security fixes (XSS, CSRF). |
 | **v0.2.7** | Jun 23, 2026 | Interactive replay TUI. Colored output. Agent glyphs. |
 | **v0.2.6** | Jun 23, 2026 | Daemon auto-update. Linux systemd support. |
@@ -366,7 +366,9 @@ Disabling a **core** rule requires `--force` + interactive confirmation (agents 
 agentjail mcp list                # current allowed + blocked
 agentjail mcp allow claude-mem    # trust a server
 agentjail mcp block my-payment-bot
-agentjail mcp inventory           # full MCP surface map from configs, npm, pip, Docker
+agentjail mcp scan                # full MCP surface map from configs, npm, pip, Docker, audit history
+agentjail mcp scan --json         # machine-readable scan output
+agentjail mcp where <server>      # show which projects use a given MCP server
 ```
 
 Install auto-seeds the allowlist from your existing MCP config (including Claude Code plugins). Changes require interactive terminal confirmation.
