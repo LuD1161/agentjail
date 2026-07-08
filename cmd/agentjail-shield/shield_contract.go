@@ -14,6 +14,7 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,6 +81,18 @@ const (
 	// CapLoopbackScopedBind is the "restrict a TCP bind/inbound rule to the
 	// loopback interface only" capability, as opposed to any-interface.
 	CapLoopbackScopedBind CapabilityKey = "loopback-scoped-bind"
+	// CapMetadataIPFilter is the "deny egress to a specific destination IP
+	// (e.g. the cloud metadata service) while still allowing the fallback
+	// ports to everything else" capability. Neither backend's port-only
+	// (--no-netproxy) primitive can express this: Landlock net rules
+	// (LANDLOCK_RULE_NET_PORT) are port-scoped only with no address
+	// component, and sbpl's (remote tcp/ip "HOST:PORT") rejects literal IP
+	// hosts (only "*" and "localhost" are accepted -- see
+	// shield_darwin_test.go). Both backends name this Unsupported; the
+	// mitigation is the launch-time metadata-egress guard in main.go
+	// (decideMetadataEgress / probeMetadataReachable), not a network rule.
+	// See docs/adr/0049-cloud-metadata-egress-guard.md.
+	CapMetadataIPFilter CapabilityKey = "metadata-ip-filter"
 )
 
 // BackendCapability summarizes, for one backend, which contract capabilities
@@ -157,6 +170,68 @@ func AgentjailSecretsProtectedNames() map[string]bool {
 		"secrets.key": true,
 		"secrets":     true,
 	}
+}
+
+// CloudMetadataDenyIP is a single well-known cloud-provider instance
+// metadata service (IMDS) address that must never be reachable by the
+// sandboxed agent. This is the shared, tag-free source of truth (ADR 0034):
+// both shield backends would translate this into their own enforcement
+// primitive if either had one (see CapMetadataIPFilter -- today neither
+// does in port-only/--no-netproxy mode), and main.go's launch-time guard
+// (decideMetadataEgress) consumes it directly.
+type CloudMetadataDenyIP struct {
+	// IP is the literal IPv4 or IPv6 address (no port, no CIDR).
+	IP string
+	// Note documents which cloud provider(s) use this address.
+	Note string
+}
+
+// CloudMetadataDenyIPs returns the well-known cloud IMDS endpoints that must
+// never be reachable through the shield's default egress path.
+//
+//   - 169.254.169.254 is the IMDS address on AWS, GCP, Azure, OpenStack, and
+//     Alibaba Cloud (the "link-local metadata IP" convention).
+//   - fd00:ec2::254 is AWS's IPv6 IMDS endpoint.
+//
+// See CloudMetadataDenyCIDR for the broader IPv4 link-local block these
+// addresses live in.
+func CloudMetadataDenyIPs() []CloudMetadataDenyIP {
+	return []CloudMetadataDenyIP{
+		{IP: "169.254.169.254", Note: "AWS/GCP/Azure/OpenStack/Alibaba Cloud IMDS (IPv4)"},
+		{IP: "fd00:ec2::254", Note: "AWS IMDS (IPv6)"},
+	}
+}
+
+// CloudMetadataDenyCIDR is the full IPv4 link-local block (RFC 3927) that
+// hosts every cloud provider's metadata IP. IsCloudMetadataIP treats any
+// address inside this block as a metadata endpoint, not just the exact
+// 169.254.169.254 literal, since some providers (e.g. Azure's Wireserver at
+// 168.63.129.16 is an exception -- deliberately NOT covered by this CIDR)
+// use adjacent link-local addresses for related services.
+const CloudMetadataDenyCIDR = "169.254.0.0/16"
+
+// IsCloudMetadataIP reports whether ip (a dotted-quad IPv4 or IPv6 literal,
+// as returned by net.Conn.RemoteAddr / net.SplitHostPort) is a known or
+// likely cloud-metadata endpoint: an exact match against CloudMetadataDenyIPs
+// or any address inside CloudMetadataDenyCIDR. Malformed input returns false
+// (fails open on THIS helper only -- callers that need fail-closed behavior
+// for unparseable input must check separately; see decideMetadataEgress
+// which never receives unparsed input because it consumes a bool).
+func IsCloudMetadataIP(ip string) bool {
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return false
+	}
+	for _, deny := range CloudMetadataDenyIPs() {
+		if denyAddr := net.ParseIP(deny.IP); denyAddr != nil && denyAddr.Equal(addr) {
+			return true
+		}
+	}
+	_, cidr, err := net.ParseCIDR(CloudMetadataDenyCIDR)
+	if err != nil {
+		return false
+	}
+	return cidr.Contains(addr)
 }
 
 var knownHostsGrant = PathGrant{Path: ".ssh/known_hosts", Mode: ReadOnly, PerFile: true}

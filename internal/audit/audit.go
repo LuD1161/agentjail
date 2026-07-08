@@ -34,7 +34,7 @@ const (
 	// expiry regardless of traffic. Never put the session Token in Detail.
 	NetproxySessionRegistered = "netproxy.session_registered"
 	NetproxySessionExpired    = "netproxy.session_expired"
-	// Runtime host grants (`/agentjail allow`, AGE-93). Requested is
+	// Runtime host grants (`/agentjail allow`, follow-up). Requested is
 	// best-effort (filed by the agent-reachable data-plane sentinel);
 	// Approved/Denied are the human, control-socket decisions -- Approved is
 	// fail-closed (never emitted through a NopEmitter, see ADR 0044); Expired
@@ -43,7 +43,7 @@ const (
 	NetproxyGrantApproved  = "netproxy.grant_approved"
 	NetproxyGrantDenied    = "netproxy.grant_denied"
 	NetproxyGrantExpired   = "netproxy.grant_expired"
-	// Daemon-hosted runtime host grants (AGE-116, ADR 0047). Requested is
+	// Daemon-hosted runtime host grants (follow-up, ADR 0047). Requested is
 	// best-effort; Denied is best-effort. Approval uses PolicyChangeRequested
 	// (fail-closed) and PolicyChanged (best-effort) instead of a separate event.
 	DaemonGrantRequested = "daemon.grant_requested"
@@ -52,6 +52,12 @@ const (
 	// shield when it resolves a `./.agentjail/policy.yaml` for a session.
 	ProjectOverlayApplied          = "project_overlay.applied"
 	ProjectOverlayIgnoredUntrusted = "project_overlay.ignored_untrusted"
+	// ShieldMetadataEgressExposed is emitted by the launch-time cloud-
+	// metadata (IMDS) egress guard (main.go decideMetadataEgress) when the
+	// metadata service is reachable through the shield's default
+	// (port-only, --no-netproxy) egress path -- best-effort, fired whether
+	// or not --audit-strict caused the launch to be refused. See ADR 0049.
+	ShieldMetadataEgressExposed = "shield.metadata_egress_exposed"
 )
 
 // Event is one audit log entry.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"regexp"
 	"testing"
 )
@@ -136,5 +137,82 @@ func TestConfigCredentialSubdirs_CoversKnownCredentialStores(t *testing.T) {
 		if !seen[w] {
 			t.Errorf("ConfigCredentialSubdirs() missing expected entry %q", w)
 		}
+	}
+}
+
+// ---- Cloud-metadata (IMDS) egress guard contract (P2/M2, ADR 0049) ----
+
+// TestCloudMetadataDenyIPs_CoversKnownEndpoints pins the shared list to the
+// two addresses the finding calls out explicitly: AWS/GCP/Azure/OpenStack/
+// Alibaba's shared IPv4 IMDS address and AWS's IPv6 IMDS address. A silent
+// change here would silently narrow what the launch-time guard checks.
+func TestCloudMetadataDenyIPs_CoversKnownEndpoints(t *testing.T) {
+	ips := CloudMetadataDenyIPs()
+	want := map[string]bool{"169.254.169.254": false, "fd00:ec2::254": false}
+	for _, m := range ips {
+		if m.IP == "" {
+			t.Errorf("CloudMetadataDenyIP with empty IP: %+v", m)
+		}
+		if m.Note == "" {
+			t.Errorf("CloudMetadataDenyIP %q has no Note", m.IP)
+		}
+		if net.ParseIP(m.IP) == nil {
+			t.Errorf("CloudMetadataDenyIP %q does not parse as an IP", m.IP)
+		}
+		if _, ok := want[m.IP]; ok {
+			want[m.IP] = true
+		}
+	}
+	for ip, seen := range want {
+		if !seen {
+			t.Errorf("CloudMetadataDenyIPs() missing expected endpoint %q", ip)
+		}
+	}
+}
+
+// TestIsCloudMetadataIP covers the exact-match, CIDR-match, non-match, and
+// malformed-input cases for the membership helper the launch-time guard's
+// documentation and the shared contract both describe.
+func TestIsCloudMetadataIP(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{"exact AWS/GCP/Azure IMDS IPv4", "169.254.169.254", true},
+		{"exact AWS IMDS IPv6", "fd00:ec2::254", true},
+		{"other address in the 169.254.0.0/16 link-local block", "169.254.1.1", true},
+		{"link-local block boundary, lowest address", "169.254.0.0", true},
+		{"link-local block boundary, highest address", "169.254.255.255", true},
+		{"ordinary public IPv4, not metadata", "8.8.8.8", false},
+		{"ordinary private IPv4, not metadata", "10.0.0.1", false},
+		{"loopback, not metadata", "127.0.0.1", false},
+		{"unrelated IPv6, not metadata", "2001:4860:4860::8888", false},
+		{"empty string", "", false},
+		{"not an IP at all", "169.254.169.254.evil.example.com", false},
+		{"hostname, not a literal IP", "metadata.google.internal", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsCloudMetadataIP(c.ip); got != c.want {
+				t.Errorf("IsCloudMetadataIP(%q) = %v, want %v", c.ip, got, c.want)
+			}
+		})
+	}
+}
+
+// TestCapMetadataIPFilter_IsDistinctKey is a compile-time-adjacent sanity
+// check that the capability key exists and is distinct from the other two
+// -- the real "both backends name it Unsupported" assertion lives in
+// shield_darwin_fixes_test.go (darwin) and shield_linux_netplan_test.go
+// (linux), where the OS-tagged Unsupported maps are actually constructed.
+func TestCapMetadataIPFilter_IsDistinctKey(t *testing.T) {
+	keys := map[CapabilityKey]bool{
+		CapFilenamePatternDeny: true,
+		CapLoopbackScopedBind:  true,
+		CapMetadataIPFilter:    true,
+	}
+	if len(keys) != 3 {
+		t.Fatalf("expected 3 distinct CapabilityKey values, got %d", len(keys))
 	}
 }

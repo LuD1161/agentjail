@@ -104,6 +104,7 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 		Unsupported: map[CapabilityKey]UnsupportedReason{
 			CapFilenamePatternDeny: "landlock-has-no-filename-regex; enforced by hook layer (agentpolicy/policies/file_policy.rego)",
 			CapLoopbackScopedBind:  "landlock net rules (LANDLOCK_RULE_NET_PORT) are port-scoped only; there is no per-interface/address restriction, so a granted bind/connect port is reachable on any interface, not loopback-only",
+			CapMetadataIPFilter:    "landlock net rules (LANDLOCK_RULE_NET_PORT) are port-scoped only -- there is no destination-address component, so the port-only fallback's CONNECT-to-{22,80,443} rule cannot carve out a deny for 169.254.169.254; mitigated by the launch-time decideMetadataEgress guard in main.go instead (ADR 0049)",
 		},
 	}
 	if abi < 4 {

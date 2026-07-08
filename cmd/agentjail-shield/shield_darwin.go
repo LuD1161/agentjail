@@ -166,6 +166,10 @@ func darwinCapabilities() BackendCapability {
 				"(local ip \"127.0.0.1:*\") is rejected by sandbox-exec (\"host must be * or localhost\") " +
 				"and (local tcp \"localhost:*\") was measured to still allow 0.0.0.0 bind -- " +
 				"no proven sbpl form restricts bind to loopback only",
+			CapMetadataIPFilter: "sbpl (remote tcp/ip \"HOST:PORT\") rejects literal IP hosts -- only \"*\" and " +
+				"\"localhost\" are accepted by sandbox-exec -- so the port-only fallback's *:80/*:443 allow " +
+				"rules cannot carve out a deny for 169.254.169.254; mitigated by the launch-time " +
+				"decideMetadataEgress guard in main.go instead (ADR 0049)",
 		},
 	}
 }

@@ -103,7 +103,7 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 
 > **Interim (ADR 0046):** per-host egress enforcement (`agentjail-netproxy`) is
 > **opt-in and OFF by default**. The credentialed proxy URL broke Claude Code's
-> MCP transport on macOS, and the transparent tunnel (AGE-81/AGE-96) will
+> MCP transport on macOS, and the transparent tunnel (follow-up/follow-up) will
 > supersede the proxy with real per-session isolation and no proxy env. Until
 > then the shield runs **port-only by default** (filesystem/process/keychain
 > sandbox stays fully on); pass `--netproxy` to turn per-host filtering on. The
@@ -182,6 +182,26 @@ unhandled in this mode so it does not regress dynamic (not-yet-resolved) MCP
 OAuth callback ports. There is still no per-host enforcement in this mode
 (port-level only, same limitation as macOS `--no-netproxy`).
 
+### Cloud metadata (IMDS) in port-only mode
+
+Neither backend can filter port-only egress by destination IP (Landlock's
+`LANDLOCK_RULE_NET_PORT` is port-scoped only; sbpl's `(remote tcp/ip
+"HOST:PORT")` rejects literal IP hosts). That means in the default,
+port-only mode, `169.254.169.254` (the cloud instance metadata service on
+AWS/GCP/Azure/OpenStack/Alibaba) and `fd00:ec2::254` (AWS IPv6) are reachable
+over the same allowlisted port 80 as any other host -- a shielded agent
+running on a real cloud instance could otherwise exfiltrate IAM/service-
+account credentials via IMDS.
+
+Since no network-layer block is available in port-only mode, `agentjail-shield`
+runs a launch-time metadata-egress guard instead (ADR 0049): it probes whether
+the metadata IPs are reachable and, if so, either refuses to launch
+(`--audit-strict`) or prints a loud warning and records a
+`shield.metadata_egress_exposed` audit event (default). Pass `--netproxy` to
+close the exposure entirely -- `network.allowed_hosts` does not include the
+metadata IP by default, so per-host enforcement blocks it like any
+non-allowlisted host.
+
 ---
 
 ## CLI reference
@@ -199,7 +219,7 @@ The `--` separator between shield flags and the agent command is **required**.
 | `--netproxy` | `false` | Enable `agentjail-netproxy` per-host egress enforcement (opt-in; default off until the transparent tunnel lands -- ADR 0046) |
 | `--no-netproxy` | `false` | Explicitly select port-based filtering (now the default); retained for back-compat |
 | `--audit-json=PATH` | `""` | Write environment audit findings as JSON to PATH (use `-` for stdout) |
-| `--audit-strict` | `false` | Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1) |
+| `--audit-strict` | `false` | Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1), or if cloud metadata (IMDS) is reachable in port-only mode |
 
 ### Examples
 
@@ -245,6 +265,14 @@ over-permissive configuration that increases the blast radius of a foot-gun:
 Use `--audit-json=PATH` to output structured findings as JSON (use `-` for
 stdout). Use `--audit-strict` to refuse launching when critical findings
 are detected.
+
+Separately from the above table, a launch-time metadata-egress guard checks
+whether the cloud instance metadata service (`169.254.169.254` /
+`fd00:ec2::254`) is reachable while running in port-only (`--no-netproxy`)
+mode -- see [Cloud metadata (IMDS) in port-only mode](#cloud-metadata-imds-in-port-only-mode)
+above and [ADR 0049](./adr/0049-cloud-metadata-egress-guard.md). It always
+warns loudly when applicable; `--audit-strict` additionally refuses to
+launch.
 
 ---
 
