@@ -40,6 +40,10 @@ func TestMain(m *testing.M) {
 		runLandlockAgentjailChild()
 		os.Exit(0)
 	}
+	if os.Getenv("AGENTJAIL_LANDLOCK_SECRETS_CHILD") == "1" {
+		runLandlockSecretsChild()
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -403,6 +407,134 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 		t.Logf("ctl_connect denied (bonus)")
 	} else {
 		t.Logf("ctl_connect=ok (Landlock limitation; grant-socket isolation needs Tier 2+)")
+	}
+}
+
+// runLandlockSecretsChild proves the C2 fix: after Landlock, the sandboxed
+// agent must be UNABLE to read the secrets-broker master key
+// (~/.agentjail/secrets.key) or anything under its encrypted store
+// (~/.agentjail/secrets/), even though the rest of ~/.agentjail (e.g.
+// policy.yaml) stays readable for observability. See the ".agentjail"
+// special-case in applyLandlock (shield_linux.go) and
+// AgentjailSecretsProtectedNames (shield_contract.go).
+//
+// Results are printed one per line:
+//   - key_read=EACCES (denied, expected) | =ok (LEAK) | =ERR:<msg>
+//   - store_read=EACCES (denied, expected) | =ok (LEAK) | =ERR:<msg>
+//   - policy_read=ok (allowed, expected) | =EACCES (over-broad deny) | =ERR:<msg>
+func runLandlockSecretsChild() {
+	if err := applyLandlock(nil, 0); err != nil {
+		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		fmt.Fprintln(os.Stdout, "key_read=ERR:no-home\nstore_read=ERR:no-home\npolicy_read=ERR:no-home")
+		os.Exit(0)
+	}
+
+	// Probe 1: read ~/.agentjail/secrets.key -- must be DENIED.
+	keyPath := filepath.Join(home, ".agentjail", "secrets.key")
+	if _, rerr := os.ReadFile(keyPath); rerr == nil {
+		fmt.Fprintln(os.Stdout, "key_read=ok")
+	} else if errors.Is(rerr, unix.EACCES) || errors.Is(rerr, unix.EPERM) {
+		fmt.Fprintln(os.Stdout, "key_read=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "key_read=ERR:%v\n", rerr)
+	}
+
+	// Probe 2: read ~/.agentjail/secrets/<name> -- must be DENIED.
+	storePath := filepath.Join(home, ".agentjail", "secrets", "github-token")
+	if _, rerr := os.ReadFile(storePath); rerr == nil {
+		fmt.Fprintln(os.Stdout, "store_read=ok")
+	} else if errors.Is(rerr, unix.EACCES) || errors.Is(rerr, unix.EPERM) {
+		fmt.Fprintln(os.Stdout, "store_read=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "store_read=ERR:%v\n", rerr)
+	}
+
+	// Probe 3: read ~/.agentjail/policy.yaml -- must remain ALLOWED. The
+	// secrets exclusion must not regress the existing observability grant.
+	policyPath := filepath.Join(home, ".agentjail", "policy.yaml")
+	if _, rerr := os.ReadFile(policyPath); rerr == nil {
+		fmt.Fprintln(os.Stdout, "policy_read=ok")
+	} else if errors.Is(rerr, unix.EACCES) || errors.Is(rerr, unix.EPERM) {
+		fmt.Fprintln(os.Stdout, "policy_read=EACCES")
+	} else {
+		fmt.Fprintf(os.Stdout, "policy_read=ERR:%v\n", rerr)
+	}
+
+	os.Exit(0)
+}
+
+// TestLandlockAgentjailSecretsExcluded verifies the C2 fix: under Landlock the
+// agent cannot read ~/.agentjail/secrets.key or ~/.agentjail/secrets/<name>,
+// but can still read ~/.agentjail/policy.yaml.
+//
+// It runs in a throwaway $HOME (under the real home, not /tmp or cwd) with
+// secrets.key, secrets/github-token, and policy.yaml pre-created, then
+// re-execs the child probe.
+func TestLandlockAgentjailSecretsExcluded(t *testing.T) {
+	_, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
+	if errno != 0 {
+		t.Skip("landlock unsupported on this kernel")
+	}
+
+	realHome, err := os.UserHomeDir()
+	if err != nil || realHome == "" {
+		t.Skip("cannot determine home directory")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Skip("cannot determine cwd")
+	}
+
+	tmpHome, err := os.MkdirTemp(realHome, ".agentjail-secrets-home-")
+	if err != nil {
+		t.Skipf("cannot create temp home under %s: %v", realHome, err)
+	}
+	defer os.RemoveAll(tmpHome)
+	if strings.HasPrefix(tmpHome, "/tmp") ||
+		strings.HasPrefix(tmpHome, cwd+string(os.PathSeparator)) || tmpHome == cwd {
+		t.Skip("temp home overlaps cwd/tmp; cannot isolate landlock denial")
+	}
+
+	ajDir := filepath.Join(tmpHome, ".agentjail")
+	secretsDir := filepath.Join(ajDir, "secrets")
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", secretsDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(ajDir, "secrets.key"), []byte("master-key-bytes"), 0o600); err != nil {
+		t.Fatalf("write secrets.key: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(secretsDir, "github-token"), []byte("ciphertext"), 0o600); err != nil {
+		t.Fatalf("write secrets/github-token: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ajDir, "policy.yaml"), []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatalf("write policy.yaml: %v", err)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "AGENTJAIL_LANDLOCK_SECRETS_CHILD=1", "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+	if err != nil {
+		t.Fatalf("child process failed: %v\noutput:\n%s", err, output)
+	}
+
+	if !strings.Contains(output, "key_read=EACCES") {
+		t.Errorf("expected key_read=EACCES (agent must NOT read ~/.agentjail/secrets.key), got:\n%s", output)
+	}
+	if !strings.Contains(output, "store_read=EACCES") {
+		t.Errorf("expected store_read=EACCES (agent must NOT read ~/.agentjail/secrets/<name>), got:\n%s", output)
+	}
+	if !strings.Contains(output, "policy_read=ok") {
+		t.Errorf("expected policy_read=ok (secrets exclusion must not regress ~/.agentjail/policy.yaml read), got:\n%s", output)
 	}
 }
 

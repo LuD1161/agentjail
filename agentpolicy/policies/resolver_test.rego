@@ -252,6 +252,7 @@ test_resolver_no_disabled_rules_effective_contains_default_allow if {
 test_resolver_locked_rules_constant if {
 	agentjail.locked_rules == {
 		"file_policy/agentjail_self",
+		"file_policy/agentjail_secrets",
 		"command_policy/no-policy-mutation",
 		"resolver/default",
 	}

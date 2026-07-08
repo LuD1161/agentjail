@@ -135,6 +135,30 @@ func NoNetproxyFallbackPorts() []int {
 	return []int{22, 80, 443}
 }
 
+// AgentjailSecretsProtectedNames returns the ~/.agentjail child names that
+// must NEVER be granted read access to the sandboxed agent: the secrets
+// broker's AES-256 master key ("secrets.key") and its encrypted store
+// ("secrets/"). ~/.agentjail is otherwise granted read-only to the agent for
+// observability (policy.yaml, the audit DB, etc — see AgentPaths.HomeRO in
+// shield_agentpaths.go), but a blanket recursive grant over the whole
+// subtree would let a sandboxed agent read the master key plus every
+// ciphertext blob and decrypt all stored secrets offline (C2).
+//
+// Linux (Landlock) has no directory-level punch-through deny primitive — an
+// allow rule on a directory grants access to its full subtree, so
+// shield_linux.go grants ~/.agentjail listing only (LANDLOCK_ACCESS_FS_READ_DIR)
+// and then enumerates children individually, skipping the names returned
+// here. Darwin (shield_darwin.go) already denies read on the whole
+// ~/.agentjail subtree via sensitiveReadPaths, so this list documents the
+// invariant for darwin (nothing further to carve out) rather than gating a
+// runtime exclusion there.
+func AgentjailSecretsProtectedNames() map[string]bool {
+	return map[string]bool{
+		"secrets.key": true,
+		"secrets":     true,
+	}
+}
+
 var knownHostsGrant = PathGrant{Path: ".ssh/known_hosts", Mode: ReadOnly, PerFile: true}
 
 var perFileGrants = []PathGrant{

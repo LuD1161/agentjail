@@ -508,6 +508,44 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		}
 		for _, name := range paths.HomeRO {
 			p := filepath.Join(home, name)
+			if name == ".agentjail" {
+				// ~/.agentjail is read-only granted for observability EXCEPT
+				// the secrets-broker master key and encrypted store (C2 fix):
+				// a plain recursive grant on the whole directory would also
+				// hand the agent secrets.key + secrets/<name>, letting it
+				// decrypt every broker secret offline. Landlock allow rules
+				// on a directory apply to its full subtree with no
+				// punch-through deny, so instead of one recursive grant we
+				// grant listing on the directory itself (READ_DIR only, no
+				// READ_FILE/EXECUTE) and then grant full read-only access to
+				// each child individually, skipping AgentjailSecretsProtectedNames.
+				if err := allowPath(p, uint64(unix.LANDLOCK_ACCESS_FS_READ_DIR)); err != nil {
+					fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
+				}
+				entries, rerr := os.ReadDir(p)
+				if rerr != nil {
+					continue // directory absent (fresh install) — nothing to grant
+				}
+				protected := AgentjailSecretsProtectedNames()
+				for _, e := range entries {
+					if protected[e.Name()] {
+						continue
+					}
+					cp := filepath.Join(p, e.Name())
+					// Directories need READ_DIR/EXECUTE too (so nested
+					// content like bin/, run/ works); plain files only take
+					// file-scoped access -- landlock_add_rule(EINVAL) if a
+					// directory-only right is requested on a regular file.
+					access := roFileAccess
+					if e.IsDir() {
+						access = roAccess
+					}
+					if err := allowPath(cp, access); err != nil {
+						fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", cp, err)
+					}
+				}
+				continue
+			}
 			if err := allowPath(p, roAccess); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 			}

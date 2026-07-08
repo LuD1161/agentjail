@@ -25,7 +25,10 @@
 #     DENY regardless of cwd.  Cannot be "inside a project" meaningfully.
 #     NOTE: ~/.agentjail is NOT in this predicate — it has its own dedicated
 #     rule_id (file_policy/agentjail_self) so it can never be disabled even
-#     when file_policy/sensitive_credential is disabled by the user.
+#     when file_policy/sensitive_credential is disabled by the user. Its
+#     secrets-broker subtree (secrets.key, secrets/) has a further dedicated,
+#     always-locked deny (file_policy/agentjail_secrets) that wins over Rule
+#     0b's read-allow for the rest of ~/.agentjail (C2 fix).
 #   is_sensitive_basename(p)   — basename/extension patterns (.env*, secrets*,
 #     *.pem, etc.).  DENY when outside cwd; ASK when inside cwd (agent was
 #     granted that directory but a human beat is still warranted).
@@ -44,6 +47,8 @@
 #
 # Disposition rules (resolver picks most-restrictive: deny > ask > allow):
 #   0. is_agentjail_self(p)                                → deny  (file_policy/agentjail_self) [LOCKED]
+#   0a. is_agentjail_secrets(p)                             → deny  (file_policy/agentjail_secrets) [LOCKED]
+#   0b. is_agentjail_self(p) AND Read AND NOT secrets       → allow (file_policy/agentjail_self_read)
 #   0c. is_hook_config(p) AND Write/Edit                   → ask   (file_policy/hook_config)
 #   1. is_protected_credential(p)                          → deny  (file_policy/sensitive_credential)
 #   2. is_sensitive_basename(p) AND in_project(p)          → ask   (file_policy/sensitive_in_project)
@@ -178,6 +183,26 @@ is_temp_path(p) if {
 
 is_agentjail_self(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.agentjail(/|$)`, p)
+}
+
+# ---------------------------------------------------------------------------
+# agentjail secrets-broker predicate — ~/.agentjail/secrets.key (the AES-256
+# master key) and ~/.agentjail/secrets/ (the encrypted secret store).
+#
+# Deliberately SEPARATE from is_agentjail_self so it can carry its own
+# candidate/rule_id (file_policy/agentjail_secrets) and win over Rule 0b's
+# blanket read-allow for the rest of ~/.agentjail (resolver.rego: deny always
+# outranks allow, regardless of rule_id). Reading either path lets an agent
+# decrypt every secret the broker has ever stored, offline, with no further
+# access needed (C2).
+# ---------------------------------------------------------------------------
+
+is_agentjail_secrets(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.agentjail/secrets\.key$`, p)
+}
+
+is_agentjail_secrets(p) if {
+	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.agentjail/secrets(/|$)`, p)
 }
 
 # ---------------------------------------------------------------------------
@@ -398,13 +423,41 @@ candidate contains r if {
 	}
 }
 
-# Rule 0b — reads of ~/.agentjail are explicitly ALLOWED (ADR 0045). Rule 0
-# above denies only Write/Edit; is_agentjail_self is already a
+# Rule 0a — agentjail secrets-broker self-protection: deny READS (and
+# writes, belt-and-suspenders) of the master key / encrypted store (C2 fix).
+# This is a LOCKED rule (resolver.rego locked_rules) so it can never be
+# suppressed via disabled_rules, and it fires for every file tool so it wins
+# regardless of tool_name. It must be declared (and therefore evaluated as a
+# deny candidate) BEFORE Rule 0b's blanket read-allow is considered by the
+# resolver — the resolver picks deny over allow unconditionally, so ordering
+# in this file doesn't strictly matter for correctness, but the deny is
+# placed first for readability.
+candidate contains r if {
+	input.tool_name in {"Write", "Edit", "Read"}
+	p := file_path
+	is_agentjail_secrets(p)
+	msg := sprintf("access to the secrets-broker store %q is denied (master key / encrypted secrets; rule is permanently locked)", [p])
+	impact_msg := sprintf("would access the secrets-broker master key or store at %q", [p])
+	r := {
+		"action":  "deny",
+		"rule_id": "file_policy/agentjail_secrets",
+		"reason":  msg,
+		"impact":  impact_msg,
+	}
+}
+
+# Rule 0b — reads of ~/.agentjail are explicitly ALLOWED (ADR 0045), EXCEPT
+# the secrets-broker master key / store, which Rule 0a above denies and which
+# always wins (resolver.rego: deny outranks allow regardless of rule_id).
+# Rule 0 above denies only Write/Edit; is_agentjail_self is already a
 # file_specific_matched clause (so file_policy/default "ask" is suppressed),
 # so without this a read would fall to the resolver default "ask". Emitting an
 # allow resolves a read cleanly to "allow", letting an agent inspect
-# policy.yaml / the audit DB for debugging. Writes stay locked; the session
-# bearer token is never on disk (ADR 0044), so reads leak no secret.
+# policy.yaml / the audit DB for debugging. Writes stay locked.
+#
+# NOTE: the master key and encrypted secrets ARE stored on disk under
+# ~/.agentjail (secrets.key, secrets/) — Rule 0a's deny is what keeps this
+# rule's blanket allow from leaking them; do not remove Rule 0a.
 candidate contains r if {
 	input.tool_name == "Read"
 	p := file_path
@@ -412,7 +465,7 @@ candidate contains r if {
 	r := {
 		"action":  "allow",
 		"rule_id": "file_policy/agentjail_self_read",
-		"reason":  "read access to ~/.agentjail is permitted for observability (writes remain locked)",
+		"reason":  "read access to ~/.agentjail is permitted for observability (writes remain locked; secrets.key/secrets/ remain denied by file_policy/agentjail_secrets)",
 		"impact":  sprintf("would read agentjail path %q", [p]),
 	}
 }
