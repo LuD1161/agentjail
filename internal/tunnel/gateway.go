@@ -29,8 +29,15 @@ type Gateway struct {
 
 	tnet      *netstack.Net
 	dev       *device.Device
-	kernelTun tun.Device    // non-nil only in utun mode (NewGatewayUTun)
+	kernelTun tun.Device // non-nil only in utun mode (NewGatewayUTun)
 	logger    *slog.Logger
+
+	// fwd is non-nil only for a transparent forward gateway
+	// (NewForwardGateway). When set, the serve path is push-based: accepted
+	// conns arrive via the forwardStack's accept callback (g.handleConn), not
+	// via tnet.ListenTCP. This is the S-F1 fix — the stack accepts SYNs to
+	// arbitrary VIP destinations. See forwarder.go.
+	fwd *forwardStack
 
 	mu       sync.Mutex
 	closed   bool
@@ -123,9 +130,67 @@ func NewGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Ga
 	return g, nil
 }
 
+// NewForwardGateway creates a transparent forward gateway. Unlike NewGateway it
+// does NOT stand up wireguard-go / netstack.CreateNetTUN: instead it builds a
+// forwardStack (see forwarder.go) that accepts a SYN to *any* destination the
+// agent dials — the destination VIP is never the gateway's own address — and
+// delivers each accepted connection to g.handleConn via the accept callback
+// (push), not via tnet.ListenTCP. This is the structural S-F1 fix.
+//
+// A later slice pumps a TUN fd into the stack through the gateway's
+// InjectInbound / ReadOutbound methods. No traffic flows until ListenAndServe
+// is called (which, for a forward gateway, simply blocks until ctx is done).
+func NewForwardGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Gateway, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	if registry == nil {
+		return nil, errors.New("tunnel: registry is required")
+	}
+
+	// Load policy templates (optional; nil matcher means allow-all). The
+	// forward path does not need WireGuard keys, so we do not run the full
+	// Config.Validate() — only the fields the forwarder consumes matter.
+	var matcher *netpolicy.Matcher
+	if cfg.PacksDir != "" {
+		m, err := netpolicy.NewMatcher(cfg.PacksDir)
+		if err != nil {
+			return nil, fmt.Errorf("tunnel: loading policy templates: %w", err)
+		}
+		matcher = m
+		logger.Info("loaded policy templates", "dir", cfg.PacksDir)
+	}
+
+	g := &Gateway{
+		cfg:      cfg,
+		registry: registry,
+		matcher:  matcher,
+		logger:   logger,
+	}
+
+	// Build the transparent forwarder, wiring the gateway's own handleConn as
+	// the accept callback. handleConn is panic-isolated (S-F2), so a parser
+	// panic on attacker bytes denies just that connection.
+	fs, err := newForwardStack(cfg.mtu(), g.handleConn)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel: building forward stack: %w", err)
+	}
+	g.fwd = fs
+
+	return g, nil
+}
+
 // ListenAndServe starts accepting TCP connections on the tunnel interface.
 // It blocks until ctx is cancelled or an unrecoverable error occurs.
 func (g *Gateway) ListenAndServe(ctx context.Context) error {
+	// Forward gateways are push-based: conns arrive via the forwardStack's
+	// accept callback, so there is nothing to Accept() here. Just block until
+	// the context is cancelled, then tear the stack down.
+	if g.fwd != nil {
+		return g.serveForward(ctx)
+	}
+
 	// Listen on all addresses, port 0 means accept connections to any port.
 	// gVisor netstack with spoofing enabled delivers all TCP SYNs to this
 	// listener regardless of destination IP/port.
@@ -168,6 +233,39 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+// serveForward is the serve path for a transparent forward gateway. The
+// forwardStack pushes accepted conns into g.handleConn on its own goroutines,
+// so this simply blocks until ctx is cancelled and then tears the stack down.
+func (g *Gateway) serveForward(ctx context.Context) error {
+	g.logger.Info("tunnel forward gateway serving", "mtu", g.cfg.mtu())
+	<-ctx.Done()
+	// Close() is idempotent and closes the forwardStack; safe to call even if
+	// the caller also defers gw.Close().
+	if err := g.Close(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// InjectInbound feeds a raw inbound IP packet (as received from the agent side)
+// into the forward gateway's stack. It is a no-op on a non-forward gateway. A
+// later slice pumps a TUN fd into this method.
+func (g *Gateway) InjectInbound(pkt []byte) {
+	if g.fwd != nil {
+		g.fwd.InjectInbound(pkt)
+	}
+}
+
+// ReadOutbound blocks until the forward gateway's stack emits an outbound IP
+// packet (or ctx is cancelled) and returns a copy of it. It returns nil when
+// ctx is done or on a non-forward gateway.
+func (g *Gateway) ReadOutbound(ctx context.Context) []byte {
+	if g.fwd == nil {
+		return nil
+	}
+	return g.fwd.ReadOutbound(ctx)
+}
+
 // Close shuts down the gateway, closing the WireGuard device and listener.
 func (g *Gateway) Close() error {
 	g.mu.Lock()
@@ -180,6 +278,9 @@ func (g *Gateway) Close() error {
 
 	if g.listener != nil {
 		g.listener.Close()
+	}
+	if g.fwd != nil {
+		g.fwd.Close()
 	}
 	if g.dev != nil {
 		g.dev.Close()

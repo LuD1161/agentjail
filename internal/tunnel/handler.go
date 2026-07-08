@@ -25,6 +25,18 @@ const (
 //  4. Evaluate the operation against policy templates
 //  5. Relay or deny
 func (g *Gateway) handleConn(c net.Conn) {
+	// Panic isolation (S-F2): handleConn runs on attacker-controlled bytes and
+	// addresses (protocol recognition, type assertions, policy evaluation). A
+	// panic must DENY this one connection — close it and return — never allow
+	// traffic and never crash the gateway process. This defer is registered
+	// first so it runs last, after c.Close below has already closed the conn;
+	// it also closes c defensively in case the panic pre-empted that defer.
+	defer func() {
+		if r := recover(); r != nil {
+			g.logger.Error("handleConn recovered from panic; denying connection", "panic", r)
+			_ = c.Close()
+		}
+	}()
 	defer c.Close()
 
 	remote := c.RemoteAddr().(*net.TCPAddr)
