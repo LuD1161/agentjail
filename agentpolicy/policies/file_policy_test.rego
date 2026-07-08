@@ -277,6 +277,63 @@ test_agentjail_dir_does_not_emit_sensitive_credential if {
 }
 
 # ---------------------------------------------------------------------------
+# Deny: ~/.agentjail/secrets.key and ~/.agentjail/secrets/ — the secrets
+# broker's AES-256 master key and encrypted store (file_policy/agentjail_secrets,
+# LOCKED rule). Rule 0b would otherwise ALLOW these as ordinary ~/.agentjail
+# reads; this rule must win (C2 fix).
+# ---------------------------------------------------------------------------
+
+agentjail_secrets := "file_policy/agentjail_secrets"
+
+test_agentjail_secrets_key_read_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/.agentjail/secrets.key")
+	agentjail.decision.rule_id == agentjail_secrets with input as read_event("/Users/dev/.agentjail/secrets.key")
+}
+
+test_agentjail_secrets_store_file_read_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/.agentjail/secrets/github-token")
+	agentjail.decision.rule_id == agentjail_secrets with input as read_event("/Users/dev/.agentjail/secrets/github-token")
+}
+
+test_agentjail_secrets_store_dir_read_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/Users/dev/.agentjail/secrets")
+	agentjail.decision.rule_id == agentjail_secrets with input as read_event("/Users/dev/.agentjail/secrets")
+}
+
+test_agentjail_secrets_key_write_denied if {
+	agentjail.decision.action == "deny" with input as write_event("/Users/dev/.agentjail/secrets.key")
+	agentjail.decision.rule_id == agentjail_secrets with input as write_event("/Users/dev/.agentjail/secrets.key")
+}
+
+# Linux home path form.
+test_linux_home_agentjail_secrets_key_read_denied if {
+	agentjail.decision.action == "deny" with input as read_event("/home/dev/.agentjail/secrets.key")
+	agentjail.decision.rule_id == agentjail_secrets with input as read_event("/home/dev/.agentjail/secrets.key")
+}
+
+# Other ~/.agentjail files remain allowed for Read — the secrets deny must
+# not overreach into policy.yaml / the audit DB.
+test_agentjail_policy_yaml_read_still_allowed_after_secrets_fix if {
+	agentjail.decision.action == "allow" with input as read_event("/Users/dev/.agentjail/policy.yaml")
+	agentjail.decision.rule_id == "file_policy/agentjail_self_read" with input as read_event("/Users/dev/.agentjail/policy.yaml")
+}
+
+test_agentjail_audit_db_read_still_allowed if {
+	agentjail.decision.action == "allow" with input as read_event("/Users/dev/.agentjail/agentjail.db")
+	agentjail.decision.rule_id == "file_policy/agentjail_self_read" with input as read_event("/Users/dev/.agentjail/agentjail.db")
+}
+
+# A basename that merely starts with "secrets" but isn't the store directory
+# itself (e.g. a sibling file "secrets.log") must NOT be swept up by the
+# is_agentjail_secrets(p) directory-prefix predicate — only literal
+# "secrets.key" and the "secrets/" subtree are denied by this rule (other
+# ~/.agentjail sibling files stay covered by Rule 0b's allow).
+test_agentjail_secrets_log_sibling_not_denied_by_secrets_rule if {
+	cands := {c | some c in agentjail.candidate; c.rule_id == agentjail_secrets}
+	count(cands) == 0 with input as read_event("/Users/dev/.agentjail/secrets.log")
+}
+
+# ---------------------------------------------------------------------------
 # Deny: /etc/ — system configuration
 # ---------------------------------------------------------------------------
 

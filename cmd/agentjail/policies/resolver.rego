@@ -50,6 +50,7 @@ import future.keywords.contains
 
 locked_rules := {
 	"file_policy/agentjail_self",
+	"file_policy/agentjail_secrets",
 	"command_policy/no-policy-mutation",
 	"resolver/default",
 }

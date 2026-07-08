@@ -56,6 +56,16 @@ func agentPaths() AgentPaths {
 			//                sensitiveReadPaths but still permits the socket connect
 			//                (allow-default network), so this read-only entry is a
 			//                Linux-effective narrowing with no macOS change.
+			//                READ is NOT blanket-recursive on Linux (C2 fix):
+			//                secrets.key (the secrets broker's AES-256 master key)
+			//                and secrets/ (its encrypted store) are excluded from
+			//                the grant -- see AgentjailSecretsProtectedNames() in
+			//                shield_contract.go and the per-child enumeration in
+			//                shield_linux.go's applyLandlock. Reading either would
+			//                let a sandboxed agent decrypt every stored secret
+			//                offline. macOS already denies read on the whole
+			//                ~/.agentjail subtree (sensitiveReadPaths in
+			//                shield_darwin.go), so it needs no further carve-out.
 			".npm-global", // npm global modules (plugins may need this)
 			".config",     // XDG config (MCP server configs, etc.)
 			".codex",      // codex skills and config
@@ -84,7 +94,7 @@ func agentPaths() AgentPaths {
 			// effective result as a daemon-down session: hook fails open).
 			".agentjail/daemon.sock",
 			// daemon-ctl.sock is deliberately ABSENT from HomeFilesRW.
-			// It lives at ~/.agentjail/run/daemon-ctl.sock (AGE-116) and
+			// It lives at ~/.agentjail/run/daemon-ctl.sock (follow-up) and
 			// is agent-unreachable: Linux Landlock denies connect() without
 			// write; macOS sbpl explicitly denies network-outbound for it.
 		},
