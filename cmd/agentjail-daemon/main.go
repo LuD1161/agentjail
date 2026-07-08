@@ -102,6 +102,13 @@ type server struct {
 	// semaphore means no cap is enforced (used in tests that construct a
 	// bare server{}).
 	connSem chan struct{}
+
+	// rulesDir and policyPath mirror the --rules/--policy flags. reloadPolicy
+	// reads them to know what to reload; both are set once at construction
+	// and never mutated. rulesDir == "" means the inline defaultInlinePolicy
+	// is in use (dev/test), matching the flag's own zero-value semantics.
+	rulesDir   string
+	policyPath string
 }
 
 // maxAgentConns bounds concurrent connections to the agent-reachable
@@ -209,6 +216,73 @@ func countCustomRuleFiles(rulesDir string) int {
 	return n
 }
 
+// reloadPolicy reloads policy.yaml and the Rego rule bundle in place,
+// rebuilding the OPA engine atomically under the evaluator's lock. It is the
+// single implementation shared by the SIGHUP signal handler and the
+// wire.ControlOpReload control message (see handleConn) so both delivery
+// paths behave identically.
+//
+// Fail-safe / never-fail-open contract: reloadPolicy returns a non-nil error
+// on ANY failure -- loading Rego modules, loading policy.yaml, or compiling
+// the new bundle -- and does NOT mutate daemon state before that point. In
+// particular, s.evaluator.Reload itself keeps serving the old engine when the
+// new bundle fails to compile (see policyeval.Evaluator.Reload). The caller
+// (signal handler or control dispatch) is responsible for logging/reporting
+// the error; the old policy stays in effect either way.
+func (s *server) reloadPolicy(ctx context.Context) error {
+	var mods [][2]string
+	if s.rulesDir != "" {
+		m, err := loadModules(s.rulesDir)
+		if err != nil {
+			return fmt.Errorf("reload: load modules: %w", err)
+		}
+		mods = m
+	} else {
+		mods = [][2]string{{"default.rego", defaultInlinePolicy}}
+	}
+
+	newCfg, err := loadConfig(s.policyPath)
+	if err != nil {
+		return fmt.Errorf("reload: load policy config: %w", err)
+	}
+
+	if err := s.evaluator.Reload(ctx, mods, newCfg); err != nil {
+		return fmt.Errorf("reload: compile: %w", err)
+	}
+
+	slog.Info("policy reloaded",
+		"rules_dir", s.rulesDir,
+		"mcp_allowed", newCfg.MCP.Allowed,
+		"mcp_blocked_count", len(newCfg.MCP.Blocked),
+	)
+
+	// Emit policy.reloaded audit event (best-effort).
+	if s.eventStore != nil {
+		_ = s.eventStore.Emit(ctx, audit.Event{
+			EventType: audit.PolicyReloaded,
+			Actor:     "daemon",
+		})
+	}
+	s.recordPolicyConfig(newCfg, s.rulesDir)
+
+	// Re-write the hook-fallback sidecar (ADR 0050) so a config change to
+	// daemon_unreachable (or a locked-rule recompile) takes effect for the
+	// hook without a daemon restart. Best-effort -- same rationale as the
+	// startup write in main().
+	if err := writeHookFallback(newCfg); err != nil {
+		slog.Warn("reload: write hook-fallback sidecar failed (non-fatal)", "err", err)
+		if s.eventStore != nil {
+			_ = s.eventStore.Emit(ctx, audit.Event{
+				EventType: audit.HookFallbackWriteFailed,
+				Actor:     "daemon",
+				Detail:    map[string]string{"err": err.Error()},
+			})
+		}
+	}
+
+	return nil
+}
+
 // handleConn serves one client connection. Each connection runs in its own
 // goroutine. The function reads newline-delimited JSON requests until the
 // connection closes or ctx is cancelled, calling s.eval for each and writing
@@ -257,6 +331,51 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 				}
 				resp := s.grantSrv.handleGrantRequest(conn, greq)
 				_ = enc.Encode(resp)
+				continue
+			}
+		}
+
+		// Route control-plane messages (currently: reload). Delivered over
+		// this agent-reachable socket rather than the privileged
+		// daemon-ctl.sock (ADR 0047) because reload is not a privileged
+		// mutation -- it re-reads policy.yaml/rules that are already on
+		// disk, exactly like SIGHUP. The socket file itself is 0600 (owner
+		// only), the same trust boundary SIGHUP already relies on (same-UID
+		// delivery via os.FindProcess+Signal). Defense-in-depth: also verify
+		// the connecting peer's real UID via SO_PEERCRED/LOCAL_PEERCRED
+		// where available (see peerpid_linux.go / peerpid_darwin.go), so a
+		// same-UID sandboxed peer that can merely connect() to the socket
+		// (e.g. the Linux Landlock single-file write grant, ADR — see
+		// docs/ARCHITECTURE.md "OS-native Sandbox") cannot self-serve a
+		// reload it shouldn't be able to trigger through any other path.
+		{
+			var probe struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(line, &probe) == nil && probe.Type == wire.ControlType {
+				peerUID, uidErr := extractPeerUID(conn)
+				if !peerUIDAllowed(peerUID, os.Getuid(), uidErr) {
+					slog.Warn("control socket: rejecting connection", "peer_uid", peerUID, "daemon_uid", os.Getuid(), "err", uidErr)
+					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unauthorized"})
+					continue
+				}
+
+				var creq wire.ControlRequest
+				if err := json.Unmarshal(line, &creq); err != nil {
+					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "malformed control request"})
+					continue
+				}
+				switch creq.Op {
+				case wire.ControlOpReload:
+					if rerr := s.reloadPolicy(ctx); rerr != nil {
+						slog.Error("control reload failed — keeping old policy", "err", rerr)
+						_ = enc.Encode(wire.ControlResponse{OK: false, Error: rerr.Error()})
+					} else {
+						_ = enc.Encode(wire.ControlResponse{OK: true})
+					}
+				default:
+					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unknown control op: " + creq.Op})
+				}
 				continue
 			}
 		}
@@ -677,6 +796,8 @@ func main() {
 		evaluator:      policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), initModules, cfg),
 		activeSessions: newActiveTracker(filepath.Dir(*policyPath)),
 		connSem:        make(chan struct{}, maxAgentConns),
+		rulesDir:       *rulesDir,
+		policyPath:     *policyPath,
 	}
 
 	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
@@ -855,61 +976,9 @@ func main() {
 		switch sig {
 		case syscall.SIGHUP:
 			slog.Info("SIGHUP received — reloading policy")
-
-			// Reload Rego modules.
-			var mods [][2]string
-			if *rulesDir != "" {
-				var loadErr error
-				mods, loadErr = loadModules(*rulesDir)
-				if loadErr != nil {
-					// Keep old config — do not go open.
-					slog.Error("reload: load modules failed — keeping old policy", "err", loadErr)
-					continue
-				}
-			} else {
-				mods = [][2]string{{"default.rego", defaultInlinePolicy}}
-			}
-
-			// Reload policy.yaml — merge over Default(), inject temp roots.
-			newCfg, cfgErr := loadConfig(*policyPath)
-			if cfgErr != nil {
-				// Keep old config — do not go open.
-				slog.Error("reload: load policy config failed — keeping old policy", "path", *policyPath, "err", cfgErr)
+			if err := srv.reloadPolicy(ctx); err != nil {
+				slog.Error("reload failed — keeping old policy", "err", err)
 				continue
-			}
-
-			if reloadErr := srv.evaluator.Reload(ctx, mods, newCfg); reloadErr != nil {
-				// Keep old engine — do not go open.
-				slog.Error("reload: compile failed — keeping old policy", "err", reloadErr)
-				continue
-			}
-			slog.Info("policy reloaded",
-				"rules_dir", *rulesDir,
-				"mcp_allowed", newCfg.MCP.Allowed,
-				"mcp_blocked_count", len(newCfg.MCP.Blocked),
-			)
-			// Emit policy.reloaded audit event (best-effort).
-			if srv.eventStore != nil {
-				_ = srv.eventStore.Emit(ctx, audit.Event{
-					EventType: audit.PolicyReloaded,
-					Actor:     "daemon",
-				})
-			}
-			srv.recordPolicyConfig(newCfg, *rulesDir)
-
-			// Re-write the hook-fallback sidecar (ADR 0050) so a config
-			// change to daemon_unreachable (or a locked-rule recompile)
-			// takes effect for the hook without a daemon restart.
-			// Best-effort — same rationale as the startup write above.
-			if err := writeHookFallback(newCfg); err != nil {
-				slog.Warn("reload: write hook-fallback sidecar failed (non-fatal)", "err", err)
-				if srv.eventStore != nil {
-					_ = srv.eventStore.Emit(ctx, audit.Event{
-						EventType: audit.HookFallbackWriteFailed,
-						Actor:     "daemon",
-						Detail:    map[string]string{"err": err.Error()},
-					})
-				}
 			}
 
 		case syscall.SIGTERM, syscall.SIGINT:
