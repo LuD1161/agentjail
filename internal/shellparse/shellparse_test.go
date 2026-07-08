@@ -62,6 +62,23 @@ func TestParse(t *testing.T) {
 		{"command_exec_agentjail", "command agentjail policy disable x", []string{"command", "agentjail"}},
 		{"nested_wrapper_interpreter", "sudo sh -c 'agentjail policy disable x'", []string{"sudo", "sh", "agentjail"}},
 		{"semicolon_agentjail_second", "echo hi; agentjail policy disable x", []string{"echo", "agentjail"}},
+		// Non-shell scripting interpreters: the inline code is not shell
+		// syntax, so it is not recursively parsed as a command — instead
+		// quoted string literals inside it are extracted and each is
+		// recursively parsed, catching the common "shell out via a string
+		// argument" evasion (os.system/execSync/system/shell_exec).
+		{"python_dash_c_os_system", `python -c 'import os; os.system("agentjail policy disable no-sudo")'`, []string{"python", "agentjail"}},
+		{"python3_dash_c_single_quoted_inner", `python3 -c "os.system('agentjail policy disable x')"`, []string{"python3", "agentjail"}},
+		{"node_dash_e_execSync", `node -e 'require("child_process").execSync("agentjail policy disable x")'`, []string{"node", "child_process", "agentjail"}},
+		{"node_dash_dash_eval", `node --eval 'require("child_process").execSync("agentjail policy disable x")'`, []string{"node", "child_process", "agentjail"}},
+		{"nodejs_dash_e", `nodejs -e 'require("child_process").execSync("agentjail policy disable x")'`, []string{"nodejs", "child_process", "agentjail"}},
+		{"perl_dash_e_system", `perl -e 'system("agentjail policy disable x")'`, []string{"perl", "agentjail"}},
+		{"ruby_dash_e_system", `ruby -e 'system("agentjail policy disable x")'`, []string{"ruby", "agentjail"}},
+		{"php_dash_r_system", `php -r 'system("agentjail policy disable x");'`, []string{"php", "agentjail"}},
+		{"python_leading_flag_before_dash_c", `python -u -c 'os.system("agentjail policy disable x")'`, []string{"python", "agentjail"}},
+		// Regression: no inline-code flag present — the interpreter name is
+		// still reported but no recursion into the (unread) script file.
+		{"python_script_file_no_recursion", "python script.py --arg", []string{"python"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,5 +99,57 @@ func TestParseResult_EmptyNotNil(t *testing.T) {
 	r := Parse("")
 	if r.Binaries == nil {
 		t.Error("expected non-nil Binaries slice for empty input")
+	}
+}
+
+// TestParse_ScriptInterpreterEvasion is the acceptance test for surfacing
+// "agentjail" (and the interpreter itself) when a flagged binary is buried
+// inside a non-shell scripting interpreter's inline code argument. It checks
+// inclusion rather than an exact binary list, since the best-effort quoted-
+// string scan may also surface incidental non-binary tokens (e.g.
+// "child_process" from a JS require() call) alongside the real evasion.
+func TestParse_ScriptInterpreterEvasion(t *testing.T) {
+	tests := []struct {
+		name        string
+		cmd         string
+		wantInclude []string
+	}{
+		{
+			"python_os_system",
+			`python -c 'import os; os.system("agentjail policy disable no-sudo")'`,
+			[]string{"python", "agentjail"},
+		},
+		{
+			"python3_os_system_single_quoted",
+			`python3 -c "os.system('agentjail policy disable x')"`,
+			[]string{"python3", "agentjail"},
+		},
+		{
+			"node_execSync",
+			`node -e 'require("child_process").execSync("agentjail policy disable x")'`,
+			[]string{"node", "agentjail"},
+		},
+		{
+			"perl_system",
+			`perl -e 'system("agentjail policy disable x")'`,
+			[]string{"perl", "agentjail"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.cmd)
+			for _, want := range tt.wantInclude {
+				found := false
+				for _, b := range got.Binaries {
+					if b == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Parse(%q).Binaries = %v, missing required binary %q", tt.cmd, got.Binaries, want)
+				}
+			}
+		})
 	}
 }

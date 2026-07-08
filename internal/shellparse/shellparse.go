@@ -39,6 +39,26 @@ var wrappers = map[string]bool{
 	"setsid":  true,
 }
 
+// scriptInterpreters maps a non-shell scripting-language interpreter to the
+// flag(s) it accepts for an inline "run this code" argument (as opposed to a
+// script file path). Unlike the shell interpreters above, the argument that
+// follows is NOT shell syntax, so it is not parsed as a shell command.
+// Instead — best-effort, not a Python/JS/Perl/Ruby/PHP parser — quoted
+// string literals inside the code are extracted and each is recursively
+// parsed as a shell command. This catches the common evasion of shelling
+// out via a string argument (os.system(...), execSync(...), system(...),
+// shell_exec(...)), e.g.
+// python -c 'import os; os.system("agentjail policy disable no-sudo")'.
+var scriptInterpreters = map[string][]string{
+	"python":  {"-c"},
+	"python3": {"-c"},
+	"perl":    {"-e"},
+	"ruby":    {"-e"},
+	"node":    {"-e", "--eval"},
+	"nodejs":  {"-e", "--eval"},
+	"php":     {"-r"},
+}
+
 // Result holds the parsed components of a shell command string.
 type Result struct {
 	// Binaries contains the base name of every command binary found in the
@@ -270,6 +290,17 @@ func extractBinaries(seg string, depth int) []string {
 			if scriptIdx, script, ok := findDashCScript(tokens, i); ok {
 				result = append(result, parseBinaries(script, depth+1)...)
 				skipFrom, skipTo = scriptIdx, scriptIdx+1
+			}
+
+		case scriptInterpreters[binary] != nil:
+			// python/python3 -c, perl/ruby -e, node/nodejs -e|--eval,
+			// php -r — the code argument is NOT shell syntax, so it is not
+			// parsed as a command string. Instead, best-effort scan its
+			// quoted string literals for embedded shell commands (the
+			// os.system("...")/execSync("...")/system("...") pattern).
+			if codeIdx, code, ok := findInlineCodeArg(tokens, i, scriptInterpreters[binary]); ok {
+				result = append(result, extractInlineCodeBinaries(code, depth+1)...)
+				skipFrom, skipTo = codeIdx, codeIdx+1
 			}
 
 		case wrappers[binary]:
@@ -507,6 +538,88 @@ func findDashCScript(tokens []string, start int) (idx int, script string, ok boo
 		}
 	}
 	return 0, "", false
+}
+
+// findInlineCodeArg scans tokens starting at start for one of the given
+// inline-code flags (e.g. "-c", "-e", "--eval") — allowing other leading
+// dash-flags before it — and returns the index and unquoted text of the
+// code argument that follows. It also accepts the "--eval=<code>" long-flag
+// form. If a non-flag token is seen first (e.g. "python script.py"), it
+// stops looking — that invocation runs a script file, which this parser
+// does not read.
+func findInlineCodeArg(tokens []string, start int, flags []string) (idx int, code string, ok bool) {
+	for k := start; k < len(tokens); k++ {
+		t := tokens[k]
+		for _, f := range flags {
+			if t == f {
+				if k+1 < len(tokens) {
+					return k + 1, unquoteToken(tokens[k+1]), true
+				}
+				return 0, "", false
+			}
+			if strings.HasPrefix(f, "--") && strings.HasPrefix(t, f+"=") {
+				return k, unquoteToken(t[len(f)+1:]), true
+			}
+		}
+		if !strings.HasPrefix(t, "-") {
+			break
+		}
+	}
+	return 0, "", false
+}
+
+// extractInlineCodeBinaries best-effort scans a non-shell scripting
+// language's inline code string (e.g. a python -c or node -e argument) for
+// quoted string literals and recursively parses each as a shell command.
+// This is NOT a Python/JavaScript/Perl/Ruby/PHP parser — it does not
+// understand variables, string concatenation, or encoding (base64, etc).
+// It only catches the common "shell out with a string literal" pattern
+// (os.system("..."), execSync("..."), system("..."), shell_exec("...")) by
+// surfacing any binaries named in string literals within the code.
+// Depth-bounded like the rest of this package's recursive parsing.
+func extractInlineCodeBinaries(code string, depth int) []string {
+	if depth >= maxSubstitutionDepth {
+		return nil
+	}
+	var result []string
+	for _, s := range findQuotedStrings(code) {
+		result = append(result, parseBinaries(s, depth+1)...)
+	}
+	return result
+}
+
+// findQuotedStrings scans raw text for single- and double-quoted string
+// literals and returns their (best-effort unescaped) contents. It is a
+// lightweight scan, not a lexer for the host language's full quoting/escaping
+// rules.
+func findQuotedStrings(s string) []string {
+	var out []string
+	i := 0
+	for i < len(s) {
+		ch := s[i]
+		if ch == '\'' || ch == '"' {
+			quote := ch
+			j := i + 1
+			var b strings.Builder
+			for j < len(s) && s[j] != quote {
+				if s[j] == '\\' && j+1 < len(s) {
+					b.WriteByte(s[j+1])
+					j += 2
+					continue
+				}
+				b.WriteByte(s[j])
+				j++
+			}
+			out = append(out, b.String())
+			if j < len(s) {
+				j++ // consume closing quote
+			}
+			i = j
+			continue
+		}
+		i++
+	}
+	return out
 }
 
 // wrapperFlagTakesValue reports whether flag is a known value-taking option
