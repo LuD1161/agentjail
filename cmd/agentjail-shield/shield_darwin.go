@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -144,6 +146,58 @@ func sensitiveReadRegexes() []string {
 		}
 	}
 	return out
+}
+
+// darwinTempDirRegex matches the macOS per-user temp directory shape:
+// /var/folders/<xx>/<yyy>/T or its canonical /private/var/folders/<xx>/<yyy>/T
+// form. Exactly two opaque path segments between "folders" and "T" -- no
+// more (a subpath under T, e.g. .../T/sub) and no fewer (a malformed or
+// truncated path).
+var darwinTempDirRegex = regexp.MustCompile(`^/(private/)?var/folders/[^/]+/[^/]+/T$`)
+
+// validateDarwinTempDir validates a candidate TMPDIR path against
+// darwinTempDirRegex and, on a match, returns BOTH the canonical
+// (/private/var/folders/...) and symlink (/var/folders/...) forms -- sbpl
+// matches the canonical path, but callers may pass either form, so both must
+// be present in the profile.  Deduped if identical.
+//
+// Returns nil (no carve-out -- fail closed to the pre-fix behavior of
+// denying all of /var and /private/var for writes) if t does not match the
+// expected shape: TMPDIR unset (os.TempDir() then defaults to /tmp),
+// TMPDIR overridden to an arbitrary path (e.g. /Users/me), a malformed
+// /var/folders path (e.g. missing the trailing T, or /var/folders alone),
+// or a subpath below T (e.g. .../T/sub -- only the T directory itself is
+// carved out, never a descendant).
+//
+// Factored out of darwinUserTempDirs as a pure function (no os.TempDir()
+// call) so it can be table-tested without depending on process environment.
+func validateDarwinTempDir(t string) []string {
+	t = filepath.Clean(t)
+	if !darwinTempDirRegex.MatchString(t) {
+		return nil
+	}
+	var canonical, symlink string
+	if strings.HasPrefix(t, "/private") {
+		canonical = t
+		symlink = strings.TrimPrefix(t, "/private")
+	} else {
+		symlink = t
+		canonical = "/private" + t
+	}
+	if canonical == symlink {
+		return []string{canonical}
+	}
+	return []string{canonical, symlink}
+}
+
+// darwinUserTempDirs returns the per-user macOS temp directory (os.TempDir(),
+// e.g. /var/folders/xx/yyy/T -- what $TMPDIR points to) in both its
+// canonical /private/... form and symlink form, for use as a narrow
+// file-write and AF_UNIX bind/connect carve-out (see generateSBProfileWithIPs).
+// Returns nil if os.TempDir() does not match the expected per-user T
+// directory shape -- see validateDarwinTempDir.
+func darwinUserTempDirs() []string {
+	return validateDarwinTempDir(os.TempDir())
 }
 
 // darwinCapabilities reports which shared-contract capabilities the darwin
@@ -311,6 +365,25 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 			continue
 		}
 		fmt.Fprintf(&sb, "(allow file-write*\n    (subpath %q))\n", home+"/"+name)
+	}
+	sb.WriteString("\n")
+
+	// --- darwin TMPDIR carve-out ---
+	// $TMPDIR on macOS is a per-user directory under /var/folders/<xx>/<yyy>/T,
+	// which sensitiveWritePathsExtra denies for writes via the broad /var and
+	// /private/var subpath entries above (needed to block writes to
+	// /private/etc, /private/var/db, etc.). That blanket deny also breaks any
+	// tool that writes to TMPDIR (e.g. xcrun). Emit a narrow allow carve-out
+	// for exactly the per-user T directory -- never the parent
+	// /var/folders/<xx>/<yyy> root or its C (cache) sibling -- in both the
+	// canonical /private/... form and the /var/... symlink form (sbpl
+	// resolves to the canonical path, so both must be present for the
+	// carve-out to apply regardless of which form a caller passes). This
+	// must appear AFTER the /var deny block above (last-match-wins).
+	// darwinUserTempDirs returns nil (no carve-out, fail closed) if TMPDIR
+	// does not match the expected per-user T directory shape.
+	for _, dir := range darwinUserTempDirs() {
+		fmt.Fprintf(&sb, "(allow file-write*\n    (subpath %q))\n", dir)
 	}
 	sb.WriteString("\n")
 
@@ -502,6 +575,45 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		fmt.Fprintf(&sb, "(allow network-outbound\n    (path %q))\n\n", sock)
 	}
+
+	// --- AF_UNIX sockets in temp dirs: bind broad, connect narrow ---
+	// Seatbelt models AF_UNIX bind() as network-bind and AF_UNIX connect() as
+	// network-outbound. Dev tooling (language servers, MCP stdio-over-socket
+	// shims, xcrun helpers, etc.) routinely creates a Unix-domain socket under
+	// /tmp or $TMPDIR and both binds AND connects to it locally; without an
+	// explicit allow here those calls fail under the (deny network*) catch-all
+	// below even though no real network egress is involved.
+	//
+	// Threat model, and why bind and connect get different treatment:
+	//   - network-bind (listening on a socket) is allowed broadly across
+	//     /tmp, /private/tmp, and the per-user T dir. Merely listening on a
+	//     local socket in a shared temp directory does not let the sandboxed
+	//     agent reach anything it could not already reach -- nothing outside
+	//     the sandbox is obligated to connect to it.
+	//   - network-outbound (connect) is allowed ONLY for the per-user T dir
+	//     ($TMPDIR, e.g. /var/folders/<xx>/<yyy>/T), never for /tmp or
+	//     /private/tmp. /tmp is world-writable: any other local process (or
+	//     a malicious binary the agent itself wrote there) could plant a
+	//     Unix-domain socket that acts as a proxy/agent shim, and an
+	//     unrestricted connect-allow on /tmp would let the sandboxed agent
+	//     use that shim to egress network traffic on its behalf, bypassing
+	//     the network policy enforced above -- a shim-egress risk. The
+	//     per-user T dir is created 0700 by the OS, so only processes
+	//     running as the same user can plant a socket there, which is
+	//     materially lower (though not zero) risk. Connects to sockets that
+	//     live directly in /tmp or /private/tmp stay denied by the
+	//     (deny network*) catch-all below.
+	// darwinUserTempDirs returns nil (no carve-out) if TMPDIR does not match
+	// the expected per-user T directory shape -- see validateDarwinTempDir.
+	sb.WriteString("(allow network-bind\n    (subpath \"/private/tmp\"))\n")
+	sb.WriteString("(allow network-bind\n    (subpath \"/tmp\"))\n")
+	for _, dir := range darwinUserTempDirs() {
+		fmt.Fprintf(&sb, "(allow network-bind\n    (subpath %q))\n", dir)
+	}
+	for _, dir := range darwinUserTempDirs() {
+		fmt.Fprintf(&sb, "(allow network-outbound\n    (subpath %q))\n", dir)
+	}
+	sb.WriteString("\n")
 
 	// Default deny for all remaining network traffic.
 	// This blocks: C2 on non-standard ports (4444, 8888, etc.), raw IP/ICMP

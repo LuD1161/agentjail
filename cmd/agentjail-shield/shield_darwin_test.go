@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -707,6 +708,295 @@ func TestGenerateSBProfile_ClaudeWriteCarveOut(t *testing.T) {
 	if readDenyStart != -1 && readDenyEnd != -1 && strings.Contains(profile[readDenyStart:readDenyEnd], keychainDenySubpath) {
 		t.Errorf("profile must NOT contain a read-deny subpath for ~/Library/Keychains; got deny block:\n%s", profile[readDenyStart:readDenyEnd])
 	}
+}
+
+// ---- Darwin TMPDIR / AF_UNIX carve-out tests ----
+
+// TestValidateDarwinTempDir table-tests the pure validation/carve-out logic
+// in validateDarwinTempDir, independent of the process's actual TMPDIR (see
+// darwinUserTempDirs, which is the thin os.TempDir()-reading wrapper around
+// this function).
+func TestValidateDarwinTempDir(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string // nil means "must return nil (no carve-out)"
+	}{
+		{
+			name: "var_folders_form",
+			in:   "/var/folders/x/y/T",
+			want: []string{"/private/var/folders/x/y/T", "/var/folders/x/y/T"},
+		},
+		{
+			name: "private_var_folders_form",
+			in:   "/private/var/folders/x/y/T",
+			want: []string{"/private/var/folders/x/y/T", "/var/folders/x/y/T"},
+		},
+		{name: "bare_tmp", in: "/tmp", want: nil},
+		{name: "empty", in: "", want: nil},
+		{name: "arbitrary_path", in: "/Users/me", want: nil},
+		{name: "var_folders_root_only", in: "/var/folders", want: nil},
+		{name: "subpath_of_T", in: "/var/folders/x/y/T/sub", want: nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := validateDarwinTempDir(c.in)
+			if c.want == nil {
+				if got != nil {
+					t.Fatalf("validateDarwinTempDir(%q) = %v, want nil", c.in, got)
+				}
+				return
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("validateDarwinTempDir(%q) = %v, want %v", c.in, got, c.want)
+			}
+			gotSet := map[string]bool{}
+			for _, g := range got {
+				gotSet[g] = true
+			}
+			for _, w := range c.want {
+				if !gotSet[w] {
+					t.Errorf("validateDarwinTempDir(%q) missing %q; got %v", c.in, w, got)
+				}
+			}
+		})
+	}
+
+	// Never returns a dangerously broad path regardless of input.
+	dangerous := map[string]bool{"/": true, "/var": true, "/private/var": true, "/tmp": true, "/private/tmp": true}
+	for _, c := range cases {
+		for _, g := range validateDarwinTempDir(c.in) {
+			if dangerous[g] {
+				t.Errorf("validateDarwinTempDir(%q) returned dangerous broad path %q", c.in, g)
+			}
+		}
+	}
+}
+
+// withSyntheticDarwinTempDir sets TMPDIR to a synthetic, deterministic
+// /var/folders/<xx>/<yyy>/T path for the duration of the test and restores
+// the previous value on cleanup. This makes profile-content assertions
+// deterministic regardless of how the test binary was invoked -- notably,
+// this repo's convention of exporting TMPDIR=/tmp for sandboxed `go test`
+// runs would otherwise make os.TempDir() return "/tmp", a value
+// validateDarwinTempDir correctly rejects (no carve-out).
+func withSyntheticDarwinTempDir(t *testing.T) (canonical, symlink string) {
+	t.Helper()
+	const synthetic = "/var/folders/zz/agentjailtest01/T"
+	old, hadOld := os.LookupEnv("TMPDIR")
+	if err := os.Setenv("TMPDIR", synthetic); err != nil {
+		t.Fatalf("Setenv TMPDIR: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadOld {
+			os.Setenv("TMPDIR", old)
+		} else {
+			os.Unsetenv("TMPDIR")
+		}
+	})
+	return "/private" + synthetic, synthetic
+}
+
+// TestGenerateSBProfile_DarwinTempDirCarveOut verifies the generated sbpl
+// profile carves out the per-user TMPDIR for file-write and AF_UNIX
+// bind/connect, per the bind-broad/connect-narrow threat model: network-bind
+// is allowed for /tmp, /private/tmp, and the T dir; network-outbound
+// (connect) is allowed ONLY for the T dir, never bare /tmp or /private/tmp.
+func TestGenerateSBProfile_DarwinTempDirCarveOut(t *testing.T) {
+	canonical, symlink := withSyntheticDarwinTempDir(t)
+
+	cfg := config.Default()
+	home := "/Users/testuser"
+	profile := generateSBProfileWithIPs(cfg, home, nil, false)
+
+	// file-write* allow for both forms of the T dir.
+	for _, dir := range []string{canonical, symlink} {
+		want := fmt.Sprintf("(allow file-write*\n    (subpath %q))", dir)
+		if !strings.Contains(profile, want) {
+			t.Errorf("profile missing file-write* allow for %s; got:\n%s", dir, profile)
+		}
+	}
+
+	// network-bind allow for /tmp, /private/tmp, and both T dir forms.
+	for _, dir := range []string{"/private/tmp", "/tmp", canonical, symlink} {
+		want := fmt.Sprintf("(allow network-bind\n    (subpath %q))", dir)
+		if !strings.Contains(profile, want) {
+			t.Errorf("profile missing network-bind allow for %s; got:\n%s", dir, profile)
+		}
+	}
+
+	// network-outbound allow for the T dir forms only.
+	for _, dir := range []string{canonical, symlink} {
+		want := fmt.Sprintf("(allow network-outbound\n    (subpath %q))", dir)
+		if !strings.Contains(profile, want) {
+			t.Errorf("profile missing network-outbound allow for %s; got:\n%s", dir, profile)
+		}
+	}
+
+	// Must NOT allow network-outbound subpath for bare /tmp or /private/tmp
+	// (the shim-egress risk the bind-broad/connect-narrow split guards against).
+	for _, dir := range []string{"/tmp", "/private/tmp"} {
+		bad := fmt.Sprintf("(allow network-outbound\n    (subpath %q))", dir)
+		if strings.Contains(profile, bad) {
+			t.Errorf("profile must NOT allow network-outbound subpath for %s; got:\n%s", dir, profile)
+		}
+	}
+
+	// Must not contain a bare (subpath "/var") ALLOW anywhere (that would
+	// undo the broad /var write-deny rather than carving out just the T dir).
+	if strings.Contains(profile, "(allow file-write*\n    (subpath \"/var\"))") {
+		t.Errorf("profile must not allow-carve-out the whole /var tree; got:\n%s", profile)
+	}
+
+	// Position: the temp-dir allows must appear before (deny network*).
+	denyIdx := strings.Index(profile, "(deny network*)")
+	if denyIdx == -1 {
+		t.Fatal("profile missing (deny network*)")
+	}
+	for _, dir := range []string{canonical, symlink} {
+		idx := strings.Index(profile, fmt.Sprintf("(allow network-outbound\n    (subpath %q))", dir))
+		if idx == -1 || idx > denyIdx {
+			t.Errorf("network-outbound allow for %s must appear before (deny network*); idx=%d denyIdx=%d", dir, idx, denyIdx)
+		}
+	}
+	for _, dir := range []string{canonical, symlink} {
+		idx := strings.Index(profile, fmt.Sprintf("(allow file-write*\n    (subpath %q))", dir))
+		if idx == -1 || idx > denyIdx {
+			t.Errorf("file-write* allow for %s must appear before (deny network*); idx=%d denyIdx=%d", dir, idx, denyIdx)
+		}
+	}
+}
+
+// TestSandboxExec_DarwinTempDirCarveOuts is a REAL sandbox-exec integration
+// test: it writes the generated profile to disk and execs python3 under
+// sandbox-exec to exercise actual AF_UNIX bind/connect and file-write
+// enforcement, not just profile text. Skipped on non-darwin, when
+// sandbox-exec is absent, when python3 is absent, or when the ambient
+// os.TempDir() does not match the expected per-user T directory shape
+// (e.g. under this repo's TMPDIR=/tmp go-test convention -- in that case
+// darwinUserTempDirs() legitimately returns nil and there is no carve-out
+// to exercise).
+func TestSandboxExec_DarwinTempDirCarveOuts(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-only sandbox-exec integration test")
+	}
+	skipIfNoSandboxExec(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+
+	tmpdir := os.TempDir()
+	if validateDarwinTempDir(tmpdir) == nil {
+		t.Skipf("os.TempDir() = %q is not a valid per-user T directory shape; skipping (expected when TMPDIR is overridden, e.g. this repo's TMPDIR=/tmp go-test convention)", tmpdir)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	cfg := config.Default()
+	profile := generateSBProfile(cfg, home)
+
+	dir := t.TempDir()
+	profilePath := filepath.Join(dir, "test.sb")
+	if err := os.WriteFile(profilePath, []byte(profile), 0o644); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+
+	// Minimal, robust python3 script: performs each probe, catches OSError
+	// individually so one denial doesn't abort the remaining probes, and
+	// prints "key=ok" or "key=denied:<errno>" per line for the Go test to parse.
+	script := `
+import os, socket
+
+def report(key, fn):
+    try:
+        fn()
+        print(key + "=ok")
+    except OSError as e:
+        print(key + "=denied:" + str(e))
+
+tmpdir = os.environ.get("TMPDIR", "/tmp")
+pid = os.getpid()
+
+tmp_sock_path = "/tmp/agentjail-shield-test-bind-%d.sock" % pid
+tmpdir_sock_path = os.path.join(tmpdir, "agentjail-shield-test-bind2-%d.sock" % pid)
+
+def bind_tmp():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        os.remove(tmp_sock_path)
+    except OSError:
+        pass
+    s.bind(tmp_sock_path)
+    s.listen(1)
+
+def bindconnect_tmpdir():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        os.remove(tmpdir_sock_path)
+    except OSError:
+        pass
+    s.bind(tmpdir_sock_path)
+    s.listen(1)
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    c.connect(tmpdir_sock_path)
+
+def write_tmpdir():
+    p = os.path.join(tmpdir, "agentjail-shield-test-write-%d.txt" % pid)
+    with open(p, "w") as f:
+        f.write("x")
+
+def write_vardb():
+    p = "/private/var/db/agentjail-shield-test-%d.txt" % pid
+    with open(p, "w") as f:
+        f.write("x")
+
+def connect_tmp():
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    c.connect(tmp_sock_path)
+
+report("bind_tmp", bind_tmp)
+report("bindconnect_tmpdir", bindconnect_tmpdir)
+report("write_tmpdir", write_tmpdir)
+report("write_vardb", write_vardb)
+report("connect_tmp", connect_tmp)
+`
+
+	cmd := exec.Command(sandboxExecPath, "-f", profilePath, "/usr/bin/python3", "-c", script)
+	cmd.Env = os.Environ()
+	out, runErr := cmd.CombinedOutput()
+	output := string(out)
+	t.Logf("sandbox-exec output:\n%s", output)
+	if runErr != nil {
+		t.Logf("sandbox-exec exited non-zero (may be expected if a probe denial surfaces as a process error): %v", runErr)
+	}
+
+	results := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			results[parts[0]] = parts[1]
+		}
+	}
+
+	check := func(key, label string, wantOK bool) {
+		got, ok := results[key]
+		if !ok {
+			t.Errorf("%s: no result reported (script may have crashed before printing); full output:\n%s", label, output)
+			return
+		}
+		isOK := got == "ok"
+		if isOK != wantOK {
+			t.Errorf("%s: got %q, want ok=%v", label, got, wantOK)
+		}
+	}
+
+	check("bind_tmp", "(a) AF_UNIX bind in /tmp", true)
+	check("bindconnect_tmpdir", "(b) AF_UNIX bind+connect in $TMPDIR", true)
+	check("write_tmpdir", "(c) file-write in $TMPDIR", true)
+	check("write_vardb", "(d) file-write to /private/var/db", false)
+	check("connect_tmp", "(e) AF_UNIX connect to socket in /tmp", false)
 }
 
 // TestProjectLocalNpmrcNotBlockedBySubpath verifies that a project-local
