@@ -35,6 +35,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/telemetry"
@@ -124,6 +125,66 @@ type cursorHookOutput struct {
 // defaultSocketPath returns ~/.agentjail/daemon.sock via wire.DefaultSocketPath.
 func defaultSocketPath() string {
 	return wire.DefaultSocketPath()
+}
+
+// trustedStateDir returns the trusted agentjail state directory (~/.agentjail),
+// the same directory wire.DefaultSocketPath derives the daemon socket from.
+func trustedStateDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".agentjail"), nil
+}
+
+// isTrustedSocketOverride reports whether path resolves under the trusted
+// agentjail state directory (~/.agentjail). AGENTJAIL_SOCKET is not in the
+// shield's env allowlist (internal/sandbox/env.go), so an agent's sandboxed
+// bash cannot set it for the hook's parent process today. This check is
+// defense-in-depth: even if AGENTJAIL_SOCKET reaches the hook's environment
+// by some other path (a misconfigured wrapper script, a future allowlist
+// change, a non-shielded invocation), the override is only honored when it
+// points inside the directory the user already trusts the daemon to live in
+// — never at an arbitrary attacker-supplied "always allow" socket elsewhere
+// on disk.
+func isTrustedSocketOverride(path string) bool {
+	if path == "" {
+		return false
+	}
+	trustedDir, err := trustedStateDir()
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absTrustedDir, err := filepath.Abs(trustedDir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absTrustedDir, absPath)
+	if err != nil {
+		return false
+	}
+	// rel escapes the trusted dir if it starts with ".." (covers both the
+	// exact ".." case and deeper escapes like "../../evil.sock").
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
+// resolveSocketPath determines the daemon socket path: AGENTJAIL_SOCKET is
+// honored only when it resolves under the trusted ~/.agentjail directory
+// (see isTrustedSocketOverride); otherwise (unset, or pointing elsewhere)
+// the default socket path is used. This keeps existing no-override behavior
+// identical while closing off arbitrary-socket redirection.
+func resolveSocketPath() string {
+	if override := os.Getenv("AGENTJAIL_SOCKET"); isTrustedSocketOverride(override) {
+		return override
+	}
+	return defaultSocketPath()
 }
 
 // failOpenWarnedSentinelPath returns the path to the one-time fail-open
@@ -462,11 +523,10 @@ func runClaude(agent string) {
 		return
 	}
 
-	// 2. Determine socket path (can be overridden for tests via AGENTJAIL_SOCKET).
-	sockPath := os.Getenv("AGENTJAIL_SOCKET")
-	if sockPath == "" {
-		sockPath = defaultSocketPath()
-	}
+	// 2. Determine socket path. AGENTJAIL_SOCKET can override the default for
+	// tests/tooling, but only when it resolves under the trusted ~/.agentjail
+	// directory (see isTrustedSocketOverride) — otherwise it is ignored.
+	sockPath := resolveSocketPath()
 
 	// 3. Connect to daemon with a short dial timeout (30 ms).
 	conn, err := dialDaemon(sockPath)
@@ -558,11 +618,9 @@ func runCursor() {
 	// parseCursorInput does not know the agent identity; set it here.
 	req.Agent = "cursor"
 
-	// 3. Determine socket path.
-	sockPath := os.Getenv("AGENTJAIL_SOCKET")
-	if sockPath == "" {
-		sockPath = defaultSocketPath()
-	}
+	// 3. Determine socket path (see resolveSocketPath: AGENTJAIL_SOCKET is
+	// honored only under the trusted ~/.agentjail directory).
+	sockPath := resolveSocketPath()
 
 	// 4. Connect to daemon.
 	conn, err := dialDaemon(sockPath)

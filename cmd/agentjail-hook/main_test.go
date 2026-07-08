@@ -40,13 +40,31 @@ func shortSockDir(t *testing.T) string {
 	return d
 }
 
+// trustedHome creates a short-path temp directory (see shortSockDir for why
+// short paths matter for Unix sockets), pre-creates its .agentjail
+// subdirectory, and points $HOME at it for the current test (t.Setenv, so
+// subprocesses launched via os.Environ() inherit it). The hook only honors
+// an AGENTJAIL_SOCKET override when it resolves under $HOME/.agentjail (see
+// isTrustedSocketOverride in main.go), so tests that need the daemon socket
+// pointed at a stub must place it in the directory this returns.
+func trustedHome(t *testing.T) string {
+	t.Helper()
+	home := shortSockDir(t)
+	agentjailDir := filepath.Join(home, ".agentjail")
+	if err := os.MkdirAll(agentjailDir, 0o700); err != nil {
+		t.Fatalf("mkdir .agentjail: %v", err)
+	}
+	t.Setenv("HOME", home)
+	return agentjailDir
+}
+
 // stubDaemon starts a minimal fake daemon that serves a single connection.
 // It reads one JSON request, applies actionFn to produce an action string and
 // reason, writes the response, then closes the connection.
 // It returns the socket path and a cleanup function.
 func stubDaemon(t *testing.T, dir string, actionFn func(req daemonRequest) (string, string, string)) string {
 	t.Helper()
-	sockPath := filepath.Join(shortSockDir(t), "test-daemon.sock")
+	sockPath := filepath.Join(trustedHome(t), "test-daemon.sock")
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -287,12 +305,13 @@ func TestCodexHook_AskBlocks(t *testing.T) {
 func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildHook(t, dir)
-	nonexistentSock := filepath.Join(shortSockDir(t), "no-daemon.sock")
 
 	// Isolate $HOME so the one-time fail-open warning sentinel
 	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
-	// real machine state from prior hook invocations.
-	t.Setenv("HOME", t.TempDir())
+	// real machine state from prior hook invocations. Also gives us a
+	// trusted ~/.agentjail directory to place the (nonexistent) override
+	// socket in, so it isn't silently ignored by isTrustedSocketOverride.
+	nonexistentSock := filepath.Join(trustedHome(t), "no-daemon.sock")
 
 	stdin := makeStdinJSON("Write", map[string]interface{}{
 		"path":    "/tmp/x.txt",
@@ -325,11 +344,12 @@ func TestHook_FailOpen(t *testing.T) {
 
 	// Isolate $HOME so the one-time fail-open warning sentinel
 	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
-	// real machine state from prior hook invocations.
-	t.Setenv("HOME", t.TempDir())
-
+	// real machine state from prior hook invocations. Also gives us a
+	// trusted ~/.agentjail directory to place the (nonexistent) override
+	// socket in, so it isn't silently ignored by isTrustedSocketOverride.
+	//
 	// Point the hook at a socket that does not exist.
-	nonexistentSock := filepath.Join(shortSockDir(t), "no-daemon.sock")
+	nonexistentSock := filepath.Join(trustedHome(t), "no-daemon.sock")
 
 	stdin := makeStdinJSON("Write", map[string]interface{}{
 		"path":    "/tmp/x.txt",
