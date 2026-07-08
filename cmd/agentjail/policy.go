@@ -14,8 +14,14 @@
 //
 // # Daemon reload
 //
-// After enable/disable the command tries to SIGHUP agentjail-daemon via pgrep.
-// If the daemon is not running, we warn but do not fail — the rule is correctly
+// After enable/disable the command asks the running daemon to reload via a
+// control message on its Unix socket (internal/wire.ControlOpReload); the
+// daemon replies with an explicit ok/error so a bad policy.yaml or rules
+// directory is reported here instead of silently keeping the old policy
+// while the CLI claims success. If the socket is unreachable (daemon not
+// running, or an older daemon without the control op), the command falls
+// back to a pgrep+SIGHUP signal, same as before. Either way, if the daemon
+// is not running at all we warn but do not fail — the rule is correctly
 // persisted and takes effect on the next daemon start.
 //
 // # Disable/enable semantics (ADR 0014)
@@ -35,9 +41,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -45,10 +54,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/policyctl"
 	"github.com/LuD1161/agentjail/internal/ui"
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // runPolicy is the top-level dispatcher for `agentjail policy <sub>`.
@@ -630,9 +641,79 @@ func isCoreRule(name string) bool {
 // go test ./...).
 var sighupDaemonFn = sighupDaemon
 
-// sighupDaemon finds the agentjail-daemon process and sends SIGHUP.
-// Warns (but does not fail) if the daemon is not running.
+// controlDialTimeout bounds how long sighupDaemon waits to dial and
+// round-trip a reload request on the daemon's control socket before falling
+// back to pgrep+SIGHUP. Short enough that a CLI invocation never feels slow,
+// generous enough for a warm daemon on a busy box.
+const controlDialTimeout = 200 * time.Millisecond
+
+// sighupDaemon asks the running daemon to reload policy.yaml and the Rego
+// rule bundle. It first tries the daemon's control socket
+// (internal/wire.ControlOpReload) — a request/response round trip lets the
+// daemon report back whether the reload actually compiled, instead of the
+// old pgrep+SIGHUP path where a bad policy.yaml would silently keep the old
+// policy while this command still reported success. If the control socket
+// is unreachable (daemon not running, or an older daemon binary that
+// doesn't understand the control op yet), it falls back to
+// sighupDaemonViaSignal.
 func sighupDaemon() {
+	if reloadViaControlSocket() {
+		return
+	}
+	sighupDaemonViaSignal()
+}
+
+// reloadViaControlSocket dials the daemon's Unix socket and sends a
+// ControlOpReload request. It returns true if the round trip completed
+// (regardless of whether the daemon reported ok=true or ok=false) — in both
+// of those cases the caller learned something concrete and should NOT also
+// fall back to SIGHUP. It returns false only when the socket could not be
+// reached or spoke an unexpected protocol, meaning the caller learned
+// nothing and the pgrep+SIGHUP fallback should be tried instead.
+//
+// On a reported failure (ok=false), a warning naming the daemon's error is
+// printed to stderr — this is the key win over SIGHUP: the operator learns
+// immediately that a bad policy.yaml (or rules directory) kept the old
+// policy in effect, rather than assuming their change took effect.
+func reloadViaControlSocket() bool {
+	conn, err := net.DialTimeout("unix", wire.DefaultSocketPath(), controlDialTimeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(controlDialTimeout)); err != nil {
+		return false
+	}
+
+	if err := json.NewEncoder(conn).Encode(wire.ControlRequest{
+		Type: wire.ControlType,
+		Op:   wire.ControlOpReload,
+	}); err != nil {
+		return false
+	}
+
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+	if !scanner.Scan() {
+		return false
+	}
+
+	var resp wire.ControlResponse
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		return false
+	}
+
+	if !resp.OK {
+		fmt.Fprintf(os.Stderr, "warning: daemon policy reload failed — old policy is still in effect: %s\n", resp.Error)
+	}
+	return true
+}
+
+// sighupDaemonViaSignal finds the agentjail-daemon process via pgrep and
+// sends SIGHUP. This is the fallback path used when the control socket is
+// unreachable. Warns (but does not fail) if the daemon is not running.
+func sighupDaemonViaSignal() {
 	pid, err := findDaemonPID()
 	if err != nil || pid == 0 {
 		fmt.Fprintln(os.Stderr, "warning: agentjail-daemon not running; rule will take effect on next start.")
