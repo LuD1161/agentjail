@@ -158,12 +158,13 @@ func TestCursorHook_MCPDeny(t *testing.T) {
 func TestCursorHook_DaemonUnreachable(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildHook(t, dir)
-	nonexistentSock := filepath.Join(dir, "no-daemon.sock")
 
 	// Isolate $HOME so the one-time fail-open warning sentinel
 	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
-	// real machine state from prior hook invocations.
-	t.Setenv("HOME", t.TempDir())
+	// real machine state from prior hook invocations. Also gives us a
+	// trusted ~/.agentjail directory to place the (nonexistent) override
+	// socket in, so it isn't silently ignored by isTrustedSocketOverride.
+	nonexistentSock := filepath.Join(trustedHome(t), "no-daemon.sock")
 
 	stdinBytes, err := os.ReadFile(filepath.Join("..", "..", "internal", "agents", "testdata", "cursor_before_shell_input.json"))
 	if err != nil {
@@ -235,7 +236,7 @@ func TestCursorHook_ShellRequestMapping(t *testing.T) {
 
 	var capturedReq daemonRequest
 
-	ln, err := net.Listen("unix", filepath.Join(shortSockDir(t), "map-test.sock"))
+	ln, err := net.Listen("unix", filepath.Join(trustedHome(t), "map-test.sock"))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -322,12 +323,13 @@ func TestDefaultClaudePathUnchanged(t *testing.T) {
 func TestCursorHook_FailOpenMarkerOnStderr(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildHook(t, dir)
-	nonexistentSock := filepath.Join(dir, "absent.sock")
 
 	// Isolate $HOME so the one-time fail-open warning sentinel
 	// (~/.agentjail/fail-open-warned) starts fresh instead of inheriting
-	// real machine state from prior hook invocations.
-	t.Setenv("HOME", t.TempDir())
+	// real machine state from prior hook invocations. Also gives us a
+	// trusted ~/.agentjail directory to place the (nonexistent) override
+	// socket in, so it isn't silently ignored by isTrustedSocketOverride.
+	nonexistentSock := filepath.Join(trustedHome(t), "absent.sock")
 
 	stdinBytes, err := os.ReadFile(filepath.Join("..", "..", "internal", "agents", "testdata", "cursor_before_shell_input.json"))
 	if err != nil {
