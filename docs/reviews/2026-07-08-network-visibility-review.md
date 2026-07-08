@@ -19,13 +19,26 @@ All line numbers verified against the worktree at review time.
 > | **S-D1** (fail-open policy) | **Fixed** — UNKNOWN→deny (fail-closed) on managed DB ports {5432,3306,6379,27017}; non-managed ports stay allow-by-default (host availability). `8f94cd7` |
 > | **S-C1** (CA key on disk) | **Fixed** — `GenerateCAInMemory`; `setupTunnelCA` writes only `root.crt`, never `root.key`. Hardens the not-yet-wired MITM subsystem. `8f94cd7` |
 > | **S-C2** (credential headers logged) | **Fixed** — sensitive header keys redacted at the store boundary. Not-yet-wired MITM subsystem. `8f94cd7` |
+> | **S-D2** (first-1024-bytes-only) | **Fixed** — per-message re-inspection on managed-port relays (`relayManaged`, bounded to 64 chunks); mid-stream deny tears the connection down. `45eee99` |
+> | **S-F3** (upstream dial loop) | **Fixed** — VIP-pool loop guard (`Registry.IsVIP`) refuses dials that resolve back into the pool. `45eee99` |
 > | **E / S4** (macOS machine-wide utun-via-root-daemon) | **Removed** — dead daemon-RPC path deleted; macOS keeps its NEPacketTunnelProvider Network Extension. `c6687a3` |
 > | Mechanism A (host-veth + privileged daemon) | **Deleted** per ADR 0049; **AGE-103/AGE-140 obviated**. `c6687a3` |
 >
-> **Still open:** S-D2 (per-message inspection, not first-1024-bytes-only), S-F3
-> (guard upstream dials against the VIP pool), and full DNS-VIP↔TCP end-to-end
-> validation on a real Linux TUN host. MITM TLS termination is not wired into the
-> forward gateway (it is a plain relay today), so S-C1/S-C2 are defense-in-depth.
+> **End-to-end VALIDATED on a real host** (`582f024`): a `TestE2ETUNInterception`
+> drives a real `bash /dev/tcp` client inside a live userns/netns over a real
+> kernel `ajtun0` TUN → SCM_RIGHTS fd → `fdPump` → gVisor forwarder → `handleConn`
+> → real upstream, and a real `dig` DNS query answered from the VIP registry. This
+> promoted three latent defects from "unit-passing" to found-and-fixed: (1) the
+> netns default-route add used a nil `Dst` that this netlink version rejects — the
+> real TUN never came up; (2) `RecvFD` hung instead of failing over because the
+> parent kept the child socket open — breaking the fail-open story; (3) half-close
+> (FIN) never propagated on the forward path (`*gonet.TCPConn` ≠ `*net.TCPConn`).
+> A fourth, the same half-close bug in `relayManaged`, was caught at integration
+> (`be66128`). Unit tests (packet injection) passed through all four — only real
+> execution surfaced them.
+>
+> **Still open:** MITM TLS termination is not wired into the forward gateway (it is
+> a plain relay today), so S-C1/S-C2 remain defense-in-depth until it lands.
 
 ---
 
