@@ -1102,7 +1102,7 @@ func TestToOPADataAWSEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// MCPServerConfig.BlockedTools / AskTools (AGE-34)
+// MCPServerConfig.BlockedTools / AskTools (follow-up)
 // ---------------------------------------------------------------------------
 
 // TestLoadMCPServerBlockedAndAskTools verifies that blocked_tools and ask_tools
@@ -1784,5 +1784,70 @@ func TestExtendedDefaultIncludesCursorLoginHosts(t *testing.T) {
 		if h == "*.cursor.sh" {
 			t.Errorf("ExtendedDefaultAllowedHosts() must not contain a broad *.cursor.sh wildcard")
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DaemonUnreachable (ADR 0050) tests
+// ---------------------------------------------------------------------------
+
+func TestDefaultDaemonUnreachableIsAllow(t *testing.T) {
+	cfg := Default()
+	if cfg.DaemonUnreachable != DaemonUnreachableAllow {
+		t.Errorf("Default().DaemonUnreachable = %q, want %q", cfg.DaemonUnreachable, DaemonUnreachableAllow)
+	}
+}
+
+func TestLoadDaemonUnreachableEmptyIsValid(t *testing.T) {
+	cfg, err := decode(strings.NewReader(`mcp:
+  allowed: ["*"]
+`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if cfg.DaemonUnreachable != "" {
+		t.Errorf("expected empty DaemonUnreachable when unset, got %q", cfg.DaemonUnreachable)
+	}
+}
+
+func TestLoadDaemonUnreachableValidValues(t *testing.T) {
+	for _, level := range []DaemonUnreachableLevel{DaemonUnreachableAllow, DaemonUnreachableDegraded, DaemonUnreachableDeny} {
+		yamlSrc := "daemon_unreachable: " + string(level) + "\n"
+		cfg, err := decode(strings.NewReader(yamlSrc))
+		if err != nil {
+			t.Fatalf("decode(%q): unexpected error: %v", level, err)
+		}
+		if cfg.DaemonUnreachable != level {
+			t.Errorf("decode(%q): got %q", level, cfg.DaemonUnreachable)
+		}
+	}
+}
+
+func TestLoadDaemonUnreachableInvalidValueRejected(t *testing.T) {
+	_, err := decode(strings.NewReader("daemon_unreachable: bogus\n"))
+	if err == nil {
+		t.Fatal("expected error for invalid daemon_unreachable value, got nil")
+	}
+	if !strings.Contains(err.Error(), "daemon_unreachable") {
+		t.Errorf("error should mention daemon_unreachable, got: %v", err)
+	}
+}
+
+func TestMergeDaemonUnreachableOverlayWinsWhenSet(t *testing.T) {
+	base := Default()
+	base.DaemonUnreachable = DaemonUnreachableDegraded
+	overlay := &PolicyConfig{DaemonUnreachable: DaemonUnreachableDeny}
+	merged := Merge(base, overlay)
+	if merged.DaemonUnreachable != DaemonUnreachableDeny {
+		t.Errorf("expected overlay to win, got %q", merged.DaemonUnreachable)
+	}
+}
+
+func TestMergeDaemonUnreachableKeepsBaseWhenOverlayEmpty(t *testing.T) {
+	base := Default()
+	base.DaemonUnreachable = DaemonUnreachableDegraded
+	merged := Merge(base, &PolicyConfig{})
+	if merged.DaemonUnreachable != DaemonUnreachableDegraded {
+		t.Errorf("expected base to be kept, got %q", merged.DaemonUnreachable)
 	}
 }
