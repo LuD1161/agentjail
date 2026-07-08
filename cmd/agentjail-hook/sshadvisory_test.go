@@ -42,9 +42,33 @@ func TestSSHCommandPatternNonMatches(t *testing.T) {
 	}
 }
 
+// unsetGetenv simulates a host env with no relevant variables set - used by
+// tests that don't exercise the pinned-IdentityFile / git-marker logic.
+func unsetGetenv(string) string { return "" }
+
+// overrideSetGetenv simulates a host env where the shield has set the git
+// auto-fix marker.
+func overrideSetGetenv(key string) string {
+	if key == agentjailSSHOverrideEnv {
+		return "1"
+	}
+	return ""
+}
+
 // readyProbe simulates an ssh-agent that already has keys loaded.
 func readyProbe(ctx context.Context) sshagent.Status {
 	return sshagent.Status{Readiness: sshagent.ReadinessReady, KeysOnDisk: true, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
+}
+
+// readyPinnedProbe simulates an ssh-agent that has keys loaded AND a pinned
+// IdentityFile blind spot (config pins an on-disk file the shield blocks).
+func readyPinnedProbe(ctx context.Context) sshagent.Status {
+	return sshagent.Status{
+		Readiness:           sshagent.ReadinessReady,
+		KeysOnDisk:          true,
+		KeyPaths:            []string{"/home/u/.ssh/id_ed25519"},
+		PinnedIdentityPaths: []string{"/home/u/.ssh/id_ed25519"},
+	}
 }
 
 // needsRemediationProbe simulates keys on disk but no agent reachable.
@@ -70,7 +94,7 @@ func TestSSHAdvisoryAllowMatchingNeedsRemediation(t *testing.T) {
 	var buf bytes.Buffer
 	ppid := 12345
 
-	if err := sshAdvisory(&buf, "Bash", "git push origin main", ppid, needsRemediationProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&buf, "Bash", "git push origin main", ppid, needsRemediationProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("sshAdvisory returned error: %v", err)
 	}
 
@@ -89,7 +113,7 @@ func TestSSHAdvisoryOneShotPerSession(t *testing.T) {
 	ppid := 22222
 
 	var first bytes.Buffer
-	if err := sshAdvisory(&first, "Bash", "git push origin main", ppid, needsRemediationProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&first, "Bash", "git push origin main", ppid, needsRemediationProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("first sshAdvisory returned error: %v", err)
 	}
 	if first.Len() == 0 {
@@ -97,7 +121,7 @@ func TestSSHAdvisoryOneShotPerSession(t *testing.T) {
 	}
 
 	var second bytes.Buffer
-	if err := sshAdvisory(&second, "Bash", "git push origin main", ppid, needsRemediationProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&second, "Bash", "git push origin main", ppid, needsRemediationProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("second sshAdvisory returned error: %v", err)
 	}
 	if second.Len() != 0 {
@@ -109,7 +133,7 @@ func TestSSHAdvisoryNonMatchingCommand(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := sshAdvisory(&buf, "Bash", "npm install", 33333, needsRemediationProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&buf, "Bash", "npm install", 33333, needsRemediationProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("sshAdvisory returned error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -127,7 +151,7 @@ func TestSSHAdvisoryNonBashTool(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := sshAdvisory(&buf, "Read", "ssh host", 44444, needsRemediationProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&buf, "Read", "ssh host", 44444, needsRemediationProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("sshAdvisory returned error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -139,7 +163,7 @@ func TestSSHAdvisoryProbeReady(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
-	if err := sshAdvisory(&buf, "Bash", "ssh host", 55555, readyProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&buf, "Bash", "ssh host", 55555, readyProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("sshAdvisory returned error: %v", err)
 	}
 	if buf.Len() != 0 {
@@ -152,7 +176,7 @@ func TestSSHAdvisoryProbeTimeout(t *testing.T) {
 	var buf bytes.Buffer
 
 	start := time.Now()
-	if err := sshAdvisory(&buf, "Bash", "ssh host", 66666, slowProbe, "linux", dir); err != nil {
+	if err := sshAdvisory(&buf, "Bash", "ssh host", 66666, slowProbe, "linux", dir, unsetGetenv); err != nil {
 		t.Fatalf("sshAdvisory returned error: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -182,7 +206,7 @@ func TestSSHAdvisoryNeverReturnsErrorThatWouldAlterHookFlow(t *testing.T) {
 		{"Read", "ssh host", needsRemediationProbe},
 	}
 	for i, c := range cases {
-		if err := sshAdvisory(&buf, c.toolName, c.command, 70000+i, c.probe, "darwin", dir); err != nil {
+		if err := sshAdvisory(&buf, c.toolName, c.command, 70000+i, c.probe, "darwin", dir, unsetGetenv); err != nil {
 			t.Errorf("case %d: sshAdvisory returned non-nil error %v; the hook must never see an error here", i, err)
 		}
 	}
@@ -193,5 +217,104 @@ func TestSSHAdvisorySentinelPath(t *testing.T) {
 	want := "/tmp/agentjail-ssh-warned-" + strconv.Itoa(999)
 	if got != want {
 		t.Errorf("sshAdvisorySentinelPath(/tmp, 999) = %q, want %q", got, want)
+	}
+}
+
+func TestSSHAdvisoryPinnedDirectSSH(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	ppid := 80001
+
+	if err := sshAdvisory(&buf, "Bash", "ssh host", ppid, readyPinnedProbe, "linux", dir, unsetGetenv); err != nil {
+		t.Fatalf("sshAdvisory returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "IdentityFile=none") {
+		t.Errorf("advisory output = %q, want it to contain the pinned-IdentityFile remediation", buf.String())
+	}
+
+	pinnedPath := sshPinnedSentinelPath(dir, ppid)
+	if _, err := os.Stat(pinnedPath); err != nil {
+		t.Errorf("expected pinned sentinel at %s to exist: %v", pinnedPath, err)
+	}
+
+	// Second call for the same ppid must stay silent (one-shot).
+	var second bytes.Buffer
+	if err := sshAdvisory(&second, "Bash", "ssh host", ppid, readyPinnedProbe, "linux", dir, unsetGetenv); err != nil {
+		t.Fatalf("second sshAdvisory returned error: %v", err)
+	}
+	if second.Len() != 0 {
+		t.Errorf("expected second call (same ppid) to write nothing, got %q", second.String())
+	}
+}
+
+func TestSSHAdvisoryPinnedGitSuppressedWhenOverrideSet(t *testing.T) {
+	dir := t.TempDir()
+	ppid := 80002
+
+	var buf bytes.Buffer
+	if err := sshAdvisory(&buf, "Bash", "git clone git@github.com:foo/bar.git", ppid, readyPinnedProbe, "linux", dir, overrideSetGetenv); err != nil {
+		t.Fatalf("sshAdvisory returned error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for git command when shield auto-handled it, got %q", buf.String())
+	}
+
+	pinnedPath := sshPinnedSentinelPath(dir, ppid)
+	if _, err := os.Stat(pinnedPath); err == nil {
+		t.Errorf("expected no pinned sentinel to be created for a suppressed-git occurrence, found one at %s", pinnedPath)
+	}
+
+	// A subsequent direct ssh command in the same session must still warn -
+	// proving the suppressed git occurrence did not consume the sentinel.
+	var second bytes.Buffer
+	if err := sshAdvisory(&second, "Bash", "ssh host", ppid, readyPinnedProbe, "linux", dir, overrideSetGetenv); err != nil {
+		t.Fatalf("sshAdvisory returned error: %v", err)
+	}
+	if !strings.Contains(second.String(), "IdentityFile=none") {
+		t.Errorf("expected direct ssh to still print the pinned advisory, got %q", second.String())
+	}
+}
+
+func TestSSHAdvisoryPinnedGitPrintsWhenOverrideUnset(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := sshAdvisory(&buf, "Bash", "git clone git@github.com:foo/bar.git", 80003, readyPinnedProbe, "linux", dir, unsetGetenv); err != nil {
+		t.Fatalf("sshAdvisory returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "IdentityFile=none") {
+		t.Errorf("expected pinned advisory for git when the override marker is unset (opt-out path), got %q", buf.String())
+	}
+}
+
+func TestSSHAdvisoryNotPinnedReadyStaysSilent(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := sshAdvisory(&buf, "Bash", "ssh host", 80004, readyProbe, "linux", dir, unsetGetenv); err != nil {
+		t.Fatalf("sshAdvisory returned error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for a ready, non-pinned status, got %q", buf.String())
+	}
+}
+
+func TestSSHAdvisoryEmptyAgentStillFiresRegression(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := sshAdvisory(&buf, "Bash", "ssh host", 80005, needsRemediationProbe, "linux", dir, unsetGetenv); err != nil {
+		t.Fatalf("sshAdvisory returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "ssh-add") {
+		t.Errorf("expected the existing empty-agent advisory to still fire, got %q", buf.String())
+	}
+}
+
+func TestSSHAdvisoryPinnedSentinelPath(t *testing.T) {
+	got := sshPinnedSentinelPath("/tmp", 999)
+	want := "/tmp/agentjail-ssh-pinned-warned-" + strconv.Itoa(999)
+	if got != want {
+		t.Errorf("sshPinnedSentinelPath(/tmp, 999) = %q, want %q", got, want)
 	}
 }

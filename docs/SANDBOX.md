@@ -103,6 +103,52 @@ an ssh-ish command while the agent is empty. Neither ever suggests
 granting a read hole for the key file -- the fix is always to load the
 key into the agent.
 
+**Key loaded but ssh still fails (pinned `IdentityFile`).** If
+`ssh-add -l` shows your key *is* loaded yet a sandboxed `ssh`/`git` still
+dies with `no such identity: ~/.ssh/id_...: Operation not permitted`
+followed by `Permission denied (publickey)`, your `~/.ssh/config` pins an
+explicit `IdentityFile` (usually with `IdentitiesOnly yes`). `ssh` tries
+to read that on-disk file first -- which the shield blocks -- and gives
+up before trying the agent.
+
+For shield-wrapped `git`, this is handled automatically: the shield
+injects an agent-backed `GIT_SSH_COMMAND` (`ssh -o IdentitiesOnly=no -o
+IdentityFile=none -o IdentityAgent='<your SSH_AUTH_SOCK>'`) so `git`
+authenticates through the agent instead of the pinned file, with no action
+needed. The `IdentitiesOnly=no` is the decisive part: with `IdentitiesOnly
+yes` in your config, OpenSSH only offers agent keys matching a configured
+`IdentityFile`, so an agent key that differs from the pinned one is never
+offered -- `IdentitiesOnly=no` lifts that so the agent's real key is used.
+This auto-fix is skipped -- and you are back to the manual workaround below
+-- if you have already set your own `GIT_SSH_COMMAND`, or if you export
+`AGENTJAIL_NO_SSH_OVERRIDE=1` to opt out (for example, to keep your
+deliberate per-host identity restrictions intact for git too). See
+[ADR 0056](./adr/0056-ssh-agent-pinned-identityfile-blindspot.md) for why
+all three options are required, and for the accepted tradeoffs of forcing
+`IdentitiesOnly=no` (it offers every agent key to the server).
+
+For direct `ssh`/`scp`/`sftp`/`rsync` (not git), or for git when you have
+opted out of the auto-fix above, apply the same recipe by hand:
+
+```sh
+# per command
+GIT_SSH_COMMAND='ssh -o IdentitiesOnly=no -o IdentityFile=none -o IdentityAgent=$SSH_AUTH_SOCK' \
+  git clone git@github.com:owner/repo.git
+
+# or, for direct ssh:
+ssh -o IdentitiesOnly=no -o IdentityFile=none -o IdentityAgent=$SSH_AUTH_SOCK git@github.com
+
+# or drop `IdentitiesOnly yes` from ~/.ssh/config so the agent is used as
+# a fallback
+```
+
+Note: a global git `url.git@github.com:.insteadOf https://github.com/`
+rewrite silently sends HTTPS GitHub URLs over SSH, so an apparent HTTPS
+clone can hit this same path. `agentjail doctor` and the hook's one-shot
+advisory both detect this case now (agent Ready, but a pinned
+`IdentityFile` the shield would block) and print the guidance above --
+for git, only when the auto-fix did not already handle it.
+
 ### Linux — Landlock LSM
 
 On Linux, agentjail-shield uses [Landlock](https://docs.kernel.org/userspace-api/landlock.html)

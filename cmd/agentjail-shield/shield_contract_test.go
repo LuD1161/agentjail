@@ -90,6 +90,72 @@ func TestPerFileGrants_KnownHostsIsReadOnlyPerFile(t *testing.T) {
 	}
 }
 
+// TestPerFileGrants_SSHConfigIsReadOnlyScoped verifies the ADR 0056 Task D
+// contract shape: .ssh/config is a per-file READ-ONLY carve-out alongside
+// .ssh/known_hosts, and this narrow grant does not widen into write access on
+// .ssh/config or into broader ~/.ssh access (a private key file, or the bare
+// .ssh directory itself). Private key FILE reads must stay denied by design
+// (SensitiveFilePatterns covers id_rsa/id_ed25519/etc, and .ssh is
+// listed in SensitiveMCPCommandDirs precisely so it is never granted as a
+// directory) -- ssh auth for a sandboxed agent goes through ssh-agent, never
+// a config-driven read hole. See docs/adr/0056-ssh-agent-pinned-identityfile-blindspot.md.
+func TestPerFileGrants_SSHConfigIsReadOnlyScoped(t *testing.T) {
+	grants := PerFileGrants()
+
+	wantReadOnly := map[string]bool{
+		".ssh/config":      false,
+		".ssh/known_hosts": false,
+	}
+	for _, g := range grants {
+		if _, ok := wantReadOnly[g.Path]; !ok {
+			continue
+		}
+		wantReadOnly[g.Path] = true
+		if !g.PerFile {
+			t.Errorf("grant %q must have PerFile=true, got %+v", g.Path, g)
+		}
+		if g.Mode != ReadOnly {
+			t.Errorf("grant %q must have Mode=ReadOnly, got %+v", g.Path, g)
+		}
+	}
+	for path, found := range wantReadOnly {
+		if !found {
+			t.Errorf("PerFileGrants() missing expected read-only grant %q", path)
+		}
+	}
+
+	// No grant anywhere in the per-file list may name .ssh/config with write
+	// access, and none may name a private key file or the bare .ssh
+	// directory -- a narrow per-file read carve-out must never imply
+	// broader ~/.ssh access.
+	disallowed := map[string]bool{
+		".ssh":            true,
+		".ssh/id_rsa":     true,
+		".ssh/id_ed25519": true,
+	}
+	for _, g := range grants {
+		if g.Path == ".ssh/config" && g.Mode == ReadWrite {
+			t.Errorf("PerFileGrants() must not grant write access to .ssh/config, got %+v", g)
+		}
+		if disallowed[g.Path] {
+			t.Errorf("PerFileGrants() must not grant broader ~/.ssh access via %q, got %+v", g.Path, g)
+		}
+	}
+
+	// Confirm the broader contract too: .ssh is one of the top-level
+	// directories that must NEVER be granted (SensitiveMCPCommandDirs), so a
+	// directory-level grant for ~/.ssh cannot exist by construction.
+	var sawSSHDir bool
+	for _, d := range SensitiveMCPCommandDirs() {
+		if d == ".ssh" {
+			sawSSHDir = true
+		}
+	}
+	if !sawSSHDir {
+		t.Error("SensitiveMCPCommandDirs() must include \".ssh\" -- the per-file config/known_hosts carve-outs rely on .ssh never being a directory-level grant")
+	}
+}
+
 // TestAccessMode_String is a light sanity check on the AccessMode Stringer
 // used in test failure messages and any future --profile-print output.
 func TestAccessMode_String(t *testing.T) {

@@ -276,6 +276,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
 	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
 	env = sandbox.StripEnv(env, cfg)
+	env = sandbox.RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
+	gitSSHEnv := sandbox.AgentGitSSHEnv(os.Getenv)
+	env = append(env, gitSSHEnv...)
+	if sshOverrideInjected(gitSSHEnv) {
+		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
+	}
 	if netproxyReady {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}

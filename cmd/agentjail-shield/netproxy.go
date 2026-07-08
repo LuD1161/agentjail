@@ -276,6 +276,20 @@ func proxyEnvVars(proxyAddr string, tok proxyctl.Token) []string {
 	}
 }
 
+// sshOverrideInjected reports whether env (the return of
+// sandbox.AgentGitSSHEnv) contains the agentjail marker, i.e. whether the
+// shield actually injected the agent-backed GIT_SSH_COMMAND override (as
+// opposed to preserving a user value or injecting nothing). Shared by both
+// OS exec paths so the INFO line logic never drifts between them.
+func sshOverrideInjected(env []string) bool {
+	for _, kv := range env {
+		if kv == "AGENTJAIL_SSH_OVERRIDE=1" {
+			return true
+		}
+	}
+	return false
+}
+
 // cleanupNetproxy terminates and reaps the netproxy child process to prevent
 // zombies.  Safe to call with a nil cmd (i.e. when we reused an existing proxy).
 func cleanupNetproxy(cmd *exec.Cmd) {

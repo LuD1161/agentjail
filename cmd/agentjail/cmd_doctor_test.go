@@ -53,6 +53,46 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 			wantStatus: "skip",
 			wantSubstr: "no ssh keys",
 		},
+		{
+			name: "ready and pinned identity blind spot",
+			status: sshagent.Status{
+				Readiness:           sshagent.ReadinessReady,
+				KeysOnDisk:          true,
+				KeyPaths:            []string{"/home/user/.ssh/id_ed25519"},
+				PinnedIdentityPaths: []string{"/home/user/.ssh/id_ed25519"},
+			},
+			wantStatus: "warn",
+			wantSubstr: "IdentityFile=none",
+		},
+		{
+			name: "deploy-key-only pinned, no id_* keys on disk - still warns, not skip",
+			status: sshagent.Status{
+				Readiness:           sshagent.ReadinessReady,
+				KeysOnDisk:          false,
+				PinnedIdentityPaths: []string{"/home/user/.ssh/github_deploy"},
+			},
+			wantStatus: "warn",
+			wantSubstr: "IdentityFile=none",
+		},
+		{
+			name: "ready and not pinned",
+			status: sshagent.Status{
+				Readiness:  sshagent.ReadinessReady,
+				KeysOnDisk: true,
+				KeyPaths:   []string{"/home/user/.ssh/id_ed25519"},
+			},
+			wantStatus: "ok",
+			wantSubstr: "loaded",
+		},
+		{
+			name: "no keys on disk and not pinned",
+			status: sshagent.Status{
+				Readiness:  sshagent.ReadinessNoAgent,
+				KeysOnDisk: false,
+			},
+			wantStatus: "skip",
+			wantSubstr: "no ssh keys",
+		},
 	}
 
 	for _, tt := range tests {

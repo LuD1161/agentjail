@@ -41,6 +41,8 @@ const sandboxExecPath = "/usr/bin/sandbox-exec"
 func buildBaseEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	env := sandbox.BuildCleanEnv(hostEnv, cfg)
 	env = sandbox.StripEnv(env, cfg)
+	env = sandbox.RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
+	env = append(env, sandbox.AgentGitSSHEnv(os.Getenv)...)
 	return env
 }
 
@@ -740,6 +742,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// Build the environment: clean allowlist + strip defence-in-depth + proxy
 	// vars + granted secrets.
 	env := buildBaseEnv(os.Environ(), cfg)
+	if sshOverrideInjected(env) {
+		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
+	}
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
@@ -769,6 +774,9 @@ func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, w
 	// path -- the fail-open fallback must not leak a broader environment
 	// than the sandboxed path does.
 	env := buildBaseEnv(os.Environ(), cfg)
+	if sshOverrideInjected(env) {
+		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
+	}
 	env = append(env, "AGENTJAIL_SHIELDED=1")
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
