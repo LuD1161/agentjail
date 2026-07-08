@@ -605,6 +605,9 @@ func runClaude(agent string) {
 	default:
 		// "allow" or any unrecognised action → allow (fail-open semantics for
 		// unknown future action values).
+		// One-time ssh-agent remediation advisory (non-blocking, stderr
+		// only, allow-path only - never on deny/ask).
+		maybeEmitSSHAgentWarning(input.ToolName, input.ToolInput)
 		if agent == "codex" {
 			os.Exit(0)
 		}
@@ -668,6 +671,9 @@ func runCursor() {
 
 	default:
 		// "allow" or unknown → allow.
+		// One-time ssh-agent remediation advisory (non-blocking, stderr
+		// only, allow-path only - never on deny/ask).
+		maybeEmitSSHAgentWarning(req.ToolName, req.ToolInput)
 		writeCursorAllow()
 	}
 
