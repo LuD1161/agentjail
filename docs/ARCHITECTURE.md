@@ -97,7 +97,9 @@ namespaced `rule_id` (`file_policy/…`, `command_policy/…`, `mcp_policy/…`,
 ### Config overlay (ADR 0012)
 
 The daemon loads `~/.agentjail/policy.yaml`, merges it over built-in defaults,
-and injects it into OPA as `data.agentjail.config` (re-injected on `SIGHUP`,
+and injects it into OPA as `data.agentjail.config` (re-injected on reload —
+a control message over the daemon socket, with `SIGHUP` retained as a
+fallback; see [ADR 0052](adr/0052-daemon-control-plane-socket.md) —
 decision cache invalidated). Rego reads config from there — e.g.
 `data.agentjail.config.mcp.allowed`, `.file.temp_roots`, `.disabled_rules`.
 Request paths and `cwd` are canonicalized (symlinks/`..` resolved) at ingest, so
