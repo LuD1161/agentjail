@@ -56,7 +56,7 @@ func TestFdPumpDrivesHandshake(t *testing.T) {
 	accepted := make(chan net.Conn, 1)
 	fs, err := newForwardStack(mtu, func(c net.Conn) {
 		accepted <- c
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newForwardStack: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestFdPumpCloseIsClean(t *testing.T) {
 
 	fs, err := newForwardStack(mtu, func(net.Conn) {
 		t.Error("no connection should be accepted in the close test")
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newForwardStack: %v", err)
 	}

@@ -30,7 +30,9 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -58,6 +60,19 @@ const forwarderQueueSize = 16384
 // the TCP forwarder tracks concurrently before it starts refusing new SYNs.
 const forwarderMaxInFlight = 1024
 
+// dnsUDPPort is the destination UDP port the forwarder answers from the VIP
+// registry; every other UDP port is dropped.
+const dnsUDPPort = 53
+
+// dnsMaxQuerySize bounds a single intercepted DNS query datagram (EDNS0 allows
+// up to 4096; anything larger is truncated by the read).
+const dnsMaxQuerySize = 4096
+
+// dnsReadTimeout bounds how long the UDP handler waits for the agent's query
+// datagram after the endpoint is created, so a stalled endpoint cannot leak a
+// goroutine indefinitely.
+const dnsReadTimeout = 5 * time.Second
+
 // forwardStack is a transparent L3 TCP forwarder built on a gVisor netstack. It
 // owns the stack and its channel endpoint. Inbound IP packets are injected via
 // InjectInbound; outbound packets (SYN-ACKs, data, RSTs the stack emits) are
@@ -70,12 +85,20 @@ type forwardStack struct {
 	ep     *channel.Endpoint
 	mtu    int
 	accept func(net.Conn)
+
+	// dnsResolve, when non-nil, answers an inbound UDP:53 query datagram (DNS
+	// wire format) and returns the response datagram to write back. The agent
+	// inside the namespace resolves names via UDP:53, so this is what lets DNS
+	// reach the VIP registry and allocate VIPs (AGE-148, review finding W1).
+	// When nil, all UDP — including :53 — is dropped.
+	dnsResolve func([]byte) ([]byte, error)
 }
 
 // newForwardStack builds a transparent forwarder stack. accept is invoked (on a
 // fresh goroutine, so it never blocks the forwarder's packet path) for every
-// accepted connection; accept must not be nil.
-func newForwardStack(mtu int, accept func(net.Conn)) (*forwardStack, error) {
+// accepted connection; accept must not be nil. dnsResolve answers intercepted
+// UDP:53 DNS queries from the VIP registry; when nil, all UDP is dropped.
+func newForwardStack(mtu int, accept func(net.Conn), dnsResolve func([]byte) ([]byte, error)) (*forwardStack, error) {
 	if accept == nil {
 		return nil, fmt.Errorf("tunnel: forwarder accept callback is required")
 	}
@@ -94,8 +117,9 @@ func newForwardStack(mtu int, accept func(net.Conn)) (*forwardStack, error) {
 			// endpoint rather than short-circuiting loopback-style.
 			HandleLocal: false,
 		}),
-		mtu:    mtu,
-		accept: accept,
+		mtu:        mtu,
+		accept:     accept,
+		dnsResolve: dnsResolve,
 	}
 
 	if err := fs.stack.CreateNIC(forwarderNIC, fs.ep); err != nil {
@@ -123,6 +147,13 @@ func newForwardStack(mtu int, accept func(net.Conn)) (*forwardStack, error) {
 	fwd := tcp.NewForwarder(fs.stack, 0, forwarderMaxInFlight, fs.handleForward)
 	fs.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
 
+	// UDP forwarder: intercepts every inbound UDP datagram to any destination.
+	// Only :53 (DNS) is answered — from the VIP registry — so the agent's name
+	// resolution reaches the registry and VIPs get allocated (AGE-148/W1). All
+	// other UDP ports are dropped (no exfil/covert channel via raw UDP).
+	udpFwd := udp.NewForwarder(fs.stack, fs.handleUDP)
+	fs.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
+
 	return fs, nil
 }
 
@@ -144,6 +175,63 @@ func (fs *forwardStack) handleForward(r *tcp.ForwarderRequest) {
 	// Never block the forwarder's packet-processing path: hand the accepted
 	// conn off to the callback on its own goroutine.
 	go fs.accept(conn)
+}
+
+// handleUDP is the udp.Forwarder handler. It fires once per inbound UDP
+// datagram to any destination. r.ID().LocalPort is the ORIGINAL destination
+// port the agent addressed. Only :53 is answered (DNS, from the VIP registry);
+// every other UDP port is dropped. The work happens on its own goroutine so it
+// never blocks the forwarder's packet path, mirroring handleForward.
+func (fs *forwardStack) handleUDP(r *udp.ForwarderRequest) {
+	id := r.ID()
+
+	// Drop non-DNS UDP and DNS when no resolver is wired: no endpoint is
+	// created, so the datagram is silently discarded (no response emitted).
+	if id.LocalPort != dnsUDPPort || fs.dnsResolve == nil {
+		slog.Debug("tunnel: dropping non-DNS UDP datagram",
+			"dst_port", id.LocalPort, "src", id.RemoteAddress.String())
+		return
+	}
+
+	var wq waiter.Queue
+	ep, tcpErr := r.CreateEndpoint(&wq)
+	if tcpErr != nil {
+		slog.Debug("tunnel: UDP CreateEndpoint failed", "err", tcpErr)
+		return
+	}
+
+	go func() {
+		// Panic isolation: the resolver runs on attacker-controlled query
+		// bytes. A panic must drop just this datagram, never crash the
+		// gateway. Mirrors handleConn's S-F2 defer.
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("tunnel: handleUDP recovered from panic; dropping datagram", "panic", rec)
+			}
+		}()
+
+		conn := gonet.NewUDPConn(&wq, ep)
+		defer conn.Close()
+
+		// A DNS query is at most 512 bytes over UDP without EDNS0, and 4096
+		// with it; dnsMaxQuerySize bounds a single datagram read.
+		buf := make([]byte, dnsMaxQuerySize)
+		_ = conn.SetReadDeadline(time.Now().Add(dnsReadTimeout))
+		n, err := conn.Read(buf)
+		if err != nil || n == 0 {
+			slog.Debug("tunnel: reading UDP DNS query failed", "err", err, "n", n)
+			return
+		}
+
+		resp, err := fs.dnsResolve(buf[:n])
+		if err != nil {
+			slog.Debug("tunnel: DNS resolve failed", "err", err)
+			return
+		}
+		if _, err := conn.Write(resp); err != nil {
+			slog.Debug("tunnel: writing UDP DNS response failed", "err", err)
+		}
+	}()
 }
 
 // InjectInbound feeds a raw inbound IP packet (as received from the agent side)

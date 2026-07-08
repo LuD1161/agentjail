@@ -60,7 +60,7 @@ func TestForwarderAcceptsArbitraryDestinationSYN(t *testing.T) {
 	accepted := make(chan net.Conn, 1)
 	fs, err := newForwardStack(1420, func(c net.Conn) {
 		accepted <- c
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newForwardStack: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestForwarderAcceptsArbitraryDestinationSYN(t *testing.T) {
 func TestForwarderRejectsGarbage(t *testing.T) {
 	fs, err := newForwardStack(1420, func(net.Conn) {
 		t.Error("garbage input should not produce an accepted connection")
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newForwardStack: %v", err)
 	}

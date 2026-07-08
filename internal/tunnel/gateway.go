@@ -179,8 +179,14 @@ func NewForwardGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logge
 
 	// Build the transparent forwarder, wiring the gateway's own handleConn as
 	// the accept callback. handleConn is panic-isolated (S-F2), so a parser
-	// panic on attacker bytes denies just that connection.
-	fs, err := newForwardStack(cfg.mtu(), g.handleConn)
+	// panic on attacker bytes denies just that connection. The DNS resolver
+	// closure answers intercepted UDP:53 queries straight from the shared VIP
+	// registry (AGE-148/W1) — no import cycle since internal/dnsvip does not
+	// import internal/tunnel and this file already depends on dnsvip.
+	dnsResolve := func(query []byte) ([]byte, error) {
+		return dnsvip.Resolve(g.registry, query)
+	}
+	fs, err := newForwardStack(cfg.mtu(), g.handleConn, dnsResolve)
 	if err != nil {
 		return nil, fmt.Errorf("tunnel: building forward stack: %w", err)
 	}

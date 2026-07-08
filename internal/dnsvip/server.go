@@ -2,6 +2,7 @@ package dnsvip
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -76,10 +77,54 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// Resolve answers a DNS query in wire format using the VIP registry, without
+// touching any socket. It unmarshals query, runs the same A/AAAA → reg.Allocate
+// / reg.AllocateV6 logic as the socket server, and returns the marshalled
+// response bytes. It is the entry point for the in-stack UDP:53 interceptor
+// (see internal/tunnel/forwarder.go), which cannot use the socket-backed
+// dns.Server. An error is returned only when the query cannot be unpacked or
+// the response cannot be packed; DNS-level failures (e.g. allocation errors)
+// are surfaced as an Rcode in the returned bytes.
+func Resolve(reg *Registry, query []byte) ([]byte, error) {
+	r := new(dns.Msg)
+	// This dns fork unpacks from / packs into the Msg's own Data buffer.
+	r.Data = query
+	if err := r.Unpack(); err != nil {
+		return nil, err
+	}
+	resp := buildResponse(reg, r)
+	if resp == nil {
+		return nil, errNoQuestion
+	}
+	if err := resp.Pack(); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// errNoQuestion is returned by Resolve when the query carries no question
+// section (nothing to answer).
+var errNoQuestion = errors.New("dnsvip: query has no question")
+
 // handleDNS processes a single DNS query and writes the response.
 func (s *Server) handleDNS(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
-	if len(r.Question) == 0 {
+	resp := buildResponse(s.registry, r)
+	if resp == nil {
 		return
+	}
+	if _, err := io.Copy(w, resp); err != nil {
+		slog.Debug("dnsvip: failed to write response", "err", err)
+	}
+}
+
+// buildResponse runs the A/AAAA → registry allocation logic for a single DNS
+// query and returns the response message. It returns nil when the query has no
+// question (nothing to answer). It is shared by the socket server (handleDNS)
+// and the socket-free Resolve entry point so the allocation/response-build
+// logic lives in exactly one place.
+func buildResponse(reg *Registry, r *dns.Msg) *dns.Msg {
+	if len(r.Question) == 0 {
+		return nil
 	}
 
 	q := r.Question[0]
@@ -93,7 +138,7 @@ func (s *Server) handleDNS(_ context.Context, w dns.ResponseWriter, r *dns.Msg) 
 	switch qtype {
 	case dns.TypeA:
 		hostname := fqdnToHostname(qname)
-		vip, err := s.registry.Allocate(hostname)
+		vip, err := reg.Allocate(hostname)
 		if err != nil {
 			slog.Warn("dnsvip: allocate failed", "host", hostname, "err", err)
 			resp.Rcode = dns.RcodeServerFailure
@@ -113,7 +158,7 @@ func (s *Server) handleDNS(_ context.Context, w dns.ResponseWriter, r *dns.Msg) 
 
 	case dns.TypeAAAA:
 		hostname := fqdnToHostname(qname)
-		vip, err := s.registry.AllocateV6(hostname)
+		vip, err := reg.AllocateV6(hostname)
 		if err != nil {
 			slog.Warn("dnsvip: allocate v6 failed", "host", hostname, "err", err)
 			resp.Rcode = dns.RcodeServerFailure
@@ -135,9 +180,7 @@ func (s *Server) handleDNS(_ context.Context, w dns.ResponseWriter, r *dns.Msg) 
 		resp.Rcode = dns.RcodeRefused
 	}
 
-	if _, err := io.Copy(w, resp); err != nil {
-		slog.Debug("dnsvip: failed to write response", "err", err)
-	}
+	return resp
 }
 
 // fqdnToHostname strips the trailing dot from an FQDN.
