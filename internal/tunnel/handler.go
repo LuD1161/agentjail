@@ -227,6 +227,14 @@ func (g *Gateway) recognizer(hostname string, port int, data []byte) *operation 
 	return netpolicy.RecognizeTCP(hostname, port, data)
 }
 
+// halfCloser is implemented by both *net.TCPConn and gVisor's *gonet.TCPConn
+// (the client conn on the transparent forward path). relay uses it to propagate
+// a half-close (FIN) to the peer when one direction's copy ends, so e.g. an
+// upstream that closes first delivers EOF to the in-ns agent instead of leaving
+// it blocked on a read. Asserting only *net.TCPConn silently dropped the FIN on
+// the forward path, where the client side is never a *net.TCPConn.
+type halfCloser interface{ CloseWrite() error }
+
 // relay copies data bidirectionally between two connections.
 // It returns when either direction's copy completes or errors.
 func relay(client, upstream net.Conn, log *slog.Logger) {
@@ -241,8 +249,8 @@ func relay(client, upstream net.Conn, log *slog.Logger) {
 			log.Debug("relay upstream→client ended", "bytes", n, "err", err)
 		}
 		// Signal the other direction to stop by closing the write half.
-		if tc, ok := client.(*net.TCPConn); ok {
-			tc.CloseWrite()
+		if hc, ok := client.(halfCloser); ok {
+			_ = hc.CloseWrite()
 		}
 	}()
 
@@ -253,8 +261,8 @@ func relay(client, upstream net.Conn, log *slog.Logger) {
 		if err != nil && log != nil {
 			log.Debug("relay client→upstream ended", "bytes", n, "err", err)
 		}
-		if tc, ok := upstream.(*net.TCPConn); ok {
-			tc.CloseWrite()
+		if hc, ok := upstream.(halfCloser); ok {
+			_ = hc.CloseWrite()
 		}
 	}()
 

@@ -173,10 +173,15 @@ func configureTUNInterface(tunName, addrCIDR string) error {
 		return fmt.Errorf("set %s up: %w", tunName, err)
 	}
 
-	// Default route out the TUN (point-to-point L3 device, no gateway).
+	// Default route out the TUN (point-to-point L3 device, no gateway). The
+	// destination must be an explicit 0.0.0.0/0 prefix with link scope: a nil
+	// Dst is rejected by vishvananda/netlink's RouteAdd validation ("either
+	// Dst.IP, Src.IP or Gw must be set"), and with no gateway the route is
+	// on-link (SCOPE_LINK) out the interface.
 	if err := netlink.RouteAdd(&netlink.Route{
 		LinkIndex: link.Attrs().Index,
-		Dst:       nil, // default
+		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		Scope:     netlink.SCOPE_LINK,
 	}); err != nil {
 		return fmt.Errorf("add default route via %s: %w", tunName, err)
 	}
@@ -202,7 +207,20 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	}
 	parentSock := os.NewFile(uintptr(fds[0]), "tun-handoff-parent")
 	childSock := os.NewFile(uintptr(fds[1]), "tun-handoff-child")
-	defer childSock.Close()
+	// childSock is closed explicitly right after cmd.Start() below (once the
+	// child has inherited it), NOT deferred to function return: the parent must
+	// drop its own reference to the child's socket end so that if the holder
+	// exits before SendFD (e.g. TUN open/configure failure), RecvFD sees EOF and
+	// returns an error instead of blocking forever on a half-open socketpair.
+	// closeChild guards against a double close on the early-return error paths.
+	childClosed := false
+	closeChild := func() {
+		if !childClosed {
+			_ = childSock.Close()
+			childClosed = true
+		}
+	}
+	defer closeChild()
 
 	parentConn, err := net.FileConn(parentSock)
 	_ = parentSock.Close() // FileConn dup'd it
@@ -246,6 +264,10 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 		}
 		return nil, nil, fmt.Errorf("netns: start tun holder: %w", err)
 	}
+
+	// The holder has inherited childSock; drop the parent's copy now so RecvFD
+	// below unblocks with EOF if the holder dies before SendFD.
+	closeChild()
 
 	// Receive the configured TUN fd. If the holder failed to open/configure the
 	// TUN it exits before SendFD, so RecvFD returns an error here.
