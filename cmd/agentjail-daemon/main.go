@@ -220,7 +220,6 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		defer func() { <-s.connSem }()
 	}
 
-
 	scanner := bufio.NewScanner(conn)
 	// 1 MB line buffer — large enough for realistic tool_input payloads.
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -409,14 +408,14 @@ func loadConfig(policyPath string) (*agentconfig.PolicyConfig, error) {
 // stem here too so the daemon correctly classifies it as non-custom and doesn't
 // subject it to staged quarantine.
 var coreFileStems = map[string]bool{
-	"aws_posture":          true,
-	"command_policy":       true,
-	"file_policy":          true,
-	"internal_tools":       true,
-	"mcp_policy":           true,
-	"web_policy":           true,
-	"no_daemon_kill":       true,
-	"resolver":             true,
+	"aws_posture":    true,
+	"command_policy": true,
+	"file_policy":    true,
+	"internal_tools": true,
+	"mcp_policy":     true,
+	"web_policy":     true,
+	"no_daemon_kill": true,
+	"resolver":       true,
 }
 
 // libraryFileStems is the set of rego file stems that are opt-in library rules.

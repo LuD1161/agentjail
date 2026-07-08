@@ -75,7 +75,7 @@ type Filter struct {
 // SessionFilter selects sessions for ListSessionsFiltered.
 type SessionFilter struct {
 	Since time.Duration // only sessions with end_ts newer than now-Since; 0 = no filter
-	Limit int          // 0 = no limit
+	Limit int           // 0 = no limit
 }
 
 // ActionCount is one row from the per-session action aggregate query.
@@ -88,9 +88,9 @@ type ActionCount struct {
 // DiscoveredTool is a persisted MCP tool entry from scan/audit/session logs.
 type DiscoveredTool struct {
 	ID        int64
-	Server    string    // MCP server name (e.g. "chrome-devtools", "claude_ai_Gmail")
-	Tool      string    // tool name (e.g. "click", "authenticate")
-	Source    string    // discovery source: "audit", "session_log", "live", "config"
+	Server    string // MCP server name (e.g. "chrome-devtools", "claude_ai_Gmail")
+	Tool      string // tool name (e.g. "click", "authenticate")
+	Source    string // discovery source: "audit", "session_log", "live", "config"
 	FirstSeen time.Time
 	LastSeen  time.Time
 }
@@ -98,8 +98,8 @@ type DiscoveredTool struct {
 // DiscoveredSkill is a persisted skill entry from audit history.
 type DiscoveredSkill struct {
 	ID        int64
-	Name      string    // skill name (e.g. "superpowers:brainstorming", "deep-research")
-	Source    string    // "audit" or "session_log"
+	Name      string // skill name (e.g. "superpowers:brainstorming", "deep-research")
+	Source    string // "audit" or "session_log"
 	FirstSeen time.Time
 	LastSeen  time.Time
 	UseCount  int
