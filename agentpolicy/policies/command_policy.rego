@@ -1,4 +1,4 @@
-# Package agentjail — command policy (hook-wire-format Bash tool).
+# Package agentjail - command policy (hook-wire-format Bash tool).
 #
 # Evaluates Claude Code PreToolUse events for the Bash tool. Input shape
 # matches HookInput in agentpolicy/internal/policy/engine.go:
@@ -47,7 +47,7 @@ is_bash if {
 }
 
 # ---------------------------------------------------------------------------
-# DENY patterns — high-confidence dangerous
+# DENY patterns - high-confidence dangerous
 # ---------------------------------------------------------------------------
 
 # Pipe to shell: curl <url> | bash   or  curl <url> | sh
@@ -63,7 +63,7 @@ candidate contains r if {
 	}
 }
 
-# sudo — privilege escalation via operator or chained command.
+# sudo - privilege escalation via operator or chained command.
 candidate contains r if {
 	is_bash
 	regex.match(`(^|;|&&|\|\|)\s*sudo\s+`, cmd)
@@ -137,7 +137,7 @@ candidate contains r if {
 }
 
 # rm -rf on absolute paths (catches rm -rf / and rm -rf /anywhere).
-# /(tmp|private/tmp)/<child> paths are exempted (requires a child path — bare /tmp stays denied).
+# /(tmp|private/tmp)/<child> paths are exempted (requires a child path - bare /tmp stays denied).
 candidate contains r if {
 	is_bash
 	regex.match(`\brm\s+(-[rRfF]{1,4}\s+|--recursive\s+|--force\s+)*/`, cmd)
@@ -151,13 +151,13 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# git force-push — branch-aware.
+# git force-push - branch-aware.
 #
 # Force-pushing a topic/feature branch is a normal rebase / PR-update workflow,
 # so it should NOT be blocked. Force-pushing the default branch (main/master)
 # rewrites shared history and can destroy others' commits, so it stays denied.
 # When the target branch can't be read from the command (`git push -f` with no
-# explicit refspec — it pushes the *current* branch, which the daemon can't see
+# explicit refspec - it pushes the *current* branch, which the daemon can't see
 # from the command string), we ask rather than guess.
 #
 # "Force" = -f / --force / --force-with-lease, or the `+<refspec>` push syntax.
@@ -175,7 +175,7 @@ _git_push_force if regex.match(`\bgit\s+push\b.*\s\+\S+`, cmd) # git push origin
 _git_push_default_branch if regex.match(`(^|[\s/+:])(main|master)\b`, cmd)
 
 # The command carries an explicit `<remote> <refspec>` (≥2 non-flag args), so the
-# branch IS named — as opposed to a bare `git push -f` that pushes the current
+# branch IS named - as opposed to a bare `git push -f` that pushes the current
 # branch implicitly.
 _git_push_explicit_target if regex.match(`\bgit\s+push\b(\s+-{1,2}[\w-]+(=\S+)?)*\s+[^\s-]\S*\s+\+?\S+`, cmd)
 
@@ -290,11 +290,11 @@ candidate contains r if {
 # them before execution.
 #
 # Blocked subcommand patterns:
-#   agentjail policy {disable,enable,add,remove}  — rule lifecycle mutations
-#   agentjail mcp {allow,block}                   — MCP allowlist mutations
-#   agentjail grant {approve,deny}                — runtime host-grant approval (human-only; ADR 0042)
-#   agentjail ... --persist                       — persisting a runtime grant into the trusted overlay
-#   agentjail trust / untrust                     — trusted-overlay hash mutation
+#   agentjail policy {disable,enable,add,remove}  - rule lifecycle mutations
+#   agentjail mcp {allow,block}                   - MCP allowlist mutations
+#   agentjail grant {approve,deny}                - runtime host-grant approval (human-only; ADR 0042)
+#   agentjail ... --persist                       - persisting a runtime grant into the trusted overlay
+#   agentjail trust / untrust                     - trusted-overlay hash mutation
 #   writes/redirects into ~/.agentjail/ (> ~/.agentjail/*, tee ~/.agentjail)
 #   editing policy.yaml via sed/awk/perl/python in-place over agentjail paths
 #
@@ -304,7 +304,7 @@ candidate contains r if {
 #   agentjail status
 #   agentjail logs
 #   agentjail grants          (bare list; only approve/deny subcommands are blocked)
-#   agentjail allow host <h>  (the runtime grant REQUEST — inert without human approval)
+#   agentjail allow host <h>  (the runtime grant REQUEST - inert without human approval)
 #
 # This rule_id is in locked_rules (resolver.rego), so it can NEVER be
 # suppressed via disabled_rules.
@@ -328,7 +328,7 @@ _mentions_agentjail if {
 # agentjail CLI subcommand (policy disable/enable/add/remove or mcp allow/block),
 # regardless of how the binary is referenced.
 _is_policy_mutation if {
-	# agentjail … policy {disable,enable,add,remove} — mutation verbs only
+	# agentjail … policy {disable,enable,add,remove} - mutation verbs only
 	_mentions_agentjail
 	regex.match(`\bpolicy\s+(disable|enable|add|remove)\b`, cmd)
 }
@@ -340,7 +340,7 @@ _is_policy_mutation if {
 }
 
 _is_policy_mutation if {
-	# agentjail update [--force] — binary self-modification.
+	# agentjail update [--force] - binary self-modification.
 	# _mentions_agentjail uses command_binaries to confirm "agentjail" is the
 	# actual command binary (not a path component like cmd/agentjail/update.go).
 	# \bupdate\b then ensures the update subcommand is present.
@@ -351,25 +351,25 @@ _is_policy_mutation if {
 # defense-in-depth: the hard boundary is the agent-unreachable netproxy
 # control socket (ADR 0042); regex here is bypassable. The socket is what
 # actually prevents an agent from approving/denying its own runtime host
-# grants or persisting them — this rule only stops a well-behaved agent from
+# grants or persisting them - this rule only stops a well-behaved agent from
 # typing the command in the first place.
 _is_policy_mutation if {
-	# agentjail grant approve|deny <grant_id> — runtime host-grant approval is
+	# agentjail grant approve|deny <grant_id> - runtime host-grant approval is
 	# human-only (netproxy-ctl.sock). "agentjail allow host <h>" (the REQUEST
-	# side) is deliberately NOT matched here — it's inert without approval.
+	# side) is deliberately NOT matched here - it's inert without approval.
 	_mentions_agentjail
 	regex.match(`\bgrant\s+(approve|deny)\b`, cmd)
 }
 
 _is_policy_mutation if {
 	# Any agentjail invocation carrying --persist (e.g. `agentjail grant
-	# approve <id> --persist`) — writes the repo's trusted overlay.
+	# approve <id> --persist`) - writes the repo's trusted overlay.
 	_mentions_agentjail
 	regex.match(`--persist\b`, cmd)
 }
 
 _is_policy_mutation if {
-	# agentjail trust / untrust — mutates the Phase-2 trusted-overlay hash.
+	# agentjail trust / untrust - mutates the Phase-2 trusted-overlay hash.
 	_mentions_agentjail
 	regex.match(`\b(trust|untrust)\b`, cmd)
 }
@@ -401,7 +401,7 @@ candidate contains r if {
 # file_policy.rego catches Write/Edit/Read tool calls to these paths, but
 # agents can bypass that by issuing the equivalent Bash command. This rule
 # closes that loophole by denying any Bash command that mentions a known
-# sensitive path. Over-broad on purpose — `cat ~/.ssh/known_hosts` also gets
+# sensitive path. Over-broad on purpose - `cat ~/.ssh/known_hosts` also gets
 # denied, which is the right default; users can explicitly use the Read tool.
 # ---------------------------------------------------------------------------
 
@@ -416,7 +416,7 @@ candidate contains r if {
 	}
 }
 
-# Sensitive path patterns — mirrors file_policy.rego's is_sensitive_path
+# Sensitive path patterns - mirrors file_policy.rego's is_sensitive_path
 # clauses but matches against the raw command string rather than tool_input.file_path.
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.ssh\b`, c)
 
@@ -430,45 +430,65 @@ contains_sensitive_path(c) if regex.match(`\bid_(rsa|ed25519|ecdsa|dsa)\b`, c)
 
 contains_sensitive_path(c) if regex.match(`(^|\s|=|>|<)/etc/`, c)
 
-contains_sensitive_path(c) if regex.match(`(^|\s|/)\.env(\.[a-zA-Z0-9_-]+)?(\s|$|>)`, c)
+# .env secret-form matches (ADR 0057): narrowed from a blanket ".env*" match
+# to the secret-bearing basenames only, so bash referencing a non-secret
+# TEMPLATE-named env file (.env.example, .env.docker, .env.sample, ...) is no
+# longer auto-blocked - including a plain `cat` of one. This is a bounded,
+# documented relaxation: file_policy's Read path still asks on the broad
+# ".env*" set for the Read tool; real secret forms below stay blocked here.
+# Token boundaries: a prefix delimiter class (start-of-string, whitespace,
+# quote, =, /, redirect, pipe, &, ;, or open-paren) and a matching suffix
+# class, so quoted/redirected/chained usages are still caught.
+
+# bare .env
+contains_sensitive_path(c) if regex.match(`(^|[\s"'=/><|&;(])\.env([\s"'>;&|)]|$)`, c)
+
+# .env.local
+contains_sensitive_path(c) if regex.match(`(^|[\s"'=/><|&;(])\.env\.local([\s"'>;&|)]|$)`, c)
+
+# .env.<anything>.local - nested local override
+contains_sensitive_path(c) if regex.match(`(^|[\s"'=/><|&;(])\.env\..+\.local([\s"'>;&|)]|$)`, c)
+
+# known environment/secret names
+contains_sensitive_path(c) if regex.match(`(^|[\s"'=/><|&;(])\.env\.(production|prod|development|dev|staging|test|qa|uat|secret|secrets|vault|override)([\s"'>;&|)]|$)`, c)
 
 contains_sensitive_path(c) if regex.match(`\.(pem|p12|pfx|jks|keystore)\b`, c)
 
-# ~/.npmrc — npm registry auth tokens (matches ~/, $HOME/, and absolute /Users/<u>/ forms)
+# ~/.npmrc - npm registry auth tokens (matches ~/, $HOME/, and absolute /Users/<u>/ forms)
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.npmrc(\s|$|"|')`, c)
 
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.npmrc$`, c)
 
-# ~/.pypirc — PyPI upload credentials
+# ~/.pypirc - PyPI upload credentials
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.pypirc(\s|$|"|')`, c)
 
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.pypirc$`, c)
 
-# ~/.git-credentials — git plaintext password store
+# ~/.git-credentials - git plaintext password store
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.git-credentials(\s|$|"|')`, c)
 
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.git-credentials$`, c)
 
-# ~/.docker/config.json — Docker registry auth tokens
+# ~/.docker/config.json - Docker registry auth tokens
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.docker/config\.json(\s|$|"|')`, c)
 
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.docker/config\.json$`, c)
 
-# ~/.kube/config — Kubernetes credentials
+# ~/.kube/config - Kubernetes credentials
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.kube/config(\s|$|"|')`, c)
 
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.kube/config$`, c)
 
-# ~/.cargo/credentials and credentials.toml — Cargo registry tokens
+# ~/.cargo/credentials and credentials.toml - Cargo registry tokens
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.cargo/credentials(\.toml)?(\s|$|"|')`, c)
 
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+|/home/[^/\s'"]+|/root)/\.cargo/credentials(\.toml)?$`, c)
 
-# ~/Library/Keychains/ — macOS Keychain files
+# ~/Library/Keychains/ - macOS Keychain files
 contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/Library/Keychains/`, c)
 
 # ---------------------------------------------------------------------------
-# ASK rules — ambiguous; require operator confirmation
+# ASK rules - ambiguous; require operator confirmation
 # ---------------------------------------------------------------------------
 
 # git push without --force (could push to a protected branch or production remote).

@@ -119,8 +119,13 @@ type BackendCapability struct {
 // [a-z0-9_-]). Use POSIX character classes ([[:alnum:]]) or omit the hyphen.
 func SensitiveFilePatterns() []PatternDeny {
 	return []PatternDeny{
-		// .env, .env.local, .env.production, etc. (write only).
-		{Regex: `\.env(\.[a-zA-Z0-9_]+)?$`, Write: true},
+		// Secret-bearing .env forms only (write only). Non-secret templates
+		// (.env.example/.sample/.template/.dist/.docker/...) are intentionally
+		// NOT denied so git checkout of repos that commit them works. See ADR 0057.
+		{Regex: `(^|/)\.env$`, Write: true},
+		{Regex: `(^|/)\.env\.local$`, Write: true},
+		{Regex: `(^|/)\.env\..+\.local$`, Write: true},
+		{Regex: `(^|/)\.env\.(production|prod|development|dev|staging|test|qa|uat|secret|secrets|vault|override)$`, Write: true},
 		{Regex: `(^|/)\.envrc$`, Write: true},
 		// Private key / keystore formats (write + read).
 		{Regex: `\.(pem|p12|pfx|jks|keystore|key)$`, Write: true, Read: true},

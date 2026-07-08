@@ -1,4 +1,4 @@
-# Package agentjail — file access policy (macOS sensitive path deny-list)
+# Package agentjail - file access policy (macOS sensitive path deny-list)
 #
 # This rule evaluates Claude Code PreToolUse events for file-touching tools
 # (Write, Edit, Read) against a deny-list of sensitive macOS paths.
@@ -15,32 +15,32 @@
 # `candidate` (defined via resolver.rego). The resolver picks the most
 # restrictive candidate (deny > ask > allow) and produces `decision`.
 #
-# Path contract (enforced by daemon BEFORE calling OPA — Rego does NOT normalize):
+# Path contract (enforced by daemon BEFORE calling OPA - Rego does NOT normalize):
 #   - input.tool_input.file_path (and path/old_path) are CANONICAL + ABSOLUTE
 #     (symlinks and .. resolved by daemon ingest).
 #   - input.cwd is CANONICAL + ABSOLUTE.
 #
 # Sensitive-path model (two tiers):
-#   is_protected_credential(p) — home-anchored stores + system dirs.  Always
+#   is_protected_credential(p) - home-anchored stores + system dirs.  Always
 #     DENY regardless of cwd.  Cannot be "inside a project" meaningfully.
-#     NOTE: ~/.agentjail is NOT in this predicate — it has its own dedicated
+#     NOTE: ~/.agentjail is NOT in this predicate - it has its own dedicated
 #     rule_id (file_policy/agentjail_self) so it can never be disabled even
 #     when file_policy/sensitive_credential is disabled by the user. Its
 #     secrets-broker subtree (secrets.key, secrets/) has a further dedicated,
 #     always-locked deny (file_policy/agentjail_secrets) that wins over Rule
 #     0b's read-allow for the rest of ~/.agentjail (C2 fix).
-#   is_sensitive_basename(p)   — basename/extension patterns (.env*, secrets*,
+#   is_sensitive_basename(p)   - basename/extension patterns (.env*, secrets*,
 #     *.pem, etc.).  DENY when outside cwd; ASK when inside cwd (agent was
 #     granted that directory but a human beat is still warranted).
 #
 # Temp path model:
-#   is_temp_path(p) — /tmp, /private/tmp, /var/folders/…/T/, macOS $TMPDIR.
-#     Always ALLOW for Write/Edit/Read — transparent scratch space.
+#   is_temp_path(p) - /tmp, /private/tmp, /var/folders/…/T/, macOS $TMPDIR.
+#     Always ALLOW for Write/Edit/Read - transparent scratch space.
 #     Temp paths are EXCLUDED from is_protected_credential so no deny candidate
 #     is emitted (the resolver is order-independent; suppression is required).
 #
 # Config key for dynamic temp roots (daemon injects):
-#   data.agentjail.config.file.temp_roots — array of absolute temp root paths.
+#   data.agentjail.config.file.temp_roots - array of absolute temp root paths.
 #   When absent, falls back to structural patterns covering macOS defaults.
 #   DAEMON AGENT: inject os.TempDir()-resolved root(s) into
 #   data.agentjail.config.file.temp_roots to enable this path.
@@ -57,7 +57,7 @@
 #   5. is_temp_path(p)                                     → allow (file_policy/temp_allow)
 #   6. else (Write/Edit/Read)                              → ask   (file_policy/default)
 #
-# Default: "ask" — unknown path escalates to human rather than silently permitting.
+# Default: "ask" - unknown path escalates to human rather than silently permitting.
 #
 # Pattern follows Cerbos' "one resource per file" organization: all file-access
 # rules live here, unit-testable in isolation, composable with the umbrella
@@ -173,7 +173,7 @@ is_temp_path(p) if {
 }
 
 # ---------------------------------------------------------------------------
-# agentjail self-protection predicate — ~/.agentjail/ subtree.
+# agentjail self-protection predicate - ~/.agentjail/ subtree.
 #
 # This predicate is intentionally SEPARATE from is_protected_credential so
 # that its candidate (file_policy/agentjail_self) lives in the locked_rules
@@ -186,7 +186,7 @@ is_agentjail_self(p) if {
 }
 
 # ---------------------------------------------------------------------------
-# agentjail secrets-broker predicate — ~/.agentjail/secrets.key (the AES-256
+# agentjail secrets-broker predicate - ~/.agentjail/secrets.key (the AES-256
 # master key) and ~/.agentjail/secrets/ (the encrypted secret store).
 #
 # Deliberately SEPARATE from is_agentjail_self so it can carry its own
@@ -206,77 +206,77 @@ is_agentjail_secrets(p) if {
 }
 
 # ---------------------------------------------------------------------------
-# Protected credential predicate — home-anchored stores + system dirs.
+# Protected credential predicate - home-anchored stores + system dirs.
 # ALWAYS deny regardless of cwd. EXCLUDES temp subtrees.
 # NOTE: ~/.agentjail is handled by is_agentjail_self above (NOT here).
 # ---------------------------------------------------------------------------
 
-# ~/.ssh/ — SSH private keys, known_hosts, config
+# ~/.ssh/ - SSH private keys, known_hosts, config
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.ssh(/|$)`, p)
 }
 
-# ~/.aws/ — AWS credentials, config, session tokens
+# ~/.aws/ - AWS credentials, config, session tokens
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.aws(/|$)`, p)
 }
 
-# ~/.gnupg/ — GPG private keys and trust databases
+# ~/.gnupg/ - GPG private keys and trust databases
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.gnupg(/|$)`, p)
 }
 
-# ~/Desktop/ — often contains sensitive documents / credentials
+# ~/Desktop/ - often contains sensitive documents / credentials
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/Desktop(/|$)`, p)
 }
 
-# ~/.agentjail/ is intentionally NOT listed here — it has its own predicate
+# ~/.agentjail/ is intentionally NOT listed here - it has its own predicate
 # (is_agentjail_self) and candidate (file_policy/agentjail_self). Keeping them
 # separate ensures agentjail self-protection stays locked even when the user
 # disables file_policy/sensitive_credential.
 
-# ~/.config/ — application configs that may contain tokens (e.g. gh, gcloud, kubectl)
+# ~/.config/ - application configs that may contain tokens (e.g. gh, gcloud, kubectl)
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.config(/|$)`, p)
 }
 
-# ~/.npmrc — npm registry credentials (auth tokens, passwords)
+# ~/.npmrc - npm registry credentials (auth tokens, passwords)
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.npmrc$`, p)
 }
 
-# ~/.pypirc — PyPI upload credentials
+# ~/.pypirc - PyPI upload credentials
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.pypirc$`, p)
 }
 
-# ~/.git-credentials — git credential store (plaintext passwords)
+# ~/.git-credentials - git credential store (plaintext passwords)
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.git-credentials$`, p)
 }
 
-# ~/.docker/config.json — Docker registry credentials and auth tokens
+# ~/.docker/config.json - Docker registry credentials and auth tokens
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.docker/config\.json$`, p)
 }
 
-# ~/.kube/config — Kubernetes cluster credentials and access tokens
+# ~/.kube/config - Kubernetes cluster credentials and access tokens
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.kube/config$`, p)
 }
 
-# ~/.cargo/credentials and credentials.toml — Cargo (Rust) registry tokens
+# ~/.cargo/credentials and credentials.toml - Cargo (Rust) registry tokens
 is_protected_credential(p) if {
 	regex.match(`^(/Users/[^/]+|/home/[^/]+|/root)/\.cargo/credentials(\.toml)?$`, p)
 }
 
-# ~/Library/Keychains/ — macOS Keychain files (passwords, certificates)
+# ~/Library/Keychains/ - macOS Keychain files (passwords, certificates)
 is_protected_credential(p) if {
 	regex.match(`^/Users/[^/]+/Library/Keychains(/|$)`, p)
 }
 
-# /etc/ and /private/etc/ — system configuration (macOS uses /private/etc)
+# /etc/ and /private/etc/ - system configuration (macOS uses /private/etc)
 is_protected_credential(p) if {
 	startswith(p, "/etc/")
 }
@@ -293,7 +293,7 @@ is_protected_credential(p) if {
 	p == "/private/etc"
 }
 
-# /var/ and /private/var/ — system state (macOS /var → /private/var symlink).
+# /var/ and /private/var/ - system state (macOS /var → /private/var symlink).
 # CRITICAL: temp subtrees (/var/folders/.../T/) are EXCLUDED so no deny candidate
 # is emitted for temp paths. Without this exclusion, the resolver (deny > allow)
 # would pick the deny over the temp_allow.
@@ -316,7 +316,7 @@ is_protected_credential(p) if {
 }
 
 # ---------------------------------------------------------------------------
-# Downloads path predicate — ~/Downloads/ (downgraded from hard deny to ask).
+# Downloads path predicate - ~/Downloads/ (downgraded from hard deny to ask).
 # Fires an "ask" candidate for non-sensitive files. Sensitive files (matching
 # is_sensitive_basename) still get denied via the sensitive_credential rules.
 # ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ candidate contains r if {
 	is_downloads_path(p)
 	not is_sensitive_basename(p)
 	not is_agentjail_self(p)
-	msg := sprintf("file %q is in ~/Downloads — review before proceeding", [p])
+	msg := sprintf("file %q is in ~/Downloads - review before proceeding", [p])
 	r := {
 		"action":  "ask",
 		"rule_id": "file_policy/downloads_review",
@@ -340,72 +340,132 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Sensitive basename predicate — basename/extension patterns.
+# Sensitive basename predicate - basename/extension patterns.
 # These DOWNGRADE to "ask" when inside cwd; remain "deny" when outside.
+#
+# ENV HANDLING IS OP-AWARE (ADR 0057): a bare "deny all .env*" catch-all
+# blocked routine `git clone`/checkout of repos that commit non-secret env
+# TEMPLATE files (.env.example, .env.docker, .env.sample, .env.template,
+# .env.dist). Those templates conventionally hold no secrets, so they should
+# be writable - but READ posture must NOT widen (no new read exposure via
+# the Read tool), so the broad env match stays in force for Read. Only
+# Write/Edit use the narrower secret-form list below.
 # ---------------------------------------------------------------------------
 
-# .env, .env.local, .env.production, etc. — application secrets
-is_sensitive_basename(p) if {
-	regex.match(`(^|/)\.env($|\.)`, p)
-}
-
-# .envrc — direnv local secret injection
-is_sensitive_basename(p) if {
+# .envrc - direnv local secret injection
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)\.envrc$`, p)
 }
 
-# credentials files (AWS, GCP, various tooling) — matches a basename that IS
+# credentials files (AWS, GCP, various tooling) - matches a basename that IS
 # "credentials" or that STARTS with "credentials" followed by a separator/extension
 # (credentials.json, credentials.yml, credentials_old, credentials-prod). The
 # trailing class avoids matching unrelated words like "credentialsmith".
-is_sensitive_basename(p) if {
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)\.?credentials($|[._-])`, p)
 }
 
-# secrets files — same widening (secrets.yaml, secrets.json, .secrets, secrets-prod).
-is_sensitive_basename(p) if {
+# secrets files - same widening (secrets.yaml, secrets.json, .secrets, secrets-prod).
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)\.?secrets($|[._-])`, p)
 }
 
-# PEM / key / PKCS12 / JKS files — certificate private keys (case-insensitive)
-is_sensitive_basename(p) if {
+# PEM / key / PKCS12 / JKS files - certificate private keys (case-insensitive)
+is_sensitive_basename_non_env(p) if {
 	regex.match(`\.(pem|key|p12|pfx|jks|keystore)$`, lower(p))
 }
 
-# .netrc — machine credentials for FTP/HTTP/curl
-is_sensitive_basename(p) if {
+# .netrc - machine credentials for FTP/HTTP/curl
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)\.netrc$`, p)
 }
 
 # SSH private key files by conventional name
-is_sensitive_basename(p) if {
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)id_rsa$`, p)
 }
 
-is_sensitive_basename(p) if {
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)id_ed25519$`, p)
 }
 
-is_sensitive_basename(p) if {
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)id_ecdsa$`, p)
 }
 
-is_sensitive_basename(p) if {
+is_sensitive_basename_non_env(p) if {
 	regex.match(`(^|/)id_dsa$`, p)
 }
 
 # ---------------------------------------------------------------------------
-# Rule 0 — agentjail self-protection: deny WRITES (LOCKED rule).
+# Env basename predicates (ADR 0057).
+#
+# is_env_basename_broad - the ORIGINAL catch-all: any ".env" or ".env.*"
+# basename. Still governs Read (unchanged posture).
+#
+# is_secret_env_basename - the NARROWED secret-form deny-set. Governs
+# Write/Edit only: bare .env, .env.local, .env.<anything>.local (nested
+# framework overrides), and the known environment/secret names below.
+# Non-secret template forms (.env.example, .env.docker, .env.sample,
+# .env.template, .env.dist, ...) do NOT match this predicate, so they fall
+# through to the ordinary in-project allow / out-of-project ask rules on
+# Write/Edit.
+# ---------------------------------------------------------------------------
+
+is_env_basename_broad(p) if {
+	regex.match(`(^|/)\.env($|\.)`, p)
+}
+
+# bare .env - canonical local secrets
+is_secret_env_basename(p) if {
+	regex.match(`(^|/)\.env$`, p)
+}
+
+# .env.local - local override
+is_secret_env_basename(p) if {
+	regex.match(`(^|/)\.env\.local$`, p)
+}
+
+# .env.<anything>.local - nested local override (.env.production.local,
+# .env.feature-x.local, ...): framework local secrets
+is_secret_env_basename(p) if {
+	regex.match(`(^|/)\.env\..+\.local$`, p)
+}
+
+# known environment/secret names
+is_secret_env_basename(p) if {
+	regex.match(`(^|/)\.env\.(production|prod|development|dev|staging|test|qa|uat|secret|secrets|vault|override)$`, p)
+}
+
+# Combined predicate used by the rules below. Non-env sensitive patterns are
+# unconditional; env sensitivity is op-aware: Write/Edit use the narrowed
+# secret-form list, Read keeps the broad catch-all (unchanged posture).
+is_sensitive_basename(p) if {
+	is_sensitive_basename_non_env(p)
+}
+
+is_sensitive_basename(p) if {
+	input.tool_name in {"Write", "Edit"}
+	is_secret_env_basename(p)
+}
+
+is_sensitive_basename(p) if {
+	input.tool_name == "Read"
+	is_env_basename_broad(p)
+}
+
+# ---------------------------------------------------------------------------
+# Rule 0 - agentjail self-protection: deny WRITES (LOCKED rule).
 # Fires for any Write/Edit to a path under ~/.agentjail/. This rule_id is in
-# locked_rules (resolver.rego) so it can NEVER be suppressed by disabled_rules —
+# locked_rules (resolver.rego) so it can NEVER be suppressed by disabled_rules -
 # even if the user adds "file_policy/agentjail_self" to disabled_rules it still
 # fires. This is the primary defense against an agent tampering with its own
 # enforcement state (policy.yaml, trusted.yaml, the audit DB).
 #
 # READS are intentionally NOT denied (ADR 0045): an agent may read ~/.agentjail
 # for debugging/observability (inspect policy.yaml, the audit DB, etc). Reads
-# cannot tamper, and the session bearer token is never on disk — it lives only
-# in netproxy memory (ADR 0044) — so read access leaks no secret. Writes stay
+# cannot tamper, and the session bearer token is never on disk - it lives only
+# in netproxy memory (ADR 0044) - so read access leaks no secret. Writes stay
 # locked; the deny below only triggers on Write/Edit.
 # ---------------------------------------------------------------------------
 
@@ -423,13 +483,13 @@ candidate contains r if {
 	}
 }
 
-# Rule 0a — agentjail secrets-broker self-protection: deny READS (and
+# Rule 0a - agentjail secrets-broker self-protection: deny READS (and
 # writes, belt-and-suspenders) of the master key / encrypted store (C2 fix).
 # This is a LOCKED rule (resolver.rego locked_rules) so it can never be
 # suppressed via disabled_rules, and it fires for every file tool so it wins
 # regardless of tool_name. It must be declared (and therefore evaluated as a
 # deny candidate) BEFORE Rule 0b's blanket read-allow is considered by the
-# resolver — the resolver picks deny over allow unconditionally, so ordering
+# resolver - the resolver picks deny over allow unconditionally, so ordering
 # in this file doesn't strictly matter for correctness, but the deny is
 # placed first for readability.
 candidate contains r if {
@@ -446,7 +506,7 @@ candidate contains r if {
 	}
 }
 
-# Rule 0b — reads of ~/.agentjail are explicitly ALLOWED (ADR 0045), EXCEPT
+# Rule 0b - reads of ~/.agentjail are explicitly ALLOWED (ADR 0045), EXCEPT
 # the secrets-broker master key / store, which Rule 0a above denies and which
 # always wins (resolver.rego: deny outranks allow regardless of rule_id).
 # Rule 0 above denies only Write/Edit; is_agentjail_self is already a
@@ -456,7 +516,7 @@ candidate contains r if {
 # policy.yaml / the audit DB for debugging. Writes stay locked.
 #
 # NOTE: the master key and encrypted secrets ARE stored on disk under
-# ~/.agentjail (secrets.key, secrets/) — Rule 0a's deny is what keeps this
+# ~/.agentjail (secrets.key, secrets/) - Rule 0a's deny is what keeps this
 # rule's blanket allow from leaking them; do not remove Rule 0a.
 candidate contains r if {
 	input.tool_name == "Read"
@@ -471,7 +531,7 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 0c — Hook config self-protection: ask on Write/Edit.
+# Rule 0c - Hook config self-protection: ask on Write/Edit.
 # Prevents an agent from silently removing agentjail's hooks by overwriting
 # the agent harness settings file (e.g. ~/.claude/settings*.json). The user
 # can still approve legitimate edits. Reads are allowed (no secret in config).
@@ -494,9 +554,9 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 1 — Protected credential: always deny.
+# Rule 1 - Protected credential: always deny.
 # Fires for is_protected_credential, regardless of cwd.
-# NOTE: ~/.agentjail is NOT in is_protected_credential — it fires Rule 0.
+# NOTE: ~/.agentjail is NOT in is_protected_credential - it fires Rule 0.
 # ---------------------------------------------------------------------------
 
 candidate contains r if {
@@ -514,7 +574,7 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 2 — Sensitive basename inside project: ask.
+# Rule 2 - Sensitive basename inside project: ask.
 # Fires when path is in cwd AND matches a basename pattern AND is NOT a
 # protected credential (which hard-denies regardless).
 # ---------------------------------------------------------------------------
@@ -526,7 +586,7 @@ candidate contains r if {
 	in_project(p)
 	not is_protected_credential(p)
 	not is_agentjail_self(p)
-	msg := sprintf("sensitive-named file %q is inside the project directory — review before proceeding", [p])
+	msg := sprintf("sensitive-named file %q is inside the project directory - review before proceeding", [p])
 	impact_msg := sprintf("would access sensitive-named file %q inside project", [p])
 	r := {
 		"action":  "ask",
@@ -537,7 +597,7 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 3 — Sensitive basename outside project: deny.
+# Rule 3 - Sensitive basename outside project: deny.
 # Fires when path matches a basename pattern AND is NOT in cwd AND NOT a
 # protected credential (which already fires rule 1 above).
 # ---------------------------------------------------------------------------
@@ -560,7 +620,7 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 4 — Path is within the agent's project directory (not sensitive).
+# Rule 4 - Path is within the agent's project directory (not sensitive).
 # ---------------------------------------------------------------------------
 
 candidate contains r if {
@@ -578,8 +638,8 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 5 — Temp path: allow.
-# CRITICAL: temp paths must not emit a deny candidate — is_protected_credential
+# Rule 5 - Temp path: allow.
+# CRITICAL: temp paths must not emit a deny candidate - is_protected_credential
 # already excludes temp subtrees, so no collision occurs.
 # ---------------------------------------------------------------------------
 
@@ -595,7 +655,7 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 6 — Agent harness internal paths: allow.
+# Rule 6 - Agent harness internal paths: allow.
 # Claude Code stores session data, tool results, and image caches under
 # ~/.claude/projects/. These are agent-internal and safe to read/write.
 # ~/.claude/settings*.json writes are guarded by Rule 0c (hook_config ask).
@@ -634,7 +694,7 @@ candidate contains r if {
 }
 
 # ---------------------------------------------------------------------------
-# Guarded default: ask — unknown file-tool path escalates to a human.
+# Guarded default: ask - unknown file-tool path escalates to a human.
 #
 # This candidate only fires when the tool is Write, Edit, or Read AND no
 # more specific rule matched (i.e., the path is neither sensitive nor inside

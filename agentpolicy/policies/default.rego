@@ -53,7 +53,19 @@ rule_dotfile_ask := r if {
 }
 
 dotfile_match(p) if {
-	patterns := ["**/.env*", "**/.ssh/**", "**/credentials*"]
+	# .env glob list (ADR 0057): enumerated secret-bearing forms only, so
+	# non-secret TEMPLATE files (.env.example, .env.docker, .env.sample,
+	# .env.template, .env.dist, ...) do not trigger the write-confirmation
+	# ask. Keep in sync with file_policy.rego's is_secret_env_basename and
+	# command_policy.rego's contains_sensitive_path env clauses.
+	patterns := [
+		"**/.env", "**/.env.local", "**/.env.*.local",
+		"**/.env.production", "**/.env.prod",
+		"**/.env.development", "**/.env.dev",
+		"**/.env.staging", "**/.env.test", "**/.env.qa", "**/.env.uat",
+		"**/.env.secret", "**/.env.secrets", "**/.env.vault", "**/.env.override",
+		"**/.ssh/**", "**/credentials*",
+	]
 	some pat in patterns
 	glob.match(pat, ["/"], p)
 }

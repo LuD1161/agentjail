@@ -3,20 +3,20 @@
 # Runs as: opa test agentpolicy/policies/ -v --filter file_policy
 #
 # Test taxonomy:
-#   Deny cases  — protected credentials that must be blocked unconditionally
-#   Ask cases   — sensitive basenames inside project (downgraded from deny)
-#   Deny cases  — sensitive basenames outside project (still deny)
-#   Allow cases — paths within the project's cwd that are not sensitive
-#   Allow cases — temp paths (scratch space)
-#   Ask cases   — paths that match neither sensitive nor project-dir rule
-#   Boundary    — edge cases: exact path match, suffix collision avoidance
-#   AC tests    — plan acceptance criteria
+#   Deny cases  - protected credentials that must be blocked unconditionally
+#   Ask cases   - sensitive basenames inside project (downgraded from deny)
+#   Deny cases  - sensitive basenames outside project (still deny)
+#   Allow cases - paths within the project's cwd that are not sensitive
+#   Allow cases - temp paths (scratch space)
+#   Ask cases   - paths that match neither sensitive nor project-dir rule
+#   Boundary    - edge cases: exact path match, suffix collision avoidance
+#   AC tests    - plan acceptance criteria
 #
 # All tests use the hook-wire-format input shape (HookInput from engine.go):
 #   input.hook_event  "PreToolUse"
 #   input.tool_name   "Write" | "Edit" | "Read"
 #   input.tool_input  {file_path?, path?, old_path?, ...}
-#   input.cwd         string  (canonical + absolute — daemon normalizes)
+#   input.cwd         string  (canonical + absolute - daemon normalizes)
 package agentjail_test
 
 import future.keywords.if
@@ -82,7 +82,7 @@ read_event_cwd(p, cwd) := {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.ssh/id_rsa — SSH private key (direct path) — protected credential
+# Deny: ~/.ssh/id_rsa - SSH private key (direct path) - protected credential
 # ---------------------------------------------------------------------------
 
 test_ssh_key_denied if {
@@ -91,7 +91,7 @@ test_ssh_key_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.ssh/ directory — any file under .ssh/ is denied
+# Deny: ~/.ssh/ directory - any file under .ssh/ is denied
 # ---------------------------------------------------------------------------
 
 test_ssh_dir_denied if {
@@ -100,7 +100,7 @@ test_ssh_dir_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.aws/credentials — AWS credential file
+# Deny: ~/.aws/credentials - AWS credential file
 # ---------------------------------------------------------------------------
 
 test_aws_creds_denied if {
@@ -109,7 +109,7 @@ test_aws_creds_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: .env file in a project directory — now ASK (sensitive_in_project).
+# Deny: .env file in a project directory - now ASK (sensitive_in_project).
 # The agent was granted cwd; .env inside cwd → ask, not deny.
 # ---------------------------------------------------------------------------
 
@@ -125,7 +125,7 @@ test_dot_env_local_in_project_asks if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: .env outside project — still deny
+# Deny: .env outside project - still deny
 # ---------------------------------------------------------------------------
 
 test_dot_env_outside_project_denied if {
@@ -161,14 +161,90 @@ test_server_key_in_project_asks if {
 	agentjail.decision.rule_id == sensitive_in_project with input as read_event("/Users/dev/myproject/server.key")
 }
 
-# .env.example inside project → ask (AC3)
+# .env.example READ inside project → still ask (AC3; READ posture unchanged
+# per ADR 0057 - the broad .env($|\.) match still governs Read).
 test_env_example_in_project_asks if {
 	agentjail.decision.action == "ask" with input as read_event("/Users/dev/myproject/.env.example")
 	agentjail.decision.rule_id == sensitive_in_project with input as read_event("/Users/dev/myproject/.env.example")
 }
 
 # ---------------------------------------------------------------------------
-# A3: ~/Downloads/ — downgraded from hard deny to ask (non-sensitive files)
+# ADR 0057: op-aware .env handling - WRITE/EDIT of non-secret TEMPLATE forms
+# is now ALLOWED (was ask); READ of the same templates stays ASK (unchanged).
+# Secret forms (.env, .env.local, .env.<x>.local, .env.production, ...) stay
+# sensitive (ask in project / deny outside) on every op.
+# ---------------------------------------------------------------------------
+
+# .env.example WRITE inside project → allow (non-secret template; was ask)
+test_env_example_write_allowed if {
+	agentjail.decision.action == "allow" with input as write_event("/Users/dev/myproject/.env.example")
+	agentjail.decision.rule_id == project_allow with input as write_event("/Users/dev/myproject/.env.example")
+}
+
+# .env.docker WRITE inside project → allow
+test_env_docker_write_allowed if {
+	agentjail.decision.action == "allow" with input as write_event("/Users/dev/myproject/.env.docker")
+	agentjail.decision.rule_id == project_allow with input as write_event("/Users/dev/myproject/.env.docker")
+}
+
+# .env.sample WRITE inside project → allow
+test_env_sample_write_allowed if {
+	agentjail.decision.action == "allow" with input as write_event("/Users/dev/myproject/.env.sample")
+	agentjail.decision.rule_id == project_allow with input as write_event("/Users/dev/myproject/.env.sample")
+}
+
+# .env.dist EDIT inside project → allow
+test_env_dist_edit_allowed if {
+	agentjail.decision.action == "allow" with input as edit_event("/Users/dev/myproject/.env.dist")
+	agentjail.decision.rule_id == project_allow with input as edit_event("/Users/dev/myproject/.env.dist")
+}
+
+# .env.template WRITE inside project → allow
+test_env_template_write_allowed if {
+	agentjail.decision.action == "allow" with input as write_event("/Users/dev/myproject/.env.template")
+	agentjail.decision.rule_id == project_allow with input as write_event("/Users/dev/myproject/.env.template")
+}
+
+# .env.example READ inside project still asks even though write is now allowed
+# (duplicate of test_env_example_in_project_asks above, kept explicit here for
+# the op-aware contrast).
+test_env_example_read_still_asks if {
+	agentjail.decision.action == "ask" with input as read_event("/Users/dev/myproject/.env.example")
+	agentjail.decision.rule_id == sensitive_in_project with input as read_event("/Users/dev/myproject/.env.example")
+}
+
+# bare .env WRITE inside project → still ask (secret form)
+test_dot_env_write_in_project_asks if {
+	agentjail.decision.action == "ask" with input as write_event("/Users/dev/myproject/.env")
+	agentjail.decision.rule_id == sensitive_in_project with input as write_event("/Users/dev/myproject/.env")
+}
+
+# .env.production.local WRITE inside project → still ask (secret form)
+test_env_production_local_write_asks if {
+	agentjail.decision.action == "ask" with input as write_event("/Users/dev/myproject/.env.production.local")
+	agentjail.decision.rule_id == sensitive_in_project with input as write_event("/Users/dev/myproject/.env.production.local")
+}
+
+# .env.dev WRITE inside project → still ask (secret form)
+test_env_dev_write_asks if {
+	agentjail.decision.action == "ask" with input as write_event("/Users/dev/myproject/.env.dev")
+	agentjail.decision.rule_id == sensitive_in_project with input as write_event("/Users/dev/myproject/.env.dev")
+}
+
+# .env.override WRITE inside project → still ask (secret form)
+test_env_override_write_asks if {
+	agentjail.decision.action == "ask" with input as write_event("/Users/dev/myproject/.env.override")
+	agentjail.decision.rule_id == sensitive_in_project with input as write_event("/Users/dev/myproject/.env.override")
+}
+
+# bare .env WRITE outside project → still deny (secret form)
+test_dot_env_write_outside_project_denied if {
+	agentjail.decision.action == "deny" with input as write_event_cwd("/Users/other/.env", "/Users/dev/myproject")
+	agentjail.decision.rule_id == deny_sensitive with input as write_event_cwd("/Users/other/.env", "/Users/dev/myproject")
+}
+
+# ---------------------------------------------------------------------------
+# A3: ~/Downloads/ - downgraded from hard deny to ask (non-sensitive files)
 # ---------------------------------------------------------------------------
 
 downloads_ask := "file_policy/downloads_review"
@@ -228,7 +304,7 @@ test_downloads_linux_path_asks if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.gnupg/ — GPG private keys
+# Deny: ~/.gnupg/ - GPG private keys
 # ---------------------------------------------------------------------------
 
 test_gnupg_denied if {
@@ -237,7 +313,7 @@ test_gnupg_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.agentjail/ — prevent self-modification (file_policy/agentjail_self,
+# Deny: ~/.agentjail/ - prevent self-modification (file_policy/agentjail_self,
 # LOCKED rule, separate from file_policy/sensitive_credential so it cannot
 # be disabled even when sensitive_credential is disabled).
 # ---------------------------------------------------------------------------
@@ -270,14 +346,14 @@ test_agentjail_policy_yaml_edit_denied if {
 }
 
 # Confirm that ~/.agentjail/ does NOT emit file_policy/sensitive_credential
-# (it only emits file_policy/agentjail_self — the two must not both fire).
+# (it only emits file_policy/agentjail_self - the two must not both fire).
 test_agentjail_dir_does_not_emit_sensitive_credential if {
 	cands := {c | some c in agentjail.candidate; c.rule_id == "file_policy/sensitive_credential"}
 	count(cands) == 0 with input as write_event("/Users/dev/.agentjail/policy.yaml")
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.agentjail/secrets.key and ~/.agentjail/secrets/ — the secrets
+# Deny: ~/.agentjail/secrets.key and ~/.agentjail/secrets/ - the secrets
 # broker's AES-256 master key and encrypted store (file_policy/agentjail_secrets,
 # LOCKED rule). Rule 0b would otherwise ALLOW these as ordinary ~/.agentjail
 # reads; this rule must win (C2 fix).
@@ -311,7 +387,7 @@ test_linux_home_agentjail_secrets_key_read_denied if {
 	agentjail.decision.rule_id == agentjail_secrets with input as read_event("/home/dev/.agentjail/secrets.key")
 }
 
-# Other ~/.agentjail files remain allowed for Read — the secrets deny must
+# Other ~/.agentjail files remain allowed for Read - the secrets deny must
 # not overreach into policy.yaml / the audit DB.
 test_agentjail_policy_yaml_read_still_allowed_after_secrets_fix if {
 	agentjail.decision.action == "allow" with input as read_event("/Users/dev/.agentjail/policy.yaml")
@@ -325,7 +401,7 @@ test_agentjail_audit_db_read_still_allowed if {
 
 # A basename that merely starts with "secrets" but isn't the store directory
 # itself (e.g. a sibling file "secrets.log") must NOT be swept up by the
-# is_agentjail_secrets(p) directory-prefix predicate — only literal
+# is_agentjail_secrets(p) directory-prefix predicate - only literal
 # "secrets.key" and the "secrets/" subtree are denied by this rule (other
 # ~/.agentjail sibling files stay covered by Rule 0b's allow).
 test_agentjail_secrets_log_sibling_not_denied_by_secrets_rule if {
@@ -334,7 +410,7 @@ test_agentjail_secrets_log_sibling_not_denied_by_secrets_rule if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: /etc/ — system configuration
+# Deny: /etc/ - system configuration
 # ---------------------------------------------------------------------------
 
 test_etc_denied if {
@@ -348,7 +424,7 @@ test_private_etc_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: /var/ — system state (non-temp)
+# Deny: /var/ - system state (non-temp)
 # ---------------------------------------------------------------------------
 
 test_var_denied if {
@@ -366,7 +442,7 @@ test_envrc_in_project_asks if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: .netrc — machine credentials (outside cwd)
+# Deny: .netrc - machine credentials (outside cwd)
 # ---------------------------------------------------------------------------
 
 test_netrc_denied if {
@@ -375,7 +451,7 @@ test_netrc_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: id_ed25519 — SSH private key by conventional name (in ~/.ssh/ → protected)
+# Deny: id_ed25519 - SSH private key by conventional name (in ~/.ssh/ → protected)
 # ---------------------------------------------------------------------------
 
 test_id_ed25519_denied if {
@@ -384,7 +460,7 @@ test_id_ed25519_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# Deny: ~/.config/ — application configs (gh auth, gcloud, kubectl)
+# Deny: ~/.config/ - application configs (gh auth, gcloud, kubectl)
 # ---------------------------------------------------------------------------
 
 test_config_dir_denied if {
@@ -398,19 +474,19 @@ test_config_dir_denied if {
 # ---------------------------------------------------------------------------
 
 test_ssh_key_denied_even_in_contrived_cwd if {
-	# cwd=/Users/dev puts .ssh under it, but it's a protected credential — still deny
+	# cwd=/Users/dev puts .ssh under it, but it's a protected credential - still deny
 	agentjail.decision.action == "deny" with input as read_event_cwd("/Users/dev/.ssh/id_rsa", "/Users/dev")
 	agentjail.decision.rule_id == deny_sensitive with input as read_event_cwd("/Users/dev/.ssh/id_rsa", "/Users/dev")
 }
 
 test_aws_creds_denied_even_in_contrived_cwd if {
-	# cwd=/Users/dev, path /Users/dev/.aws/credentials — still deny (protected credential)
+	# cwd=/Users/dev, path /Users/dev/.aws/credentials - still deny (protected credential)
 	agentjail.decision.action == "deny" with input as read_event_cwd("/Users/dev/.aws/credentials", "/Users/dev")
 	agentjail.decision.rule_id == deny_sensitive with input as read_event_cwd("/Users/dev/.aws/credentials", "/Users/dev")
 }
 
 # ---------------------------------------------------------------------------
-# Allow: normal project file — within cwd and not sensitive
+# Allow: normal project file - within cwd and not sensitive
 # ---------------------------------------------------------------------------
 
 test_project_file_allowed if {
@@ -503,12 +579,12 @@ test_other_user_home_asks if {
 # ---------------------------------------------------------------------------
 
 test_etc_prefix_collision_does_not_deny if {
-	# /etcetera/ is NOT /etc/ — should fall through to ask
+	# /etcetera/ is NOT /etc/ - should fall through to ask
 	agentjail.decision.action != "deny" with input as write_event("/etcetera/scratch/notes.txt")
 }
 
 # ---------------------------------------------------------------------------
-# Boundary: ~/Desktop/ (exact directory) denied — protected credential
+# Boundary: ~/Desktop/ (exact directory) denied - protected credential
 # ---------------------------------------------------------------------------
 
 test_desktop_denied if {
@@ -564,7 +640,7 @@ test_dot_secrets_in_project_asks if {
 }
 
 # "credentialsmith" starts with "credentials" but the next char is a letter, not
-# a separator — must NOT be treated as sensitive (falls to project_allow in cwd).
+# a separator - must NOT be treated as sensitive (falls to project_allow in cwd).
 test_credentialsmith_not_denied if {
 	agentjail.decision.action != "deny" with input as read_event("/Users/dev/myproject/credentialsmith.go")
 }
@@ -611,7 +687,7 @@ test_old_path_ssh_key_denied if {
 # Task A: new credential-store paths
 # ---------------------------------------------------------------------------
 
-# POSITIVE: ~/.npmrc (home form) must be denied — protected credential
+# POSITIVE: ~/.npmrc (home form) must be denied - protected credential
 test_npmrc_home_denied if {
 	agentjail.decision.action == "deny" with input as read_event("/Users/dev/.npmrc")
 	agentjail.decision.rule_id == deny_sensitive with input as read_event("/Users/dev/.npmrc")
@@ -664,7 +740,7 @@ test_project_local_npmrc_not_denied if {
 	agentjail.decision.action != "deny" with input as read_event("/Users/dev/myproject/.npmrc")
 }
 
-# NEGATIVE: project-local .docker/config.json — config.json is not a sensitive basename
+# NEGATIVE: project-local .docker/config.json - config.json is not a sensitive basename
 # pattern, so it falls to project_allow
 test_project_local_docker_config_not_denied if {
 	agentjail.decision.action != "deny" with input as read_event("/Users/dev/myproject/.docker/config.json")
@@ -702,7 +778,7 @@ test_npmrc_bak_not_denied if {
 }
 
 # ---------------------------------------------------------------------------
-# AC-R8: Path-boundary — /Users/u/proj2/file.txt with cwd=/Users/u/proj
+# AC-R8: Path-boundary - /Users/u/proj2/file.txt with cwd=/Users/u/proj
 # must NOT hit project_allow (raw startswith bug).
 # ---------------------------------------------------------------------------
 
@@ -721,7 +797,7 @@ test_sibling_project_no_project_allow_candidate if {
 	count(candidates) == 0 with input as read_event_cwd("/Users/u/proj2/file.txt", "/Users/u/proj")
 }
 
-# AC-R8: Sibling path falls to ask (default) — not sensitive, not in cwd, not temp
+# AC-R8: Sibling path falls to ask (default) - not sensitive, not in cwd, not temp
 test_sibling_project_falls_to_ask if {
 	agentjail.decision.action == "ask" with input as read_event_cwd("/Users/u/proj2/file.txt", "/Users/u/proj")
 }
