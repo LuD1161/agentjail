@@ -1,14 +1,22 @@
 // install.go — agentjail install/uninstall/status subcommands.
 //
-// What `agentjail install` does on macOS:
+// What `agentjail install` does on macOS and Linux:
 //  1. Copies agentjail-hook binary to ~/.agentjail/bin/agentjail-hook (0755).
 //  2. Copies agentjail-daemon binary to ~/.agentjail/bin/agentjail-daemon (0755).
 //  3. Copies core .rego rules to ~/.agentjail/rules/ (idempotent).
 //  4. Writes ~/.agentjail/policy.yaml from agentpolicy/default_policy.yaml
 //     if the file does not already exist (never overwrites user customisations).
-//  5. Installs the launchd plist at ~/Library/LaunchAgents/com.agentjail.daemon.plist
+//  5. Installs the daemon service definition:
+//     - macOS: the launchd plist at ~/Library/LaunchAgents/com.agentjail.daemon.plist
 //     with ProgramArguments patched to ~/.agentjail/bin/agentjail-daemon.
-//  6. Runs launchctl unload/load to (re)start the daemon.
+//     - Linux: the systemd --user unit at
+//     ~/.config/systemd/user/agentjail-daemon.service with ExecStart patched
+//     to ~/.agentjail/bin/agentjail-daemon and Restart=on-failure.
+//  6. (Re)starts the daemon: launchctl unload/load on macOS, `systemctl --user
+//     enable --now` + `restart` on Linux. When no systemd user session is
+//     reachable (e.g. a bare container with no login session), the unit is
+//     still written and manual start instructions are printed instead of
+//     failing the install.
 //  7. Detects which agents are present on the machine (claude-code, codex, cursor)
 //     and which of them already have the agentjail hook wired.
 //  8. If every detected agent is already protected, the run is just a binary +
@@ -16,17 +24,20 @@
 //     re-running `curl … | sh` on an installed machine behaves like an update.
 //  9. Otherwise presents an interactive multi-select picker (already-protected
 //     agents are marked) or falls back to non-interactive selection.
+//
 // 10. Dispatches agent.Install(env) for each selected agent.
 // 11. Prints a summary and exits non-zero if any selected install failed.
 //
 // Use `agentjail install --for <agent>` for single-agent back-compat.
 // Use `agentjail install --all` / `--yes` for non-interactive "install all".
-// Use `agentjail install --allow-unsupported` on Linux to detect without error.
+// `agentjail install --allow-unsupported` is a deprecated no-op kept for
+// back-compat: Linux is a fully supported install target (ADR 0051).
 //
 // What `agentjail uninstall` does (no --for):
 //  1. Calls agent.Uninstall(env) for every agent in the registry. Failures are
 //     collected but do not abort other agents (Uninstall is idempotent).
-//  2. On macOS: unloads the launchd daemon and removes the plist.
+//  2. On macOS: unloads the launchd daemon and removes the plist. On Linux:
+//     stops/disables the systemd --user unit and removes the unit file.
 //  3. Removes ~/.agentjail and /tmp/agentjail-daemon.log.
 //
 // Use `agentjail uninstall --for <agent>` to remove only that agent's hook
@@ -60,6 +71,11 @@ const plistLabel = "com.agentjail.daemon"
 // plistFilename is the filename placed under ~/Library/LaunchAgents/.
 const plistFilename = "com.agentjail.daemon.plist"
 
+// systemdUnitName is the systemd --user service name (with and without the
+// .service suffix, since some systemctl subcommands take either form).
+const systemdUnitName = "agentjail-daemon"
+const systemdUnitFilename = systemdUnitName + ".service"
+
 // hookBinaryName, daemonBinaryName, and cliBinaryName are the binary
 // filenames we install.
 const hookBinaryName = "agentjail-hook"
@@ -69,6 +85,17 @@ const cliBinaryName = "agentjail"
 // currentGOOS is the runtime OS. It is a variable (not a constant) so that
 // tests can override it to simulate non-darwin platforms without recompiling.
 var currentGOOS = runtime.GOOS
+
+// systemdUserAvailableFn reports whether a systemd --user session is reachable
+// on this machine. It is a variable so tests can stub it out — the real
+// implementation shells out to systemctl and must never run against the
+// developer's real session during `go test`.
+var systemdUserAvailableFn = defaultSystemdUserAvailable
+
+// systemctlUserEnableStartFn (re)starts the systemd --user unit. It is a
+// variable so tests can stub it out and assert it was (or was not) called,
+// without ever touching a real systemd session.
+var systemctlUserEnableStartFn = defaultSystemctlUserEnableStart
 
 // installResult holds the per-agent outcome of a single agent install attempt.
 type installResult struct {
@@ -85,8 +112,7 @@ type installResult struct {
 //
 //	--for <agent>        install only a single named agent (back-compat)
 //	--all / --yes        non-interactive; select all detected agents
-//	--allow-unsupported  on Linux, print the detection report and exit 0
-//	                     (default on Linux: exit non-zero after detection)
+//	--allow-unsupported  deprecated no-op; Linux is fully supported now
 func runInstallCmd(args []string) {
 	forAgent, all, yes, allowUnsupported := parseInstallFlags(args)
 
@@ -94,7 +120,7 @@ func runInstallCmd(args []string) {
 	_ = u // used below on macOS path
 
 	// ── IDE wrapper and PATH shim targets work on all platforms ──────────
-	// These don't need the daemon, so they run before the Linux gate.
+	// These don't need the daemon, so they run before the daemon preamble.
 	home, homeErr := os.UserHomeDir()
 	if homeErr == nil {
 		if forAgent == "vscode" || forAgent == "cursor-ide" {
@@ -120,23 +146,17 @@ func runInstallCmd(args []string) {
 		}
 	}
 
-	// ── Linux gate ──────────────────────────────────────────────────────────
-	if currentGOOS != "darwin" {
-		if homeErr != nil {
-			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: cannot determine home dir: %v", homeErr)))
-			os.Exit(1)
-		}
-		env := buildAgentsEnv(home)
-		detected := detectAll(env)
-		n := countPresent(detected)
-		printLinuxGate(os.Stdout, n, currentGOOS, detected)
-		if allowUnsupported {
-			os.Exit(0)
-		}
-		os.Exit(1)
+	// ── --allow-unsupported is deprecated ────────────────────────────────
+	// Linux is a fully supported install target as of this release (the
+	// daemon runs under a systemd --user service instead of launchd). The
+	// flag is kept — and still parsed above — purely for back-compat with
+	// existing scripts/docs that pass it; it is now a no-op other than this
+	// notice.
+	if allowUnsupported {
+		fmt.Fprintln(os.Stdout, u.Badge("dim", "agentjail: --allow-unsupported is deprecated; Linux is fully supported, continuing normally"))
 	}
 
-	// ── macOS path ──────────────────────────────────────────────────────────
+	// ── macOS / Linux install path ───────────────────────────────────────
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -572,9 +592,9 @@ func performFullUninstall(home, goos string) UninstallResult {
 		}
 	}
 
-	// Step 2: daemon teardown (macOS only).
-	if goos == "darwin" {
-		r.DaemonErr = uninstallDaemon(home)
+	// Step 2: daemon teardown (macOS: launchd, Linux: systemd --user).
+	if goos == "darwin" || goos == "linux" {
+		r.DaemonErr = uninstallDaemon(home, goos)
 		if r.DaemonErr != nil {
 			r.HardFailed = true
 		}
@@ -720,9 +740,19 @@ func cleanupShellRCPath(home string) []string {
 	return cleaned
 }
 
-// uninstallDaemon unloads the launchd service and removes the plist file.
+// uninstallDaemon tears down the platform daemon service for goos: the
+// launchd plist on macOS, the systemd --user unit on Linux. It tolerates
+// "already unloaded/stopped" and "file not found" gracefully.
+func uninstallDaemon(home, goos string) error {
+	if goos == "darwin" {
+		return uninstallLaunchdDaemon(home)
+	}
+	return uninstallSystemdDaemon(home)
+}
+
+// uninstallLaunchdDaemon unloads the launchd service and removes the plist file.
 // It tolerates "already unloaded" and "file not found" gracefully.
-func uninstallDaemon(home string) error {
+func uninstallLaunchdDaemon(home string) error {
 	plistDst := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
 
 	// Unload — tolerate "not loaded" / non-zero exit gracefully.
@@ -742,6 +772,27 @@ func uninstallDaemon(home string) error {
 	// Remove the plist file.
 	if err := os.Remove(plistDst); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove plist: %w", err)
+	}
+
+	return nil
+}
+
+// uninstallSystemdDaemon stops and disables the systemd --user unit and
+// removes the unit file. It tolerates "already stopped" / "unit not found"
+// gracefully (systemctlUserDisableStopFn already tolerates those), and skips
+// the disable/stop call entirely when no systemd --user session is reachable
+// (nothing to stop) or the unit file was never installed.
+func uninstallSystemdDaemon(home string) error {
+	unitDst := filepath.Join(systemdUserUnitDir(home), systemdUnitFilename)
+
+	if fileExists(unitDst) && systemdUserAvailableFn() {
+		if err := systemctlUserDisableStopFn(systemdUnitFilename); err != nil {
+			return fmt.Errorf("systemctl --user disable/stop: %w", err)
+		}
+	}
+
+	if err := os.Remove(unitDst); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove systemd unit: %w", err)
 	}
 
 	return nil
@@ -768,11 +819,13 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 	}
 
 	if r.DaemonSkipped {
-		lines = append(lines, u.KeyValue("daemon", "", u.Badge("dim", "skipped (non-darwin)")))
+		lines = append(lines, u.KeyValue("daemon", "", u.Badge("dim", "skipped (unsupported OS)")))
 	} else if r.DaemonErr != nil {
 		lines = append(lines, u.KeyValue("daemon", "", u.Badge("fail", "FAILED: "+r.DaemonErr.Error())))
-	} else {
+	} else if currentGOOS == "darwin" {
 		lines = append(lines, u.KeyValue("daemon", "", u.Badge("ok", "stopped and plist removed")))
+	} else {
+		lines = append(lines, u.KeyValue("daemon", "", u.Badge("ok", "stopped and systemd unit removed")))
 	}
 
 	if r.InstallDirErr != nil {
@@ -816,18 +869,6 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 	fmt.Fprintln(w)
 }
 
-// printLinuxGate writes the styled Linux gate detection report to w.
-// It is the testable core of the Linux gate block in runInstallCmd.
-func printLinuxGate(w io.Writer, n int, goos string, detected []detectedAgent) {
-	u := ui.New(w)
-	fmt.Fprintln(w, u.Section(fmt.Sprintf("%d agent(s) detected; hook wiring skipped (daemon not yet supported on %s)", n, goos)))
-	for _, r := range detected {
-		if r.d.Present {
-			fmt.Fprintln(w, "  "+u.KeyValue(r.ag.DisplayName(), r.d.Evidence, u.Badge("warn", "detected — hooks not wired")))
-		}
-	}
-}
-
 // runStatusCmd handles `agentjail status`.
 // It prints daemon infrastructure status plus per-agent detection and hook state.
 func runStatusCmd() {
@@ -856,7 +897,15 @@ func printStatusOutput(w io.Writer, home string) {
 	hookBin := filepath.Join(binDir, hookBinaryName)
 	daemonBin := filepath.Join(binDir, daemonBinaryName)
 	policyFile := filepath.Join(home, ".agentjail", "policy.yaml")
-	plistDst := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
+
+	// Service definition path + label differ by platform: launchd plist on
+	// macOS, systemd --user unit on Linux.
+	serviceLabel := "launchd plist"
+	serviceDst := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
+	if currentGOOS != "darwin" {
+		serviceLabel = "systemd unit"
+		serviceDst = filepath.Join(systemdUserUnitDir(home), systemdUnitFilename)
+	}
 
 	// Infrastructure section.
 	fmt.Fprintln(w, u.Section(u.Emoji("🧱  ")+"Infrastructure"))
@@ -882,11 +931,11 @@ func printStatusOutput(w io.Writer, home string) {
 	}
 	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue("policy.yaml", "", policyBadge))
 
-	plistBadge := u.Badge("ok", "ok")
-	if !fileExists(plistDst) {
-		plistBadge = u.Badge("fail", "missing")
+	serviceBadge := u.Badge("ok", "ok")
+	if !fileExists(serviceDst) {
+		serviceBadge = u.Badge("fail", "missing")
 	}
-	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue("launchd plist", "", plistBadge))
+	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue(serviceLabel, "", serviceBadge))
 
 	daemonRunning := isDaemonRunning()
 	daemonBadge2 := u.Badge("ok", "running")
@@ -945,14 +994,17 @@ var version = ""
 
 // ---- daemon preamble -----------------------------------------------------------
 
-// installDaemonPreamble performs the macOS-only infrastructure steps 1–6 that
-// are shared across all per-agent installs:
+// installDaemonPreamble performs the infrastructure steps 1–6 that are shared
+// across all per-agent installs, on both macOS and Linux:
 //  1. Copy agentjail-hook to ~/.agentjail/bin/
 //  2. Copy agentjail-daemon to ~/.agentjail/bin/
 //  3. Install core .rego rules to ~/.agentjail/rules/
 //  4. Write ~/.agentjail/policy.yaml (if absent) with mcpSeed pre-populated
-//  5. Install the launchd plist
-//  6. Load the daemon via launchctl
+//  5. Install the daemon service definition (launchd plist on macOS,
+//     systemd --user unit on Linux)
+//  6. Start the daemon (launchctl on macOS; `systemctl --user enable --now` +
+//     restart on Linux — or, if no systemd user session is reachable, print
+//     manual-start instructions instead of failing)
 //
 // mcpSeed is a pre-filtered list of MCP server names to seed into mcp.allowed
 // on first install (R10: discovery runs before this function is called so the
@@ -1004,29 +1056,75 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 	}
 	fmt.Fprintln(w, u.Step(4, 6, "policy.yaml ready", true))
 
-	// Step 5: install launchd plist. The daemon log lives under ~/.agentjail so
-	// it is co-located with the install (and removed on uninstall) and matches
-	// the path `agentjail logs` reads by default.
-	plistDst := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
+	// Steps 5-6: install + (re)start the daemon service. The daemon log lives
+	// under ~/.agentjail so it is co-located with the install (and removed on
+	// uninstall) and matches the path `agentjail logs` reads by default.
 	daemonLogPath := filepath.Join(home, ".agentjail", "daemon.log")
 	crashLogPath := filepath.Join(home, ".agentjail", "crash.log")
-	if err := installPlist(daemonDst, rulesD, daemonLogPath, crashLogPath, plistDst); err != nil {
-		return fmt.Errorf("install launchd plist: %w", err)
+	if err := installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashLogPath, w); err != nil {
+		return err
 	}
-	fmt.Fprintln(w, u.Step(5, 6, "launchd plist installed", true))
-
-	// Step 6: load daemon.
-	if err := launchctlLoad(plistDst); err != nil {
-		// Non-fatal: log but continue.
-		fmt.Fprintf(os.Stderr, "agentjail: warning: launchctl load failed (daemon may not be running): %v\n", err)
-	}
-	fmt.Fprintln(w, u.Step(6, 6, "daemon started", true))
 
 	// Refresh the PATH shim if one was previously installed. This ensures
 	// brew upgrade / curl|sh reinstall picks up the current template and
 	// does not retain stale flags from a dev build.
 	refreshPathShimIfExists(home)
 
+	return nil
+}
+
+// installAndStartDaemonService performs steps 5-6 of installDaemonPreamble:
+// install the platform service definition and (re)start it. Split out as its
+// own function — independent of findBinary/copyBinary — so it is directly
+// unit-testable with a fake daemon binary path, no real binaries required.
+//
+//   - macOS: writes the launchd plist and runs launchctlLoad.
+//   - Linux: writes the systemd --user unit and, if a systemd --user session
+//     is reachable (systemdUserAvailableFn), enables + starts it via
+//     systemctlUserEnableStartFn. If no session is reachable (e.g. a bare
+//     container with no login session), the unit is still written and manual
+//     start instructions are printed instead of failing the install.
+//
+// currentGOOS selects the branch, so tests can override it to exercise the
+// Linux path on any host; systemdUserAvailableFn / systemctlUserEnableStartFn
+// are themselves variables so tests can stub them and never touch a real
+// systemd session.
+func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashLogPath string, w io.Writer) error {
+	u := ui.New(w)
+
+	if currentGOOS == "darwin" {
+		plistDst := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
+		if err := installPlist(daemonDst, rulesD, daemonLogPath, crashLogPath, plistDst); err != nil {
+			return fmt.Errorf("install launchd plist: %w", err)
+		}
+		fmt.Fprintln(w, u.Step(5, 6, "launchd plist installed", true))
+
+		if err := launchctlLoad(plistDst); err != nil {
+			// Non-fatal: log but continue.
+			fmt.Fprintf(os.Stderr, "agentjail: warning: launchctl load failed (daemon may not be running): %v\n", err)
+		}
+		fmt.Fprintln(w, u.Step(6, 6, "daemon started", true))
+		return nil
+	}
+
+	// Linux (and any other non-darwin unix): systemd --user unit.
+	unitDst := filepath.Join(systemdUserUnitDir(home), systemdUnitFilename)
+	if err := installSystemdUnit(daemonDst, rulesD, daemonLogPath, crashLogPath, unitDst); err != nil {
+		return fmt.Errorf("install systemd user unit: %w", err)
+	}
+	fmt.Fprintln(w, u.Step(5, 6, "systemd --user unit installed", true))
+
+	if systemdUserAvailableFn() {
+		if err := systemctlUserEnableStartFn(systemdUnitFilename); err != nil {
+			// Non-fatal: log but continue, same as the launchd path.
+			fmt.Fprintf(os.Stderr, "agentjail: warning: systemctl --user enable/start failed (daemon may not be running): %v\n", err)
+		}
+		fmt.Fprintln(w, u.Step(6, 6, "daemon started (systemd --user)", true))
+	} else {
+		fmt.Fprintln(w, u.Step(6, 6, "daemon NOT started — no systemd --user session detected", true))
+		fmt.Fprintln(w, "      "+u.Badge("dim", fmt.Sprintf("unit installed at %s", unitDst)))
+		fmt.Fprintln(w, "      "+u.Badge("dim", fmt.Sprintf("start it manually once a session exists: systemctl --user enable --now %s", systemdUnitFilename)))
+	}
 	return nil
 }
 
@@ -1328,14 +1426,114 @@ func launchctlUnload(plistPath string) error {
 	return selfupdate.LaunchctlUnload(plistPath)
 }
 
-// isDaemonRunning asks launchctl whether the daemon service is loaded.
+// isDaemonRunning asks the platform service manager whether the daemon
+// service is active: launchctl on macOS, systemctl --user on Linux.
 func isDaemonRunning() bool {
-	out, err := exec.Command("launchctl", "list", plistLabel).Output()
-	if err != nil {
+	if currentGOOS == "darwin" {
+		out, err := exec.Command("launchctl", "list", plistLabel).Output()
+		if err != nil {
+			return false
+		}
+		return len(out) > 0
+	}
+	return exec.Command("systemctl", "--user", "is-active", "--quiet", systemdUnitFilename).Run() == nil
+}
+
+// ---- systemd --user (Linux) helpers ----------------------------------------
+
+// systemdUserUnitDir returns the directory systemd searches for --user unit
+// files under a given home: ~/.config/systemd/user.
+func systemdUserUnitDir(home string) string {
+	return filepath.Join(home, ".config", "systemd", "user")
+}
+
+// systemdUnitTemplate is the systemd --user unit with placeholders for the
+// daemon path, rules directory, log path, and crash log path. Placeholders
+// are patched at install time (same names as plistTemplate):
+//   - __DAEMON_PATH__    — absolute path to the agentjail-daemon binary
+//   - __RULES_DIR__      — absolute path to the rules directory
+//   - __LOG_PATH__       — daemon.log, managed by the daemon's internal
+//     rotating writer (passed via --log flag); `agentjail logs` reads this
+//   - __CRASH_LOG_PATH__ — crash.log; captures stdout/stderr (panics, runtime
+//     output) across restarts, appended rather than truncated so a crash loop
+//     doesn't erase prior history
+//
+// Restart=on-failure + RestartSec gives the daemon the same self-recovery
+// launchd's KeepAlive provides on macOS. WantedBy=default.target (not
+// graphical-session.target) so the unit starts in headless/SSH user sessions
+// too, not only desktop logins.
+const systemdUnitTemplate = `[Unit]
+Description=agentjail daemon — policy enforcement for coding agents
+After=default.target
+
+[Service]
+ExecStart=__DAEMON_PATH__ --rules=__RULES_DIR__ --log=__LOG_PATH__
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:__CRASH_LOG_PATH__
+StandardError=append:__CRASH_LOG_PATH__
+
+[Install]
+WantedBy=default.target
+`
+
+// installSystemdUnit writes the systemd --user unit to dst with the daemon
+// binary path, rules directory, log path, and crash log path patched in.
+func installSystemdUnit(daemonBin, rulesDir, logPath, crashLogPath, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	content := strings.ReplaceAll(systemdUnitTemplate, "__DAEMON_PATH__", daemonBin)
+	content = strings.ReplaceAll(content, "__RULES_DIR__", rulesDir)
+	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
+	content = strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
+	return os.WriteFile(dst, []byte(content), 0o644)
+}
+
+// defaultSystemdUserAvailable reports whether a systemd --user session is
+// reachable on this machine. `systemctl --user show-environment` is a
+// read-only query that only succeeds when a user session/bus exists (it
+// fails fast in bare containers or SSH sessions with no logind session), so
+// it is safe to use as a capability probe.
+func defaultSystemdUserAvailable() bool {
+	if _, err := exec.LookPath("systemctl"); err != nil {
 		return false
 	}
-	return len(out) > 0
+	return exec.Command("systemctl", "--user", "show-environment").Run() == nil
 }
+
+// defaultSystemctlUserEnableStart enables (persists across logins) and starts
+// the given systemd --user unit, then restarts it so a reinstall picks up a
+// refreshed binary or unit file. Mirrors launchctlLoad's "unload then load"
+// idempotency.
+func defaultSystemctlUserEnableStart(unit string) error {
+	if out, err := exec.Command("systemctl", "--user", "enable", "--now", unit).CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl --user enable --now %s: %w: %s", unit, err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("systemctl", "--user", "restart", unit).CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl --user restart %s: %w: %s", unit, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// defaultSystemctlUserDisableStop stops and disables the given systemd --user
+// unit. Tolerates "not loaded"/"not found" gracefully, mirroring
+// uninstallDaemon's launchctl-unload tolerance on macOS.
+func defaultSystemctlUserDisableStop(unit string) error {
+	out, err := exec.Command("systemctl", "--user", "disable", "--now", unit).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" && !strings.Contains(msg, "not loaded") && !strings.Contains(msg, "does not exist") &&
+			!strings.Contains(msg, "No such file or directory") {
+			return fmt.Errorf("systemctl --user disable --now %s: %w: %s", unit, err, msg)
+		}
+	}
+	return nil
+}
+
+// systemctlUserDisableStopFn is a variable so tests can stub it out and never
+// touch a real systemd session.
+var systemctlUserDisableStopFn = defaultSystemctlUserDisableStop
 
 // fileExists reports whether path exists (any file type).
 func fileExists(path string) bool {

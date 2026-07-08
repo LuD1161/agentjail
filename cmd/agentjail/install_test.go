@@ -534,14 +534,17 @@ func TestEmbeddedDefaultPolicyMatchesSource(t *testing.T) {
 
 // ---- uninstall tests -----------------------------------------------------------
 
-// TestFullUninstallOnLinuxSkipsDaemon verifies that performFullUninstall on a
-// simulated non-darwin platform:
+// TestFullUninstallOnLinuxTearsDownDaemon verifies that performFullUninstall
+// on a simulated Linux platform:
 //   - Unhooks all agents (no error expected for non-installed agents since
 //     Uninstall is idempotent).
-//   - Skips daemon teardown and sets DaemonSkipped=true.
+//   - Runs (not skips) daemon teardown; with no systemd unit file present in
+//     the test's tmp home, uninstallSystemdDaemon is a graceful no-op (it
+//     never shells out to systemctl, since it only calls
+//     systemctlUserDisableStopFn when the unit file exists).
 //   - Removes the fake ~/.agentjail directory.
-//   - Does NOT call real launchctl.
-func TestFullUninstallOnLinuxSkipsDaemon(t *testing.T) {
+//   - Does NOT call real systemctl (no unit file ⇒ short-circuits before the call).
+func TestFullUninstallOnLinuxTearsDownDaemon(t *testing.T) {
 	home := t.TempDir()
 
 	// Set up agent config dirs so Install actually creates hook config files,
@@ -580,12 +583,13 @@ func TestFullUninstallOnLinuxSkipsDaemon(t *testing.T) {
 		}
 	}
 
-	// Daemon must be skipped, not errored.
-	if !result.DaemonSkipped {
-		t.Error("DaemonSkipped should be true on non-darwin")
+	// Daemon teardown now runs on Linux too (not skipped), and must be a
+	// graceful no-op since no systemd unit file exists in the test's tmp home.
+	if result.DaemonSkipped {
+		t.Error("DaemonSkipped should be false on linux — teardown now runs on Linux")
 	}
 	if result.DaemonErr != nil {
-		t.Errorf("DaemonErr should be nil on non-darwin, got: %v", result.DaemonErr)
+		t.Errorf("DaemonErr should be nil with no unit file installed, got: %v", result.DaemonErr)
 	}
 
 	// ~/.agentjail must be gone.
@@ -700,8 +704,11 @@ func TestFullUninstallIdempotentOnFreshHome(t *testing.T) {
 		t.Errorf("HardFailed should be false on a fresh home; agents=%v daemonErr=%v installDirErr=%v",
 			result.Agents, result.DaemonErr, result.InstallDirErr)
 	}
-	if !result.DaemonSkipped {
-		t.Error("DaemonSkipped should be true for goos=linux")
+	if result.DaemonSkipped {
+		t.Error("DaemonSkipped should be false for goos=linux — teardown now runs on Linux")
+	}
+	if result.DaemonErr != nil {
+		t.Errorf("DaemonErr should be nil with no unit file installed, got: %v", result.DaemonErr)
 	}
 }
 
@@ -1144,8 +1151,8 @@ func TestPrintUninstallSummaryAgentFailure(t *testing.T) {
 	}
 }
 
-// TestPrintUninstallSummaryDaemonSkipped verifies that a non-darwin run shows
-// "skipped (non-darwin)" for the daemon row.
+// TestPrintUninstallSummaryDaemonSkipped verifies that a run on an
+// unsupported OS shows "skipped (unsupported OS)" for the daemon row.
 func TestPrintUninstallSummaryDaemonSkipped(t *testing.T) {
 	r := UninstallResult{
 		Agents:        []UninstallAgentResult{{Name: "Codex", Err: nil}},
