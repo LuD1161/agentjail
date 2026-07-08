@@ -93,7 +93,34 @@ type server struct {
 
 	// grantSrv handles runtime host grant requests (follow-up). Nil-safe.
 	grantSrv *grantServer
+
+	// connSem bounds the number of concurrent agent-socket connections
+	// (P9): an agent that holds write access to daemon.sock could otherwise
+	// open unbounded connections and exhaust daemon resources, pushing
+	// per-request latency past the hook's fail-open deadline and forcing
+	// every hook invocation in the fleet to fail open. nil-safe: a nil
+	// semaphore means no cap is enforced (used in tests that construct a
+	// bare server{}).
+	connSem chan struct{}
 }
+
+// maxAgentConns bounds concurrent connections to the agent-reachable
+// daemon.sock (P9). Generously sized for legitimate concurrent hook
+// invocations (parallel tool calls, multiple sessions) while still bounding
+// worst-case goroutine/scanner-buffer memory from a misbehaving or hostile
+// peer.
+const maxAgentConns = 256
+
+// agentConnIdleTimeout bounds how long the daemon will block on a single
+// read from an agent-socket connection (P9). Mirrors the control socket's
+// 5-second deadline (see grantServer.handleCtlConn). The deadline is reset
+// after each request is fully processed, so a connection that is actively
+// making requests is never punished — only one that opens a connection and
+// then goes idle or trickles bytes.
+//
+// A var (not const) so tests can shrink it temporarily to exercise the
+// timeout without a real multi-second sleep.
+var agentConnIdleTimeout = 5 * time.Second
 
 // recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
 // toolName and agentID are enum values from the daemon Request struct; they are
@@ -189,6 +216,9 @@ func countCustomRuleFiles(rulesDir string) int {
 func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
+	if s.connSem != nil {
+		defer func() { <-s.connSem }()
+	}
 
 
 	scanner := bufio.NewScanner(conn)
@@ -197,7 +227,16 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 
 	enc := json.NewEncoder(conn)
 
-	for scanner.Scan() {
+	for {
+		// Reset the idle read deadline before each read (P9). A connection
+		// that opens and then sends nothing (or trickles bytes slowly) is
+		// cut off instead of holding a goroutine + 1 MB scanner buffer
+		// indefinitely; a connection making steady requests is unaffected
+		// since the deadline is pushed out again after each one completes.
+		_ = conn.SetReadDeadline(time.Now().Add(agentConnIdleTimeout))
+		if !scanner.Scan() {
+			break
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -309,6 +348,30 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Warn("scanner error", "err", err)
+	}
+}
+
+// acceptConn admits conn onto an agent-socket worker goroutine, subject to
+// the bounded-concurrency cap (P9): if s.connSem is at capacity, conn is
+// closed immediately instead of blocking the accept loop (which would delay
+// every other agent) or spawning unboundedly (which would let one
+// hostile/misbehaving peer exhaust daemon memory/goroutines and starve
+// latency for everyone, pushing hooks past their fail-open deadline). A nil
+// s.connSem (e.g. a bare server{} built directly in tests) means no cap is
+// enforced.
+func (s *server) acceptConn(ctx context.Context, conn net.Conn) {
+	if s.connSem == nil {
+		s.wg.Add(1)
+		go s.handleConn(ctx, conn)
+		return
+	}
+	select {
+	case s.connSem <- struct{}{}:
+		s.wg.Add(1)
+		go s.handleConn(ctx, conn)
+	default:
+		slog.Warn("daemon.sock: max concurrent connections reached; rejecting connection", "max", maxAgentConns)
+		_ = conn.Close()
 	}
 }
 
@@ -614,6 +677,7 @@ func main() {
 	srv := &server{
 		evaluator:      policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), initModules, cfg),
 		activeSessions: newActiveTracker(filepath.Dir(*policyPath)),
+		connSem:        make(chan struct{}, maxAgentConns),
 	}
 
 	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
@@ -766,8 +830,7 @@ func main() {
 				slog.Warn("accept", "err", err)
 				continue
 			}
-			srv.wg.Add(1)
-			go srv.handleConn(ctx, conn)
+			srv.acceptConn(ctx, conn)
 		}
 	}()
 
