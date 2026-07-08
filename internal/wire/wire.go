@@ -166,6 +166,37 @@ type OfflineRule struct {
 	Patterns []string `json:"patterns,omitempty"`
 }
 
+// ControlType is the Request.Type discriminator for a control-plane message
+// on the daemon's agent socket (daemon.sock), as opposed to a policy-eval
+// request or a grant_request probe. handleConn's probe-then-dispatch pattern
+// checks Type before unmarshalling the full payload, mirroring how
+// grantctl.ReqGrantRequest is dispatched.
+const ControlType = "control"
+
+// ControlOpReload asks the daemon to reload policy.yaml and the Rego rule
+// bundle in place -- the same operation SIGHUP triggers, but delivered over
+// the socket so the caller receives an explicit ControlResponse instead of
+// having to guess whether the reload (and, critically, whether it compiled)
+// succeeded.
+const ControlOpReload = "reload"
+
+// ControlRequest is the wire shape for a daemon control-plane message. Type
+// must equal ControlType; Op selects the operation (currently only
+// ControlOpReload).
+type ControlRequest struct {
+	Type string `json:"type"`
+	Op   string `json:"op"`
+}
+
+// ControlResponse is the daemon's reply to a ControlRequest. OK reports
+// whether the operation succeeded; Error carries the failure reason (e.g. a
+// Rego compile error) so the caller can surface it instead of silently
+// assuming the reload took effect.
+type ControlResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
 // EvalOne is the reusable daemon RPC client for agentjail CLI callers.
 //
 // It dials socketPath over a Unix domain socket using DialTimeout=timeout,
