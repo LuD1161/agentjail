@@ -229,9 +229,11 @@ Documentation: https://agentjail.io/docs`,
 agentjail ships with built-in policy rules that evaluate every tool call.
 
 Commands:
-  agentjail policy list             Show all rules and their status
-  agentjail policy enable <rule>    Enable an optional hardening rule
-  agentjail policy disable <rule>   Disable a non-locked rule
+  agentjail policy list                    Show all rules and their status
+  agentjail policy enable <name|rule_id>   Enable a library rule or re-enable a disabled rule
+  agentjail policy disable <name|rule_id>  Disable a rule (core rules need --force + TTY)
+  agentjail policy add <file.rego>         Install a custom rule file into ~/.agentjail/rules/
+  agentjail policy remove <name>           Remove a custom rule by file stem
 
 Rule categories:
   command_policy/    Shell command restrictions (sudo, rm -rf, etc.)
@@ -254,14 +256,18 @@ Configuration: ~/.agentjail/policy.yaml
 Replay and review policy decisions from saved agent sessions.
 
 Commands:
-  agentjail replay --list           List all saved sessions
-  agentjail replay <session-id>     Replay a specific session
-  agentjail replay --last           Replay the most recent session
+  agentjail replay --list                List all saved sessions
+  agentjail replay --session <id>        Replay a specific session (id prefix ok)
+  agentjail replay --session <id> --follow   Keep replaying as new decisions arrive
 
 The replay shows each tool call with its policy decision (allow/deny/ask),
-the rule that fired, timing information, and agent glyphs.
+the rule that fired, timing information, and agent glyphs. It opens an
+interactive TUI when run in a terminal; falls back to plain text otherwise.
 
-Filtering:
-  agentjail replay <id> --action=deny    Only show denied calls
-  agentjail replay <id> --since=1h       Only recent decisions`,
+Flags:
+  --db <path>       Path to the SQLite event store (default ~/.agentjail/agentjail.db)
+  --verbose         Include redacted tool_input in the output
+  --follow          Follow new decisions for the session
+  --no-color        Disable ANSI colors
+  --basic           Force plain text output (no TUI)`,
 }

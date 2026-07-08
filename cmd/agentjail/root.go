@@ -22,13 +22,6 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 
-	// Show the legacy styled usage when the user runs `agentjail` with no args.
-	RunE: func(cmd *cobra.Command, args []string) error {
-		usage(os.Stderr)
-		os.Exit(2)
-		return nil
-	},
-
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Mirror main.go: record feature usage for every command except telemetry.
 		if cmd.Name() != "telemetry" {
@@ -51,6 +44,16 @@ var rootCmd = &cobra.Command{
 func init() {
 	// Persistent --agent flag mirrors the old parseTopLevelFlags handling.
 	rootCmd.PersistentFlags().StringVar(&agentSlug, "agent", "", "Agent slug")
+
+	// Show the legacy styled usage when the user runs `agentjail` with no
+	// args. Assigned in init() (rather than inline in the var literal above)
+	// so that usage()'s reference back to rootCmd.Commands() (via
+	// commandList) doesn't create a package-level initialization cycle.
+	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		usage(os.Stderr)
+		os.Exit(2)
+		return nil
+	}
 }
 
 // Execute runs the root command and exits non-zero on error.
