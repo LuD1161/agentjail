@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -112,12 +113,75 @@ func buildPGCreateRoleSQL(roleName, password, validUntil, scope string) string {
 
 // psqlExec runs SQL via the psql command-line client.
 func psqlExec(dsn, sql string) error {
-	cmd := exec.Command("psql", dsn, "-c", sql, "-v", "ON_ERROR_STOP=1")
+	cmd := buildPsqlCmd(dsn, sql)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("psql: %w: %s", err, string(output))
 	}
 	return nil
+}
+
+// buildPsqlCmd builds the *exec.Cmd used to run sql via psql, without ever
+// putting a password on argv. Both the admin DSN's password and any
+// password embedded in the SQL body (e.g. CREATE ROLE ... PASSWORD '...')
+// are visible in /proc/<pid>/cmdline to any local user for the life of the
+// process if passed as command-line arguments -- `psql <dsn-with-password>`
+// or `-c <sql-with-password>` both leak. So the DSN's password is stripped
+// and supplied via the PGPASSWORD env var instead, and the SQL is streamed
+// over stdin via `-f -` rather than passed as a `-c` argument.
+func buildPsqlCmd(dsn, sql string) *exec.Cmd {
+	safeDSN, password := stripPGDSNPassword(dsn)
+
+	cmd := exec.Command("psql", safeDSN, "-v", "ON_ERROR_STOP=1", "-f", "-")
+	cmd.Stdin = strings.NewReader(sql)
+	if password != "" {
+		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
+	}
+	return cmd
+}
+
+// stripPGDSNPassword removes the password from a PG DSN (URL form
+// postgresql://user:pass@host/db or key=value form host=h password=p) and
+// returns the sanitized DSN alongside the extracted password.
+func stripPGDSNPassword(dsn string) (safeDSN, password string) {
+	if strings.HasPrefix(dsn, "postgresql://") || strings.HasPrefix(dsn, "postgres://") {
+		scheme := "postgresql://"
+		if strings.HasPrefix(dsn, "postgres://") {
+			scheme = "postgres://"
+		}
+		rest := dsn[len(scheme):]
+
+		var userinfo, hostAndPath string
+		if idx := strings.Index(rest, "@"); idx >= 0 {
+			userinfo = rest[:idx]
+			hostAndPath = rest[idx+1:]
+		} else {
+			hostAndPath = rest
+		}
+
+		user := userinfo
+		if idx := strings.Index(userinfo, ":"); idx >= 0 {
+			user = userinfo[:idx]
+			password = userinfo[idx+1:]
+		}
+
+		if user == "" {
+			return scheme + hostAndPath, password
+		}
+		return scheme + user + "@" + hostAndPath, password
+	}
+
+	// key=value format.
+	parts := strings.Fields(dsn)
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if idx := strings.Index(p, "="); idx >= 0 && p[:idx] == "password" {
+			password = p[idx+1:]
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return strings.Join(kept, " "), password
 }
 
 // parsePGDSN extracts host, port, and database from a PG DSN.
