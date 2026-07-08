@@ -812,6 +812,23 @@ func main() {
 		})
 	}
 
+	// Write the hook-fallback sidecar (ADR 0050) now that the daemon has
+	// successfully started listening. Best-effort: a failure is logged (and
+	// audited if the store is available) but never blocks startup — the
+	// hook treats a missing/unparseable sidecar as "allow" (today's
+	// behavior), so this can never make things worse than not having the
+	// feature at all.
+	if err := writeHookFallback(cfg); err != nil {
+		slog.Warn("write hook-fallback sidecar failed (non-fatal)", "err", err)
+		if srv.eventStore != nil {
+			_ = srv.eventStore.Emit(ctx, audit.Event{
+				EventType: audit.HookFallbackWriteFailed,
+				Actor:     "daemon",
+				Detail:    map[string]string{"err": err.Error()},
+			})
+		}
+	}
+
 	// Signal handling.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -879,6 +896,21 @@ func main() {
 				})
 			}
 			srv.recordPolicyConfig(newCfg, *rulesDir)
+
+			// Re-write the hook-fallback sidecar (ADR 0050) so a config
+			// change to daemon_unreachable (or a locked-rule recompile)
+			// takes effect for the hook without a daemon restart.
+			// Best-effort — same rationale as the startup write above.
+			if err := writeHookFallback(newCfg); err != nil {
+				slog.Warn("reload: write hook-fallback sidecar failed (non-fatal)", "err", err)
+				if srv.eventStore != nil {
+					_ = srv.eventStore.Emit(ctx, audit.Event{
+						EventType: audit.HookFallbackWriteFailed,
+						Actor:     "daemon",
+						Detail:    map[string]string{"err": err.Error()},
+					})
+				}
+			}
 
 		case syscall.SIGTERM, syscall.SIGINT:
 			slog.Info("shutdown signal received", "signal", sig)

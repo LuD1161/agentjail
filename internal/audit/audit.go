@@ -58,6 +58,12 @@ const (
 	// (port-only, --no-netproxy) egress path -- best-effort, fired whether
 	// or not --audit-strict caused the launch to be refused. See ADR 0049.
 	ShieldMetadataEgressExposed = "shield.metadata_egress_exposed"
+	// HookFallbackWriteFailed is emitted (best-effort) when the daemon fails
+	// to write the hook-fallback sidecar (ADR 0050) on startup or SIGHUP
+	// reload. Never fatal — the hook falls back to "allow" when the sidecar
+	// is missing/stale, so a write failure degrades observability, not
+	// enforcement.
+	HookFallbackWriteFailed = "hook_fallback.write_failed"
 )
 
 // Event is one audit log entry.
