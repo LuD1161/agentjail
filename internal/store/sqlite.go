@@ -14,25 +14,18 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/sqliteutil"
 	_ "modernc.org/sqlite"
 )
-
-var dsnPathReplacer = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 
 const (
 	defaultLimit = 100
 	maxLimit     = 10000
 )
 
-func clampLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
+// clampLimit clamps a query LIMIT to this store's [defaultLimit, maxLimit]
+// range via the shared helper.
+func clampLimit(n int) int { return sqliteutil.ClampLimit(n, defaultLimit, maxLimit) }
 
 // sqliteStore is the SQLite-backed EventStore.
 type sqliteStore struct {
@@ -53,7 +46,7 @@ func Open(path string) (EventStore, error) {
 	}
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)",
-		dsnPathReplacer.Replace(path),
+		sqliteutil.EscapeDSNPath(path),
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -69,26 +62,11 @@ func Open(path string) (EventStore, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := chmodDBFiles(path, 0o600); err != nil {
+	if err := sqliteutil.ChmodDBFiles(path, 0o600); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: chmod: %w", err)
 	}
 	return s, nil
-}
-
-// chmodDBFiles chmods the DB and its WAL/SHM sidecars to mode (best-effort
-// on sidecars; they may not exist yet). The 0700 parent dir is the primary
-// protection; this is defense-in-depth + meets the 0600 acceptance.
-func chmodDBFiles(path string, mode os.FileMode) error {
-	if err := os.Chmod(path, mode); err != nil {
-		return err
-	}
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if _, err := os.Stat(path + suffix); err == nil {
-			_ = os.Chmod(path+suffix, mode)
-		}
-	}
-	return nil
 }
 
 func toNullString(s string) sql.NullString {
@@ -983,7 +961,7 @@ func OpenReadOnly(path string) (ReadOnlyStore, error) {
 	}
 	dsn := fmt.Sprintf(
 		"file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=cache_size(-1000)&_pragma=mmap_size(0)",
-		dsnPathReplacer.Replace(path),
+		sqliteutil.EscapeDSNPath(path),
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

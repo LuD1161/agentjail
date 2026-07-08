@@ -16,10 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/sqliteutil"
 	_ "modernc.org/sqlite"
 )
-
-var dsnPathReplacer = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 
 // RequestLog represents one intercepted HTTP request/response pair.
 type RequestLog struct {
@@ -68,15 +67,9 @@ const (
 	maxLimit     = 10000
 )
 
-func clampLimit(n int) int {
-	if n <= 0 {
-		return defaultLimit
-	}
-	if n > maxLimit {
-		return maxLimit
-	}
-	return n
-}
+// clampLimit clamps a query LIMIT to this store's [defaultLimit, maxLimit]
+// range via the shared helper.
+func clampLimit(n int) int { return sqliteutil.ClampLimit(n, defaultLimit, maxLimit) }
 
 // RequestStore logs intercepted HTTP requests to SQLite.
 type RequestStore struct {
@@ -103,7 +96,7 @@ func NewRequestStore(dbPath string) (*RequestStore, error) {
 	}
 	dsn := fmt.Sprintf(
 		"file:%s?_pragma=busy_timeout(3000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)",
-		dsnPathReplacer.Replace(dbPath),
+		sqliteutil.EscapeDSNPath(dbPath),
 	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -120,23 +113,11 @@ func NewRequestStore(dbPath string) (*RequestStore, error) {
 		return nil, err
 	}
 	// chmod 0600 on the DB file (defense-in-depth; 0700 dir is primary).
-	if err := chmodDBFiles(dbPath, 0o600); err != nil {
+	if err := sqliteutil.ChmodDBFiles(dbPath, 0o600); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("mitm/store: chmod: %w", err)
 	}
 	return s, nil
-}
-
-func chmodDBFiles(path string, mode os.FileMode) error {
-	if err := os.Chmod(path, mode); err != nil {
-		return err
-	}
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if _, err := os.Stat(path + suffix); err == nil {
-			_ = os.Chmod(path+suffix, mode)
-		}
-	}
-	return nil
 }
 
 func (s *RequestStore) migrate() error {
