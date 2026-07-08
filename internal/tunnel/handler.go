@@ -304,8 +304,11 @@ func (g *Gateway) relayManaged(client, upstream net.Conn, hostname string, port 
 		if err != nil && log != nil {
 			log.Debug("managed relay upstream→client ended", "bytes", n, "err", err)
 		}
-		if tc, ok := client.(*net.TCPConn); ok {
-			tc.CloseWrite()
+		// Propagate the half-close so the in-ns agent sees EOF. On the forward
+		// path client is a *gonet.TCPConn, not *net.TCPConn, so assert the
+		// shared halfCloser interface (see relay()).
+		if hc, ok := client.(halfCloser); ok {
+			_ = hc.CloseWrite()
 		}
 	}()
 
@@ -356,8 +359,8 @@ func (g *Gateway) relayManaged(client, upstream net.Conn, hostname string, port 
 				if err != io.EOF && log != nil {
 					log.Debug("managed relay client→upstream read ended", "err", err)
 				}
-				if tc, ok := upstream.(*net.TCPConn); ok {
-					tc.CloseWrite()
+				if hc, ok := upstream.(halfCloser); ok {
+					_ = hc.CloseWrite()
 				}
 				return
 			}
