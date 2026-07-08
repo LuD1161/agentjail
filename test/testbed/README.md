@@ -25,6 +25,7 @@ test/testbed/testbed.sh provision <name> [--worktree <path>]
 test/testbed/testbed.sh ssh <name>
 test/testbed/testbed.sh exec <name> -- <cmd>
 test/testbed/testbed.sh test <name> [scenario]        # run a scenario (default: e2e-smoke)
+test/testbed/testbed.sh gate                          # RELEASE GATE (== make e2e-release)
 test/testbed/testbed.sh snapshot <name> <tag>         # checkpoint
 test/testbed/testbed.sh reset <name> [tag]            # revert to golden
 test/testbed/testbed.sh ls
@@ -186,6 +187,26 @@ macOS work** — Linux is already done and validated on a Linux host; do not
 re-run or re-implement the Lima side.
 
 ---
+
+## Release gate (the only trigger — no nightly)
+
+This engine runs **on every release, not on a timer**. Before tagging `vX.Y.Z`:
+
+```sh
+make e2e-release        # == testbed.sh gate --worktree .
+```
+
+It resets a `release-gate` testbed to the clean golden (or creates it the first
+time — that run is slow, ~5–8 min for cloud-init + node; later runs reset in
+seconds), provisions the current worktree through the real installer, runs the
+`e2e-smoke` scenario, and **exits non-zero on any failure** so it can gate the
+tag. Wired into the pre-release checklist in `AGENTS.md`. Run it on the home
+server for the Linux build and on the Mac for the macOS build.
+
+CI note: this is deliberately a **local** gate, not a GitHub Actions job —
+Linux needs KVM and macOS needs a self-hosted Tart host, and the release is cut
+by hand anyway. If that changes, `make e2e-release` is the single entry point to
+wire in.
 
 ## Design notes
 

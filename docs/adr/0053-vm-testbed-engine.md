@@ -34,10 +34,16 @@ like a real end-user machine:
   release-layout tarball fed to `install.sh` via its `LOCAL_TARBALL=` seam,
   then `agentjail install --for claude-code`. Never a source build in-guest.
 - **Shell scripts, not a framework:** `testbed.sh` verbs
-  (create/provision/ssh/snapshot/reset/destroy) with a per-driver split
-  (lima|tart) selected by host OS. Promotion to Go/YAML/CI is deferred until
-  the shell version demonstrably hurts (see Linear follow-up for the staged
-  plan: scripted scenarios, nightly timers, release gate).
+  (create/provision/ssh/test/gate/snapshot/reset/destroy) with a per-driver
+  split (lima|tart) selected by host OS. Promotion to Go/YAML/CI is deferred
+  until the shell version demonstrably hurts (see Linear follow-up).
+- **Trigger is the release, not a timer.** `make e2e-release` (`testbed.sh
+  gate`) is a local pre-tag gate: clean VM → real installer → policy
+  enforcement, non-zero exit blocks the tag. A nightly timer was explicitly
+  rejected — this repo does not change nightly, and the gate's value is
+  guaranteeing a release installs and enforces on a clean box. Kept local (not
+  GitHub Actions) because Linux needs KVM and macOS needs a self-hosted Tart
+  host, and releases are cut by hand.
 
 ## Consequences
 
