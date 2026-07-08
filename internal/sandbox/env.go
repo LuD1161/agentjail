@@ -316,6 +316,129 @@ func EnvVarName(kv string) string {
 	return kv
 }
 
+// RemoveEnvKeys returns a new slice with any "KEY=VALUE" entry whose key
+// matches one of keys removed.  Used to dedupe an assembled env before
+// appending a value that must appear exactly once (e.g. GIT_SSH_COMMAND).
+func RemoveEnvKeys(env []string, keys ...string) []string {
+	if len(keys) == 0 {
+		return env
+	}
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
+	}
+	result := make([]string, 0, len(env))
+	for _, kv := range env {
+		if drop[EnvVarName(kv)] {
+			continue
+		}
+		result = append(result, kv)
+	}
+	return result
+}
+
+// AgentGitSSHEnv decides the final GIT_SSH_COMMAND (and, when the agentjail
+// override is injected, a companion marker) to append to the sandboxed
+// agent's environment.  It is a pure function of getenv (typically
+// os.Getenv) so it is fully unit-testable and has no side effects.
+//
+// Background (ADR 0056): under the shield, on-disk private key reads are
+// denied by design.  When ssh-agent has the key loaded (Readiness == Ready)
+// but the user's ~/.ssh/config pins an IdentityFile (usually paired with
+// IdentitiesOnly yes), OpenSSH reads the pinned file FIRST, the shield
+// EPERMs the read, and ssh gives up before ever trying the agent. Since a
+// global `url."git@github.com:".insteadOf https://github.com/` rewrite can
+// route even HTTPS-looking clones over ssh, this silently breaks git under
+// the shield. The empirically verified fix is to force agent-backed auth
+// via GIT_SSH_COMMAND.
+//
+// Decision order:
+//  1. If the host has a non-empty GIT_SSH_COMMAND, preserve it verbatim
+//     (the user's choice wins; git is not auto-handled, no marker).
+//  2. Else if AGENTJAIL_NO_SSH_OVERRIDE is truthy, inject nothing (opt-out).
+//  3. Else if SSH_AUTH_SOCK is empty or contains a control character
+//     (including newline), inject nothing (fail-closed).
+//  4. Else inject the agentjail override plus the AGENTJAIL_SSH_OVERRIDE=1
+//     marker.
+//
+// The injected value is the exact recipe verified live under the shield
+// against a real pinned-IdentityFile config: "ssh -o IdentitiesOnly=no -o
+// IdentityFile=none -o IdentityAgent=<quoted sock>". Do not simplify this:
+//   - IdentityFile=none alone is insufficient - OpenSSH APPENDS command-line
+//     IdentityFile entries rather than replacing the config-file pin.
+//   - IdentityAgent alone is insufficient too - when the config has
+//     IdentitiesOnly yes, OpenSSH only offers agent keys whose public half
+//     matches a CONFIGURED IdentityFile, so an agent holding a DIFFERENT key
+//     than the pinned one never gets offered (the common real case).
+//   - IdentitiesOnly=no is the decisive option: it lifts that restriction so
+//     the agent's real key is offered. TRADEOFF (see ADR 0056): this offers
+//     ALL agent keys to the server for every shielded git ssh op while the
+//     override is active - not only broken pinned cases - overriding a
+//     deliberate user IdentitiesOnly yes (key-fingerprint exposure, possible
+//     auth with a broader agent-resident key, MaxAuthTries). Accepted because
+//     on-disk key auth is unavailable under the shield anyway; opt out with
+//     AGENTJAIL_NO_SSH_OVERRIDE.
+//
+// AGENTJAIL_SSH_OVERRIDE is deliberately NOT in EnvAllowlistBaseline: a
+// host-supplied value would spoof the marker and must never survive
+// BuildCleanEnv. The marker only ever appears here, appended by the shield
+// after StripEnv has already run.
+func AgentGitSSHEnv(getenv func(string) string) []string {
+	if userCmd := getenv("GIT_SSH_COMMAND"); userCmd != "" {
+		return []string{"GIT_SSH_COMMAND=" + userCmd}
+	}
+
+	if isTruthyEnvFlag(getenv("AGENTJAIL_NO_SSH_OVERRIDE")) {
+		return nil
+	}
+
+	sock := getenv("SSH_AUTH_SOCK")
+	if sock == "" || hasControlChar(sock) {
+		return nil
+	}
+
+	return []string{
+		"GIT_SSH_COMMAND=ssh -o IdentitiesOnly=no -o IdentityFile=none -o IdentityAgent=" + shellSingleQuote(sock),
+		"AGENTJAIL_SSH_OVERRIDE=1",
+	}
+}
+
+// isTruthyEnvFlag reports whether an env var value should be treated as
+// "set" for boolean opt-out flags: non-empty and not "0" or "false"
+// (case-insensitive).
+func isTruthyEnvFlag(v string) bool {
+	if v == "" {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "0", "false":
+		return false
+	default:
+		return true
+	}
+}
+
+// hasControlChar reports whether s contains any ASCII control character
+// (byte < 0x20), including newlines. Used to fail closed on a malformed
+// SSH_AUTH_SOCK value rather than build an unsafe shell command string.
+func hasControlChar(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 {
+			return true
+		}
+	}
+	return false
+}
+
+// shellSingleQuote wraps s in POSIX single quotes, escaping any embedded
+// single quote as '\'' (close quote, escaped literal quote, reopen quote).
+// This makes s safe to embed in a shell command string such as the ssh -o
+// IdentityAgent=<sock> value, even if s contains spaces or shell
+// metacharacters.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // MatchesBlocklist returns true if key matches any pattern in blocklist.
 // Patterns use path.Match glob semantics (case-sensitive).
 func MatchesBlocklist(key string, blocklist []string) bool {

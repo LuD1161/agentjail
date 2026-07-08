@@ -146,7 +146,7 @@ func findNetproxyBinary() (string, error) {
 // *exec.Cmd is non-nil only if WE started the proxy (the caller must reap it on
 // exit); it is nil when we reused an already-running proxy.
 //
-// sessionID and cwd are non-secret, display-only identity (AGE-93; see
+// sessionID and cwd are non-secret, display-only identity (follow-up; see
 // proxyctl.Request.SessionID / Cwd) so a human approving a runtime host grant
 // later (`agentjail grants`) can tell concurrent sessions apart. Neither
 // carries authority -- Token remains the sole data-plane bearer. Callers mint
@@ -274,6 +274,20 @@ func proxyEnvVars(proxyAddr string, tok proxyctl.Token) []string {
 		"HTTP_PROXY=" + proxyURL,
 		"ALL_PROXY=" + proxyURL,
 	}
+}
+
+// sshOverrideInjected reports whether env (the return of
+// sandbox.AgentGitSSHEnv) contains the agentjail marker, i.e. whether the
+// shield actually injected the agent-backed GIT_SSH_COMMAND override (as
+// opposed to preserving a user value or injecting nothing). Shared by both
+// OS exec paths so the INFO line logic never drifts between them.
+func sshOverrideInjected(env []string) bool {
+	for _, kv := range env {
+		if kv == "AGENTJAIL_SSH_OVERRIDE=1" {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanupNetproxy terminates and reaps the netproxy child process to prevent

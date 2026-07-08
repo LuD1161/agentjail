@@ -328,8 +328,22 @@ func checkSSHAgent(home string) []doctorCheck {
 // sshAgentCheck maps a probed sshagent.Status to a doctorCheck. It is a pure
 // function of Status so it can be tested with hand-built values without a
 // real ssh-agent.
+//
+// Ordering matters (Codex-required): PinnedBlindSpot is independent of
+// KeysOnDisk (a pinned deploy key that ListKeyFiles never globs still hits
+// the trap), so it must be evaluated BEFORE the !KeysOnDisk skip - otherwise
+// a deploy-key-only user with no id_* files would be wrongly skipped instead
+// of warned.
 func sshAgentCheck(st sshagent.Status) doctorCheck {
-	if !st.KeysOnDisk {
+	if st.Readiness == sshagent.ReadinessReady && st.PinnedBlindSpot() {
+		return doctorCheck{
+			label:  "ssh-agent",
+			status: "warn",
+			detail: "ssh key is loaded but your ssh config pins an IdentityFile the shield blocks, so ssh reads it first and fails. Fix: " + st.PinnedRemediation(runtime.GOOS) + " (git is auto-handled by the shield unless AGENTJAIL_NO_SSH_OVERRIDE is set)",
+		}
+	}
+
+	if !st.KeysOnDisk && !st.PinnedIdentity() {
 		return doctorCheck{
 			label:  "ssh-agent",
 			status: "skip",
