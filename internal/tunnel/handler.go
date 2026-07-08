@@ -70,6 +70,21 @@ func (g *Gateway) handleConn(c net.Conn) {
 	}
 	log = log.With("hostname", hostname)
 
+	// TLS interception (AGE-149): if MITM is enabled and this is the HTTPS
+	// port, terminate TLS here — decrypt, run policy, log to network.db, and
+	// re-originate upstream — instead of relaying opaque bytes. The handler
+	// reads the ClientHello directly, so this must run BEFORE the peek below.
+	// handleConn's recover() still guards this path (S-F2); a nil handler
+	// (the default) falls through to the plain relay (fail-open).
+	g.mu.Lock()
+	mh := g.mitmHandler
+	g.mu.Unlock()
+	if mh != nil && dstPort == 443 {
+		log.Debug("routing connection through MITM (TLS interception)")
+		mh.Handle(c, hostname, strconv.Itoa(dstPort))
+		return
+	}
+
 	// Step 2: Peek at the first bytes for protocol detection.
 	// We use a peekConn to buffer the peeked bytes so they can be
 	// replayed to the upstream connection.

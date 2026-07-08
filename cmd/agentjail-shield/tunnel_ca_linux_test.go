@@ -13,7 +13,7 @@ import (
 // key must be returned in memory instead. The sandboxed agent shares the host
 // uid and /tmp, so any persisted key would be readable and defeat the MITM.
 func TestWriteTunnelCACert_NoPrivateKeyOnDisk(t *testing.T) {
-	caDir, caKey, certPath, cleanup, err := writeTunnelCACert()
+	caDir, caCert, caKey, certPath, cleanup, err := writeTunnelCACert()
 	if err != nil {
 		t.Fatalf("writeTunnelCACert: %v", err)
 	}
@@ -21,6 +21,9 @@ func TestWriteTunnelCACert_NoPrivateKeyOnDisk(t *testing.T) {
 
 	if caKey == nil {
 		t.Fatal("writeTunnelCACert returned a nil private key; key must be kept in memory")
+	}
+	if caCert == nil {
+		t.Fatal("writeTunnelCACert returned a nil certificate; cert is needed to build the MITM handler")
 	}
 
 	// root.crt must exist.

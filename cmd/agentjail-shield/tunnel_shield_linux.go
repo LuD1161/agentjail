@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/LuD1161/agentjail/internal/dnsvip"
+	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
@@ -17,11 +18,13 @@ import (
 // exec path can run the agent inside the namespace and cleanup can tear it all
 // down in the right order.
 type tunnelSession struct {
-	ns     *netns.Namespace
-	gw     *tunnel.Gateway
-	tun    *os.File
-	dns    *dnsvip.Server
-	cancel context.CancelFunc
+	ns        *netns.Namespace
+	gw        *tunnel.Gateway
+	tun       *os.File
+	dns       *dnsvip.Server
+	store     *mitm.RequestStore // non-nil when TLS interception is enabled
+	caCleanup func()             // removes the temp CA cert dir; nil if no MITM
+	cancel    context.CancelFunc
 }
 
 // startTunnel sets up the unprivileged-userns transparent tunnel (ADR 0049,
@@ -82,13 +85,39 @@ func startTunnel(ctx context.Context) (*tunnelSession, bool) {
 		return nil, false
 	}
 
+	// TLS interception (AGE-149): generate an in-memory CA, inject its public
+	// cert into the agent's trust store, and route :443 through the MITM handler
+	// so HTTPS is decrypted, policy-checked, and logged to network.db. This is
+	// best-effort and fail-open: any failure here leaves a working plain-relay
+	// tunnel rather than aborting.
+	sess := &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}
+	if caDir, caCert, caKey, caCleanup, err := setupTunnelCA(ns); err != nil {
+		logger.Warn("tunnel TLS interception disabled (CA setup failed); relaying HTTPS opaque", "err", err)
+	} else {
+		sess.caCleanup = caCleanup
+		_ = caDir
+		if store, serr := mitm.NewRequestStore(mitm.DefaultDBPath()); serr != nil {
+			logger.Warn("tunnel TLS interception disabled (network.db open failed)", "err", serr)
+		} else {
+			sess.store = store
+			h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
+				if lerr := store.Log(rl); lerr != nil {
+					logger.Debug("network.db log failed", "err", lerr)
+				}
+			})
+			h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
+			gw.SetMITM(h)
+			logger.Info("tunnel TLS interception enabled", "db", mitm.DefaultDBPath())
+		}
+	}
+
 	go func() {
 		if err := gw.ListenAndServe(tunnelCtx); err != nil && tunnelCtx.Err() == nil {
 			logger.Error("tunnel gateway error", "err", err)
 		}
 	}()
 
-	return &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}, true
+	return sess, true
 }
 
 // cleanup tears the tunnel down. Order matters: stop the gateway/pump first (it
@@ -109,6 +138,12 @@ func (s *tunnelSession) cleanup() {
 	}
 	if s.tun != nil {
 		_ = s.tun.Close()
+	}
+	if s.store != nil {
+		_ = s.store.Close()
+	}
+	if s.caCleanup != nil {
+		s.caCleanup() // remove the temp CA cert dir (key was never on disk)
 	}
 	if s.ns != nil {
 		_ = s.ns.Close() // SIGKILL the holder -> namespaces torn down

@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/LuD1161/agentjail/internal/dnsvip"
+	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/netpolicy"
 )
 
@@ -27,6 +28,11 @@ type Gateway struct {
 	cfg      Config
 	registry *dnsvip.Registry
 	matcher  *netpolicy.Matcher
+
+	// mitmHandler, when non-nil, enables TLS termination on the forward path:
+	// handleConn routes :443 through it (decrypt, policy, log to network.db,
+	// re-originate upstream) instead of a plain byte relay. See SetMITM.
+	mitmHandler *mitm.MITMHandler
 
 	tnet      *netstack.Net
 	dev       *device.Device
@@ -198,6 +204,22 @@ func NewForwardGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logge
 	g.fwd = fs
 
 	return g, nil
+}
+
+// Matcher returns the gateway's policy matcher (loaded from cfg.PacksDir), or
+// nil if none was configured. Callers wire it into the MITM handler so decrypted
+// HTTPS is evaluated against the same templates.
+func (g *Gateway) Matcher() *netpolicy.Matcher { return g.matcher }
+
+// SetMITM enables TLS interception on the transparent forward path. When set,
+// handleConn routes :443 connections through the MITM handler (TLS terminate +
+// policy + logging to network.db) instead of a plain relay. Leaving it nil (the
+// default) keeps the plain relay — fail-open. The same in-memory CA the handler
+// signs leaf certs with must be injected into the agent's trust store.
+func (g *Gateway) SetMITM(h *mitm.MITMHandler) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.mitmHandler = h
 }
 
 // ListenAndServe starts accepting TCP connections on the tunnel interface.
