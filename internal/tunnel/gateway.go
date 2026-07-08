@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -38,6 +39,13 @@ type Gateway struct {
 	// via tnet.ListenTCP. This is the S-F1 fix — the stack accepts SYNs to
 	// arbitrary VIP destinations. See forwarder.go.
 	fwd *forwardStack
+
+	// pump, when set, is the fd<->forwarder packet pump started by AttachTUN
+	// (Linux only). It is typed as io.Closer rather than *fdPump so this
+	// cross-platform struct compiles on non-Linux targets, where fdPump does
+	// not exist; the concrete *fdPump is only referenced in attach_linux.go.
+	// Guarded by mu. Close/detachTUN stops it.
+	pump io.Closer
 
 	mu       sync.Mutex
 	closed   bool
@@ -276,6 +284,14 @@ func (g *Gateway) Close() error {
 	}
 	g.closed = true
 
+	// Stop the fd<->forwarder pump (if AttachTUN started one) before tearing
+	// down the stack it feeds. fdPump.Close never closes the caller's fd; it
+	// only stops the pump goroutines. Nil it out so Close stays idempotent and
+	// never double-closes.
+	if g.pump != nil {
+		g.pump.Close()
+		g.pump = nil
+	}
 	if g.listener != nil {
 		g.listener.Close()
 	}
