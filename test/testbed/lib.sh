@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib.sh — shared helpers for testbed.sh (follow-up).
+# lib.sh — shared helpers for testbed.sh.
 # Sourced, not executed.
 
 set -euo pipefail
@@ -9,7 +9,7 @@ TESTBED_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTBED_DIR/../.." && pwd)"
 
 # Linux testbeds keep VM disks on the big data disk, not the root partition.
-if [ "$(uname -s)" = "Linux" ] && [ -d /DATA ]; then
+if [ "$(uname -s)" = "Linux" ] && [ -d "$HOME/.local/share" ]; then
     export LIMA_HOME="${LIMA_HOME:-$HOME/.local/share/lima}"
 fi
 
@@ -17,7 +17,7 @@ die() { echo "testbed: $*" >&2; exit 1; }
 log() { echo "==> $*" >&2; }
 
 # Driver is chosen by host OS: Lima/QEMU on Linux (a Linux host),
-# Tart on macOS (the laptop). Override with TESTBED_DRIVER for testing.
+# Tart on macOS (the Mac). Override with TESTBED_DRIVER for testing.
 detect_driver() {
     if [ -n "${TESTBED_DRIVER:-}" ]; then echo "$TESTBED_DRIVER"; return; fi
     case "$(uname -s)" in

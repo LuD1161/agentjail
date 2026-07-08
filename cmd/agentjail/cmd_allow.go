@@ -10,7 +10,7 @@
 // the daemon's agent-reachable socket (daemon.sock, see internal/wire).
 // Filing a request grants nothing -- a human must approve it out-of-band
 // with `agentjail grant approve` from a trusted terminal. See docs/adr/0044
-// (Phase 3 runtime host grants) and AGE-116 (daemon-hosted grant control
+// (Phase 3 runtime host grants) and docs/adr/0047 (daemon-hosted grant control
 // plane).
 package main
 

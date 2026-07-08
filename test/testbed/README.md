@@ -1,4 +1,4 @@
-# agentjail testbeds — clean-VM sandboxes (follow-up)
+# agentjail testbeds — clean-VM sandboxes
 
 Persistent, named VMs that behave like a **real end-user machine**: full
 kernel, systemd/launchd, no Go toolchain, no host mounts. Each worktree gets
@@ -14,8 +14,8 @@ is installed via npm, like a human would.
 
 | Side | Host | Driver | Status |
 |---|---|---|---|
-| **Linux** | **a Linux host** (this box) | Lima/QEMU, `LIMA_HOME=$HOME/.local/share/lima` | ✅ **DONE — set up and validated end-to-end on a Linux host. Do not redo.** |
-| **macOS** | an Apple-Silicon Mac | Tart | ⬜ TODO — **this is the only part the Mac-side agent needs to do** (see "Mac side" below) |
+| **Linux** | a Linux host | Lima/QEMU, `LIMA_HOME=$HOME/.local/share/lima` | ✅ **DONE — set up and validated end-to-end on the Linux host. Do not redo.** |
+| **macOS** | your Apple-Silicon Mac | Tart | ⬜ TODO — **this is the only part the Mac-side agent needs to do** (see "Mac side" below) |
 
 ## Quick reference (both OSes)
 
@@ -57,11 +57,11 @@ and never committed.
 
 ---
 
-## Linux side (a Linux host) — DONE, for reference only
+## Linux side (Linux host) — DONE, for reference only
 
-Installed on the server: QEMU (apt `qemu-system-x86 qemu-utils`), Lima v2.1.4
+Installed on the host: QEMU (apt `qemu-system-x86 qemu-utils`), Lima v2.1.4
 (static tarball → `/usr/local`), user in `kvm` group, `LIMA_HOME=$HOME/.local/share/lima`
-(root disk is small; VM disks live on `/DATA`). Template:
+(root disk is small; VM disks live under the same data volume). Template:
 `lima-template.yaml` — Ubuntu 24.04 cloud image, 4 CPU / 4 GiB / 20 GiB,
 `mounts: []` for isolation, cloud-init installs node/git/tmux/sqlite3 and
 enables `loginctl enable-linger` so `systemd --user` (the agentjail daemon)
@@ -98,9 +98,9 @@ Two important lessons baked into the scenario:
 ## Mac side — WHAT THE MAC AGENT NEEDS TO DO
 
 > Context for the agent working on the Mac: the Linux half already runs on the
-> a Linux host. **Only do the macOS/Tart work below.** The shared scripts
+> Linux host. **Only do the macOS/Tart work below.** The shared scripts
 > (`testbed.sh`, `lib.sh`, `guest-provision.sh`) already contain a Tart driver,
-> written blind on the Linux server — your job is to bake the golden image,
+> written blind on the Linux host — your job is to bake the golden image,
 > then validate/fix that driver on real hardware.
 
 ### 1. Install Tart
@@ -171,24 +171,24 @@ Known things to verify / likely fixes (commit them when done):
 ### 4. Done when
 
 `create → provision → ssh → agentjail status → claude` works on a fresh clone,
-same as the Linux flow above. Commit fixes to this directory on the
-`security/2026-07-07-review-fixes` branch (signed, `git commit -s`, identity
-`You <you@example.com>`), then push to `origin`.
+same as the Linux flow above. Commit fixes to this directory on your working
+branch, signed off (`git commit -s`; sign off with your own Git identity),
+then push to your remote.
 
 ### Pulling this on the Mac
 
-The Linux work is on `origin` (branch `security/2026-07-07-review-fixes`).
-On the laptop the same bare repo is named `origin` (not `origin`):
+The Linux work lives on your remote, on your working branch. On the Mac,
+fetch and check out the same branch from your remote (e.g. `origin`):
 
 ```sh
 cd ~/Repos/AgentJail-Repos/agentjail   # the local-dev working copy
 git fetch origin
-git checkout security/2026-07-07-review-fixes
-git pull origin security/2026-07-07-review-fixes
+git checkout <your-branch>
+git pull origin <your-branch>
 ```
 
 Then follow "Mac side" steps 1–4 above. **You only need to do the Tart /
-macOS work** — Linux is already done and validated on a Linux host; do not
+macOS work** — Linux is already done and validated on the Linux host; do not
 re-run or re-implement the Lima side.
 
 ---
@@ -205,8 +205,8 @@ It resets a `release-gate` testbed to the clean golden (or creates it the first
 time — that run is slow, ~5–8 min for cloud-init + node; later runs reset in
 seconds), provisions the current worktree through the real installer, runs the
 `e2e-smoke` scenario, and **exits non-zero on any failure** so it can gate the
-tag. Wired into the pre-release checklist in `AGENTS.md`. Run it on the home
-server for the Linux build and on the Mac for the macOS build.
+tag. Wired into the pre-release checklist in `AGENTS.md`. Run it on the Linux
+host for the Linux build and on the Mac for the macOS build.
 
 CI note: this is deliberately a **local** gate, not a GitHub Actions job —
 Linux needs KVM and macOS needs a self-hosted Tart host, and the release is cut
@@ -223,5 +223,5 @@ wire in.
 - **Why VMs, not containers:** the shield tier needs a real kernel
   (Landlock/seccomp on Linux, Seatbelt on macOS) and a real service manager.
 - Stage 3 (scripted scenarios in `scenarios/`) and Stage 4 (nightly timers +
-  Planka report) are tracked in Linear follow-up — see the "Lean rollout plan"
-  comment there.
+  report) are tracked in the project's tracking issue — see the "Lean rollout
+  plan" comment there.

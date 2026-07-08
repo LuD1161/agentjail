@@ -34,7 +34,7 @@ const (
 	// expiry regardless of traffic. Never put the session Token in Detail.
 	NetproxySessionRegistered = "netproxy.session_registered"
 	NetproxySessionExpired    = "netproxy.session_expired"
-	// Runtime host grants (`/agentjail allow`, follow-up). Requested is
+	// Runtime host grants (`/agentjail allow`). Requested is
 	// best-effort (filed by the agent-reachable data-plane sentinel);
 	// Approved/Denied are the human, control-socket decisions -- Approved is
 	// fail-closed (never emitted through a NopEmitter, see ADR 0044); Expired
@@ -43,7 +43,7 @@ const (
 	NetproxyGrantApproved  = "netproxy.grant_approved"
 	NetproxyGrantDenied    = "netproxy.grant_denied"
 	NetproxyGrantExpired   = "netproxy.grant_expired"
-	// Daemon-hosted runtime host grants (follow-up, ADR 0047). Requested is
+	// Daemon-hosted runtime host grants (see ADR 0047). Requested is
 	// best-effort; Denied is best-effort. Approval uses PolicyChangeRequested
 	// (fail-closed) and PolicyChanged (best-effort) instead of a separate event.
 	DaemonGrantRequested = "daemon.grant_requested"

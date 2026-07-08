@@ -1102,7 +1102,7 @@ func TestToOPADataAWSEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// MCPServerConfig.BlockedTools / AskTools (follow-up)
+// MCPServerConfig.BlockedTools / AskTools
 // ---------------------------------------------------------------------------
 
 // TestLoadMCPServerBlockedAndAskTools verifies that blocked_tools and ask_tools

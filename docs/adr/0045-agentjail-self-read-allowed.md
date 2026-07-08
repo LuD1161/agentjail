@@ -49,14 +49,14 @@ core self-protection architecture; the write half is unchanged.
   allowed/blocked, not how to bypass it, and it holds no bearer secret (tokens
   are memory-only, ADR 0044).
 - A cleaner in-session path (render config via a trusted process, request changes
-  via approve/deny) is tracked separately in AGE-105 (`/agentjail get|update`).
+  via approve/deny) is tracked separately as a follow-up (`/agentjail get|update`).
   That remains the preferred long-term UX; this ADR is the pragmatic unblock.
 - Tests: `file_policy_test.rego` asserts a Read resolves to
   `file_policy/agentjail_self_read` (allow) while Write/Edit resolve to
   `file_policy/agentjail_self` (deny). The embedded mirror
   (`cmd/agentjail/policies/file_policy.rego`) is kept in parity.
 
-See also: [ADR 0044] (runtime host grants, token-in-memory invariant), AGE-105
-(trusted in-session config read/update).
+See also: [ADR 0044] (runtime host grants, token-in-memory invariant) and the
+trusted in-session config read/update follow-up.
 
 [ADR 0044]: ./0044-runtime-host-grants.md

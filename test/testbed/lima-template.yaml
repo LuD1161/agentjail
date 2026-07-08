@@ -1,4 +1,4 @@
-# Lima template for agentjail Linux testbeds (follow-up).
+# Lima template for agentjail Linux testbeds.
 #
 # A testbed is a clean Ubuntu VM that behaves like a real end-user Linux box:
 # full kernel (Landlock, seccomp), systemd --user, no Go toolchain, no host

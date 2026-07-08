@@ -1,6 +1,6 @@
 package main
 
-// grant_test.go exercises the runtime host grant flow end-to-end (AGE-93):
+// grant_test.go exercises the runtime host grant flow end-to-end:
 // the data-plane sentinel (main.go: isGrantSentinel/handleGrantSentinel)
 // files a pending request, and the control-plane verbs (control.go:
 // grant_list/grant_approve/grant_deny) let a human decide it. Both planes

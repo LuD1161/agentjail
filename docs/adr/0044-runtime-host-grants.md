@@ -1,4 +1,4 @@
-# 0044 - Runtime host grants (`agentjail allow`), AGE-93
+# 0044 - Runtime host grants (`agentjail allow`)
 
 Status: Accepted
 
@@ -143,11 +143,9 @@ Known limitations / follow-ups:
   verbs later.
 - **Non-HTTP protocols are unaffected and still blocked.** This grant layer is
   HTTP CONNECT only, same as the rest of netproxy today. Postgres/Redis/SSH
-  remain blocked by the OS sandbox until AGE-81 (SOCKS5, then the WireGuard
-  gateway), which is transport-agnostic to this control/policy layer and will
-  carry the request/approve model forward unchanged.
-
-This is AGE-93.
+  remain blocked by the OS sandbox until the SOCKS5 and WireGuard gateway
+  follow-up lands, which is transport-agnostic to this control/policy layer and
+  will carry the request/approve model forward unchanged.
 
 **Note:** [ADR 0047] moved the grant control plane from netproxy to the
 always-running daemon so grants work without `--netproxy`. The request/approve
@@ -156,7 +154,7 @@ the daemon adds peer-PID session binding and transactional persist-on-approve.
 
 See also: [ADR 0042] (session-aware netproxy control plane), [ADR 0043]
 (per-folder policy overlay trust gate), [ADR 0047] (daemon grant server),
-AGE-81 (WireGuard gateway), AGE-93 (this feature).
+and the WireGuard gateway follow-up.
 
 [ADR 0042]: ./0042-session-aware-netproxy-control-plane.md
 [ADR 0043]: ./0043-per-folder-policy-overlay-trust-gate.md

@@ -146,7 +146,7 @@ func findNetproxyBinary() (string, error) {
 // *exec.Cmd is non-nil only if WE started the proxy (the caller must reap it on
 // exit); it is nil when we reused an already-running proxy.
 //
-// sessionID and cwd are non-secret, display-only identity (follow-up; see
+// sessionID and cwd are non-secret, display-only identity (see
 // proxyctl.Request.SessionID / Cwd) so a human approving a runtime host grant
 // later (`agentjail grants`) can tell concurrent sessions apart. Neither
 // carries authority -- Token remains the sole data-plane bearer. Callers mint

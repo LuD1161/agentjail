@@ -90,12 +90,11 @@ the hook's one-shot advisory for the UX that nudges a user toward loading
 the key into the agent (`ssh-add --apple-use-keychain <key>` on macOS)
 instead of ever suggesting a key-file read hole.
 
-**Contrast with a comparable macOS Seatbelt sandbox.** [a comparable macOS Seatbelt sandbox](https://github.com/a comparable macOS Seatbelt sandbox) is a
-comparable macOS Seatbelt sandbox, but it takes the opposite base
-posture: deny-default, requiring an explicit `(allow system-socket
-(socket-domain AF_UNIX))` just to permit any unix socket at all. For the
-"ssh key not loaded in the agent" case, a comparable macOS Seatbelt sandbox's guidance misdirects the
-user toward granting the key FILE. agentjail's shield stays allow-default
+**Contrast with another sandbox implementation.** A comparable macOS Seatbelt
+sandbox takes the opposite base posture: deny-default, requiring an explicit
+`(allow system-socket (socket-domain AF_UNIX))` just to permit any unix
+socket at all. For the "ssh key not loaded in the agent" case, that
+guidance misdirects the user toward granting the key FILE. agentjail's shield stays allow-default
 at the base layer and deliberately never widens credential-file reads --
 the UX always points at loading the key into ssh-agent instead.
 

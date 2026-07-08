@@ -91,7 +91,7 @@ type server struct {
 	// activeSessions tracks which session IDs have open connections.
 	activeSessions *activeTracker
 
-	// grantSrv handles runtime host grant requests (follow-up). Nil-safe.
+	// grantSrv handles runtime host grant requests. Nil-safe.
 	grantSrv *grantServer
 
 	// connSem bounds the number of concurrent agent-socket connections
@@ -318,7 +318,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		// Route grant_request to the grant server (follow-up).
+		// Route grant_request to the grant server.
 		if s.grantSrv != nil {
 			var probe struct {
 				Type string `json:"type"`
@@ -881,7 +881,7 @@ func main() {
 	hookWatchdog := hookwatch.New(logger, hwEmitter)
 	go hookWatchdog.Run(ctx)
 
-	// Start grant control server on daemon-ctl.sock (follow-up, ADR 0047).
+	// Start grant control server on daemon-ctl.sock (see ADR 0047).
 	{
 		ctlSockPath := grantctl.ControlSocketPath()
 		durableAudit := srv.eventStore != nil

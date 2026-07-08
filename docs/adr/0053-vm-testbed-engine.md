@@ -36,7 +36,7 @@ like a real end-user machine:
 - **Shell scripts, not a framework:** `testbed.sh` verbs
   (create/provision/ssh/test/gate/snapshot/reset/destroy) with a per-driver
   split (lima|tart) selected by host OS. Promotion to Go/YAML/CI is deferred
-  until the shell version demonstrably hurts (see Linear follow-up).
+  until the shell version demonstrably hurts (see the tracking issue).
 - **Trigger is the release, not a timer.** `make e2e-release` (`testbed.sh
   gate`) is a local pre-tag gate: clean VM → real installer → policy
   enforcement, non-zero exit blocks the tag. A nightly timer was explicitly
@@ -50,11 +50,11 @@ like a real end-user machine:
 - Parallel worktrees each get their own testbed; the host install is never
   touched by feature testing.
 - Release confidence: the exact `curl | sh` user flow is exercised on a clean
-  box before tagging (manual at first, automated in follow-up stages 3–4).
+  box before tagging (manual at first, automated in later rollout stages).
 - Two real-world regressions were caught in the first provision run: Claude
   Code's node >= 22 requirement (template now uses NodeSource 22) and the
   main-branch build lacking Linux daemon support.
-- Cost: ~600 MB cached Ubuntu image + ~3 GB per Linux testbed on `/DATA`;
+- Cost: ~600 MB cached Ubuntu image + ~3 GB per Linux testbed on the host's data volume;
   ~20–25 GB one-time golden on the Mac (APFS clones are copy-on-write).
 - The Tart driver is written but unvalidated until the Mac-side pass
   (`test/testbed/README.md` § "Mac side").

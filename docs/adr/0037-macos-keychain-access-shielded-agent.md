@@ -60,7 +60,7 @@ The **hardened opt-out** (denying both the file path *and* the four keychain
 Mach services -- `com.apple.SecurityServer`, `com.apple.securityd`,
 `com.apple.security.keychaind`, `com.apple.secd` -- plus
 `com.apple.security.agent`) is deferred to a follow-up. Tracked as
-[AGE-94](https://linear.app/agentjail/issue/AGE-94) in Linear.
+a follow-up issue.
 
 The system keychains (`/System/Library/Keychains`, `/Library/Keychains` --
 no home prefix) are untouched by this change: they were already read-allowed
@@ -114,7 +114,7 @@ we define.
   for the host process.
 
 **Follow-ups:**
-1. [AGE-94] Hardened opt-out flag that denies both the keychain file path and
+1. Hardened opt-out flag that denies both the keychain file path and
    the four keychain-related Mach services plus `com.apple.security.agent`,
    for users who don't need Claude Code's keychain-based auth (e.g. API-key-
    only setups).

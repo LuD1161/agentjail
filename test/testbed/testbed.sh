@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# testbed.sh — persistent clean-VM sandboxes for agentjail (follow-up, Stage 1+2).
+# testbed.sh — persistent clean-VM sandboxes for agentjail (Stage 1+2).
 #
 # A testbed is a named VM that behaves like a real end-user machine. One
 # testbed per worktree/feature: install that build, run Claude Code against
@@ -20,7 +20,7 @@
 #   testbed.sh reset <name> [tag]         revert to golden (or named) snapshot
 #   testbed.sh destroy <name>             delete the VM
 #
-# Drivers: Lima/QEMU on Linux (a Linux host), Tart on macOS (laptop).
+# Drivers: Lima/QEMU on Linux (a Linux host), Tart on macOS (the Mac).
 # Credential seeding: put a token from `claude setup-token` into
 #   ~/.agentjail-testbed/token   (chmod 600)
 # and provision will export CLAUDE_CODE_OAUTH_TOKEN inside the guest.
