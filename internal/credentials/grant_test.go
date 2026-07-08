@@ -160,6 +160,63 @@ func TestNewGrantID(t *testing.T) {
 	}
 }
 
+func TestGrantManager_StartCleanup(t *testing.T) {
+	gm := NewGrantManager()
+
+	revoked := make(chan struct{})
+	g := &Grant{
+		SecretName: "expiring",
+		Backend:    "redis",
+		ExpiresAt:  time.Now().Add(20 * time.Millisecond),
+		EnvVars:    map[string]string{},
+	}
+	g.SetRevokeFn(func() error {
+		close(revoked)
+		return nil
+	})
+	gm.Register(g)
+
+	stop := gm.StartCleanup(10 * time.Millisecond)
+	defer stop()
+
+	select {
+	case <-revoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expired grant was not revoked by the cleanup ticker in time")
+	}
+
+	if gm.Active() != 0 {
+		t.Fatalf("expected 0 active grants after cleanup, got %d", gm.Active())
+	}
+}
+
+func TestGrantManager_StartCleanup_StopIsIdempotent(t *testing.T) {
+	gm := NewGrantManager()
+	stop := gm.StartCleanup(5 * time.Millisecond)
+	stop()
+	stop() // must not panic
+}
+
+func TestClampTTL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"under cap passes through", 30 * time.Minute, 30 * time.Minute},
+		{"at cap passes through", MaxGrantTTL, MaxGrantTTL},
+		{"over cap is clamped", 2 * time.Hour, MaxGrantTTL},
+		{"far over cap is clamped", 30 * 24 * time.Hour, MaxGrantTTL},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClampTTL(tc.in); got != tc.want {
+				t.Errorf("ClampTTL(%v) = %v; want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGrantManager_NilRevokeFn(t *testing.T) {
 	gm := NewGrantManager()
 	g := &Grant{

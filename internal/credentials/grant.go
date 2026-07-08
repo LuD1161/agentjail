@@ -29,6 +29,29 @@ func (g *Grant) SetRevokeFn(fn func() error) {
 	g.revokeFn = fn
 }
 
+// MaxGrantTTL is the hard ceiling on any grant's TTL, enforced uniformly
+// across all backends. AWS STS already enforces its own 15m-12h window
+// server-side; PG roles get a DB-enforced VALID UNTIL. But Redis ACL users
+// and "raw" secrets have no backend-native expiry -- their only expiry is
+// this process remembering to call CleanupExpired before the ticket runs
+// out -- so a generous client-supplied TTL would leave a live credential
+// around indefinitely if the daemon never restarts. Clamping every grant to
+// this ceiling bounds the blast radius regardless of backend.
+const MaxGrantTTL = 1 * time.Hour
+
+// DefaultCleanupInterval is how often StartCleanup checks for expired
+// grants when no other interval is specified.
+const DefaultCleanupInterval = 30 * time.Second
+
+// ClampTTL caps ttl at MaxGrantTTL. Requests under the ceiling pass through
+// unchanged.
+func ClampTTL(ttl time.Duration) time.Duration {
+	if ttl > MaxGrantTTL {
+		return MaxGrantTTL
+	}
+	return ttl
+}
+
 // GrantManager tracks active grants and handles revocation.
 // It is safe for concurrent use.
 type GrantManager struct {
@@ -143,5 +166,32 @@ func (gm *GrantManager) CleanupExpired() {
 
 	for _, id := range expired {
 		_ = gm.Revoke(id)
+	}
+}
+
+// StartCleanup starts a background goroutine that calls CleanupExpired
+// every interval, so that backends with no native TTL (e.g. Redis ACL
+// users) don't stay valid for the daemon's entire lifetime. It returns a
+// stop function that terminates the goroutine; callers must invoke it on
+// shutdown (or defer it). stop is safe to call more than once.
+func (gm *GrantManager) StartCleanup(interval time.Duration) (stop func()) {
+	ticker := time.NewTicker(interval)
+	done := make(chan struct{})
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				gm.CleanupExpired()
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() { close(done) })
 	}
 }
