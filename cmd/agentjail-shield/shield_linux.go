@@ -165,22 +165,22 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		fmt.Fprintln(os.Stderr, "  \033[38;5;208magentjail\033[0m — setting up sandbox...")
 	}
 
-	// Tunnel mode: try to start the WireGuard gateway. If it succeeds,
-	// skip netproxy entirely. If it fails, fall back to netproxy.
+	// Tunnel mode: try to start the unprivileged-userns transparent tunnel
+	// (ADR 0049). On success the agent runs inside the namespace and its
+	// traffic is intercepted by the userspace forwarder, so netproxy is
+	// skipped. On ANY failure we fall back to netproxy (fail-open).
+	var tunnelSess *tunnelSession
 	if tunnelMode {
-		tunnelSessionID := generateSessionID()
-		gw, cancel, ready := startTunnel(ctx, tunnelSessionID)
-		if ready {
+		if s, ready := startTunnel(ctx); ready {
+			tunnelSess = s
 			noNetproxy = true
-			defer cleanupTunnel(gw, cancel, tunnelSessionID)
+			defer tunnelSess.cleanup()
 			if noColor {
-				fmt.Fprintln(os.Stderr, "  ✓ WireGuard tunnel gateway started")
+				fmt.Fprintln(os.Stderr, "  ✓ transparent tunnel active (userns)")
 			} else {
-				fmt.Fprintln(os.Stderr, "  \033[32m✓\033[0m WireGuard tunnel gateway started")
+				fmt.Fprintln(os.Stderr, "  \033[32m✓\033[0m transparent tunnel active (userns)")
 			}
 		} else {
-			_ = gw
-			_ = cancel
 			fmt.Fprintln(os.Stderr, "  ⚠ tunnel not available, falling back to netproxy")
 		}
 	}
@@ -324,7 +324,18 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	//
 	// Landlock restrictions are inherited by the agent child because
 	// Landlock applies to the process and all fork/exec descendants.
-	agentCmd := exec.Command(agentPath, agentArgs...)
+	//
+	// When the transparent tunnel is active, the agent must run INSIDE the
+	// network namespace so its traffic hits the TUN/forwarder. AgentCommand
+	// runs it via nsenter + a hardening shim (cap-drop + secbits) so the
+	// uid-0-in-userns agent cannot regain privileges. Landlock — applied above,
+	// before this fork — is inherited across nsenter, the shim, and the agent.
+	var agentCmd *exec.Cmd
+	if tunnelSess != nil {
+		agentCmd = tunnelSess.ns.AgentCommand(agentPath, agentArgs)
+	} else {
+		agentCmd = exec.Command(agentPath, agentArgs...)
+	}
 	agentCmd.Env = env
 	agentCmd.Stdin = os.Stdin
 	agentCmd.Stdout = os.Stdout

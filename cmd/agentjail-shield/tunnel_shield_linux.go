@@ -4,107 +4,113 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/LuD1161/agentjail/internal/dnsvip"
+	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
 
-func daemonSocketPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "/tmp/agentjail-daemon.sock"
-	}
-	return filepath.Join(home, ".agentjail", "daemon-ns.sock")
+// tunnelSession bundles one shield's live transparent-tunnel objects so the
+// exec path can run the agent inside the namespace and cleanup can tear it all
+// down in the right order.
+type tunnelSession struct {
+	ns     *netns.Namespace
+	gw     *tunnel.Gateway
+	tun    *os.File
+	dns    *dnsvip.Server
+	cancel context.CancelFunc
 }
 
-func generateSessionID() string {
-	var buf [8]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return fmt.Sprintf("shield-%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(buf[:])
-}
-
-func startTunnel(ctx context.Context, sessionID string) (gw *tunnel.Gateway, cancel context.CancelFunc, ready bool) {
+// startTunnel sets up the unprivileged-userns transparent tunnel (ADR 0049,
+// AGE-148): an isolated user+network namespace whose only route is a TUN
+// device, with the agent's traffic pumped into a userspace forwarder. No host
+// CAP_NET_ADMIN, no privileged daemon, no install password — the privileged
+// network operation happens only inside namespaces this process created and
+// owns.
+//
+// It is strictly fail-open: ANY failure returns (nil, false) and the caller
+// falls back to netproxy. A broken or unavailable tunnel must never choke the
+// agent's network (a hard constraint of this feature).
+//
+// NOTE (remaining integration gap): the forwarder intercepts TCP to any
+// destination, but DNS-VIP resolution over the TUN (UDP) is not yet wired, so
+// name resolution inside the namespace does not work end-to-end. --tunnel is
+// therefore opt-in and experimental until the DNS-VIP/UDP slice lands. The
+// registry is still passed to the gateway so per-VIP policy can attach once DNS
+// is wired. See docs/reviews/2026-07-08-network-visibility-review.md (W1).
+func startTunnel(ctx context.Context) (*tunnelSession, bool) {
 	logger := slog.Default()
-	sockPath := daemonSocketPath()
 
-	privKey, _, err := tunnel.GenerateKeyPair()
+	// Create the owned user+net+mount namespaces and the in-namespace TUN,
+	// receiving the open TUN fd back over SCM_RIGHTS.
+	ns, tun, err := netns.CreateWithTUN(netns.TUNIfName, netns.TUNAddrCIDR)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"agentjail-shield WARNING: tunnel key generation failed: %v\n"+
+			"agentjail-shield: transparent tunnel unavailable (%v)\n"+
 				"  Falling back to netproxy mode.\n", err)
-		return nil, nil, false
-	}
-
-	nsResp, err := requestNamespace(sockPath, sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"agentjail-shield WARNING: could not request namespace from daemon: %v\n"+
-				"  Is agentjail-daemon running? Falling back to netproxy mode.\n", err)
-		return nil, nil, false
-	}
-
-	_, agentPubKey, err := tunnel.GenerateKeyPair()
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"agentjail-shield WARNING: tunnel agent key generation failed: %v\n"+
-				"  Falling back to netproxy mode.\n", err)
-		_ = destroyNamespace(sockPath, sessionID)
-		return nil, nil, false
-	}
-	_ = nsResp
-
-	cfg := tunnel.Config{
-		PrivateKey:    privKey,
-		ListenPort:    51820,
-		PeerPublicKey: agentPubKey,
-		TunnelAddr:    "10.78.0.1/16",
+		return nil, false
 	}
 
 	registry := dnsvip.NewRegistry()
-	dnsServer := dnsvip.NewServer("10.78.0.1:53", registry)
+	tunnelCtx, cancel := context.WithCancel(ctx)
 
-	tunnelCtx, tunnelCancelFn := context.WithCancel(ctx)
-	go func() {
-		if err := dnsServer.ListenAndServe(tunnelCtx); err != nil && tunnelCtx.Err() == nil {
-			logger.Error("DNS-VIP server error", "err", err)
-		}
-	}()
-
-	gateway, err := tunnel.NewGateway(cfg, registry, logger)
+	// Forward gateway: a userspace gVisor stack that accepts a SYN to any
+	// destination the agent dials (the S-F1 transparent-forwarder fix).
+	gw, err := tunnel.NewForwardGateway(tunnel.Config{MTU: netns.TUNMTU}, registry, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"agentjail-shield WARNING: could not create tunnel gateway: %v\n"+
+			"agentjail-shield: could not create tunnel gateway (%v)\n"+
 				"  Falling back to netproxy mode.\n", err)
-		tunnelCancelFn()
-		_ = dnsServer.Close()
-		_ = destroyNamespace(sockPath, sessionID)
-		return nil, nil, false
+		cancel()
+		_ = tun.Close()
+		_ = ns.Close()
+		return nil, false
+	}
+
+	// Pump raw IP packets between the netns TUN fd and the forwarder.
+	if err := gw.AttachTUN(tunnelCtx, tun); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"agentjail-shield: could not attach TUN to gateway (%v)\n"+
+				"  Falling back to netproxy mode.\n", err)
+		cancel()
+		_ = gw.Close()
+		_ = tun.Close()
+		_ = ns.Close()
+		return nil, false
 	}
 
 	go func() {
-		if err := gateway.ListenAndServe(tunnelCtx); err != nil && tunnelCtx.Err() == nil {
+		if err := gw.ListenAndServe(tunnelCtx); err != nil && tunnelCtx.Err() == nil {
 			logger.Error("tunnel gateway error", "err", err)
 		}
 	}()
 
-	return gateway, tunnelCancelFn, true
+	return &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}, true
 }
 
-func cleanupTunnel(gw *tunnel.Gateway, cancel context.CancelFunc, sessionID string) {
-	if cancel != nil {
-		cancel()
+// cleanup tears the tunnel down. Order matters: stop the gateway/pump first (it
+// holds the TUN fd), then close the fd, then SIGKILL the namespace holder so the
+// kernel reclaims the namespaces. Safe on a nil receiver.
+func (s *tunnelSession) cleanup() {
+	if s == nil {
+		return
 	}
-	if gw != nil {
-		_ = gw.Close()
+	if s.cancel != nil {
+		s.cancel()
 	}
-	_ = destroyNamespace(daemonSocketPath(), sessionID)
+	if s.gw != nil {
+		_ = s.gw.Close() // also stops the fd pump (Gateway.pump)
+	}
+	if s.dns != nil {
+		_ = s.dns.Close()
+	}
+	if s.tun != nil {
+		_ = s.tun.Close()
+	}
+	if s.ns != nil {
+		_ = s.ns.Close() // SIGKILL the holder -> namespaces torn down
+	}
 }

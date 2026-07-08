@@ -14,10 +14,12 @@
 // (sysctl kernel.unprivileged_userns_clone=1, the default on most distros).
 // No root or CAP_NET_ADMIN is required for namespace creation itself.
 //
-// However, veth pair creation (SetupVeth) requires CAP_NET_ADMIN in the
-// *initial* (host) network namespace -- unprivileged user namespaces only
-// grant capabilities inside the new namespace, not in the host namespace.
-// See SetupVeth documentation for the privilege escalation strategy.
+// The network path into the namespace is a TUN device created *inside* the
+// netns by the namespace owner, who holds CAP_NET_ADMIN there — see
+// tunsetup_linux.go (CreateWithTUN). The open TUN fd is handed to the userspace
+// gateway over SCM_RIGHTS, so no host CAP_NET_ADMIN and no privileged daemon are
+// needed. This replaced the earlier host-veth + privileged-daemon design; see
+// ADR 0049.
 package netns
 
 import (

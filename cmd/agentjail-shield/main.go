@@ -38,6 +38,7 @@ import (
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/envaudit"
+	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -51,6 +52,11 @@ func defaultPolicyPath() string {
 }
 
 func main() {
+	// If this process was re-exec'd as a transparent-tunnel namespace holder or
+	// a hardened-exec shim (AGE-148, see internal/netns), run that role and
+	// exit/exec before any normal flag parsing. No-op in the normal case.
+	netns.MaybeRunReexec()
+
 	policyPath := flag.String("policy", defaultPolicyPath(), "path to ~/.agentjail/policy.yaml")
 	profilePrint := flag.Bool("profile-print", false, "print the sandbox profile to stderr and exit without running the agent")
 	// Egress enforcement (agentjail-netproxy) is OPT-IN and OFF by default:

@@ -27,8 +27,9 @@ func (ns *Namespace) ExecInCombinedOutput(_ *exec.Cmd) ([]byte, error) {
 // InjectCA returns ErrUnsupported on non-Linux platforms.
 func (ns *Namespace) InjectCA(_ string) error { return ErrUnsupported }
 
-// SetupVeth returns ErrUnsupported on non-Linux platforms.
-func (ns *Namespace) SetupVeth() (string, string, error) { return "", "", ErrUnsupported }
+// MaybeRunReexec is a no-op on non-Linux platforms (the transparent-tunnel
+// namespace holder / hardened-exec shim are Linux-only).
+func MaybeRunReexec() {}
 
 // PID returns 0 on non-Linux platforms.
 func (ns *Namespace) PID() int { return 0 }
