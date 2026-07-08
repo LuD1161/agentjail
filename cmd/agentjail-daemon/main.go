@@ -54,6 +54,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/telemetry"
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // version is set via -ldflags at build time (mirrors cmd/agentjail).
@@ -90,7 +91,7 @@ type server struct {
 	// activeSessions tracks which session IDs have open connections.
 	activeSessions *activeTracker
 
-	// grantSrv handles runtime host grant requests (AGE-116). Nil-safe.
+	// grantSrv handles runtime host grant requests (follow-up). Nil-safe.
 	grantSrv *grantServer
 }
 
@@ -205,7 +206,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		// Route grant_request to the grant server (AGE-116).
+		// Route grant_request to the grant server (follow-up).
 		if s.grantSrv != nil {
 			var probe struct {
 				Type string `json:"type"`
@@ -490,6 +491,21 @@ func defaultLogPath() string {
 	return filepath.Join(home, ".agentjail", "daemon.log")
 }
 
+// removeFailOpenSentinel deletes the fail-open warning sentinel
+// (~/.agentjail/fail-open-warned) so agentjail-hook's "warn once" gate
+// re-arms after a successful daemon startup (U2). Uses the same path
+// construction as the hook (wire.FailOpenWarnedSentinelPath) so the two
+// sides can never drift apart. Best-effort: a missing file (the common
+// case — no prior fail-open) is not an error and is not logged; any other
+// removal failure is logged at Warn since it means the next daemon outage
+// will silently fail to re-warn the user.
+func removeFailOpenSentinel() {
+	path := wire.FailOpenWarnedSentinelPath()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("remove fail-open sentinel", "path", path, "err", err)
+	}
+}
+
 // defaultDBPath returns ~/.agentjail/agentjail.db (the SQLite store, ADR 0018).
 func defaultDBPath() string {
 	home, err := os.UserHomeDir()
@@ -681,7 +697,7 @@ func main() {
 	hookWatchdog := hookwatch.New(logger, hwEmitter)
 	go hookWatchdog.Run(ctx)
 
-	// Start grant control server on daemon-ctl.sock (AGE-116, ADR 0047).
+	// Start grant control server on daemon-ctl.sock (follow-up, ADR 0047).
 	{
 		ctlSockPath := grantctl.ControlSocketPath()
 		durableAudit := srv.eventStore != nil
@@ -714,6 +730,16 @@ func main() {
 	}
 
 	slog.Info("listening", "socket", *socketPath)
+
+	// Remove the fail-open warning sentinel (U2). agentjail-hook writes
+	// ~/.agentjail/fail-open-warned the first time it fails open (daemon
+	// unreachable) and stays silent on subsequent fail-opens until this file
+	// is gone — that re-arming is the daemon's job, not the hook's (the hook
+	// has no way to know the daemon is healthy again). Without this, the
+	// warning would fire at most once ever, for the lifetime of the
+	// ~/.agentjail directory. Best-effort: os.IsNotExist is the expected,
+	// common case (no prior fail-open) and is not logged.
+	removeFailOpenSentinel()
 
 	// Emit daemon.started audit event (best-effort).
 	if srv.eventStore != nil {

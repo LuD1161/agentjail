@@ -16,6 +16,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/policyeval"
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // testRegoPolicy is the inline Rego policy used in all daemon tests. It
@@ -1107,6 +1108,64 @@ func TestNormalizeToolInput_ExpandsCommand(t *testing.T) {
 	want := "cat " + home + "/.aws/credentials"
 	if cmd != want {
 		t.Errorf("got %q, want %q", cmd, want)
+	}
+}
+
+// TestRemoveFailOpenSentinel_RemovesExistingFile verifies U2: the daemon
+// startup routine deletes ~/.agentjail/fail-open-warned so agentjail-hook's
+// "warn once" gate re-arms for the next outage. Without this, the fail-open
+// warning would fire at most once ever, for the lifetime of the
+// ~/.agentjail directory.
+func TestRemoveFailOpenSentinel_RemovesExistingFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	agentjailDir := filepath.Join(home, ".agentjail")
+	if err := os.MkdirAll(agentjailDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	sentinelPath := filepath.Join(agentjailDir, "fail-open-warned")
+	if err := os.WriteFile(sentinelPath, []byte("pid=1 time=x\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := os.Stat(sentinelPath); err != nil {
+		t.Fatalf("sentinel not created: %v", err)
+	}
+
+	removeFailOpenSentinel()
+
+	if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
+		t.Fatalf("expected sentinel to be removed, stat err = %v", err)
+	}
+}
+
+// TestRemoveFailOpenSentinel_NoFileIsNotAnError verifies the common case
+// (daemon starting up with no prior fail-open, so no sentinel exists) is a
+// silent no-op rather than a logged warning.
+func TestRemoveFailOpenSentinel_NoFileIsNotAnError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Does not panic and does not create the file.
+	removeFailOpenSentinel()
+
+	sentinelPath := filepath.Join(home, ".agentjail", "fail-open-warned")
+	if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no sentinel file, stat err = %v", err)
+	}
+}
+
+// TestRemoveFailOpenSentinel_PathMatchesHook verifies the daemon and the
+// hook agree on exactly the same sentinel path (both delegate to
+// wire.FailOpenWarnedSentinelPath so they cannot drift apart).
+func TestRemoveFailOpenSentinel_PathMatchesHook(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	want := filepath.Join(home, ".agentjail", "fail-open-warned")
+	got := wire.FailOpenWarnedSentinelPath()
+	if got != want {
+		t.Fatalf("wire.FailOpenWarnedSentinelPath() = %q, want %q", got, want)
 	}
 }
 
