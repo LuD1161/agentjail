@@ -169,9 +169,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// (applied below) restricts the shield + agent, not the netproxy child
 	// which was already forked before restriction.
 	netproxyPort := 0
-	var netproxyCmd *exec.Cmd            // non-nil only if WE started the proxy (we must clean it up)
-	netproxyReady := false               // true if a proxy is available (ours or pre-existing)
-	var sessionToken proxyctl.Token      // this session's per-session proxy credential
+	var netproxyCmd *exec.Cmd       // non-nil only if WE started the proxy (we must clean it up)
+	netproxyReady := false          // true if a proxy is available (ours or pre-existing)
+	var sessionToken proxyctl.Token // this session's per-session proxy credential
 	if !noNetproxy {
 		netproxyPort = netproxyDefaultPort
 		netproxyBin, findErr := findNetproxyBinary()
@@ -546,6 +546,17 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 				}
 				continue
 			}
+			if name == ".config" {
+				// ~/.config holds legitimate MCP server configs but also
+				// credential-bearing subdirs (gh, gcloud, containers, ...).
+				// Landlock path-beneath grants are purely additive -- there
+				// is no way to carve a "deny" hole out of a directory once
+				// its subtree is granted -- so grant each child individually
+				// and skip the denylisted ones instead of granting ~/.config
+				// as a whole. See ConfigCredentialSubdirs (P4).
+				allowConfigDirExcludingCredentials(p, allowPath, roAccess)
+				continue
+			}
 			if err := allowPath(p, roAccess); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 			}
@@ -623,9 +634,23 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			if seen[dir] {
 				continue
 			}
-			seen[dir] = true
 			// Allow the venv/tool directory tree (read-only + execute).
 			topDir := findTopLevelDir(dir, home)
+			// SECURITY (P3): ~/.claude.json is agent-writable. Without this
+			// check, an agent could widen its own Landlock grants by
+			// pointing a fake MCP server's `command` at a path inside
+			// ~/.ssh, ~/.aws, or ~/.gnupg -- the code below would otherwise
+			// grant read access to the resolved top-level directory on the
+			// next launch. Refuse and warn instead of granting.
+			grantTarget := topDir
+			if grantTarget == "" {
+				grantTarget = dir
+			}
+			if isSensitiveMCPTarget(grantTarget, home) {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: WARNING: refusing to grant MCP command path %q: resolves inside sensitive directory %s (check ~/.claude.json for a poisoned mcpServers command)\n", mp, grantTarget)
+				continue
+			}
+			seen[dir] = true
 			if topDir != "" && !seen[topDir] {
 				seen[topDir] = true
 				if err := allowPath(topDir, roAccess); err != nil {
@@ -726,4 +751,62 @@ func findTopLevelDir(dir, parent string) string {
 	rel := strings.TrimPrefix(dir, parent+"/")
 	parts := strings.SplitN(rel, "/", 2)
 	return filepath.Join(parent, parts[0])
+}
+
+// isSensitiveMCPTarget reports whether target (a directory an MCP server's
+// resolved `command` would be granted Landlock read access to) falls inside
+// one of the sensitive home directories in SensitiveMCPCommandDirs (P3:
+// ~/.ssh, ~/.aws, ~/.gnupg). target may be the sensitive directory itself
+// (e.g. a command living directly at ~/.ssh/foo) or any of its descendants.
+func isSensitiveMCPTarget(target, home string) bool {
+	if target == "" || home == "" {
+		return false
+	}
+	home = filepath.Clean(home)
+	target = filepath.Clean(target)
+	if target != home && !strings.HasPrefix(target, home+"/") {
+		return false
+	}
+	rel := strings.TrimPrefix(target, home+"/")
+	if rel == target {
+		// target == home itself; not a sensitive subdir.
+		return false
+	}
+	top := strings.SplitN(rel, "/", 2)[0]
+	for _, sensitive := range SensitiveMCPCommandDirs() {
+		if top == sensitive {
+			return true
+		}
+	}
+	return false
+}
+
+// allowConfigDirExcludingCredentials grants read-only Landlock access to
+// each immediate child of configDir (~/.config) individually, skipping the
+// credential-bearing subdirectories named in ConfigCredentialSubdirs (P4:
+// gh, gcloud, containers, git). Landlock path-beneath grants are purely
+// additive, so this is the only way to keep e.g. ~/.config/gh unreadable
+// while an MCP server's own ~/.config/<tool> directory stays readable.
+//
+// If configDir does not exist, this is a silent no-op (same semantics as
+// allowPath skipping an absent path).
+func allowConfigDirExcludingCredentials(configDir string, allowPath func(string, uint64) error, roAccess uint64) {
+	denied := make(map[string]bool, len(ConfigCredentialSubdirs()))
+	for _, d := range ConfigCredentialSubdirs() {
+		denied[d] = true
+	}
+	entries, err := os.ReadDir(configDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if denied[e.Name()] {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: denying read access to %s (credential store)\n", filepath.Join(configDir, e.Name()))
+			continue
+		}
+		p := filepath.Join(configDir, e.Name())
+		if err := allowPath(p, roAccess); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
+		}
+	}
 }

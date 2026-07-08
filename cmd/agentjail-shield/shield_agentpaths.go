@@ -101,3 +101,47 @@ func agentPaths() AgentPaths {
 		Runtimes: []string{"node", "bun", "npx", "python3", "python", "deno", "go", "cargo", "ruby"},
 	}
 }
+
+// SensitiveMCPCommandDirs is the shared set of top-level home directories
+// that must NEVER be granted filesystem access as a side effect of
+// resolving an MCP server's `command` path from ~/.claude.json.
+//
+// ~/.claude.json is agent-writable. Without this check, an agent could
+// widen its own read access by writing
+// {"mcpServers":{"x":{"command":"/home/user/.ssh/anything"}}} -- on next
+// launch, shield_linux.go's MCP-path resolution would otherwise grant
+// Landlock read access to the resolved top-level directory (~/.ssh),
+// leaking private keys. The same attack applies to ~/.aws and ~/.gnupg.
+//
+// Linux (shield_linux.go, allowlist model) checks this set explicitly
+// before granting a resolved MCP command's directory tree -- see
+// isSensitiveMCPTarget. macOS (shield_darwin.go, denylist model) already
+// denies reads under these same directories unconditionally via
+// sensitiveReadPaths, so it is protected by construction; sensitiveReadPaths
+// derives its literal entries from this list so the two never drift.
+func SensitiveMCPCommandDirs() []string {
+	return []string{".ssh", ".aws", ".gnupg"}
+}
+
+// ConfigCredentialSubdirs lists subdirectories of ~/.config that hold CLI
+// credential material (OAuth/PAT tokens, service-account keys, registry
+// auth) even though ~/.config itself is granted read-only so legitimate MCP
+// server config files remain reachable (see AgentPaths.HomeRO above).
+//
+// Both shield backends deny read access to these specific subdirectories
+// while leaving the rest of ~/.config readable:
+//   - Linux (shield_linux.go) grants ~/.config child-by-child, skipping
+//     these names, since Landlock path-beneath grants are purely additive
+//     (there is no "deny within an allow" primitive to carve a hole out of
+//     a directory once its subtree is granted).
+//   - macOS (shield_darwin.go) is denylist-based ((allow default) plus
+//     explicit denies), so these are added as literal file-read* denies
+//     that take precedence over the broad allow.
+func ConfigCredentialSubdirs() []string {
+	return []string{
+		"gh",         // GitHub CLI: hosts.yml holds OAuth/PAT tokens
+		"gcloud",     // gcloud CLI: access tokens, application-default credentials
+		"containers", // podman/buildah/skopeo: auth.json holds registry credentials
+		"git",        // some git credential helpers store plaintext tokens here
+	}
+}

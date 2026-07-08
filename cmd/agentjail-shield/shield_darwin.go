@@ -46,14 +46,25 @@ func buildBaseEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 // for writes.  This mirrors the is_sensitive_path predicates in
 // agentpolicy/policies/file_policy.rego — both lists must be kept in sync.
 //
+// The .ssh/.aws/.gnupg entries are sourced from the shared
+// SensitiveMCPCommandDirs() contract (P3) rather than re-listed here, so
+// Linux's MCP-command-path check and darwin's deny list can never drift.
+//
 // Uses the real home directory for ~/ expansion.
 func sensitiveWritePaths(home string) []string {
+	paths := []string{home + "/.config", home + "/.agentjail"}
+	for _, d := range SensitiveMCPCommandDirs() {
+		paths = append(paths, home+"/"+d)
+	}
+	return append(paths, sensitiveWritePathsExtra(home)...)
+}
+
+// sensitiveWritePathsExtra lists write-deny paths beyond the shared
+// SensitiveMCPCommandDirs contract set -- entries with no Linux analog
+// (Landlock's allowlist never grants them in the first place) or that are
+// darwin-specific hardening.
+func sensitiveWritePathsExtra(home string) []string {
 	return []string{
-		home + "/.ssh",
-		home + "/.aws",
-		home + "/.gnupg",
-		home + "/.config",
-		home + "/.agentjail",
 		home + "/.codex",
 		home + "/.cursor",
 		home + "/.docker",
@@ -96,20 +107,29 @@ func sensitiveWriteRegexes() []string {
 
 // sensitiveReadPaths returns the subset of sensitive paths that should also
 // be denied for reads (private keys, credential stores).
+//
+// The .ssh/.aws/.gnupg entries are sourced from the shared
+// SensitiveMCPCommandDirs() contract (P3) -- see sensitiveWritePaths above.
+// The ~/.config/{gh,gcloud,containers,...} entries are sourced from the
+// shared ConfigCredentialSubdirs() contract (P4): unlike Linux, which grants
+// ~/.config child-by-child to exclude these, darwin's ~/.config is not in
+// this deny list (it stays readable via (allow default) for legitimate MCP
+// configs) so these specific credential-bearing children must be denied
+// individually here instead.
+// NOTE: ~/Library/Keychains is intentionally NOT read-denied here.
+// The shielded agent's own process needs its login keychain readable
+// so Claude Code auth/token-refresh works. NAMED per-OS exception --
+// no Linux analog (Linux Claude creds live in ~/.claude/.credentials.json,
+// already granted). See docs/adr/0037-macos-keychain-access-shielded-agent.md.
 func sensitiveReadPaths(home string) []string {
-	return []string{
-		home + "/.ssh",
-		home + "/.aws",
-		home + "/.gnupg",
-		home + "/.agentjail",
-		home + "/.docker",
-		home + "/.kube",
-		// NOTE: ~/Library/Keychains is intentionally NOT read-denied here.
-		// The shielded agent's own process needs its login keychain readable
-		// so Claude Code auth/token-refresh works. NAMED per-OS exception --
-		// no Linux analog (Linux Claude creds live in ~/.claude/.credentials.json,
-		// already granted). See docs/adr/0037-macos-keychain-access-shielded-agent.md.
+	paths := []string{home + "/.agentjail", home + "/.docker", home + "/.kube"}
+	for _, d := range SensitiveMCPCommandDirs() {
+		paths = append(paths, home+"/"+d)
 	}
+	for _, d := range ConfigCredentialSubdirs() {
+		paths = append(paths, home+"/.config/"+d)
+	}
+	return paths
 }
 
 // sensitiveReadRegexes returns sbpl regex patterns denied for reads.

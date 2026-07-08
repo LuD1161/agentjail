@@ -99,3 +99,42 @@ func TestAccessMode_String(t *testing.T) {
 		t.Errorf("ReadWrite.String() = %q, want %q", ReadWrite.String(), "read-write")
 	}
 }
+
+// TestSensitiveMCPCommandDirs_CoversKnownCredentialDirs pins the P3 contract
+// set: an agent that poisons ~/.claude.json's mcpServers[].command must be
+// blocked from widening its grant into any of these directories.
+func TestSensitiveMCPCommandDirs_CoversKnownCredentialDirs(t *testing.T) {
+	want := map[string]bool{".ssh": true, ".aws": true, ".gnupg": true}
+	got := SensitiveMCPCommandDirs()
+	if len(got) != len(want) {
+		t.Fatalf("SensitiveMCPCommandDirs() = %v, want exactly %v", got, want)
+	}
+	for _, d := range got {
+		if !want[d] {
+			t.Errorf("unexpected entry %q in SensitiveMCPCommandDirs()", d)
+		}
+	}
+}
+
+// TestConfigCredentialSubdirs_CoversKnownCredentialStores pins the P4
+// contract set: ~/.config subdirectories that must stay unreadable even
+// though ~/.config itself is broadly granted for legitimate MCP configs.
+func TestConfigCredentialSubdirs_CoversKnownCredentialStores(t *testing.T) {
+	got := ConfigCredentialSubdirs()
+	if len(got) == 0 {
+		t.Fatal("ConfigCredentialSubdirs() returned no entries")
+	}
+	want := map[string]bool{"gh": true, "gcloud": true, "containers": true}
+	seen := make(map[string]bool, len(got))
+	for _, d := range got {
+		if d == "" {
+			t.Error("ConfigCredentialSubdirs() contains an empty entry")
+		}
+		seen[d] = true
+	}
+	for w := range want {
+		if !seen[w] {
+			t.Errorf("ConfigCredentialSubdirs() missing expected entry %q", w)
+		}
+	}
+}
