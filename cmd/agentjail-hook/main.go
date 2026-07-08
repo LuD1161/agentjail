@@ -571,7 +571,11 @@ func runClaude(agent string) {
 		// Exit code 2: Claude Code's fast-block path reads stderr for the reason.
 		fmt.Fprintf(os.Stderr, "agentjail: denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
 		if resp.RuleID == "mcp_policy/unknown" {
-			fmt.Fprintf(os.Stderr, "  run: agentjail mcp allow <server-name>   (see 'agentjail mcp list' for current state)\n")
+			if server := mcpServerName(input.ToolName); server != "" {
+				fmt.Fprintf(os.Stderr, "  run: agentjail mcp allow %s   (see 'agentjail mcp list' for current state)\n", server)
+			} else {
+				fmt.Fprintf(os.Stderr, "  run: agentjail mcp allow <server-name>   (see 'agentjail mcp list' for current state)\n")
+			}
 		}
 		if hint := denyRemediationHint(resp.RuleID); hint != "" {
 			fmt.Fprintln(os.Stderr, hint)
@@ -677,6 +681,21 @@ func denyRemediationHint(ruleID string) string {
 	default:
 		return ""
 	}
+}
+
+// mcpServerName extracts the server component from an MCP tool name of the
+// form "mcp__<server>__<tool>" (double-underscore separated). This mirrors
+// mcp_policy.rego's mcp_server_name (split on "__", take index 1) so the deny
+// hint names the exact server the agent tried to reach, letting the user
+// copy-paste `agentjail mcp allow <server>` verbatim. Returns "" when toolName
+// is not an MCP tool call, in which case the caller falls back to the
+// <server-name> placeholder.
+func mcpServerName(toolName string) string {
+	parts := strings.Split(toolName, "__")
+	if len(parts) < 3 || parts[0] != "mcp" {
+		return ""
+	}
+	return parts[1]
 }
 
 // isWriteErr is a heuristic to distinguish write/send errors from read errors
