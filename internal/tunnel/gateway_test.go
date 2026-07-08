@@ -217,25 +217,34 @@ func TestRecognizeTCPFallback(t *testing.T) {
 	// Create a minimal gateway (just enough for recognizeTCP).
 	g := &Gateway{}
 
-	// Unknown port should get a generic TCP operation.
-	op := g.recognizeTCP("example.com", 8080, []byte("hello"))
+	// Unknown port should get a generic TCP operation (not confidently recognized).
+	op, recognized := g.recognizeTCP("example.com", 8080, []byte("hello"))
 	if op.Protocol != "tcp" {
 		t.Errorf("Protocol = %q, want %q", op.Protocol, "tcp")
 	}
 	if op.Verb != "connect" {
 		t.Errorf("Verb = %q, want %q", op.Verb, "connect")
 	}
+	if recognized {
+		t.Errorf("recognized = true for generic fallback, want false")
+	}
 
 	// Port 443 should get "tls".
-	op = g.recognizeTCP("example.com", 443, []byte{0x16, 0x03, 0x01})
+	op, recognized = g.recognizeTCP("example.com", 443, []byte{0x16, 0x03, 0x01})
 	if op.Protocol != "tls" {
 		t.Errorf("Protocol = %q, want %q for port 443", op.Protocol, "tls")
 	}
+	if recognized {
+		t.Errorf("recognized = true for TLS fallback, want false")
+	}
 
 	// Port 80 should get "http".
-	op = g.recognizeTCP("example.com", 80, []byte("GET / HTTP/1.1\r\n"))
+	op, recognized = g.recognizeTCP("example.com", 80, []byte("GET / HTTP/1.1\r\n"))
 	if op.Protocol != "http" {
 		t.Errorf("Protocol = %q, want %q for port 80", op.Protocol, "http")
+	}
+	if recognized {
+		t.Errorf("recognized = true for HTTP fallback, want false")
 	}
 }
 

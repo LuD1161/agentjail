@@ -71,14 +71,27 @@ func (g *Gateway) handleConn(c net.Conn) {
 	}
 	peek = peek[:n]
 
-	// Step 3: Protocol detection via netpolicy.RecognizeTCP.
-	op := g.recognizeTCP(hostname, dstPort, peek)
+	// Step 3: Protocol detection via netpolicy.RecognizeTCP. recognized is true
+	// only when a real protocol parser matched; false means we fell back to the
+	// generic "connect" operation.
+	op, recognized := g.recognizeTCP(hostname, dstPort, peek)
 
 	log = log.With(
 		"protocol", op.Protocol,
 		"service", op.Service,
 		"verb", op.Verb,
 	)
+
+	// Step 3.5: Fail-closed on managed database ports (S-D1). If this is a
+	// managed DB port but we could NOT confidently recognize the protocol
+	// (truncated/unparseable/insufficient bytes → generic fallback), treat it as
+	// UNKNOWN and DENY without relaying. Anything that dodges recognition would
+	// otherwise dodge the verb-keyed deny-list packs. Non-managed ports (80, 443,
+	// …) are unaffected and remain allow-by-default to preserve availability.
+	if !recognized && netpolicy.ManagedPort(dstPort) {
+		log.Warn("unknown protocol on managed port; denying (fail-closed)")
+		return
+	}
 
 	// Step 4: Policy evaluation.
 	if g.matcher != nil {
@@ -116,14 +129,18 @@ func (g *Gateway) handleConn(c net.Conn) {
 }
 
 // recognizeTCP wraps netpolicy.RecognizeTCP with a fallback for unrecognized
-// protocols (e.g. HTTPS/TLS on port 443).
-func (g *Gateway) recognizeTCP(hostname string, port int, data []byte) *operation {
+// protocols (e.g. HTTPS/TLS on port 443). The second return value reports
+// whether a real protocol parser matched (true) or we synthesized the generic
+// "connect" fallback (false); the caller branches on this to fail closed on
+// managed database ports.
+func (g *Gateway) recognizeTCP(hostname string, port int, data []byte) (*operation, bool) {
 	op := g.recognizer(hostname, port, data)
 	if op != nil {
-		return op
+		return op, true
 	}
 
-	// Fallback: create a generic TCP operation.
+	// Fallback: create a generic TCP operation. This is NOT a confident
+	// recognition — signal that to the caller via the false return.
 	proto := "tcp"
 	if port == 443 {
 		proto = "tls"
@@ -136,7 +153,7 @@ func (g *Gateway) recognizeTCP(hostname string, port int, data []byte) *operatio
 		Service:  hostname,
 		Verb:     "connect",
 		Host:     fmt.Sprintf("%s:%d", hostname, port),
-	}
+	}, false
 }
 
 // operation is an alias to avoid a stutter import path.

@@ -273,34 +273,34 @@ func TestAccept_ProtocolDetection(t *testing.T) {
 	// TLS 1.2 ClientHello: ContentType=0x16 (Handshake), Version=0x0301, ...
 	tlsClientHello := []byte{
 		0x16, 0x03, 0x01, 0x00, 0x6c, // record header
-		0x01,                               // HandshakeType = ClientHello
-		0x00, 0x00, 0x68,                   // length
-		0x03, 0x03,                         // ClientHello version (TLS 1.2)
+		0x01,             // HandshakeType = ClientHello
+		0x00, 0x00, 0x68, // length
+		0x03, 0x03, // ClientHello version (TLS 1.2)
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // random (32 bytes, zeros for test)
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00,                   // session ID length = 0
-		0x00, 0x02,             // cipher suites length = 2
-		0x00, 0x2f,             // TLS_RSA_WITH_AES_128_CBC_SHA
-		0x01, 0x00,             // compression methods length=1, null compression
+		0x00,       // session ID length = 0
+		0x00, 0x02, // cipher suites length = 2
+		0x00, 0x2f, // TLS_RSA_WITH_AES_128_CBC_SHA
+		0x01, 0x00, // compression methods length=1, null compression
 	}
 
 	cases := []struct {
-		name     string
-		host     string
-		port     int
-		data     []byte
+		name      string
+		host      string
+		port      int
+		data      []byte
 		wantProto string
-		wantNil  bool // true when RecognizeTCP returns nil (expect gateway fallback)
+		wantNil   bool // true when RecognizeTCP returns nil (expect gateway fallback)
 	}{
 		{
 			name:      "HTTP GET",
 			host:      "example.com",
 			port:      80,
 			data:      []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"),
-			wantProto: "http",  // gateway fallback for port 80
-			wantNil:   true,    // RecognizeTCP returns nil for HTTP (no port 80 case)
+			wantProto: "http", // gateway fallback for port 80
+			wantNil:   true,   // RecognizeTCP returns nil for HTTP (no port 80 case)
 		},
 		{
 			name:      "SSH version string",
@@ -328,16 +328,16 @@ func TestAccept_ProtocolDetection(t *testing.T) {
 			host:      "api.example.com",
 			port:      443,
 			data:      tlsClientHello,
-			wantProto: "tls",  // gateway fallback for port 443
-			wantNil:   true,   // RecognizeTCP returns nil for unknown port 443
+			wantProto: "tls", // gateway fallback for port 443
+			wantNil:   true,  // RecognizeTCP returns nil for unknown port 443
 		},
 		{
 			name:      "Unknown random bytes",
 			host:      "unknown.internal",
 			port:      12345,
 			data:      []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe},
-			wantProto: "tcp",  // gateway fallback
-			wantNil:   true,   // RecognizeTCP returns nil for unknown port
+			wantProto: "tcp", // gateway fallback
+			wantNil:   true,  // RecognizeTCP returns nil for unknown port
 		},
 	}
 
@@ -351,9 +351,12 @@ func TestAccept_ProtocolDetection(t *testing.T) {
 				}
 				// For gateway-level fallback verification use recognizeTCP.
 				gw := &Gateway{}
-				fallbackOp := gw.recognizeTCP(tc.host, tc.port, tc.data)
+				fallbackOp, recognized := gw.recognizeTCP(tc.host, tc.port, tc.data)
 				if fallbackOp == nil {
 					t.Fatal("recognizeTCP returned nil — gateway has no fallback")
+				}
+				if recognized {
+					t.Errorf("recognizeTCP reported recognized=true for unrecognized data")
 				}
 				if fallbackOp.Protocol != tc.wantProto {
 					t.Errorf("gateway fallback Protocol = %q, want %q", fallbackOp.Protocol, tc.wantProto)
@@ -444,7 +447,7 @@ func TestAccept_HandlerLabelsConnectionProtocol(t *testing.T) {
 	seenProtos := make(map[string]bool)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			op := gw.recognizeTCP(tc.host, tc.port, tc.data)
+			op, _ := gw.recognizeTCP(tc.host, tc.port, tc.data)
 			if op == nil {
 				t.Fatal("recognizeTCP returned nil")
 			}

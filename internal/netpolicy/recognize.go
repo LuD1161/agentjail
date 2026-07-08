@@ -37,6 +37,27 @@ func RecognizeHTTP(host string, req *http.Request, bodyBytes []byte) *Operation 
 	}
 }
 
+// managedPorts is the set of TCP ports RecognizeTCP dispatches to a database
+// protocol parser (the managed database ports). On these ports a failure to
+// confidently recognize the protocol is treated as UNKNOWN and denied
+// (fail-closed; see S-D1) rather than relayed: the shipped policy packs are
+// verb-keyed deny-lists, so any payload that dodges recognition would otherwise
+// dodge enforcement. Non-managed ports (80, 443, everything else) stay
+// allow-by-default to preserve host availability.
+var managedPorts = map[int]struct{}{
+	5432:  {}, // postgres
+	3306:  {}, // mysql
+	6379:  {}, // redis
+	27017: {}, // mongo
+}
+
+// ManagedPort reports whether port is a managed database port. Callers use this
+// together with a failed recognition to fail closed on managed ports only.
+func ManagedPort(port int) bool {
+	_, ok := managedPorts[port]
+	return ok
+}
+
 // RecognizeTCP dispatches raw TCP payload bytes to the appropriate
 // protocol parser based on the destination port. Returns nil if no
 // parser matches or the data is unrecognizable.

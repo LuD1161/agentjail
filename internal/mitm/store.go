@@ -161,6 +161,42 @@ func (s *RequestStore) migrate() error {
 	return nil
 }
 
+// sensitiveHeaderKeys names request/response headers whose values may carry
+// credentials and must never be persisted verbatim (ADR 0032 — "never log
+// credential values"). Keys are compared case-insensitively.
+var sensitiveHeaderKeys = map[string]struct{}{
+	"authorization":       {},
+	"proxy-authorization": {},
+	"cookie":              {},
+	"set-cookie":          {},
+	"x-api-key":           {},
+	"api-key":             {},
+	"x-auth-token":        {},
+	"authentication":      {},
+}
+
+// redactedHeaderValue replaces credential header values on the persistence path.
+const redactedHeaderValue = "[REDACTED]"
+
+// redactHeaders returns a copy of h with the values of sensitive header keys
+// (see sensitiveHeaderKeys, case-insensitive) replaced by redactedHeaderValue.
+// The input map is never mutated so callers keep the live values in memory;
+// only what reaches disk is redacted. Returns nil for a nil/empty input.
+func redactHeaders(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if _, ok := sensitiveHeaderKeys[strings.ToLower(k)]; ok {
+			out[k] = redactedHeaderValue
+		} else {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // marshalHeaders encodes a header map as JSON, returning "" for nil/empty.
 func marshalHeaders(h map[string]string) string {
 	if len(h) == 0 {
@@ -188,8 +224,10 @@ func unmarshalHeaders(s string) map[string]string {
 // Log writes one request/response record.
 func (s *RequestStore) Log(entry *RequestLog) error {
 	ts := entry.Ts.UTC().Format("2006-01-02T15:04:05.000")
-	reqH := marshalHeaders(entry.RequestHeaders)
-	respH := marshalHeaders(entry.ResponseHeaders)
+	// Redact credential headers at the store boundary (S-C2 / ADR 0032) so no
+	// secret value ever lands in network.db, which the agent can read back.
+	reqH := marshalHeaders(redactHeaders(entry.RequestHeaders))
+	respH := marshalHeaders(redactHeaders(entry.ResponseHeaders))
 	_, err := s.db.Exec(`INSERT INTO network_requests
 		(ts, host, method, path, url, status_code, request_size, response_size,
 		 elapsed_ms, request_headers, response_headers, error, session_id, tool_name,

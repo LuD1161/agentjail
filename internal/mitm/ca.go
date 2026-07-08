@@ -64,8 +64,64 @@ func LoadOrCreateCA(caDir string) (*x509.Certificate, crypto.PrivateKey, *tls.Ce
 	return caCert, caKey, &tlsCert, nil
 }
 
+// GenerateCAInMemory creates a new self-signed CA certificate valid for 10
+// years and returns the parsed certificate, its private key, and the cert PEM
+// bytes WITHOUT writing anything to disk. This is the S-C1-safe path: the CA
+// private key stays in the gateway's memory and never touches a filesystem the
+// same-uid agent can read, so it cannot be exfiltrated to mint trusted certs.
+// Callers that need to inject trust write only the returned cert PEM (root.crt).
+func GenerateCAInMemory() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("generate RSA key: %w", err)
+	}
+
+	serial, err := randomSerial()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:   "AgentJail Inspection CA",
+			Organization: []string{"AgentJail"},
+		},
+		NotBefore:             now,
+		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create CA certificate: %w", err)
+	}
+
+	caCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("parse generated CA cert: %w", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	if certPEM == nil {
+		return nil, nil, nil, fmt.Errorf("encode CA cert PEM")
+	}
+
+	return caCert, key, certPEM, nil
+}
+
 // GenerateCA creates a new self-signed CA certificate valid for 10 years.
 // It writes root.crt (PEM) and root.key (PEM, mode 0600) to caDir.
+//
+// SECURITY NOTE (S-C1): persisting root.key is unsafe when the sandboxed agent
+// shares the host uid and mount namespace — prefer GenerateCAInMemory for the
+// tunnel MITM path. GenerateCA remains for callers (tests, netproxy) that need
+// a reusable on-disk CA in a directory the agent cannot read.
 func GenerateCA(caDir string) (*x509.Certificate, crypto.PrivateKey, error) {
 	if err := os.MkdirAll(caDir, 0700); err != nil {
 		return nil, nil, fmt.Errorf("create CA dir: %w", err)

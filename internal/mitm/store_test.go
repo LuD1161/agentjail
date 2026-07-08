@@ -82,8 +82,16 @@ func TestRequestStoreRoundTrip(t *testing.T) {
 	if r.ToolName != "Bash" {
 		t.Errorf("tool_name: got %q, want %q", r.ToolName, "Bash")
 	}
-	if r.RequestHeaders["Authorization"] != "Bearer token123" {
-		t.Errorf("request header Authorization: got %q", r.RequestHeaders["Authorization"])
+	// S-C2 / ADR 0032: the Authorization credential must be redacted on disk,
+	// never round-trip verbatim. Non-sensitive headers are preserved.
+	if r.RequestHeaders["Authorization"] != "[REDACTED]" {
+		t.Errorf("request header Authorization: got %q, want %q", r.RequestHeaders["Authorization"], "[REDACTED]")
+	}
+	if r.RequestHeaders["Authorization"] == "Bearer token123" {
+		t.Errorf("request header Authorization leaked credential verbatim")
+	}
+	if r.RequestHeaders["User-Agent"] != "agentjail/0.1" {
+		t.Errorf("request header User-Agent: got %q, want %q", r.RequestHeaders["User-Agent"], "agentjail/0.1")
 	}
 	if r.ResponseHeaders["Content-Type"] != "application/json" {
 		t.Errorf("response header Content-Type: got %q", r.ResponseHeaders["Content-Type"])
