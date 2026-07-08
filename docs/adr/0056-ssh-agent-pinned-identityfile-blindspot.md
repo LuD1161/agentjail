@@ -19,7 +19,7 @@ NOT cover. With the key correctly loaded into the agent
 failed:
 
 ```
-no such identity: /Users/aseemshrey/.ssh/id_ed25519: Operation not permitted
+no such identity: /Users/you/.ssh/id_ed25519: Operation not permitted
 git@github.com: Permission denied (publickey)
 ```
 

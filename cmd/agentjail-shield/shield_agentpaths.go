@@ -94,7 +94,7 @@ func agentPaths() AgentPaths {
 			// effective result as a daemon-down session: hook fails open).
 			".agentjail/daemon.sock",
 			// daemon-ctl.sock is deliberately ABSENT from HomeFilesRW.
-			// It lives at ~/.agentjail/run/daemon-ctl.sock (AGE-116) and
+			// It lives at ~/.agentjail/run/daemon-ctl.sock and
 			// is agent-unreachable: Linux Landlock denies connect() without
 			// write; macOS sbpl explicitly denies network-outbound for it.
 		},

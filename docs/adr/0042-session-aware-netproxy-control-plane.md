@@ -20,10 +20,10 @@ now it held ONE global allowlist loaded from `policy.yaml`, and the shield reuse
 
 We want ONE netproxy serving every session, each with its own allowlist, plus a
 foundation for per-folder overlays (see the project-overlay ADR) and runtime
-grants (AGE-93) -- without letting the sandboxed agent widen its own egress.
+grants -- without letting the sandboxed agent widen its own egress.
 
 This is a Tier-1 (hook + OS sandbox) mechanism. The eventual protocol-aware
-WireGuard gateway (AGE-81) will replace the *transport* (HTTP CONNECT ->
+WireGuard gateway (planned) will replace the *transport* (HTTP CONNECT ->
 transparent tunnel) and therefore the token-in-Proxy-Authorization binding, but
 the control/policy layer here -- per-session identity, resolved allowlists,
 registration, leases, grants -- is transport-agnostic and carries forward.
@@ -110,13 +110,13 @@ Known limitations / follow-ups:
   to a `NopEmitter` if the DB is unavailable, so a missing/locked DB never stops
   the proxy from enforcing egress.
 - **Non-HTTP protocols.** This is HTTP CONNECT only; Postgres/Redis/SSH remain
-  blocked by the OS sandbox (port-9100-only). Enabling them is AGE-81 (SOCKS5,
-  then the WireGuard tunnel), which will replace the token-in-Proxy-Authorization
+  blocked by the OS sandbox (port-9100-only). Enabling them requires SOCKS5,
+  then the WireGuard tunnel, which will replace the token-in-Proxy-Authorization
   binding with tunnel/peer identity while reusing this control/policy layer.
 
 See also: [ADR 0034] (platform shared contract), [ADR 0040]/[ADR 0041]
-(allowed-hosts model, fail-loud/fail-closed), AGE-81 (WireGuard gateway),
-AGE-77 (per-folder policy), AGE-93 (runtime `/agentjail allow`).
+(allowed-hosts model, fail-loud/fail-closed), the WireGuard gateway follow-up,
+and per-folder policy / runtime `/agentjail allow` (see their respective ADRs).
 
 [ADR 0034]: ./0034-platform-backend-shared-contract.md
 [ADR 0040]: ./0040-mcp-derived-hosts-and-fail-loud-config.md

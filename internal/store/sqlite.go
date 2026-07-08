@@ -854,7 +854,7 @@ func (s *sqliteStore) ListAuditLog(ctx context.Context, f AuditLogFilter) ([]Aud
 }
 
 // grantAuditEventTypes are the audit_log event types that make up the grant
-// approval/denial history shown by `agentjail grants --log` (AGE-116). Kept
+// approval/denial history shown by `agentjail grants --log`. Kept
 // in one place so the CLI and store agree on what counts as a "grant event".
 var grantAuditEventTypes = []string{
 	audit.DaemonGrantRequested,

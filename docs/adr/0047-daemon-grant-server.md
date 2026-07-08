@@ -182,16 +182,16 @@ authoritative:
   affect the folder where they are persisted.
 - **macOS menubar Approve/Deny UI is a follow-up,** same as [ADR 0044]. CLI
   approve ships first; a point-and-click surface can be layered on top.
-- **Non-HTTP protocols remain blocked** until the transparent tunnel (AGE-81 on
-  Linux, AGE-96 on macOS). HTTP CONNECT via netproxy is the current transport
+- **Non-HTTP protocols remain blocked** until the transparent tunnel lands (on
+  Linux, and on macOS). HTTP CONNECT via netproxy is the current transport
   for grants.
 
-This is AGE-116 (phase 1: move grant server to daemon).
+This is phase 1: move grant server to daemon.
 
 See also: [ADR 0042] (session-aware netproxy control plane), [ADR 0043]
 (per-folder policy overlay trust gate), [ADR 0044] (runtime host grants),
-[ADR 0046] (netproxy egress enforcement opt-in), AGE-81 (transparent tunnel -
-Linux), AGE-96 (transparent tunnel - macOS), AGE-116 (daemon grant server).
+[ADR 0046] (netproxy egress enforcement opt-in), and the transparent tunnel
+follow-ups for Linux and macOS.
 
 [ADR 0042]: ./0042-session-aware-netproxy-control-plane.md
 [ADR 0043]: ./0043-per-folder-policy-overlay-trust-gate.md

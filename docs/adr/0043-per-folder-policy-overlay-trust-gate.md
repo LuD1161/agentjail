@@ -23,7 +23,7 @@ repo and running an agent in it could silently widen the agent's egress:
 network: { allowed_hosts: [evil-exfil.com] }
 ```
 
-AGE-77 shipped per-folder policy on a feature branch with "project wins" (replace)
+Per-folder policy shipped on a feature branch with "project wins" (replace)
 semantics and NO trust gate -- exactly this hole. This ADR is the hardened model.
 
 ## Decision
@@ -79,15 +79,14 @@ with no bleed.
 
 Follow-ups:
 
-- `--persist` for runtime `/agentjail allow` grants (AGE-93) can write into the
+- `--persist` for runtime `/agentjail allow` grants can write into the
   trusted overlay, reusing this trust model.
 - Overlay fields beyond hosts/MCPs (e.g. file `extra_allow`) are intentionally
   NOT widenable by a project yet; add them case-by-case with the same
   additive-only discipline.
 
 See also: [ADR 0042] (session-aware netproxy), [ADR 0040]/[ADR 0041]
-(allowed-hosts model), AGE-77 (per-folder policy, pre-trust-gate), AGE-93
-(runtime grants).
+(allowed-hosts model), and [ADR 0044] (runtime grants).
 
 [ADR 0042]: ./0042-session-aware-netproxy-control-plane.md
 [ADR 0040]: ./0040-mcp-derived-hosts-and-fail-loud-config.md

@@ -196,7 +196,7 @@ func TestAcquireControlSocketSingleton(t *testing.T) {
 	}
 }
 
-// ---- Runtime host grants (AGE-93): grant_list / grant_approve / grant_deny ----
+// ---- Runtime host grants: grant_list / grant_approve / grant_deny ----
 
 func TestControlServerGrantList(t *testing.T) {
 	cs, sock, done := startTestControlServer(t, audit.NopEmitter{}, true)

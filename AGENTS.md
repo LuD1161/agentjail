@@ -87,7 +87,7 @@ Rules:
 - **Any new `slog.Info`/`slog.Warn` that represents a state change or
   user-visible action must also `Emit()` an audit event.** If you add a
   new significant event, add both — or better, use a domain service method
-  that handles both internally (see AGE-95).
+  that handles both internally.
 
 
 ## Architecture: domain-driven, interface-first, type-safe
@@ -215,7 +215,7 @@ clean VM, installs agentjail through the real `install.sh` path, installs
 Claude Code, and asserts policy enforcement on the installed binaries. A
 non-zero exit means **do not tag**. This is the only automated check that
 exercises the true clean-box user path (see `test/testbed/`, ADR 0053,
-Linear AGE-146). Run it on the home server for Linux; run it on the Mac for
+and the tracking issue). Run it on a Linux host for Linux; run it on the Mac for
 the macOS build.
 
 Every tagged release must include:

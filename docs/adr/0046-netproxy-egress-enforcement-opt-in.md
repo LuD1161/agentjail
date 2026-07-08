@@ -1,6 +1,6 @@
 # 0046 - netproxy egress enforcement is opt-in until the transparent tunnel
 
-Status: Accepted (interim; superseded when the transparent tunnel lands -- AGE-81 / AGE-96)
+Status: Accepted (interim; superseded when the transparent tunnel lands)
 
 ## Context
 
@@ -25,7 +25,7 @@ Two problems made the default-on posture a net negative on macOS:
    of enforcement is already "localhost-only + proxy" -- when the proxy is the
    thing breaking MCP, the whole feature is friction with little residual value.
 
-The **transparent tunnel** (AGE-81 on Linux via netns/WireGuard, AGE-96 on macOS
+The **transparent tunnel** (on Linux via netns/WireGuard, on macOS
 via NetworkExtension) will supersede the proxy entirely: it captures egress at
 the network layer with no proxy env injected, so there is no credentialed-URL
 class of bug, and it provides real per-session isolation (per-peer / per-netns)

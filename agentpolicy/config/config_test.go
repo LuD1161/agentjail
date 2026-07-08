@@ -1102,7 +1102,7 @@ func TestToOPADataAWSEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// MCPServerConfig.BlockedTools / AskTools (AGE-34)
+// MCPServerConfig.BlockedTools / AskTools
 // ---------------------------------------------------------------------------
 
 // TestLoadMCPServerBlockedAndAskTools verifies that blocked_tools and ask_tools

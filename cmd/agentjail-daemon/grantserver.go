@@ -1,4 +1,4 @@
-// grantserver.go implements the daemon's grant control server (AGE-116, ADR
+// grantserver.go implements the daemon's grant control server (see ADR
 // 0047). It replaces the netproxy-hosted grant control plane
 // (cmd/agentjail-netproxy/control.go) with a daemon-hosted equivalent: the
 // same request/list/approve/deny lifecycle, backed by grantctl.Registry,

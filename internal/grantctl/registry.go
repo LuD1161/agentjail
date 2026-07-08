@@ -257,7 +257,7 @@ func (r *Registry) FindGrant(grantID string) (GrantInfo, bool) {
 //   - rollbackFn: restores the grant to the pending queue (claimed=false),
 //     making it visible again in ListPending/FindGrant and reclaimable. Call
 //     this if applying the grant or emitting its audit event failed, so the
-//     fail-closed contract (see AGE-116 credential broker rule) is upheld:
+//     fail-closed contract (see the credential broker rule) is upheld:
 //     no changes take effect without a corresponding audit record.
 //
 // While a grant is claimed, no other caller can claim it (ErrGrantAlreadyClaimed)

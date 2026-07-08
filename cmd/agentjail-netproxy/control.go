@@ -48,7 +48,7 @@ var version = "dev"
 // of the control socket, alongside proxyctl's controlSocketName.
 const controlLockName = "netproxy-ctl.lock"
 
-// pendingGrant is one filed-but-undecided runtime host grant request (AGE-93).
+// pendingGrant is one filed-but-undecided runtime host grant request.
 // It is created by the data-plane sentinel (see handleGrantSentinel in
 // main.go) and resolved by a human via grant_approve/grant_deny over the
 // control socket. Expires bounds how long an undecided request stays live
@@ -63,7 +63,7 @@ type pendingGrant struct {
 	Expires time.Time
 }
 
-// grantedHost is one approved runtime host grant (AGE-93), additive to the
+// grantedHost is one approved runtime host grant, additive to the
 // session's static allowlist until Expiry.
 type grantedHost struct {
 	Host    string
@@ -81,7 +81,7 @@ const pendingGrantTTL = time.Hour
 // reuses the same tested host-matching as the former global allowlist.
 // sessionID and cwd are non-secret, display-only identity (see
 // proxyctl.Request.SessionID / Cwd); pending/granted hold this session's
-// runtime host grants (AGE-93). All fields other than al's own internal lock
+// runtime host grants. All fields other than al's own internal lock
 // are protected by the owning sessionRegistry's mutex.
 type session struct {
 	al          *allowlist
@@ -133,7 +133,7 @@ func newSessionRegistry() *sessionRegistry {
 // maxLease is the hard ceiling on any registration lease.
 var maxLease = time.Duration(proxyctl.MaxLeaseTTLMs) * time.Millisecond
 
-// Errors returned by the runtime host grant operations (AGE-93). Callers map
+// Errors returned by the runtime host grant operations. Callers map
 // these to control-plane Response.Error strings; the data-plane sentinel maps
 // the cap errors to 429 and everything else to 400.
 var (

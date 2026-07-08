@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-smoke.sh — the first real testbed scenario (AGE-146 Stage 3 seed).
+# e2e-smoke.sh — the first real testbed scenario (Stage 3 seed).
 #
 # Runs INSIDE a provisioned testbed guest. Exercises agentjail exactly as a
 # human's Claude Code session would, across both enforcement tiers, and asserts

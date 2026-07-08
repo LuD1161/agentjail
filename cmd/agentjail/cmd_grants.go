@@ -7,7 +7,7 @@
 //	agentjail grant deny <grant_id>
 //
 // These commands are the HUMAN (approve) side of runtime host grants
-// (AGE-116, ADR 0047). The daemon hosts the grant control plane on
+// (see ADR 0047). The daemon hosts the grant control plane on
 // daemon-ctl.sock (internal/grantctl); this socket is agent-unreachable
 // by construction. A sandboxed agent cannot run these -- it can only file
 // a request via `agentjail allow host` (cmd_allow.go).
@@ -32,7 +32,7 @@ import (
 const grantControlTimeout = 3 * time.Second
 
 // grantsLogLimit is the number of most-recent grant audit_log entries shown
-// by `agentjail grants --log` (AGE-116). A diagnostic/history view, not a
+// by `agentjail grants --log`. A diagnostic/history view, not a
 // primary workflow -- kept small and non-configurable to keep it simple.
 const grantsLogLimit = 50
 

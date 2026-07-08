@@ -66,7 +66,7 @@ const (
 	upstreamDialTimeout = 10 * time.Second
 )
 
-// Runtime host grant sentinel (AGE-93). The agent CLI (`agentjail allow host
+// Runtime host grant sentinel. The agent CLI (`agentjail allow host
 // <h>`) issues a plain GET through its existing HTTPS_PROXY to this reserved
 // authority to FILE a grant request; it is never forwarded upstream --
 // handleConn intercepts it after the token/auth lookup but before the generic
@@ -298,7 +298,7 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
-	// Runtime host grant sentinel (AGE-93): a GET to grant.agentjail.local/allow
+	// Runtime host grant sentinel: a GET to grant.agentjail.local/allow
 	// files a pending grant request for THIS session and is never forwarded
 	// upstream. Matched before the generic method dispatch so it is not
 	// rejected as a non-CONNECT method; a CONNECT to the sentinel authority is
@@ -382,7 +382,7 @@ func (p *proxy) handleConn(conn net.Conn) {
 }
 
 // isGrantSentinel reports whether method+target is a runtime host grant
-// request (AGE-93): a GET whose target authority is grantSentinelHost and
+// request: a GET whose target authority is grantSentinelHost and
 // whose path starts with grantSentinelPath. A CONNECT to the same authority
 // is deliberately NOT a grant request -- only GET .../allow is (Codex r3 #2).
 func isGrantSentinel(method, target string) bool {

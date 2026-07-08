@@ -1,7 +1,7 @@
 # Plan 011 — Configurable daemon-unreachable policy (fail-open → tiered)
 
 Implements [ADR 0050](../docs/adr/0050-daemon-unreachable-policy.md). Updates the
-AGE-115 fail-open stance into a tiered `allow | degraded | deny` knob, with a
+prior fail-open stance into a tiered `allow | degraded | deny` knob, with a
 daemon-written JSON sidecar so the stdlib-only hook can act on it, a loud
 per-occurrence notice, and (later) daemon auto-recovery.
 
@@ -68,7 +68,8 @@ are blocked offline; everything else proceeds; banner shows "REDUCED protection.
 *Goal: the daemon rarely stays down, so the level rarely matters.*
 
 1. OS supervision: launchd `KeepAlive` (macOS) / systemd `Restart=always`
-   (Linux) in the install-generated unit files. Ties into AGE-114.
+   (Linux) in the install-generated unit files. Ties into daemon restart on
+   upgrade.
 2. Optional hook-triggered restart-and-retry: on connect failure, attempt one
    non-blocking `agentjail daemon restart` (or a socket-activation nudge) and
    retry once within budget before falling back to the sidecar level.

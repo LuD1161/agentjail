@@ -55,7 +55,7 @@ func main() {
 	profilePrint := flag.Bool("profile-print", false, "print the sandbox profile to stderr and exit without running the agent")
 	// Egress enforcement (agentjail-netproxy) is OPT-IN and OFF by default:
 	// the credentialed proxy URL breaks Claude Code's MCP HTTP transport on
-	// macOS, and the transparent tunnel (AGE-81/AGE-96) will supersede the
+	// macOS, and the transparent tunnel (planned) will supersede the
 	// proxy with real per-session isolation and no proxy env. Until then the
 	// shield runs port-only by default (filesystem/process/keychain sandbox
 	// stays fully on); pass --netproxy to turn per-host egress filtering back

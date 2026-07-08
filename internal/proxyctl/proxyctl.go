@@ -185,7 +185,7 @@ const MaxControlMsgBytes = 64 * 1024
 // agent-spawned background process from keeping a session alive indefinitely.
 const MaxLeaseTTLMs int64 = 24 * 60 * 60 * 1000
 
-// Runtime host grant bounds (Phase 3, AGE-93). These cap the sentinel
+// Runtime host grant bounds (Phase 3). These cap the sentinel
 // endpoint (internal/netproxy) and the CLI so a sandboxed agent cannot exceed
 // memory or audit volume by spamming grant requests.
 const (

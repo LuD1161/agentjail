@@ -504,8 +504,8 @@ func TestGenerateSBProfile_DeniesControlSocket(t *testing.T) {
 }
 
 // TestGenerateSBProfile_DeniesGrantControlSocket verifies the generated sbpl
-// profile denies network-outbound to the daemon's grant control socket
-// (AGE-116), mirroring the netproxy-ctl.sock deny above.
+// profile denies network-outbound to the daemon's grant control socket,
+// mirroring the netproxy-ctl.sock deny above.
 func TestGenerateSBProfile_DeniesGrantControlSocket(t *testing.T) {
 	cfg := config.Default()
 	home := "/Users/me"

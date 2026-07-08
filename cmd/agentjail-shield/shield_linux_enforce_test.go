@@ -215,7 +215,7 @@ func runLandlockAgentjailChild() {
 	}
 
 	// Probe 3: connect() ~/.agentjail/run/daemon-ctl.sock -- must be DENIED.
-	// This is the grant control plane (AGE-116): session register and
+	// This is the grant control plane: session register and
 	// grant list/approve/deny all ride this socket. Unlike daemon.sock it gets
 	// NO single-file write grant, so the read-only ~/.agentjail grant withholds
 	// the write access AF_UNIX connect() needs -> EACCES. If this ever succeeded
@@ -355,7 +355,7 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 		}
 	}()
 
-	// Live listener at $HOME/.agentjail/run/daemon-ctl.sock (AGE-116) so the
+	// Live listener at $HOME/.agentjail/run/daemon-ctl.sock so the
 	// inode exists (connect would succeed but for Landlock). The read-only
 	// ~/.agentjail grant has NO single-file write grant here, so the child's
 	// connect() must be denied -- proving the grant control plane is agent-

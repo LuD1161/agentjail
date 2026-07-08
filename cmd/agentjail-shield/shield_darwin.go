@@ -554,7 +554,7 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", proxyctl.ControlSocketPathForHome(home))
 	sb.WriteString("\n")
 
-	// AGE-116: daemon-ctl.sock is the daemon's grant control socket,
+	// daemon-ctl.sock is the daemon's grant control socket,
 	// agent-unreachable by the same mechanism as netproxy-ctl.sock above.
 	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", grantctl.ControlSocketPathForHome(home))
 	sb.WriteString("\n")
@@ -570,8 +570,7 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// the Landlock equivalent (a filesystem WRITE grant on the socket inode).
 	//
 	// (path ...) is the canonical exact-match predicate for a unix-socket
-	// destination (verified with sandbox-exec; nolabs-ai/nono uses the same
-	// form). The base is (allow default), so socket(2) creation is already
+	// destination (verified with sandbox-exec). The base is (allow default), so socket(2) creation is already
 	// permitted -- unlike a (deny default) profile we do not also need
 	// (allow system-socket (socket-domain AF_UNIX)).
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {

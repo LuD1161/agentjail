@@ -251,7 +251,7 @@ interim -- ADR 0046), the
 agent is restricted to localhost-only outbound TCP and all HTTPS traffic flows
 through the proxy, which enforces the *effective* allowlist from `policy.yaml`.
 By default (no `--netproxy`) egress is port-only (80/443, no per-host filtering)
-until the transparent tunnel (AGE-81/AGE-96) supersedes the proxy.
+until the transparent tunnel (planned) supersedes the proxy.
 The effective allowlist is three tiers -- non-removable essentials (provider
 auth + `mcp-proxy.anthropic.com`), hosts auto-derived from the MCP servers you
 allow (`mcp.allowed`), then your editable `network.allowed_hosts` -- computed by

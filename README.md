@@ -43,7 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v0.5.0** | Jul 6, 2026 | Daemon-hosted grant server (AGE-116). Policy simplification (AGE-114). Self-update and shield fixes. |
+| **v0.5.0** | Jul 6, 2026 | Daemon-hosted grant server. Policy simplification. Self-update and shield fixes. |
 | **v0.4.0** | Jul 5, 2026 | Session-aware network proxy. Per-folder project overlays. Runtime host grants. Shared sandbox contract. macOS code signing. |
 | **v0.3.0** | Jun 27, 2026 | Sessions subsystem (`agentjail sessions list`). Cobra CLI migration. Platform-specific procwalk. |
 | **v0.2.9** | Jun 26, 2026 | `agentjail mcp scan`. Per-project policy resolution. Per-skill and per-tool policy CLI. |
@@ -392,7 +392,7 @@ agentjail grant deny <grant_id>
 agentjail grants --log                                    # show grant history from audit log
 ```
 
-The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over an agent-unreachable control socket, so the agent can never approve its own request. As of AGE-116 the daemon hosts this control plane on `daemon-ctl.sock`, so filing and approving a grant works in the default configuration -- no `--netproxy` required -- and an approval persists into the trusted overlay for future sessions automatically. Widening the *current* session's live egress mid-session still requires `--netproxy` (the session-aware proxy that actually enforces the allowlist); without it, an approval persists for next launch but does not retroactively open a socket this run. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).
+The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over an agent-unreachable control socket, so the agent can never approve its own request. The daemon hosts this control plane on `daemon-ctl.sock`, so filing and approving a grant works in the default configuration -- no `--netproxy` required -- and an approval persists into the trusted overlay for future sessions automatically. Widening the *current* session's live egress mid-session still requires `--netproxy` (the session-aware proxy that actually enforces the allowlist); without it, an approval persists for next launch but does not retroactively open a socket this run. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).
 
 </details>
 

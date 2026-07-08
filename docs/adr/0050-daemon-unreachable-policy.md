@@ -1,7 +1,7 @@
 # 0050 - Configurable behavior when the daemon is unreachable (fail-open → tiered)
 
-Status: Accepted (Phases 1 and 2 implemented; updates the stance recorded in
-AGE-115). Phase 3 (auto-recovery) is a separate follow-up — see
+Status: Accepted (Phases 1 and 2 implemented; updates the prior fail-open
+stance). Phase 3 (auto-recovery) is a separate follow-up — see
 [plans/011-daemon-unreachable-policy.md](../../plans/011-daemon-unreachable-policy.md).
 
 ## Context
@@ -10,15 +10,15 @@ When `agentjail-hook` cannot reach the daemon within its dial/round-trip
 budget (~30 ms dial / 45 ms round-trip), it currently **fails open**: the tool
 call is allowed, a `fail_open` telemetry event fires, and a one-time stderr
 warning is printed (gated by the `~/.agentjail/fail-open-warned` sentinel, which
-the daemon now re-arms on startup — see the U2 fix). This matches AGE-115's
+the daemon now re-arms on startup — see the U2 fix). This matches the prior
 "never block the agent" stance.
 
 Two problems with a single hard-coded policy:
 
 1. **Silent false sense of security.** A user who installed agentjail to be
    protected keeps running, unprotected, after the daemon dies (crash, OOM,
-   `brew upgrade` that doesn't reload launchd — AGE-114, or a deliberate DoS —
-   P9/AGE-133). The OS shield still enforces files+network, but *all*
+   `brew upgrade` that doesn't reload launchd, or a deliberate DoS —
+   P9). The OS shield still enforces files+network, but *all*
    command/MCP/web policy is silently off. The one-shot warning is too quiet.
 2. **One size does not fit all.** A hobbyist wants work to continue (blocking on
    a dead daemon is infuriating). A fintech/regulated shop wants the opposite:
@@ -111,7 +111,8 @@ the exact restart command, e.g.:
 The best mitigation is for the daemon to rarely stay down: OS-level supervision
 (launchd `KeepAlive`, systemd `Restart=always`) plus an optional hook-triggered
 restart-and-retry on connect failure. This shrinks the window in which any of
-the above matters. Scoped as a follow-up phase (ties into AGE-114) so it doesn't
+the above matters. Scoped as a follow-up phase (ties into daemon restart on
+upgrade) so it doesn't
 block the policy knob.
 
 ## Consequences
@@ -134,7 +135,7 @@ block the policy knob.
 
 ## Supersedes / relates to
 
-- Updates the "never block the agent" stance from **AGE-115** — that remains the
+- Updates the prior "never block the agent" stance — that remains the
   `allow` default, but is no longer the only option.
-- Complements **U2** (sentinel re-arm), **P9/AGE-133** (DoS hardening), and
-  **AGE-114** (daemon restart on upgrade).
+- Complements **U2** (sentinel re-arm), **P9** (DoS hardening), and daemon
+  restart on upgrade.
