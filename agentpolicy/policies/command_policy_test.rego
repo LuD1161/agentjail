@@ -376,6 +376,62 @@ test_bash_safe_path_allow if {
 }
 
 # ---------------------------------------------------------------------------
+# ADR 0057: .env secret-form matches - token-boundaried, narrowed from a
+# blanket ".env*" match. Secret forms stay blocked via Bash; non-secret
+# TEMPLATE forms (.env.example, .env.docker, ...) are no longer flagged.
+# ---------------------------------------------------------------------------
+
+test_bash_cat_dot_env_deny if {
+	d := agentjail.decision with input as bash_input("cat .env")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_cat_quoted_dot_env_production_deny if {
+	d := agentjail.decision with input as bash_input(`cat "./.env.production"`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_printf_redirect_dot_env_local_deny if {
+	d := agentjail.decision with input as bash_input("printf x > .env.local")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_echo_append_dot_env_dev_deny if {
+	d := agentjail.decision with input as bash_input("echo x >> .env.dev")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# Negative: TEMPLATE-named env files are no longer flagged (ADR 0057 bounded
+# relaxation - file_policy's Read path still asks on the broad set).
+test_bash_touch_env_example_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input("touch foo/.env.example")
+}
+
+test_bash_cat_env_docker_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input("cat .env.docker")
+}
+
+test_bash_git_commit_mentions_env_example_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input(`git commit -m ".env.example docs"`)
+}
+
+# ---------------------------------------------------------------------------
 # Task A: new credential-store contains_sensitive_path — POSITIVE deny cases
 # ---------------------------------------------------------------------------
 

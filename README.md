@@ -315,7 +315,7 @@ For systemd-managed daemons (Linux), set via an environment override file:
 
 | Policy | Catches |
 |--|--|
-| `file_policy` | reads/writes to `~/.ssh`, `~/.aws`, `~/.gnupg`, credentials, secrets, `.env*` |
+| `file_policy` | reads/writes to `~/.ssh`, `~/.aws`, `~/.gnupg`, credentials, secrets; reads of any `.env*` still ask, writes are limited to secret `.env` forms (templates like `.env.example` are writable, [ADR 0057](./docs/adr/0057-env-write-deny-secret-form-denylist.md)) |
 | `mcp_policy` | unknown MCP servers; default-blocked: `*stripe*`, `*payment*`, `*billing*` |
 | `command_policy` | `rm -rf`, `curl\|bash`, `sudo`, `git push --force`, `env\|curl`, `chmod 777`, and more |
 

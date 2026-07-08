@@ -114,6 +114,11 @@ Two tiers:
   `~/Library/Keychains`, `/etc`, and non-temp `/var`.
 - **`is_sensitive_basename`** (`.env*`, `credentials*`, `secrets*`, `*.pem/.key/…`,
   `id_rsa`-family) → **ask** when inside the granted project dir, **deny** outside.
+  The `.env` predicate is op-aware: reads use the broad `.env*` match above
+  unchanged, writes/edits use a narrower secret-form deny-list only
+  (`.env`, `.env.local`, `.env.production`, ...) so non-secret templates
+  like `.env.example` are writable - see
+  [ADR 0057](./adr/0057-env-write-deny-secret-form-denylist.md).
 
 The temp tree (`$TMPDIR`, `/tmp`, `/var/folders/…`) is **allowed**. Project
 membership is boundary-safe (`p == cwd OR startswith(p, cwd + "/")`), so a sibling

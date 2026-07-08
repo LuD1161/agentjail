@@ -206,7 +206,7 @@ The production decision rules, evaluated on every tool use. Contains:
 |---|---|---|
 | `no-recursive-delete-of-protected-paths` | `exec` | Denies `rm -r -f` (any combination) targeting `$HOME`, `/`, `/Users/`, `/etc`, `/usr`, `/var`, `/opt` |
 | `no-find-delete-in-home` | `exec` | Denies `find ... -delete` / `--delete` when any search root is under `$HOME` |
-| `confirm-dotfile-write` | `file` | Asks before writing to `.env*`, `.ssh/**`, `**/credentials*` |
+| `confirm-dotfile-write` | `file` | Asks before writing to secret `.env` forms (`.env`, `.env.local`, `.env.production`, ...; non-secret templates like `.env.example` are allowed, [ADR 0057](../docs/adr/0057-env-write-deny-secret-form-denylist.md)), `.ssh/**`, `**/credentials*` |
 | `api-allowlist` | `http` | Denies outbound HTTP to hosts not in the explicit allowlist (Anthropic, GitHub, npm registry, etc.) |
 | `cred-not-granted` | `cred_use` | Denies credential requests for capabilities not in the agent's catalog |
 | `cred-auto-approve` | `cred_use` | Allows credential requests where `auto_approve: true` in capabilities.yaml |

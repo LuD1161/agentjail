@@ -46,9 +46,14 @@ The profile is **deny-list based** (allow-by-default):
 - **Denies writes** to sensitive paths: `~/.ssh`, `~/.aws`, `~/.gnupg`,
   `~/.config`, `~/.agentjail`, `~/.docker`, `~/.kube`, `~/.cargo`,
   `~/Downloads`, `~/Desktop`, `/etc`, `/var`
-- **Denies writes** matching sensitive filename patterns: `.env*`, `*.pem`,
-  `*.key`, `id_rsa`, `credentials`, `.netrc`, `~/.npmrc`, `~/.pypirc`,
-  `~/.git-credentials`
+- **Denies writes** matching sensitive filename patterns: secret `.env`
+  forms only (`.env`, `.env.local`, `.env.*.local`,
+  `.env.{production,prod,development,dev,staging,test,qa,uat,secret,secrets,vault,override}`)
+  - non-secret templates like `.env.example`, `.env.sample`, `.env.docker`
+    are writable, so cloning a repo that commits them works - see
+    [ADR 0057](./adr/0057-env-write-deny-secret-form-denylist.md); also
+    `*.pem`, `*.key`, `id_rsa`, `credentials`, `.netrc`, `~/.npmrc`,
+    `~/.pypirc`, `~/.git-credentials`
 - **Denies reads** of credential paths: `~/.ssh`, `~/.aws`, `~/.gnupg`,
   `~/.docker`, `~/.kube`, private key files
 - **Grants** the user keychain root (`~/Library/Keychains`, read+write) by

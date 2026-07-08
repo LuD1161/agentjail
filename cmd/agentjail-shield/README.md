@@ -84,7 +84,7 @@ mirroring the `is_sensitive_path` predicates in
 | `~/Desktop/` | deny | — |
 | `/etc/`, `/private/etc/` | deny | — |
 | `/var/`, `/private/var/` | deny | — |
-| `*.env`, `.envrc` | deny | — |
+| secret `.env` forms (`.env`, `.env.local`, `.env.production`, ...; templates like `.env.example` are writable, [ADR 0057](../../docs/adr/0057-env-write-deny-secret-form-denylist.md)), `.envrc` | deny | — |
 | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore` | deny | deny |
 | `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa` | deny | deny |
 | `credentials`, `secrets`, `.netrc` | deny | deny |

@@ -163,6 +163,39 @@ test_write_dotenv if {
 	}
 }
 
+# --- file: write to .env.production.local (secret form, ADR 0057) ---
+
+test_write_dotenv_production_local if {
+	decision == {"action": "ask", "rule_id": "confirm-dotfile-write"} with input as {
+		"hook": "file",
+		"op": "writeFile",
+		"path": "/Users/me/app/.env.production.local",
+		"context": {"home": "/Users/me"},
+	}
+}
+
+# --- file: write to .env.example (non-secret template, ADR 0057) - allow ---
+
+test_write_dotenv_example_allowed if {
+	decision == {"action": "allow"} with input as {
+		"hook": "file",
+		"op": "writeFile",
+		"path": "/Users/me/app/.env.example",
+		"context": {"home": "/Users/me"},
+	}
+}
+
+# --- file: write to .env.production.sample (non-secret template) - allow ---
+
+test_write_dotenv_production_sample_allowed if {
+	decision == {"action": "allow"} with input as {
+		"hook": "file",
+		"op": "writeFile",
+		"path": "/Users/me/app/.env.production.sample",
+		"context": {"home": "/Users/me"},
+	}
+}
+
 # --- file: write to .ssh/config ---
 
 test_write_ssh_config if {

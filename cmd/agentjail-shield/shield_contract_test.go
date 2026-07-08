@@ -46,6 +46,87 @@ func TestSensitiveFilePatterns_CompileAndCoverBoth(t *testing.T) {
 	}
 }
 
+// envWritePatterns returns the compiled regexps for every Write:true entry
+// in SensitiveFilePatterns() -- the set that governs whether a git checkout
+// (or any tool) writing a given path is allowed.
+func envWritePatterns(t *testing.T) []*regexp.Regexp {
+	t.Helper()
+	var out []*regexp.Regexp
+	for _, p := range SensitiveFilePatterns() {
+		if !p.Write {
+			continue
+		}
+		re, err := regexp.Compile(p.Regex)
+		if err != nil {
+			t.Fatalf("pattern %q does not compile: %v", p.Regex, err)
+		}
+		out = append(out, re)
+	}
+	return out
+}
+
+// anyPatternMatches reports whether path matches at least one of the given
+// compiled regexes.
+func anyPatternMatches(patterns []*regexp.Regexp, path string) bool {
+	for _, re := range patterns {
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSensitiveFilePatterns_EnvSecretFormsOnly is the ADR 0057 regression
+// guard: the shield must write-deny only secret-bearing .env forms (.env,
+// .env.local, .env.<mode>, .env.<name>.local) and must NOT write-deny
+// non-secret templates such as .env.example, so `git clone` of a repo that
+// commits those templates can complete its working-tree checkout.
+func TestSensitiveFilePatterns_EnvSecretFormsOnly(t *testing.T) {
+	patterns := envWritePatterns(t)
+
+	denied := []string{
+		".env",
+		"frontend/.env",
+		".env.local",
+		".env.production",
+		".env.prod",
+		".env.dev",
+		".env.staging",
+		".env.test",
+		".env.qa",
+		".env.uat",
+		".env.secret",
+		".env.secrets",
+		".env.vault",
+		".env.override",
+		".env.production.local",
+		".env.feature-x.local",
+		"worker/.env.local",
+	}
+	for _, path := range denied {
+		if !anyPatternMatches(patterns, path) {
+			t.Errorf("expected %q to be write-denied (secret-bearing .env form), but no pattern matched", path)
+		}
+	}
+
+	allowed := []string{
+		".env.example",
+		"frontend/.env.example",
+		".env.sample",
+		".env.template",
+		".env.dist",
+		".env.docker",
+		".env.defaults",
+		".env.schema",
+		".env.production.sample",
+	}
+	for _, path := range allowed {
+		if anyPatternMatches(patterns, path) {
+			t.Errorf("expected %q to be write-allowed (non-secret .env template), but a pattern matched it", path)
+		}
+	}
+}
+
 // TestNoNetproxyFallbackPorts pins the contract's fallback port set to
 // exactly {22, 80, 443} - both backends' --no-netproxy modes key off this
 // value; a silent change here would silently change enforcement on both
