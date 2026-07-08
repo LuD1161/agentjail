@@ -246,7 +246,13 @@ echo "✅  installed $# binaries  →  ${INSTALL_DIR}"
 # formula can export AGENTJAIL_INSTALL_METHOD=brew before invoking the installer.
 export AGENTJAIL_INSTALL_METHOD="${AGENTJAIL_INSTALL_METHOD:-curl}"
 
-"$INSTALL_DIR/agentjail" install
+# Non-fatal: a partial agent-install failure (e.g. one detected agent's hook
+# wiring fails) must not abort the rest of this script under `set -eu` — the
+# PATH setup and next-steps banner below still need to run so the user isn't
+# left without a usable `agentjail` command. `agentjail install` prints its
+# own per-step/per-agent errors; this just stops a non-zero exit from killing
+# the shell.
+"$INSTALL_DIR/agentjail" install || echo "⚠️  agentjail install reported errors above — see output; continuing setup" >&2
 
 # --- Put agentjail on PATH (default on; opt out: AGENTJAIL_NO_MODIFY_PATH=1) ---
 
