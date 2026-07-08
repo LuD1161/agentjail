@@ -7,21 +7,72 @@ import (
 	"strings"
 )
 
+// maxSubstitutionDepth bounds recursion into interpreter scripts (sh -c
+// '...') and command substitutions ($(...), `...`) so pathological or
+// self-referential input (e.g. "bash -c 'bash -c \"bash -c ...\"'") cannot
+// cause unbounded recursion.
+const maxSubstitutionDepth = 8
+
+// interpreters are shells that, when invoked as "<shell> -c <script>",
+// execute an arbitrary command string. The -c argument is parsed
+// recursively so any binaries named inside the script are also surfaced.
+var interpreters = map[string]bool{
+	"sh":   true,
+	"bash": true,
+	"zsh":  true,
+	"dash": true,
+}
+
+// wrappers are commands that execute another program on the caller's
+// behalf, more or less transparently. The wrapper's own name is still
+// reported, but the parser also looks past its flags / env-assignments to
+// find — and recursively parse — the real command being wrapped.
+var wrappers = map[string]bool{
+	"env":     true,
+	"nohup":   true,
+	"timeout": true,
+	"xargs":   true,
+	"sudo":    true,
+	"command": true,
+	"nice":    true,
+	"stdbuf":  true,
+	"setsid":  true,
+}
+
 // Result holds the parsed components of a shell command string.
 type Result struct {
-	// Binaries contains the base name of every command binary in the
-	// pipeline/chain. For "git status && /usr/local/bin/agentjail policy list | grep foo",
-	// Binaries is ["git", "agentjail", "grep"].
+	// Binaries contains the base name of every command binary found in the
+	// pipeline/chain, including binaries reachable only through newline /
+	// ';' / '&&' / '||' / '|' separated commands, interpreter wrappers
+	// (sh -c, bash -c, ...), process wrappers (sudo, env, nohup, timeout,
+	// xargs, command, nice, stdbuf, setsid), and command substitutions
+	// ($(...) and `...`). For "git status && /usr/local/bin/agentjail
+	// policy list | grep foo", Binaries is ["git", "agentjail", "grep"].
 	Binaries []string
 }
 
 // Parse extracts binary names from a shell command string.
-// It splits on pipes (|), chains (&&, ||), semicolons (;),
-// and for each segment extracts the command binary (first non-assignment word).
-// Paths are reduced to basenames (/usr/local/bin/agentjail → agentjail).
-// Quoted paths are handled ("$HOME/.agentjail/bin/agentjail" → agentjail).
+// It splits on pipes (|), chains (&&, ||), semicolons (;), and newlines,
+// and for each segment extracts the command binary (first non-assignment
+// word). Paths are reduced to basenames (/usr/local/bin/agentjail →
+// agentjail). Quoted paths are handled ("$HOME/.agentjail/bin/agentjail" →
+// agentjail). Interpreter wrappers (sh/bash/zsh/dash -c '<script>') are
+// parsed recursively, as are command substitutions ($(...), `...`).
 // Returns an empty Result (not nil) if parsing finds no binaries.
 func Parse(cmd string) Result {
+	binaries := parseBinaries(cmd, 0)
+	if binaries == nil {
+		binaries = []string{}
+	}
+	return Result{Binaries: binaries}
+}
+
+// parseBinaries is the recursive core of Parse. depth bounds recursion into
+// interpreter scripts / command substitutions (see maxSubstitutionDepth).
+func parseBinaries(cmd string, depth int) []string {
+	if depth > maxSubstitutionDepth {
+		return nil
+	}
 	segments := splitSegments(cmd)
 	var binaries []string
 	for _, seg := range segments {
@@ -29,23 +80,21 @@ func Parse(cmd string) Result {
 		if seg == "" {
 			continue
 		}
-		bins := extractBinaries(seg)
-		binaries = append(binaries, bins...)
+		binaries = append(binaries, extractBinaries(seg, depth)...)
 	}
-	if binaries == nil {
-		binaries = []string{}
-	}
-	return Result{Binaries: binaries}
+	return binaries
 }
 
-// splitSegments splits a shell command string on |, &&, ||, ; operators
-// without splitting inside quoted strings or $(...) command substitutions.
+// splitSegments splits a shell command string on |, &&, ||, ;, and newline
+// operators without splitting inside quoted strings, $(...) command
+// substitutions, or `...` command substitutions.
 func splitSegments(cmd string) []string {
 	var segments []string
 	var current strings.Builder
 	i := 0
 	inSingle := false
 	inDouble := false
+	inBacktick := false
 	depth := 0 // depth for $( ... ) substitutions
 
 	for i < len(cmd) {
@@ -72,6 +121,13 @@ func splitSegments(cmd string) []string {
 			current.WriteByte(ch)
 			i++
 
+		case inBacktick:
+			if ch == '`' {
+				inBacktick = false
+			}
+			current.WriteByte(ch)
+			i++
+
 		case depth > 0:
 			// inside $( ... )
 			if ch == '(' {
@@ -93,6 +149,11 @@ func splitSegments(cmd string) []string {
 
 		case ch == '"':
 			inDouble = true
+			current.WriteByte(ch)
+			i++
+
+		case ch == '`':
+			inBacktick = true
 			current.WriteByte(ch)
 			i++
 
@@ -123,6 +184,11 @@ func splitSegments(cmd string) []string {
 			current.Reset()
 			i++
 
+		case ch == '\n':
+			segments = append(segments, current.String())
+			current.Reset()
+			i++
+
 		default:
 			current.WriteByte(ch)
 			i++
@@ -137,9 +203,12 @@ func splitSegments(cmd string) []string {
 }
 
 // extractBinaries extracts the binary name(s) from a single command segment.
-// It handles env prefixes (KEY=val), sudo, env, subshell parens, and
-// $(which cmd) / $(command -v cmd) substitutions.
-func extractBinaries(seg string) []string {
+// It resolves the primary command word — unwrapping process wrappers
+// (sudo, env, nohup, timeout, xargs, command, nice, stdbuf, setsid) and
+// interpreter -c scripts (sh/bash/zsh/dash) recursively — and separately
+// scans the remaining argument tokens for embedded command substitutions
+// ($(...) / `...`), which execute regardless of how their result is used.
+func extractBinaries(seg string, depth int) []string {
 	seg = strings.TrimSpace(seg)
 
 	// Strip leading subshell parens: (cmd arg) → cmd arg
@@ -147,22 +216,28 @@ func extractBinaries(seg string) []string {
 		seg = strings.TrimPrefix(seg, "(")
 		seg = strings.TrimSpace(seg)
 	}
+	if seg == "" {
+		return nil
+	}
 
-	// Tokenize the segment respecting quotes (but not splitting on operators
-	// since we already did that).
 	tokens := tokenize(seg)
 	if len(tokens) == 0 {
 		return nil
 	}
 
 	var result []string
+	// [skipFrom, skipTo) marks tokens already fully resolved (recursively
+	// parsed) by the primary-command logic below, so the trailing
+	// substitution scan doesn't double-count them.
+	skipFrom, skipTo := 0, 0
+
 	i := 0
 	for i < len(tokens) {
 		tok := tokens[i]
 
 		// Skip redirection operators and their targets: >, >>, 2>, <
 		if tok == ">" || tok == ">>" || tok == "2>" || tok == "<" || tok == "2>>" {
-			i += 2 // skip operator and filename
+			i += 2
 			continue
 		}
 
@@ -172,65 +247,104 @@ func extractBinaries(seg string) []string {
 			continue
 		}
 
-		// Handle $(which cmd) or $(command -v cmd) substitution as the binary
-		if binary, ok := parseSubstitution(tok); ok {
-			result = append(result, binary)
-			return result
+		// The whole token is a command substitution, e.g. "$(agentjail x)"
+		// or "`agentjail x`" used as the command itself.
+		if inner, ok := wholeSubstitutionInner(tok); ok {
+			result = append(result, resolveSubstitutionInner(inner, depth)...)
+			skipFrom, skipTo = i, i+1
+			break
 		}
 
-		// Found the binary token
 		binary := cleanBinary(tok)
 		if binary == "" {
 			i++
 			continue
 		}
 		result = append(result, binary)
+		i++
 
-		// Special case: sudo or env — also capture the actual command after flags/assignments
-		if binary == "sudo" || binary == "env" {
-			i++
-			// skip sudo flags (-u user, -E, etc.) and env assignments
-			for i < len(tokens) {
-				next := tokens[i]
+		switch {
+		case interpreters[binary]:
+			// sh/bash/zsh/dash -c '<script>' — the script argument is
+			// itself a full command string; parse it recursively.
+			if scriptIdx, script, ok := findDashCScript(tokens, i); ok {
+				result = append(result, parseBinaries(script, depth+1)...)
+				skipFrom, skipTo = scriptIdx, scriptIdx+1
+			}
+
+		case wrappers[binary]:
+			j := i
+			introspectionOnly := false
+			for j < len(tokens) {
+				next := tokens[j]
+				if next == "--" {
+					j++
+					continue
+				}
 				if strings.HasPrefix(next, "-") {
-					// sudo flag: might consume a value, simple heuristic — skip flag
-					// For -u/-g we skip one more token (the user/group)
-					if (next == "-u" || next == "-g" || next == "-C" || next == "-c") && i+1 < len(tokens) {
-						i += 2
+					// "command -v"/"command -V" only look up a command,
+					// they don't execute it.
+					if binary == "command" && (next == "-v" || next == "-V") {
+						introspectionOnly = true
+					}
+					if wrapperFlagTakesValue(binary, next) && j+1 < len(tokens) {
+						j += 2
 					} else {
-						i++
+						j++
 					}
 					continue
 				}
 				if isAssignment(next) {
-					i++
+					j++
 					continue
 				}
-				// next non-flag, non-assignment token is the real command
-				if sub, ok := parseSubstitution(next); ok {
-					result = append(result, sub)
-				} else {
-					cmd := cleanBinary(next)
-					if cmd != "" {
-						result = append(result, cmd)
-					}
+				if binary == "timeout" && startsWithDigit(next) {
+					// duration argument, e.g. "timeout 5 agentjail ..."
+					j++
+					continue
 				}
 				break
 			}
+			if !introspectionOnly && j < len(tokens) && depth < maxSubstitutionDepth {
+				rest := strings.Join(tokens[j:], " ")
+				result = append(result, extractBinaries(rest, depth+1)...)
+				skipFrom, skipTo = j, len(tokens)
+			} else {
+				// Nothing recursively parsed beyond the wrapper's own
+				// flags — still scan the remaining tokens below for
+				// embedded substitutions (the shell evaluates those
+				// regardless of what consumes the result).
+				skipFrom, skipTo = j, j
+			}
 		}
-		return result
+		break
 	}
+
+	// Command substitutions embedded in argument tokens execute
+	// unconditionally as part of shell word-expansion, independent of the
+	// primary command resolved above.
+	for idx, tok := range tokens {
+		if idx >= skipFrom && idx < skipTo {
+			continue
+		}
+		for _, inner := range findSubstitutions(tok) {
+			result = append(result, resolveSubstitutionInner(inner, depth)...)
+		}
+	}
+
 	return result
 }
 
-// tokenize splits a shell segment into tokens respecting single/double quotes
-// and $(...) command substitutions. It does NOT split on shell operators
-// (those were already consumed by splitSegments).
+// tokenize splits a shell segment into tokens respecting single/double
+// quotes, backtick command substitutions, and $(...) command substitutions.
+// It does NOT split on shell operators (those were already consumed by
+// splitSegments).
 func tokenize(s string) []string {
 	var tokens []string
 	var cur strings.Builder
 	inSingle := false
 	inDouble := false
+	inBacktick := false
 	depth := 0 // depth for $( ... ) substitutions
 	i := 0
 
@@ -256,6 +370,12 @@ func tokenize(s string) []string {
 			} else {
 				cur.WriteByte(ch)
 			}
+			i++
+		case inBacktick:
+			if ch == '`' {
+				inBacktick = false
+			}
+			cur.WriteByte(ch)
 			i++
 		case depth > 0:
 			// inside $( ... ) — keep everything as part of the current token
@@ -284,7 +404,11 @@ func tokenize(s string) []string {
 			inDouble = true
 			cur.WriteByte(ch)
 			i++
-		case ch == ' ' || ch == '\t':
+		case ch == '`':
+			inBacktick = true
+			cur.WriteByte(ch)
+			i++
+		case ch == ' ' || ch == '\t' || ch == '\n':
 			if cur.Len() > 0 {
 				tokens = append(tokens, cur.String())
 				cur.Reset()
@@ -322,6 +446,10 @@ func isIdentChar(ch rune) bool {
 		(ch >= '0' && ch <= '9') || ch == '_'
 }
 
+func startsWithDigit(tok string) bool {
+	return tok != "" && tok[0] >= '0' && tok[0] <= '9'
+}
+
 // cleanBinary strips quotes, takes the basename, and returns the binary name.
 func cleanBinary(tok string) string {
 	// Strip outer single quotes
@@ -342,17 +470,100 @@ func cleanBinary(tok string) string {
 	return tok
 }
 
-// parseSubstitution checks if a token is $(which cmd) or $(command -v cmd)
-// and returns the extracted command name.
-func parseSubstitution(tok string) (string, bool) {
-	tok = strings.TrimSpace(tok)
-	if !strings.HasPrefix(tok, "$(") || !strings.HasSuffix(tok, ")") {
-		return "", false
+// unquoteToken strips a single layer of matching outer quotes from a token,
+// without basename-ing it (unlike cleanBinary, this is used for full
+// command strings such as a "-c" script argument).
+func unquoteToken(tok string) string {
+	if len(tok) >= 2 {
+		if tok[0] == '\'' && tok[len(tok)-1] == '\'' {
+			return tok[1 : len(tok)-1]
+		}
+		if tok[0] == '"' && tok[len(tok)-1] == '"' {
+			s := tok[1 : len(tok)-1]
+			s = strings.ReplaceAll(s, `\"`, `"`)
+			return s
+		}
 	}
-	inner := tok[2 : len(tok)-1]
+	return tok
+}
+
+// findDashCScript scans tokens starting at start for a "-c" flag (allowing
+// other leading dash-flags before it, e.g. "bash --norc -c '...'") and
+// returns the index and unquoted text of the script argument that follows.
+// If a non-flag token is seen before "-c" (e.g. "bash script.sh"), it stops
+// looking — that invocation runs a script file, which this parser does not
+// read.
+func findDashCScript(tokens []string, start int) (idx int, script string, ok bool) {
+	for k := start; k < len(tokens); k++ {
+		t := tokens[k]
+		if t == "-c" {
+			if k+1 < len(tokens) {
+				return k + 1, unquoteToken(tokens[k+1]), true
+			}
+			return 0, "", false
+		}
+		if !strings.HasPrefix(t, "-") {
+			break
+		}
+	}
+	return 0, "", false
+}
+
+// wrapperFlagTakesValue reports whether flag is a known value-taking option
+// for the given wrapper binary, so its argument can be skipped along with it.
+func wrapperFlagTakesValue(binary, flag string) bool {
+	switch binary {
+	case "sudo":
+		switch flag {
+		case "-u", "-g", "-C", "-c", "-h", "-p", "-r", "-t", "-U":
+			return true
+		}
+	case "env":
+		switch flag {
+		case "-u", "-C", "-S":
+			return true
+		}
+	case "nice":
+		return flag == "-n"
+	case "xargs":
+		switch flag {
+		case "-I", "-i", "-L", "-l", "-n", "-P", "-s", "-a", "-d", "-E":
+			return true
+		}
+	case "stdbuf":
+		switch flag {
+		case "-i", "-o", "-e":
+			return true
+		}
+	case "timeout":
+		switch flag {
+		case "-s", "-k", "--signal", "--kill-after":
+			return true
+		}
+	}
+	return false
+}
+
+// wholeSubstitutionInner returns the inner command text if tok is entirely
+// a command substitution — "$(...)" or "`...`" — with nothing before or
+// after it.
+func wholeSubstitutionInner(tok string) (string, bool) {
+	if strings.HasPrefix(tok, "$(") && strings.HasSuffix(tok, ")") && len(tok) >= 3 {
+		return strings.TrimSpace(tok[2 : len(tok)-1]), true
+	}
+	if strings.HasPrefix(tok, "`") && strings.HasSuffix(tok, "`") && len(tok) >= 2 && tok != "`" {
+		return strings.TrimSpace(tok[1 : len(tok)-1]), true
+	}
+	return "", false
+}
+
+// resolveWhichOrCommandV special-cases "$(which cmd)" and
+// "$(command -v cmd)" / "$(command -V cmd)" substitutions, which resolve to
+// the path of cmd (and cmd is what actually ends up invoked by the
+// surrounding command line), rather than "which"/"command" themselves.
+func resolveWhichOrCommandV(inner string) (string, bool) {
 	inner = strings.TrimSpace(inner)
 
-	// $(which cmd)
 	if strings.HasPrefix(inner, "which ") {
 		parts := strings.Fields(inner)
 		if len(parts) >= 2 {
@@ -360,10 +571,8 @@ func parseSubstitution(tok string) (string, bool) {
 		}
 	}
 
-	// $(command -v cmd)
 	if strings.HasPrefix(inner, "command ") {
 		parts := strings.Fields(inner)
-		// skip "command" and any flags like -v
 		for i := 1; i < len(parts); i++ {
 			if !strings.HasPrefix(parts[i], "-") {
 				return filepath.Base(parts[i]), true
@@ -372,4 +581,76 @@ func parseSubstitution(tok string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// resolveSubstitutionInner resolves the binaries invoked by the inner text
+// of a command substitution: the which/command-v shortcut if it matches,
+// otherwise a full recursive parse of the inner text as a command string.
+func resolveSubstitutionInner(inner string, depth int) []string {
+	if resolved, ok := resolveWhichOrCommandV(inner); ok {
+		return []string{resolved}
+	}
+	if depth >= maxSubstitutionDepth {
+		return nil
+	}
+	return parseBinaries(inner, depth+1)
+}
+
+// findSubstitutions scans raw token text for $(...) and `...` command
+// substitutions and returns their inner command text. Content inside
+// single quotes is skipped (the shell does not expand substitutions there).
+func findSubstitutions(s string) []string {
+	var out []string
+	i := 0
+	for i < len(s) {
+		ch := s[i]
+
+		if ch == '\'' {
+			j := i + 1
+			for j < len(s) && s[j] != '\'' {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+
+		if ch == '$' && i+1 < len(s) && s[i+1] == '(' {
+			depth := 1
+			j := i + 2
+			for j < len(s) && depth > 0 {
+				if s[j] == '(' {
+					depth++
+				} else if s[j] == ')' {
+					depth--
+				}
+				j++
+			}
+			inner := s[i+2:]
+			if depth == 0 {
+				inner = s[i+2 : j-1]
+			}
+			out = append(out, strings.TrimSpace(inner))
+			i = j
+			continue
+		}
+
+		if ch == '`' {
+			j := i + 1
+			for j < len(s) && s[j] != '`' {
+				j++
+			}
+			out = append(out, strings.TrimSpace(s[i+1:j]))
+			if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+
+		i++
+	}
+	return out
 }
