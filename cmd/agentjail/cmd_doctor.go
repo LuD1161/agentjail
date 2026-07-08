@@ -63,6 +63,13 @@ func runDoctor() int {
 	}
 	fmt.Fprintln(os.Stdout)
 
+	// ── Network Interception ────────────────────────────────────────────
+	fmt.Fprintln(os.Stdout, "Network Interception")
+	for _, c := range checkNetworkInterception() {
+		printCheck(c)
+	}
+	fmt.Fprintln(os.Stdout)
+
 	// ── Daemon ──────────────────────────────────────────────────────────
 	fmt.Fprintln(os.Stdout, "Daemon")
 	daemonChecks := checkDaemon(home)
