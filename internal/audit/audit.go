@@ -52,6 +52,12 @@ const (
 	// shield when it resolves a `./.agentjail/policy.yaml` for a session.
 	ProjectOverlayApplied          = "project_overlay.applied"
 	ProjectOverlayIgnoredUntrusted = "project_overlay.ignored_untrusted"
+	// ShieldMetadataEgressExposed is emitted by the launch-time cloud-
+	// metadata (IMDS) egress guard (main.go decideMetadataEgress) when the
+	// metadata service is reachable through the shield's default
+	// (port-only, --no-netproxy) egress path -- best-effort, fired whether
+	// or not --audit-strict caused the launch to be refused. See ADR 0049.
+	ShieldMetadataEgressExposed = "shield.metadata_egress_exposed"
 )
 
 // Event is one audit log entry.

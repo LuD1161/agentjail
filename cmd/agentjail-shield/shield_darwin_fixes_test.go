@@ -364,4 +364,12 @@ func TestDarwinCapability_HonorsPatternsGrantsAndFallbackPorts(t *testing.T) {
 	if _, ok := caps.Unsupported[CapLoopbackScopedBind]; !ok {
 		t.Error("darwin should name CapLoopbackScopedBind as Unsupported (Approach A ships, not loopback-scoped)")
 	}
+	// P2/M2 (ADR 0049): darwin cannot carve a per-IP deny out of the
+	// port-only *:80/*:443 allow rules above (sbpl rejects literal IP
+	// hosts), so CapMetadataIPFilter must be named Unsupported rather than
+	// silently dropped. The mitigation is the launch-time
+	// decideMetadataEgress guard in main.go, not a sbpl rule.
+	if _, ok := caps.Unsupported[CapMetadataIPFilter]; !ok {
+		t.Error("darwin should name CapMetadataIPFilter as Unsupported (sbpl rejects literal IP hosts)")
+	}
 }

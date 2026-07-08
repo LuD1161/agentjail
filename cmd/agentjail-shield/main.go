@@ -65,7 +65,7 @@ func main() {
 	netproxyEnable := flag.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
 	noNetproxy := flag.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
 	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
-	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1)")
+	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
@@ -74,7 +74,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  --netproxy          enable per-host egress enforcement via agentjail-netproxy (opt-in; default off)")
 		fmt.Fprintln(os.Stderr, "  --no-netproxy       (default) port-based network filtering only, no per-host enforcement")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
-		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings")
+		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings, or if IMDS is reachable in port-only mode")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Wraps the coding agent in the OS-native sandbox before exec.")
 		fmt.Fprintln(os.Stderr, "Requires a '--' separator between shield flags and the agent command.")
@@ -161,6 +161,30 @@ func main() {
 	// Egress enforcement is opt-in: netproxy runs only when --netproxy is
 	// passed and --no-netproxy is not. Default (neither flag) is port-only.
 	noNetproxyEffective := resolveNoNetproxy(*netproxyEnable, *noNetproxy)
+
+	// Cloud-metadata (IMDS) egress guard (P2/M2, ADR 0049). In the default
+	// port-only mode neither backend can filter egress by destination IP
+	// (CapMetadataIPFilter, shield_contract.go), so 169.254.169.254 is
+	// reachable over the same allowlisted port 80 as any other host. Since
+	// there is no network-layer mitigation available, this probes
+	// reachability and either refuses to launch (--audit-strict) or emits a
+	// loud warning + audit finding (default) -- run before runShield/exec
+	// so a refusal never spawns the agent. --profile-print is exempted: it
+	// only prints the profile and exits, never execs the agent.
+	if !*profilePrint {
+		decision := decideMetadataEgress(probeMetadataReachable(), noNetproxyEffective, *auditStrict)
+		if decision.Applicable {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: %s\n", decision.Message)
+			_ = emitter.Emit(ctx, audit.Event{
+				EventType: audit.ShieldMetadataEgressExposed,
+				Detail:    map[string]string{"refused": fmt.Sprintf("%t", decision.Refuse), "strict": fmt.Sprintf("%t", *auditStrict)},
+				Actor:     "shield",
+			})
+			if decision.Refuse {
+				os.Exit(1)
+			}
+		}
+	}
 
 	// Delegate to the OS-specific sandbox implementation.
 	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *policyPath, startTime, emitter)

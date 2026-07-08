@@ -103,6 +103,15 @@ func TestBuildLandlockNetPlan_NamesUnsupportedCapabilities(t *testing.T) {
 			if _, ok := plan.Unsupported[CapLoopbackScopedBind]; !ok {
 				t.Error("plan must name CapLoopbackScopedBind as Unsupported")
 			}
+			// P2/M2 (ADR 0049): LANDLOCK_RULE_NET_PORT is port-scoped only
+			// (no destination-address component), so the port-only
+			// fallback's CONNECT-to-{22,80,443} rule cannot carve out a
+			// deny for 169.254.169.254. Must be named Unsupported, not
+			// silently dropped -- mitigated by the launch-time
+			// decideMetadataEgress guard in main.go instead.
+			if _, ok := plan.Unsupported[CapMetadataIPFilter]; !ok {
+				t.Error("plan must name CapMetadataIPFilter as Unsupported")
+			}
 		})
 	}
 }
