@@ -6,6 +6,27 @@ Feature under review: the **transparent tunnel + network visibility** layer (AGE
 
 All line numbers verified against the worktree at review time.
 
+> **Resolution status (updated 2026-07-08, commits `86a3195`…`8f94cd7`).** AGE-148
+> landed the unprivileged-userns + TUN-fd mechanism and several fixes from this
+> review. Line numbers below are as-of review time and predate these commits.
+>
+> | Finding | Status |
+> |---|---|
+> | **W1** (Linux intercepts nothing) | **Fixed** — agent runs in the netns; TUN fd pumped to the forwarder; UDP DNS intercepted and answered from the VIP registry. `04d256d`, `236184e`. *Caveat: end-to-end still needs real-TUN-host validation.* |
+> | **S-F1** (no transparent forwarder) | **Fixed** — promiscuous+spoofing forwarder accepts arbitrary-VIP SYNs. `9150fd2` |
+> | **S-F2** (no `recover()`) | **Fixed** — `handleConn` panic-isolated → denies+closes. `86a3195` |
+> | **S-B1** (no cap-drop lifecycle) | **Fixed** — `ApplyHardening` (NO_NEW_PRIVS, cap-drop, SECBIT_NOROOT, non-dumpable) on in-ns exec. `2621dcf`, `04d256d` |
+> | **S-D1** (fail-open policy) | **Fixed** — UNKNOWN→deny (fail-closed) on managed DB ports {5432,3306,6379,27017}; non-managed ports stay allow-by-default (host availability). `8f94cd7` |
+> | **S-C1** (CA key on disk) | **Fixed** — `GenerateCAInMemory`; `setupTunnelCA` writes only `root.crt`, never `root.key`. Hardens the not-yet-wired MITM subsystem. `8f94cd7` |
+> | **S-C2** (credential headers logged) | **Fixed** — sensitive header keys redacted at the store boundary. Not-yet-wired MITM subsystem. `8f94cd7` |
+> | **E / S4** (macOS machine-wide utun-via-root-daemon) | **Removed** — dead daemon-RPC path deleted; macOS keeps its NEPacketTunnelProvider Network Extension. `c6687a3` |
+> | Mechanism A (host-veth + privileged daemon) | **Deleted** per ADR 0049; **AGE-103/AGE-140 obviated**. `c6687a3` |
+>
+> **Still open:** S-D2 (per-message inspection, not first-1024-bytes-only), S-F3
+> (guard upstream dials against the VIP pool), and full DNS-VIP↔TCP end-to-end
+> validation on a real Linux TUN host. MITM TLS termination is not wired into the
+> forward gateway (it is a plain relay today), so S-C1/S-C2 are defense-in-depth.
+
 ---
 
 ## Two product constraints this feature must honor
