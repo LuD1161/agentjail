@@ -34,6 +34,7 @@ inst() { echo "${TB_PREFIX}$1"; }
 # ---- Lima driver -----------------------------------------------------------
 
 lima_running() { limactl list --format '{{.Name}} {{.Status}}' | grep -q "^$(inst "$1") Running"; }
+lima_exists()  { limactl list --format '{{.Name}}' | grep -qx "$(inst "$1")"; }
 
 lima_guest_exec() {
     local name=$1; shift
@@ -53,7 +54,8 @@ TART_GOLDEN="${TART_GOLDEN:-golden-macos}"
 TART_SSH_USER="${TART_SSH_USER:-admin}"   # cirruslabs base images: admin/admin
 TART_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 
-tart_ip() { tart ip "$(inst "$1")"; }
+tart_ip()     { tart ip "$(inst "$1")"; }
+tart_exists() { tart list | awk '{print $2}' | grep -qx "$(inst "$1")"; }
 
 tart_guest_exec() {
     local name=$1; shift

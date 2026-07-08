@@ -13,6 +13,9 @@
 #                                         build tarball -> install.sh ->
 #                                         Claude Code + agentjail, ready to use
 #   testbed.sh test <name> [scenario]     run a scenario (default: e2e-smoke) in-guest
+#   testbed.sh gate [--worktree <path>]   RELEASE GATE: clean box -> provision ->
+#                                         scenario, non-zero exit on any failure.
+#                                         Run before tagging a release.
 #   testbed.sh snapshot <name> <tag>      checkpoint (Lima only)
 #   testbed.sh reset <name> [tag]         revert to golden (or named) snapshot
 #   testbed.sh destroy <name>             delete the VM
@@ -135,6 +138,37 @@ do_exec() {
     guest_exec "$name" "$@"
 }
 
+# do_gate is the release gate: a fresh, clean box (reset to the post-cloud-init
+# golden, or created if absent) provisioned from the given worktree and run
+# through a scenario. Any failure -> non-zero exit, so it can gate `git tag`.
+# The gate testbed is left at rest afterward (reset next run) for speed.
+do_gate() {
+    local worktree="$REPO_ROOT" name="release-gate" scenario="e2e-smoke"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;
+            --scenario) scenario="$2"; shift 2 ;;
+            *) die "unknown gate flag: $1" ;;
+        esac
+    done
+
+    log "RELEASE GATE starting (driver=$DRIVER, worktree=$worktree)"
+    if "${DRIVER}_exists" "$name"; then
+        log "reusing '$name' — resetting to clean golden"
+        do_reset "$name"
+    else
+        do_create "$name"
+    fi
+    do_provision "$name" --worktree "$worktree"
+    log "RELEASE GATE: running scenario '$scenario' on a clean box"
+    if do_test "$name" "$scenario"; then
+        log "RELEASE GATE ✓ PASS — safe to tag"
+        return 0
+    else
+        die "RELEASE GATE ✗ FAIL — do NOT release"
+    fi
+}
+
 do_test() {
     local name="${1:?usage: testbed.sh test <name> [scenario]}" scenario="${2:-e2e-smoke}"
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
@@ -196,6 +230,7 @@ case "$cmd" in
     ssh)       do_ssh "$@" ;;
     exec)      do_exec "$@" ;;
     test)      do_test "$@" ;;
+    gate)      do_gate "$@" ;;
     snapshot)  do_snapshot "$@" ;;
     reset)     do_reset "$@" ;;
     destroy)   do_destroy "$@" ;;

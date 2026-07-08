@@ -1,4 +1,4 @@
-.PHONY: help build dev-install shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball
+.PHONY: help build dev-install shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball e2e-release
 
 BIN ?= bin/agentjail
 
@@ -73,6 +73,9 @@ smoke: ## run the end-to-end smoke tests (hook pipeline + OS sandbox)
 
 e2e: ## full new-user E2E test (build, daemon, hook, store, replay, UI, filters, try)
 	bash test/e2e-newuser.sh
+
+e2e-release: ## RELEASE GATE: clean VM -> real installer -> policy enforcement (run before tagging)
+	bash test/testbed/testbed.sh gate --worktree .
 
 # Full codesign identity, e.g. "Developer ID Application: NAME (TEAMID)".
 # Kept out of the tree: set the APPLE_SIGNING_IDENTITY env var (the matching

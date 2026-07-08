@@ -210,6 +210,14 @@ This goes in the same commit as the code change, not a follow-up.
 
 ### Before cutting a release
 
+**Release gate (must pass first):** run `make e2e-release` — it stands up a
+clean VM, installs agentjail through the real `install.sh` path, installs
+Claude Code, and asserts policy enforcement on the installed binaries. A
+non-zero exit means **do not tag**. This is the only automated check that
+exercises the true clean-box user path (see `test/testbed/`, ADR 0053,
+Linear AGE-146). Run it on the home server for Linux; run it on the Mac for
+the macOS build.
+
 Every tagged release must include:
 
 1. **Release summary SVG** — create `assets/releases/vX.Y.Z-summary.svg` with a
