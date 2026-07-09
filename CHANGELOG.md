@@ -2,6 +2,67 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.6.0 - 2026-07-08
+
+![v0.6.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.6.0-summary.svg)
+
+#### TL;DR
+
+- Hardened the credential broker and daemon control plane - master key is now unreadable by the agent, grants auto-expire, and the daemon verifies peer UID/CWD instead of trusting self-reported claims.
+- Brought the macOS shield to parity with Linux for ssh-agent auth, including a fix for the pinned-IdentityFile blind spot that silently broke `git` over SSH under the sandbox.
+- Added first-class Linux install via a systemd `--user` service and a clean-VM testbed with a `make e2e-release` gate.
+- Inverted the over-broad `.env` write-deny to a secret-form deny-list so cloning repos that commit `.env.example`/`.env.docker` templates no longer fails.
+
+### Added
+
+- **ssh-agent auth under the shield** - `SSH_AUTH_SOCK` passthrough, agent-socket
+  connect allowed on the macOS seatbelt, and per-user temp + AF_UNIX local sockets
+- **ssh-agent readiness tooling** - typed prober, a `doctor` warning when keys are
+  on disk but not loaded, and a one-shot hook advisory on the allow path
+- **Pinned-IdentityFile fix** (ADR 0056) - the shield injects an agent-backed
+  `GIT_SSH_COMMAND` with `IdentitiesOnly=no` so a pinned on-disk key no longer
+  breaks `git` over SSH under the sandbox
+- **Daemon control-plane socket** (ADR 0052) - policy reload over the control
+  socket with SIGHUP fallback
+- **`daemon_unreachable` policy knob** (ADR 0050) with a hook-fallback sidecar the
+  hook acts on
+- **Linux install support** (ADR 0051) via a systemd `--user` daemon service
+- **Clean-VM testbed + `make e2e-release` gate** (ADR 0053) - installs through the
+  real `install.sh` and asserts enforcement on a clean box
+- **Remediation hints** on `file_policy` and `command_policy` denies, and the exact
+  MCP server name in the unknown-server deny hint
+
+### Changed
+
+- **`.env` write-deny inverted to a secret-form deny-list** (ADR 0057) - only
+  secret-bearing forms are denied; templates like `.env.example` and `.env.docker`
+  are allowed
+- **Shell parsing** now unwraps interpreter and process wrappers
+  (python/node/perl/ruby/php), newlines, and command substitutions
+- **The shield re-asserts the agentjail hook** right before exec
+
+### Fixed
+
+- **`install.sh`** no longer aborts the outer script under `set -eu`
+- **Daemon agent-socket** connections are bounded with an idle read deadline
+- **README MCP inventory** references now point at the real `mcp scan`/`mcp where`
+  commands
+
+### Security
+
+- **Secrets-broker master key** is protected from agent reads (policy + shield)
+- **Postgres passwords** no longer leak via `psql` argv; grants auto-expire and
+  requested TTL is capped
+- **Daemon peer identity** - verify peer UID and CWD instead of trusting
+  self-reported claims
+- **`AGENTJAIL_SOCKET`** is honored only when it resolves under `~/.agentjail`;
+  the fail-open sentinel re-arms on startup
+- **Credential-dir grants** - block MCP-command credential-dir grants and deny
+  `.config` credential subdirs
+- **Cloud-metadata (IMDS) egress** guarded in port-only mode
+- **Per-project policy overlay** is trust-gated before it is applied; store
+  redaction extended to more credential shapes
+
 ## v0.5.1 - 2026-07-06
 
 ### Added
