@@ -34,8 +34,29 @@ import os.log
 private let log = OSLog(subsystem: "com.openclaw.agentjail.app.extension", category: "proxy")
 private let parentBundleID = "com.openclaw.agentjail.app"
 
+// System daemons that must never be tunneled, even in whole-machine
+// mode. Tunneling these through a WG gateway that might be down
+// creates a DNS/network black hole: mDNSResponder can't resolve,
+// configd can't configure, and every process that depends on them
+// stalls. These are identified by their signing identifier (the
+// sourceAppSigningIdentifier from the flow's audit token metadata).
+private let systemDaemonExclusions: Set<String> = [
+    "com.apple.mDNSResponder",
+    "com.apple.configd",
+    "com.apple.networkd",
+    "com.apple.symptomsd",
+    "com.apple.nesessionmanager",
+    "com.apple.syspolicyd",
+    "com.apple.timed",
+    "com.apple.apsd",
+    "com.apple.geod",
+    "com.apple.identityservicesd",
+    "com.apple.rapportd",
+]
+
 class TransparentProxyProvider: NETransparentProxyProvider {
     private var wholeMachine = false
+    private var wgReady = false
 
     override func startProxy(options: [String: Any]?,
                              completionHandler: @escaping (Error?) -> Void) {
@@ -96,13 +117,15 @@ class TransparentProxyProvider: NETransparentProxyProvider {
         //     without any user action.
         applyNetworkSettings(completionHandler: completionHandler)
 
-        // Background handshake -- logging only, not on the critical path.
+        // Background handshake -- sets wgReady so shouldTunnel can
+        // fall back to bypass when the tunnel isn't up yet.
         DispatchQueue.global(qos: .utility).async {
             let hrc = wg_netstack_wait_handshake(30000)
             if hrc != 0 {
-                os_log("wg handshake did not complete in 30s -- tunnel flows will fail until gateway is reachable", log: log, type: .error)
+                os_log("wg handshake did not complete in 30s -- tunnel flows will bypass until gateway is reachable", log: log, type: .error)
             } else {
-                os_log("wg handshake complete", log: log, type: .info)
+                self.wgReady = true
+                os_log("wg handshake complete -- tunnel flows active", log: log, type: .info)
             }
         }
     }
@@ -157,6 +180,9 @@ class TransparentProxyProvider: NETransparentProxyProvider {
 
     override func stopProxy(with reason: NEProviderStopReason,
                             completionHandler: @escaping () -> Void) {
+        closeAllActiveCIDs()
+        stopSessionListener()
+        stopSessionReaper()
         wg_netstack_close()
         completionHandler()
     }
@@ -168,29 +194,54 @@ class TransparentProxyProvider: NETransparentProxyProvider {
     // clearing it on wake avoids a full stop/start cycle.
     override func sleep(completionHandler: @escaping () -> Void) {
         reasserting = true
+        wgReady = false
+        closeAllActiveCIDs()
         completionHandler()
     }
 
     override func wake() {
-        // WireGuard auto-initiates a new handshake on the next keepalive
-        // tick (<=10s, per persistent_keepalive_interval). Clear reasserting
-        // immediately -- bypassUDP flows don't need the WG tunnel and will
-        // work right away. Tunnel-side flows (agentjail children) fail fast
-        // via the cgo return code until the handshake completes.
+        // Clear reasserting immediately -- bypassUDP flows don't need
+        // the WG tunnel and will work right away. wgReady stays false
+        // until the background handshake succeeds, so tunnel flows
+        // safely bypass instead of being accepted and dropped.
         reasserting = false
-        os_log("wake -- wg will reconnect via keepalive", log: log, type: .info)
+        os_log("wake -- wg reconnecting, tunnel flows bypass until handshake completes", log: log, type: .info)
+        DispatchQueue.global(qos: .utility).async {
+            let hrc = wg_netstack_wait_handshake(30000)
+            if hrc == 0 {
+                self.wgReady = true
+                os_log("wake handshake complete -- tunnel flows active", log: log, type: .info)
+            }
+        }
     }
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
-        let tunnel = shouldTunnel(flow)
+        let appID = flow.metaData.sourceAppSigningIdentifier
+        if systemDaemonExclusions.contains(appID) {
+            if let udp = flow as? NEAppProxyUDPFlow {
+                bypassUDP(udp); return true
+            }
+            return false
+        }
+
+        let wantsTunnel = shouldTunnel(flow)
+        if wantsTunnel && !wgReady {
+            // Session flow but tunnel not up yet: accept and
+            // immediately close so the agent sees a connection error,
+            // not a bypass. Returning false would let the kernel pass
+            // the socket through un-proxied.
+            flow.closeReadWithError(nil)
+            flow.closeWriteWithError(nil)
+            return true
+        }
         if let tcp = flow as? NEAppProxyTCPFlow {
-            if !tunnel { return false }
+            if !wantsTunnel { return false }
             bridgeTCP(tcp); return true
         }
         if let udp = flow as? NEAppProxyUDPFlow {
             // Claim every UDP flow. Returning false on UDP races kernel
             // detach (radar r.98382363) -> ~30s Chrome QUIC stall.
-            if !tunnel { bypassUDP(udp); return true }
+            if !wantsTunnel { bypassUDP(udp); return true }
             bridgeUDP(udp); return true
         }
         return false
@@ -244,6 +295,33 @@ class TransparentProxyProvider: NETransparentProxyProvider {
         }
     }
 
+    // Active CID registry: tracks all live cgo connection handles so
+    // sleep/stop can force-close them, unblocking parked recv threads.
+    private var activeCIDs = Set<Int64>()
+    private let activeCIDsLock = NSLock()
+
+    private func registerCID(_ cid: Int64) {
+        activeCIDsLock.lock()
+        activeCIDs.insert(cid)
+        activeCIDsLock.unlock()
+    }
+
+    private func unregisterCID(_ cid: Int64) {
+        activeCIDsLock.lock()
+        activeCIDs.remove(cid)
+        activeCIDsLock.unlock()
+    }
+
+    private func closeAllActiveCIDs() {
+        activeCIDsLock.lock()
+        let cids = activeCIDs
+        activeCIDs.removeAll()
+        activeCIDsLock.unlock()
+        for cid in cids {
+            wg_netstack_close_conn(cid)
+        }
+    }
+
     // pumpTCP bridges a flow's read/write to the cgo conn-handle API.
     // No fds, no socketpair -- just two recursive read loops calling
     // wg_netstack_send / wg_netstack_recv with the conn ID. The Go
@@ -252,6 +330,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
     // blocked on Read per direction. Goroutines are 8KB stack each
     // and Go schedules them onto a small worker pool.
     private func pumpTCP(flow: NEAppProxyTCPFlow, cid: Int64) {
+        registerCID(cid)
         // Dedicated background queue per flow for the send path. Apple
         // serializes flow operations on a private per-flow queue; if
         // we'd called the (potentially-blocking) wg_netstack_send
@@ -267,9 +346,18 @@ class TransparentProxyProvider: NETransparentProxyProvider {
         // flow -> cid (send)
         func readFromFlow() {
             flow.readData { data, err in
-                if err != nil { wg_netstack_close_conn(cid); flow.closeWriteWithError(err); return }
+                if err != nil {
+                    self.unregisterCID(cid)
+                    wg_netstack_close_conn(cid)
+                    flow.closeReadWithError(err)
+                    flow.closeWriteWithError(err)
+                    return
+                }
                 guard let data = data, !data.isEmpty else {
-                    wg_netstack_close_conn(cid); return
+                    self.unregisterCID(cid)
+                    wg_netstack_close_conn(cid)
+                    flow.closeReadWithError(nil)
+                    return
                 }
                 sendQueue.async {
                     let n = data.withUnsafeBytes { ptr -> Int32 in
@@ -278,7 +366,11 @@ class TransparentProxyProvider: NETransparentProxyProvider {
                                          Int32(data.count))
                     }
                     if n < 0 {
-                        wg_netstack_close_conn(cid); flow.closeReadWithError(nil); return
+                        self.unregisterCID(cid)
+                        wg_netstack_close_conn(cid)
+                        flow.closeReadWithError(nil)
+                        flow.closeWriteWithError(nil)
+                        return
                     }
                     readFromFlow()
                 }
@@ -313,6 +405,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
                 sem.wait()
                 if writeErr != nil { break }
             }
+            self.unregisterCID(cid)
             wg_netstack_close_conn(cid)
             flow.closeWriteWithError(nil)
         }
@@ -332,6 +425,10 @@ class TransparentProxyProvider: NETransparentProxyProvider {
         }
     }
 
+    // Bounds concurrent UDP recv threads. Each thread is 256KB stack;
+    // without a cap, a burst of N datagrams creates N threads.
+    private let udpThreadSem = DispatchSemaphore(value: 64)
+
     /// Per-datagram dial. Each (datagram, endpoint) pair opens a fresh
     /// netstack UDP conn, sends, awaits one reply, closes. Fine for
     /// DNS / sparse UDP. For high-rate UDP (QUIC) a per-endpoint cache
@@ -339,7 +436,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
     private func pumpUDP(flow: NEAppProxyUDPFlow) {
         flow.readDatagrams { datagrams, endpoints, err in
             if err != nil || datagrams == nil || datagrams!.isEmpty {
-                flow.closeReadWithError(nil); return
+                flow.closeReadWithError(nil); flow.closeWriteWithError(nil); return
             }
             for (data, ep) in zip(datagrams!, endpoints ?? []) {
                 guard let host = ep as? NWHostEndpoint,
@@ -358,21 +455,30 @@ class TransparentProxyProvider: NETransparentProxyProvider {
                            log: log, type: .error, ip, port, msg)
                     flow.closeReadWithError(nil); flow.closeWriteWithError(nil); return
                 }
-                _ = data.withUnsafeBytes { ptr -> Int32 in
+                self.registerCID(cid)
+                let sendRC = data.withUnsafeBytes { ptr -> Int32 in
                     wg_netstack_send(cid,
                                      UnsafeMutablePointer(mutating: ptr.baseAddress!.assumingMemoryBound(to: CChar.self)),
                                      Int32(data.count))
+                }
+                if sendRC < 0 {
+                    self.unregisterCID(cid)
+                    wg_netstack_close_conn(cid)
+                    continue
                 }
                 // Dedicated pthread for the same GCD-pool-exhaustion
                 // reason as pumpTCP. UDP path is one-reply-per-dial so
                 // the thread is short-lived, but DNS amplification +
                 // QUIC racing on whole-machine still hits the pool cap
-                // when reads stack up.
+                // when reads stack up. Bounded by udpThreadSem.
+                self.udpThreadSem.wait()
                 let udpThread = Thread {
+                    defer { self.udpThreadSem.signal() }
                     var buf = [CChar](repeating: 0, count: 65536)
                     let n = buf.withUnsafeMutableBufferPointer { ptr -> Int32 in
                         wg_netstack_recv(cid, ptr.baseAddress, Int32(ptr.count))
                     }
+                    self.unregisterCID(cid)
                     wg_netstack_close_conn(cid)
                     if n > 0 {
                         let chunk = buf.withUnsafeBufferPointer { ptr in
@@ -477,6 +583,7 @@ private func sessionUnregister(_ pid: pid_t) {
 // Covers SIGKILLed CLIs that didn't get to send unregister.
 private var sessionReaperTimer: DispatchSourceTimer?
 private func startSessionReaper() {
+    if sessionReaperTimer != nil { return }
     let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     t.schedule(deadline: .now() + 5, repeating: 5)
     t.setEventHandler {
@@ -487,9 +594,21 @@ private func startSessionReaper() {
     t.resume()
     sessionReaperTimer = t
 }
+private func stopSessionReaper() {
+    sessionReaperTimer?.cancel()
+    sessionReaperTimer = nil
+}
 
 private var sessionListenFD: Int32 = -1
+private func stopSessionListener() {
+    if sessionListenFD >= 0 {
+        Darwin.close(sessionListenFD)
+        sessionListenFD = -1
+    }
+    unlink(sessionSockPath)
+}
 private func startSessionListener() {
+    if sessionListenFD >= 0 { return }
     unlink(sessionSockPath)
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     if fd < 0 {
@@ -638,6 +757,13 @@ private func ancestorMatches(pid: pid_t) -> Bool {
     ancestorCache[key] = ancestorCacheEntry(sessionPID: sessionPID, expires: now.addingTimeInterval(ancestorCacheTTL))
     if ancestorCache.count > 4096 {
         ancestorCache = ancestorCache.filter { $0.value.expires > now }
+        // Hard cap: if still over limit after TTL pruning (sustained
+        // fork-heavy workload), drop the oldest half by expiry time.
+        if ancestorCache.count > 4096 {
+            let sorted = ancestorCache.sorted { $0.value.expires < $1.value.expires }
+            let keep = sorted.suffix(2048)
+            ancestorCache = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
     }
     ancestorCacheLock.unlock()
     return sessionPID != 0
@@ -681,11 +807,11 @@ final class BypassUDP {
         var fl = fcntl(sock, F_GETFL, 0); fl |= O_NONBLOCK; _ = fcntl(sock, F_SETFL, fl)
         _ = fcntl(sock, F_SETFD, FD_CLOEXEC)
 
-        let src = DispatchSource.makeReadSource(fileDescriptor: sock, queue: recvQueue)
+        let fd = sock
+        let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: recvQueue)
         src.setEventHandler { [weak self] in self?.recvOne() }
-        src.setCancelHandler { [weak self] in
-            guard let s = self, s.sock >= 0 else { return }
-            close(s.sock); s.sock = -1
+        src.setCancelHandler {
+            close(fd)
         }
         src.resume()
         recvSource = src
@@ -743,13 +869,17 @@ final class BypassUDP {
     }
 
     private func closeAll() {
-        recvSource?.cancel()
-        recvSource = nil
-        flow.closeReadWithError(nil)
-        flow.closeWriteWithError(nil)
+        // Remove from live set BEFORE cancelling the source. The
+        // cancel handler captures the fd by value and always closes
+        // it, so we don't need self to be alive for fd cleanup.
         BypassUDP.liveLock.lock()
         BypassUDP.live.remove(self)
         BypassUDP.liveLock.unlock()
+        recvSource?.cancel()
+        recvSource = nil
+        sock = -1
+        flow.closeReadWithError(nil)
+        flow.closeWriteWithError(nil)
     }
 }
 
