@@ -5,6 +5,13 @@ set -euo pipefail
 # Runs in an isolated temp directory; does not touch the real ~/.agentjail.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Capture the real HOME before we isolate it below. Sensitive-path fixtures
+# (~/.ssh/id_rsa) must deny against a NON-temp path: file_policy excludes temp
+# subtrees from the sensitive-credential deny (Rule 5 temp_allow), so a path
+# under the isolated /tmp HOME would fail open on Linux. The fixture only tests
+# a policy decision (no file is written), so pointing it at the real HOME is
+# safe and denies correctly on every platform.
+ORIG_HOME="$HOME"
 TMPD=$(mktemp -d)
 BIN="$TMPD/bin"
 SOCK="$TMPD/.agentjail/daemon.sock"
@@ -105,7 +112,11 @@ run_hook() {
   rm -f "$stderr_f" "$json_f"
 }
 
-REAL_HOME=$(eval echo ~)
+# Use the pre-isolation HOME: the isolated $HOME lives under /tmp (a policy
+# temp-root), and file_policy allows writes under temp roots, so a temp-rooted
+# ~/.ssh/id_rsa would fail open. ORIG_HOME is a real, non-temp path the deny
+# fires on. No file is written here -- the fixture only exercises the decision.
+REAL_HOME="$ORIG_HOME"
 
 # 3a: DENY write to ~/.ssh/id_rsa
 run_hook "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$REAL_HOME/.ssh/id_rsa\",\"content\":\"x\"},\"session_id\":\"e2e-1\",\"cwd\":\"/tmp\"}"
