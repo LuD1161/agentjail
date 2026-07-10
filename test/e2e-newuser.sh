@@ -7,7 +7,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMPD=$(mktemp -d)
 BIN="$TMPD/bin"
-SOCK="$TMPD/daemon.sock"
+SOCK="$TMPD/.agentjail/daemon.sock"
 DB="$TMPD/agentjail.db"
 LOG="$TMPD/daemon.log"
 RULES="$REPO_ROOT/agentpolicy/policies"
@@ -69,6 +69,14 @@ mkdir -p "$BIN"
 (cd "$REPO_ROOT" && go build -o "$BIN/agentjail-daemon" ./cmd/agentjail-daemon)
 (cd "$REPO_ROOT" && go build -o "$BIN/agentjail-hook" ./cmd/agentjail-hook)
 pass "Build: 3 binaries compiled"
+
+# Isolate HOME inside the temp tree so the trusted state dir ($HOME/.agentjail)
+# resolves here. The hook only honors AGENTJAIL_SOCKET when the socket path is
+# under $HOME/.agentjail (isTrustedSocketOverride, commit 947c93fe) — a bare
+# $TMPD socket is rejected and the hook falls back to the real default socket,
+# failing open. Set HOME *after* the build so `go build` keeps its real GOCACHE.
+export HOME="$TMPD"
+mkdir -p "$TMPD/.agentjail"
 
 # --- Phase 2: Daemon startup ---
 "$BIN/agentjail-daemon" --socket "$SOCK" --db "$DB" --log "$LOG" --rules "$RULES" &
