@@ -2,6 +2,28 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.6.2 - 2026-07-09
+
+#### TL;DR
+
+- Restore a green CI pipeline - the e2e, smoke, and race-enabled unit tests pass again on macOS and Linux (they had been red since v0.6.0 due to test-harness assumptions the v0.6.0 hardening invalidated).
+- Fix a data race in the daemon's agent-connection idle-timeout handling that the race detector flagged.
+
+### Fixed
+
+- **Daemon idle-timeout data race** - the agent-connection idle timeout moved
+  from a mutable package global to an immutable per-server field
+  (`server.idleTimeout`), set once at construction. The old global was written
+  by a test while a `handleConn` goroutine read it concurrently, which
+  `go test -race` flagged. Production behavior is unchanged (still a 5s idle
+  deadline).
+- **CI test harnesses green again** - the e2e/smoke harnesses now isolate HOME
+  so the hook honors their test socket (v0.6.0 restricted `AGENTJAIL_SOCKET` to
+  paths under `~/.agentjail`), and the sensitive-path fixtures (e2e `~/.ssh`
+  deny, shield known-hosts read-only) run against non-temp paths so the
+  policy/shield temp-write carve-outs no longer mask them. Test-only changes;
+  no shipped behavior is affected.
+
 ## v0.6.1 - 2026-07-09
 
 #### TL;DR
