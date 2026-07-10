@@ -54,6 +54,13 @@ func shortSockDir(t *testing.T) string {
 // It returns the server and the socket path. The caller is responsible for
 // closing the listener and stopping the server.
 func newTestServer(t *testing.T) (*server, string) {
+	return newTestServerWithIdle(t, defaultAgentConnIdleTimeout)
+}
+
+// newTestServerWithIdle is newTestServer with an explicit idle timeout, set on
+// the server struct at construction (before the accept goroutine starts) so the
+// timeout is immutable and read race-free by handleConn — no shared global.
+func newTestServerWithIdle(t *testing.T, idle time.Duration) (*server, string) {
 	t.Helper()
 
 	sockPath := filepath.Join(shortSockDir(t), "test.sock")
@@ -66,7 +73,8 @@ func newTestServer(t *testing.T) (*server, string) {
 	}
 
 	srv := &server{
-		evaluator: policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), [][2]string{{"test.rego", testRegoPolicy}}, nil),
+		evaluator:   policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), [][2]string{{"test.rego", testRegoPolicy}}, nil),
+		idleTimeout: idle,
 	}
 
 	ln, err := net.Listen("unix", sockPath)
@@ -442,15 +450,11 @@ func TestAcceptConn_AdmitsUnderCapacity(t *testing.T) {
 
 // TestHandleConn_IdleConnectionTimesOut verifies P9's idle read deadline: a
 // connection that is opened but never sends a request is closed by the
-// daemon rather than held open indefinitely. Shrinks agentConnIdleTimeout
-// for the duration of the test so this doesn't require a real multi-second
-// sleep.
+// daemon rather than held open indefinitely. Uses a per-server 50 ms idle
+// timeout so this doesn't require a real multi-second sleep.
 func TestHandleConn_IdleConnectionTimesOut(t *testing.T) {
-	orig := agentConnIdleTimeout
-	agentConnIdleTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { agentConnIdleTimeout = orig })
-
-	_, sockPath := newTestServer(t)
+	// Per-server idle timeout (no shared global) so this is race-free under -race.
+	_, sockPath := newTestServerWithIdle(t, 50*time.Millisecond)
 
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
@@ -458,7 +462,7 @@ func TestHandleConn_IdleConnectionTimesOut(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Send nothing. The daemon should close its end within ~agentConnIdleTimeout.
+	// Send nothing. The daemon should close its end within ~the idle timeout.
 	buf := make([]byte, 1)
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Read(buf); err == nil {

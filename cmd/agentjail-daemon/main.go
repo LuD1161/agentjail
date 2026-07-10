@@ -109,6 +109,13 @@ type server struct {
 	// is in use (dev/test), matching the flag's own zero-value semantics.
 	rulesDir   string
 	policyPath string
+
+	// idleTimeout bounds how long handleConn blocks on a single read from an
+	// agent-socket connection (P9). Set once at construction and never mutated,
+	// so concurrent handleConn goroutines read it race-free. A zero value falls
+	// back to defaultAgentConnIdleTimeout (bare server{} built directly in
+	// tests); production and the test helpers set it explicitly.
+	idleTimeout time.Duration
 }
 
 // maxAgentConns bounds concurrent connections to the agent-reachable
@@ -118,16 +125,16 @@ type server struct {
 // peer.
 const maxAgentConns = 256
 
-// agentConnIdleTimeout bounds how long the daemon will block on a single
+// defaultAgentConnIdleTimeout bounds how long the daemon will block on a single
 // read from an agent-socket connection (P9). Mirrors the control socket's
 // 5-second deadline (see grantServer.handleCtlConn). The deadline is reset
 // after each request is fully processed, so a connection that is actively
 // making requests is never punished — only one that opens a connection and
 // then goes idle or trickles bytes.
 //
-// A var (not const) so tests can shrink it temporarily to exercise the
-// timeout without a real multi-second sleep.
-var agentConnIdleTimeout = 5 * time.Second
+// It is the fallback for server.idleTimeout; tests set a per-server idleTimeout
+// (never a shared global) to exercise the timeout without a multi-second sleep.
+const defaultAgentConnIdleTimeout = 5 * time.Second
 
 // recordTelemetry feeds one decision to the telemetry recorder (nil-safe).
 // toolName and agentID are enum values from the daemon Request struct; they are
@@ -300,13 +307,20 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 
 	enc := json.NewEncoder(conn)
 
+	// idleTimeout is immutable after construction (see server.idleTimeout), so
+	// reading it here off the shared server is race-free across goroutines.
+	idleTimeout := s.idleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultAgentConnIdleTimeout
+	}
+
 	for {
 		// Reset the idle read deadline before each read (P9). A connection
 		// that opens and then sends nothing (or trickles bytes slowly) is
 		// cut off instead of holding a goroutine + 1 MB scanner buffer
 		// indefinitely; a connection making steady requests is unaffected
 		// since the deadline is pushed out again after each one completes.
-		_ = conn.SetReadDeadline(time.Now().Add(agentConnIdleTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
 		if !scanner.Scan() {
 			break
 		}
@@ -798,6 +812,7 @@ func main() {
 		connSem:        make(chan struct{}, maxAgentConns),
 		rulesDir:       *rulesDir,
 		policyPath:     *policyPath,
+		idleTimeout:    defaultAgentConnIdleTimeout,
 	}
 
 	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
