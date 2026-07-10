@@ -25,10 +25,15 @@ SRC="$REPO_ROOT/bin"
 BIN="${AGENTJAIL_HOME:-$HOME/.agentjail}/bin"
 ALL_BINARIES="agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy"
 
-echo "==> building 5 binaries from $REPO_ROOT"
+# Embed the git-describe version so `agentjail statusline` shows "<tag>+N" (N
+# commits past the last release) instead of a bare hash. Harmless on the
+# binaries that lack a main.version symbol -- the linker ignores an unset -X.
+VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || true)"
+
+echo "==> building 5 binaries from $REPO_ROOT (version: ${VERSION:-unset})"
 mkdir -p "$SRC"
 for b in $ALL_BINARIES; do
-	go build -ldflags="-s -w" -o "$SRC/$b" "$REPO_ROOT/cmd/$b"
+	go build -ldflags="-X main.version=$VERSION -s -w" -o "$SRC/$b" "$REPO_ROOT/cmd/$b"
 	echo "    built $b"
 done
 

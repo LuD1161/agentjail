@@ -57,13 +57,62 @@ func buildCommit() string {
 	return rev
 }
 
+// displayVersion returns the compact version shown in the status line. A binary
+// built exactly on a release tag renders as that tag (e.g. "v0.6.0"); a binary
+// built N commits past the last tag renders as "<tag>+N" (e.g. "v0.6.0+5"); a
+// dirty tree appends "*". It parses the `git describe --tags --dirty` shape
+// "v0.6.0-5-g1a2b3c4[-dirty]" embedded via -ldflags into `version`. When no
+// usable version was embedded (plain `go build`, or the legacy "dev-<hash>"
+// default), it falls back to the short commit hash from build info, or "" when
+// that too is absent.
+func displayVersion() string {
+	v := strings.TrimSpace(version)
+	if v == "" || v == "dev" || strings.HasPrefix(v, "dev-") {
+		return buildCommit()
+	}
+
+	dirty := false
+	if s := strings.TrimSuffix(v, "-dirty"); s != v {
+		v, dirty = s, true
+	}
+
+	out := v
+	// git describe emits "<tag>-<N>-g<hash>" when the build is N commits past
+	// <tag>. Collapse that to "<tag>+<N>". An exact tag has no "-g" segment.
+	if i := strings.LastIndex(v, "-g"); i >= 0 {
+		rest := v[:i] // "<tag>-<N>"
+		if j := strings.LastIndex(rest, "-"); j >= 0 {
+			if n := rest[j+1:]; isAllDigits(n) {
+				out = rest[:j] + "+" + n
+			}
+		}
+	}
+	if dirty {
+		out += "*"
+	}
+	return out
+}
+
+// isAllDigits reports whether s is non-empty and every rune is an ASCII digit.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func runStatusline(cmd *cobra.Command, args []string) {
 	var parts []string
 
 	if os.Getenv("AGENTJAIL_SHIELDED") == "1" {
 		byline := "🔒 [secured by \033[38;5;208magentjail\033[0m"
-		if c := buildCommit(); c != "" {
-			byline += " (" + c + ")"
+		if v := displayVersion(); v != "" {
+			byline += " (" + v + ")"
 		}
 		byline += "]"
 		parts = append(parts, byline)

@@ -104,7 +104,7 @@ endif
 # VM through the REAL user path (install.sh LOCAL_TARBALL= seam).
 DIST_GOOS    ?= $(shell go env GOOS)
 DIST_GOARCH  ?= $(shell go env GOARCH)
-DIST_VERSION ?= dev-$(shell git rev-parse --short HEAD)
+DIST_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev-$$(git rev-parse --short HEAD))
 DIST_BINS    := agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy
 
 dist-tarball:  ## build a release-layout tarball for testbed installs (DIST_GOOS/DIST_GOARCH to cross-build)
