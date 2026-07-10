@@ -273,7 +273,22 @@ func TestSandboxEnforcesKnownHostsReadOnly(t *testing.T) {
 	skipIfNoSandboxExec(t)
 	shieldBin := buildShieldBinary(t)
 
-	fakeHome := t.TempDir()
+	// NOT t.TempDir(): that lives under $TMPDIR (/var/folders/<xx>/<yyy>/T on
+	// macOS), which the shield grants write access to as the per-user temp
+	// carve-out (commit 0ffcc964). A fake ~/.ssh under it would be writable,
+	// silently defeating part (c) of this test. Use a dir under the REAL home
+	// instead -- a genuinely non-temp path, so the sandbox's ~/.ssh read-only
+	// enforcement (the behavior under test) actually applies, exactly as it
+	// would for a real user whose ~/.ssh is never under $TMPDIR.
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	fakeHome, err := os.MkdirTemp(realHome, "ajshield-knownhosts-")
+	if err != nil {
+		t.Fatalf("MkdirTemp under home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(fakeHome) })
 	sshDir := filepath.Join(fakeHome, ".ssh")
 	if err := os.MkdirAll(sshDir, 0700); err != nil {
 		t.Fatal(err)
