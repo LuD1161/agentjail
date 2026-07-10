@@ -2,6 +2,22 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.6.1 - 2026-07-09
+
+#### TL;DR
+
+- Surface the enforcing build's version in the shielded status line instead of a bare commit hash - it reads `v0.6.1` on a release and `v0.6.0+5` between releases.
+
+### Changed
+
+- **Status line shows the version** - `agentjail statusline` now renders the
+  build version parsed from `git describe`: an exact release tag (`v0.6.1`),
+  `+N` commits past the last tag (`v0.6.0+5`), and a trailing `*` for a dirty
+  tree. It falls back to the short commit hash when no version was embedded.
+  Dev builds (`scripts/dev-deploy.sh`, `make dist`) now embed the describe
+  string so the `+N` suffix shows up between releases; the release build
+  already stamps the exact tag.
+
 ## v0.6.0 - 2026-07-08
 
 ![v0.6.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.6.0-summary.svg)
