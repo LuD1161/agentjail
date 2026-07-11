@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -435,6 +436,91 @@ func TestCursorStatusAfterUninstall(t *testing.T) {
 	s := ag.Status(env)
 	if s.Installed {
 		t.Errorf("Status.Installed = true after Uninstall, want false")
+	}
+}
+
+// ---- last-entry removal never emits "event": null -----------------------------
+
+// TestCursorUninstallLastEntryOmitsNullEvent verifies that removing the last
+// (only) entry for an event deletes the event key from the map rather than
+// assigning a nil/empty slice, so the marshaled hooks.json never contains
+// "<event>": null and re-parses cleanly.
+func TestCursorUninstallLastEntryOmitsNullEvent(t *testing.T) {
+	env := newCursorEnv(t)
+	mkCursorDir(t, env)
+	ag := Cursor{}
+
+	// Install so each of the three events has exactly one (our) entry.
+	if err := ag.Install(env); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	// Uninstall removes the only entry from every event.
+	if err := ag.Uninstall(env); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+
+	data := readCursorHooksFile(t, env)
+
+	// No event key should serialize as null.
+	for _, event := range cursorHookEvents {
+		needle := `"` + event + `": null`
+		needleCompact := `"` + event + `":null`
+		if strings.Contains(string(data), needle) || strings.Contains(string(data), needleCompact) {
+			t.Errorf("output contains %q null for event %q:\n%s", needle, event, data)
+		}
+	}
+
+	// Output must re-parse cleanly.
+	var root cursorHooksJSON
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("output does not unmarshal cleanly: %v\noutput: %s", err, data)
+	}
+
+	// Each event key is either absent or an empty (non-nil-serialized) slice.
+	for _, event := range cursorHookEvents {
+		if entries, ok := root.Hooks[event]; ok && len(entries) != 0 {
+			t.Errorf("event %q unexpectedly has entries after Uninstall: %+v", event, entries)
+		}
+	}
+}
+
+// TestCursorRemoveEntryLastOneNoNull verifies at the lower level that
+// cursorRemoveEntry-driven removal of the last entry for an event, when
+// marshaled directly, never yields "event": null.
+func TestCursorRemoveEntryLastOneNoNull(t *testing.T) {
+	const event = "beforeShellExecution"
+	hookCmd := "/usr/local/bin/agentjail-hook --agent=cursor"
+
+	root := cursorHooksJSON{
+		Version: 1,
+		Hooks: map[string][]cursorHookEntry{
+			event: {{Command: hookCmd}},
+		},
+	}
+
+	filtered := cursorRemoveEntry(root.Hooks[event], hookCmd)
+	if len(filtered) != 0 {
+		t.Fatalf("expected filtered to be empty, got %+v", filtered)
+	}
+	// Mirror the fixed Uninstall logic: delete the key instead of assigning nil.
+	delete(root.Hooks, event)
+
+	out, err := marshalCursorHooks(root)
+	if err != nil {
+		t.Fatalf("marshalCursorHooks: %v", err)
+	}
+
+	if strings.Contains(string(out), `"beforeShellExecution": null`) ||
+		strings.Contains(string(out), `"beforeShellExecution":null`) {
+		t.Errorf("output contains null event entry:\n%s", out)
+	}
+
+	var reparsed cursorHooksJSON
+	if err := json.Unmarshal(out, &reparsed); err != nil {
+		t.Fatalf("output does not unmarshal cleanly: %v\noutput: %s", err, out)
+	}
+	if _, ok := reparsed.Hooks[event]; ok {
+		t.Errorf("event %q key should be absent after deletion, got present", event)
 	}
 }
 
