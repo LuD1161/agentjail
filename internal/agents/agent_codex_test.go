@@ -1117,3 +1117,131 @@ func TestCodexMigrationStatusNew(t *testing.T) {
 		t.Errorf("Status.Installed = false after installing new-form entry, want true")
 	}
 }
+
+// ---- degenerate foreign-group serialization (hooks: null) --------------------
+
+// degenerateForeignHooksJSON is a raw hooks.json document containing a
+// degenerate foreign matcher group (hooks: null, as produced by a tool like
+// "gryph" that wrote an empty group), alongside a healthy foreign "gryph"
+// group. This mirrors the real-world file that triggered Codex's
+// "invalid type: null, expected a sequence" parse error.
+const degenerateForeignHooksJSON = `{"hooks":{"PreToolUse":[{"matcher":"","hooks":null},{"matcher":"*","hooks":[{"type":"command","command":"gryph _hook codex PreToolUse","timeout":30}]}]}}`
+
+// TestCodexMergeHookEntryDropsDegenerateForeignGroup verifies that merging
+// into a document containing a degenerate foreign matcher group (hooks: null)
+// never re-emits "hooks": null, produces valid JSON that unmarshals cleanly,
+// drops the degenerate group, preserves the healthy foreign "gryph" group,
+// adds exactly one agentjail canonical entry, and converges to a no-op on a
+// second merge.
+func TestCodexMergeHookEntryDropsDegenerateForeignGroup(t *testing.T) {
+	hookBin := "/usr/local/bin/agentjail-hook"
+
+	out, changed, err := codexMergeHookEntry([]byte(degenerateForeignHooksJSON), hookBin)
+	if err != nil {
+		t.Fatalf("codexMergeHookEntry: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected changed=true when a degenerate group must be dropped")
+	}
+
+	// (a) No "hooks": null (with or without the space MarshalIndent produces).
+	if strings.Contains(string(out), `"hooks": null`) || strings.Contains(string(out), `"hooks":null`) {
+		t.Errorf("output contains \"hooks\": null:\n%s", out)
+	}
+
+	// (b) Output unmarshals cleanly into codexHooksRoot.
+	var root codexHooksRoot
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatalf("output does not unmarshal cleanly: %v\noutput: %s", err, out)
+	}
+
+	groups := root.Hooks["PreToolUse"]
+
+	// (c) The degenerate group (matcher:"", hooks:null/empty) is gone.
+	for _, g := range groups {
+		if g.Matcher == "" {
+			t.Errorf("degenerate group (matcher=\"\") still present: %+v", g)
+		}
+	}
+
+	// (d) The gryph group is preserved.
+	foundGryph := false
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if h.Command == "gryph _hook codex PreToolUse" {
+				foundGryph = true
+			}
+		}
+	}
+	if !foundGryph {
+		t.Errorf("gryph foreign group was lost, groups: %+v", groups)
+	}
+
+	// (e) Exactly one agentjail canonical entry present.
+	canonicalCmd := hookBin + " --agent=codex"
+	if n := codexHookEntryCount(t, out, canonicalCmd); n != 1 {
+		t.Errorf("agentjail canonical entry count = %d, want 1", n)
+	}
+
+	// (f) A second merge of the output is a no-op.
+	out2, changed2, err := codexMergeHookEntry(out, hookBin)
+	if err != nil {
+		t.Fatalf("second merge: %v", err)
+	}
+	if changed2 {
+		t.Errorf("second merge reported changed=true, want false (should converge); output: %s", out2)
+	}
+}
+
+// TestCodexRemoveHookEntryNeverEmitsNullHooks verifies that
+// codexRemoveHookEntry, when a degenerate foreign group is present alongside
+// the agentjail entry being removed, never re-serializes "hooks": null.
+func TestCodexRemoveHookEntryNeverEmitsNullHooks(t *testing.T) {
+	hookBin := "/usr/local/bin/agentjail-hook"
+
+	// Build a doc with: degenerate foreign group, gryph group, and our
+	// canonical agentjail entry (to be removed).
+	initial := []byte(`{"hooks":{"PreToolUse":[` +
+		`{"matcher":"","hooks":null},` +
+		`{"matcher":"*","hooks":[{"type":"command","command":"gryph _hook codex PreToolUse","timeout":30}]},` +
+		`{"matcher":".*","hooks":[{"type":"command","command":"` + hookBin + ` --agent=codex","timeout":30}]}` +
+		`]}}`)
+
+	out, changed, err := codexRemoveHookEntry(initial, hookBin)
+	if err != nil {
+		t.Fatalf("codexRemoveHookEntry: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected changed=true when removing the agentjail entry")
+	}
+
+	if strings.Contains(string(out), `"hooks": null`) || strings.Contains(string(out), `"hooks":null`) {
+		t.Errorf("output contains \"hooks\": null:\n%s", out)
+	}
+
+	var root codexHooksRoot
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatalf("output does not unmarshal cleanly: %v\noutput: %s", err, out)
+	}
+
+	// The agentjail entry must be gone, the gryph entry preserved, and the
+	// degenerate group dropped.
+	canonicalCmd := hookBin + " --agent=codex"
+	if n := codexHookEntryCount(t, out, canonicalCmd); n != 0 {
+		t.Errorf("agentjail entry still present after removal, count=%d", n)
+	}
+	foundGryph := false
+	for _, g := range root.Hooks["PreToolUse"] {
+		if g.Matcher == "" {
+			t.Errorf("degenerate group still present: %+v", g)
+		}
+		for _, h := range g.Hooks {
+			if h.Command == "gryph _hook codex PreToolUse" {
+				foundGryph = true
+			}
+		}
+	}
+	if !foundGryph {
+		t.Errorf("gryph foreign group was lost after removal")
+	}
+}
