@@ -33,6 +33,9 @@ var skillListCmd = &cobra.Command{
 	Short:              "Show all known skills with policy status",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runSkillList(args))
 	},
 }
@@ -46,6 +49,9 @@ var skillAllowCmd = &cobra.Command{
 	Short:              "Permit a specific skill",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runSkillMutate("allow", args))
 	},
 }
@@ -55,6 +61,9 @@ var skillBlockCmd = &cobra.Command{
 	Short:              "Deny a specific skill",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runSkillMutate("block", args))
 	},
 }
@@ -64,6 +73,9 @@ var skillAskCmd = &cobra.Command{
 	Short:              "Require confirmation for a specific skill",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runSkillMutate("ask", args))
 	},
 }
@@ -73,6 +85,9 @@ var skillClearCmd = &cobra.Command{
 	Short:              "Remove per-skill policy (revert to inherited behavior)",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runSkillMutate("clear", args))
 	},
 }

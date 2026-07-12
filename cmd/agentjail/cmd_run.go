@@ -26,12 +26,10 @@ Examples:
   agentjail run -- cursor`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Handle --help before passing to runRunCmd.
-		for _, a := range args {
-			if a == "--help" || a == "-h" {
-				fmt.Fprintln(os.Stdout, cmd.Long)
-				return
-			}
+		// --help before "--" prints help; after "--" it is forwarded to the
+		// child command (e.g. `agentjail run -- some-tool --help`).
+		if helpRequested(cmd, args) {
+			return
 		}
 		os.Exit(runRunCmd(args))
 	},
@@ -49,6 +47,9 @@ Credential paths, host processes, and unrestricted network access
 are blocked at the kernel level.`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runClaudeCmd(args))
 	},
 }

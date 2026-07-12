@@ -59,6 +59,9 @@ var mcpScanCmd = &cobra.Command{
 	Short:              "Discover all MCP servers: configs, npm, pip, Docker, audit, remote connectors",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runMCPScan(args))
 	},
 }
@@ -68,6 +71,9 @@ var mcpWhereCmd = &cobra.Command{
 	Short:              "Show which projects use this MCP server",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runMCPWhere(args))
 	},
 }
@@ -77,6 +83,9 @@ var mcpToolsCmd = &cobra.Command{
 	Short:              "List all MCP tools per server with policy status",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runMCPTools(args))
 	},
 }
