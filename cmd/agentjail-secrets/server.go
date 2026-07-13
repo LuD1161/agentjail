@@ -6,16 +6,19 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/credentials"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 	auditstore "github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -66,15 +69,42 @@ func defaultKeyPath() string {
 	return filepath.Join(home, ".agentjail", "secrets.key")
 }
 
+// defaultLogPath returns ~/.agentjail/secrets.log, or "" (→ stderr) if the home
+// directory cannot be determined.
+func defaultLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".agentjail", "secrets.log")
+}
+
 // runServer starts the secrets RPC server.
 func runServer(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	socketPath := fs.String("socket", defaultSocketPath(), "path to Unix socket")
 	storeDir := fs.String("store", defaultStoreDir(), "path to secrets store directory")
 	keyPath := fs.String("key", defaultKeyPath(), "path to master key file")
+	idleTimeout := fs.Duration("idle-timeout", 0, "self-exit after this idle window with no active grants (0 = never; ADR 0058)")
+	logPath := fs.String("log", defaultLogPath(), "structured JSON log file (empty = stderr)")
 	fs.Parse(args)
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+	// Route structured slog to a dedicated file (ADR 0058): under the service
+	// manager, stderr is captured to secrets-crash.log (panics/runtime), while
+	// secrets.log holds the structured JSON. Every slog site here logs secret
+	// NAMES / grant-ids only, never values — keep it that way.
+	var logW io.Writer = os.Stderr
+	if *logPath != "" {
+		if err := os.MkdirAll(filepath.Dir(*logPath), 0o700); err == nil {
+			if f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+				logW = f
+				defer f.Close()
+			} else {
+				fmt.Fprintf(os.Stderr, "agentjail-secrets: cannot open log %s (%v); logging to stderr\n", *logPath, err)
+			}
+		}
+	}
+	logger := slog.New(slog.NewJSONHandler(logW, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
@@ -122,21 +152,65 @@ func runServer(args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
+	// activity tracks the last time a client connected, for the idle watchdog.
+	// Seeded to now so a just-started broker is not immediately considered idle.
+	var activity idleClock
+	activity.touch()
+
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			activity.touch()
 			go handleConn(conn, store, gm, emitter)
 		}
 	}()
 
-	sig := <-sigCh
-	slog.Info("shutdown signal received", "signal", sig)
+	// idleFire closes when the broker has been idle past --idle-timeout AND has
+	// zero active grants (ADR 0058 P1: never exit while grants are live, else
+	// the in-memory revokeFn state is lost or live sessions are torn down).
+	idleFire := make(chan struct{})
+	if *idleTimeout > 0 {
+		go idleWatchdog(*idleTimeout, &activity, gm, idleFire)
+	}
+
+	select {
+	case sig := <-sigCh:
+		slog.Info("shutdown signal received", "signal", sig)
+	case <-idleFire:
+		slog.Info("idle timeout reached with no active grants; exiting", "idle_timeout", idleTimeout.String())
+	}
 	gm.RevokeAll()
 	_ = ln.Close()
 	_ = os.Remove(*socketPath)
+}
+
+// idleClock records the last activity time as unix-nanos for lock-free reads.
+type idleClock struct{ last atomic.Int64 }
+
+func (c *idleClock) touch() { c.last.Store(time.Now().UnixNano()) }
+func (c *idleClock) idleFor() time.Duration {
+	return time.Duration(time.Now().UnixNano() - c.last.Load())
+}
+
+// idleWatchdog closes fire once the broker has been idle for at least timeout
+// AND the GrantManager reports zero active grants. It polls at a fraction of
+// the timeout (min 1s) so the check is cheap and responsive.
+func idleWatchdog(timeout time.Duration, clock *idleClock, gm *credentials.GrantManager, fire chan<- struct{}) {
+	interval := timeout / 4
+	if interval < time.Second {
+		interval = time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		if clock.idleFor() >= timeout && gm.Active() == 0 {
+			close(fire)
+			return
+		}
+	}
 }
 
 // handleConn serves one client connection.
@@ -289,7 +363,16 @@ func handleGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, em
 func rpcClient(socketPath string, req *RPCRequest) (*RPCResponse, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("connect to secrets server: %w\n  Is agentjail-secrets running? Start it with: agentjail-secrets serve", err)
+		// On-demand start (ADR 0058): the broker is a loaded-but-not-running
+		// launchd/systemd job, so a first client brings it up rather than
+		// failing. Falls back to a detached exec where no service manager runs.
+		if startErr := sandbox.EnsureSecretsBroker(socketPath); startErr != nil {
+			return nil, fmt.Errorf("connect to secrets server: %w\n  Auto-start failed: %v\n  Start it manually with: agentjail-secrets serve", err, startErr)
+		}
+		conn, err = net.DialTimeout("unix", socketPath, 5*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("connect to secrets server after auto-start: %w", err)
+		}
 	}
 	defer conn.Close()
 

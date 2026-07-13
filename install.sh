@@ -217,7 +217,7 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 INSTALLED=""
-for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
+for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
     if [ -f "$TMP/$bin" ]; then
         # Install atomically: stage into a temp file in the SAME dir, then
         # rename over the target. A plain `cp` rewrites the existing inode in

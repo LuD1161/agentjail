@@ -87,7 +87,7 @@ APPLE_IDENTITY ?= $(APPLE_SIGNING_IDENTITY)
 
 sign:  ## codesign macOS binaries (requires Developer ID certificate in keychain)
 ifeq ($(shell uname),Darwin)
-	@for bin in bin/agentjail bin/agentjail-hook bin/agentjail-daemon bin/agentjail-shield bin/agentjail-netproxy; do \
+	@for bin in bin/agentjail bin/agentjail-hook bin/agentjail-daemon bin/agentjail-shield bin/agentjail-netproxy bin/agentjail-secrets; do \
 		if [ -f "$$bin" ]; then \
 			echo "signing $$bin..."; \
 			codesign --force --options runtime --sign "$(APPLE_IDENTITY)" --timestamp "$$bin"; \
@@ -98,14 +98,14 @@ else
 	@echo "skip: codesign is macOS only"
 endif
 
-# dist-tarball builds all five binaries for a target platform and packs them
+# dist-tarball builds all six binaries for a target platform and packs them
 # in the flat layout install.sh expects (binaries at tarball top level). Used
 # by test/testbed/testbed.sh provision to install a local build into a clean
 # VM through the REAL user path (install.sh LOCAL_TARBALL= seam).
 DIST_GOOS    ?= $(shell go env GOOS)
 DIST_GOARCH  ?= $(shell go env GOARCH)
 DIST_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev-$$(git rev-parse --short HEAD))
-DIST_BINS    := agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy
+DIST_BINS    := agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets
 
 dist-tarball:  ## build a release-layout tarball for testbed installs (DIST_GOOS/DIST_GOARCH to cross-build)
 	@mkdir -p dist/$(DIST_GOOS)-$(DIST_GOARCH)

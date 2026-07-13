@@ -60,6 +60,7 @@ import (
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
 	"github.com/LuD1161/agentjail/internal/picker"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/ui"
@@ -81,6 +82,21 @@ const systemdUnitFilename = systemdUnitName + ".service"
 const hookBinaryName = "agentjail-hook"
 const daemonBinaryName = "agentjail-daemon"
 const cliBinaryName = "agentjail"
+
+// Secrets broker (ADR 0058): a loaded-but-not-running service definition that
+// clients start on demand. The label/unit are sourced from the shared sandbox
+// package so the installer's plist Label and the client's `launchctl kickstart`
+// target can never drift.
+const secretsBinaryName = "agentjail-secrets"
+
+var secretsPlistLabel = sandbox.SecretsBrokerLaunchdLabel         // com.agentjail.secrets
+var secretsPlistFilename = secretsPlistLabel + ".plist"           // com.agentjail.secrets.plist
+var secretsSystemdUnitFilename = sandbox.SecretsBrokerSystemdUnit // agentjail-secrets.service
+
+// secretsBrokerIdleTimeout is the --idle-timeout the broker self-exits after
+// (with zero active grants). Passed into the service definition so the broker
+// reclaims the decrypted master key when idle (ADR 0058).
+const secretsBrokerIdleTimeout = "15m"
 
 // currentGOOS is the runtime OS. It is a variable (not a constant) so that
 // tests can override it to simulate non-darwin platforms without recompiling.
@@ -514,7 +530,7 @@ func runUninstallCmd(args []string) {
 	}
 
 	// ── Full teardown path ────────────────────────────────────────────────
-	result := performFullUninstall(home, currentGOOS)
+	result := performFullUninstall(home, currentGOOS, hasFlag(args, "--keep-secrets"))
 	printUninstallResult(result)
 	if result.HardFailed {
 		os.Exit(1)
@@ -557,6 +573,14 @@ type UninstallResult struct {
 	// BrewErr is non-nil when brew uninstall was attempted but failed.
 	BrewErr error
 
+	// SecretsExisted is true when the encrypted secrets store or master key was
+	// present at uninstall time (so the summary can speak to their fate).
+	SecretsExisted bool
+
+	// SecretsKept is true when --keep-secrets preserved the store + master key
+	// across the ~/.agentjail wipe.
+	SecretsKept bool
+
 	// HardFailed is true when any step that should succeed actually failed.
 	HardFailed bool
 }
@@ -567,7 +591,9 @@ type UninstallResult struct {
 //   - home is the user's home directory (e.g. os.UserHomeDir()).
 //   - goos is the runtime OS string (pass currentGOOS, or "linux" in tests
 //     to skip the real launchctl calls).
-func performFullUninstall(home, goos string) UninstallResult {
+//   - keepSecrets, when true, preserves the encrypted secrets store and master
+//     key (~/.agentjail/secrets + secrets.key) across the ~/.agentjail wipe.
+func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 	var r UninstallResult
 	env := buildAgentsEnv(home)
 
@@ -598,6 +624,12 @@ func performFullUninstall(home, goos string) UninstallResult {
 		if r.DaemonErr != nil {
 			r.HardFailed = true
 		}
+		// Secrets broker teardown (ADR 0058). Best-effort: a leftover
+		// loaded-but-not-running definition is harmless, so a failure here does
+		// not fail the uninstall.
+		if err := uninstallSecretsBroker(home, goos); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail: warning: secrets broker teardown: %v\n", err)
+		}
 	} else {
 		r.DaemonSkipped = true
 	}
@@ -608,12 +640,15 @@ func performFullUninstall(home, goos string) UninstallResult {
 	}
 	uninstallPathShim(home)
 
-	// Step 3: remove ~/.agentjail.
+	// Step 3: remove ~/.agentjail (optionally preserving the secrets store/key).
 	installDir := filepath.Join(home, ".agentjail")
-	if err := os.RemoveAll(installDir); err != nil {
+	r.SecretsExisted = fileExists(filepath.Join(installDir, "secrets.key")) ||
+		fileExists(filepath.Join(installDir, "secrets"))
+	if err := removeInstallDir(installDir, keepSecrets); err != nil {
 		r.InstallDirErr = err
 		r.HardFailed = true
 	}
+	r.SecretsKept = keepSecrets && r.SecretsExisted
 
 	// Step 4: remove daemon log (best-effort; ENOENT is fine).
 	const daemonLog = "/tmp/agentjail-daemon.log"
@@ -798,6 +833,86 @@ func uninstallSystemdDaemon(home string) error {
 	return nil
 }
 
+// removeInstallDir removes ~/.agentjail. When keepSecrets is true it preserves
+// the encrypted secrets store and master key (secrets/ and secrets.key) by
+// removing every OTHER top-level entry instead of the whole tree. The two
+// preserved names mirror the shield's AgentjailSecretsProtectedNames() contract
+// (ADR 0048) — keep them in lockstep if that set ever changes.
+func removeInstallDir(installDir string, keepSecrets bool) error {
+	if !keepSecrets {
+		return os.RemoveAll(installDir)
+	}
+	preserved := map[string]bool{"secrets": true, "secrets.key": true}
+	entries, err := os.ReadDir(installDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var firstErr error
+	for _, e := range entries {
+		if preserved[e.Name()] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(installDir, e.Name())); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// secretsBrokerDefInstalled reports whether the secrets broker service
+// definition is present (launchd plist on macOS, systemd --user unit on Linux).
+// Pure file-presence check — does not start or connect to the broker.
+func secretsBrokerDefInstalled(home string) bool {
+	if currentGOOS == "darwin" {
+		return fileExists(filepath.Join(home, "Library", "LaunchAgents", secretsPlistFilename))
+	}
+	return fileExists(filepath.Join(systemdUserUnitDir(home), secretsSystemdUnitFilename))
+}
+
+// uninstallSecretsBroker tears down the secrets broker service definition
+// (ADR 0058): unload+remove the launchd plist on macOS, disable+remove the
+// systemd --user unit on Linux. Tolerates "not loaded"/"not found" gracefully.
+// The encrypted store and master key under ~/.agentjail are NOT removed here —
+// that happens with the whole ~/.agentjail tree in the caller's Step 3.
+func uninstallSecretsBroker(home, goos string) error {
+	if goos == "darwin" {
+		plistDst := filepath.Join(home, "Library", "LaunchAgents", secretsPlistFilename)
+		if fileExists(plistDst) {
+			out, err := exec.Command("launchctl", "unload", plistDst).CombinedOutput()
+			if err != nil {
+				msg := strings.TrimSpace(string(out))
+				if msg != "" && !strings.Contains(msg, "Could not find specified service") &&
+					!strings.Contains(msg, "No such process") {
+					return fmt.Errorf("launchctl unload (secrets): %w: %s", err, msg)
+				}
+			}
+		}
+		if err := os.Remove(plistDst); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove secrets plist: %w", err)
+		}
+		return nil
+	}
+
+	unitDst := filepath.Join(systemdUserUnitDir(home), secretsSystemdUnitFilename)
+	if fileExists(unitDst) && systemdUserAvailableFn() {
+		// Stop first (it may be running from an on-demand start), then disable.
+		_ = exec.Command("systemctl", "--user", "stop", secretsSystemdUnitFilename).Run()
+		if out, err := exec.Command("systemctl", "--user", "disable", secretsSystemdUnitFilename).CombinedOutput(); err != nil {
+			msg := strings.TrimSpace(string(out))
+			if msg != "" && !strings.Contains(msg, "does not exist") && !strings.Contains(msg, "not loaded") {
+				return fmt.Errorf("systemctl --user disable (secrets): %w: %s", err, msg)
+			}
+		}
+	}
+	if err := os.Remove(unitDst); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove secrets systemd unit: %w", err)
+	}
+	return nil
+}
+
 // printUninstallResult writes a human-readable summary of a full uninstall.
 // It is a thin wrapper around printUninstallSummary writing to os.Stdout.
 func printUninstallResult(r UninstallResult) {
@@ -830,8 +945,20 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 
 	if r.InstallDirErr != nil {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("fail", "FAILED to remove: "+r.InstallDirErr.Error())))
+	} else if r.SecretsKept {
+		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed (secrets store + key preserved: --keep-secrets)")))
 	} else {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed")))
+	}
+
+	// Speak to the stored secrets' fate whenever any existed, so a destructive
+	// delete is never silent (ADR 0058 OQ4).
+	if r.SecretsExisted {
+		if r.SecretsKept {
+			lines = append(lines, u.KeyValue("secrets", "", u.Badge("ok", "kept — encrypted store + master key left in place")))
+		} else {
+			lines = append(lines, u.KeyValue("secrets", "", u.Badge("dim", "deleted — encrypted store + master key removed (re-run with --keep-secrets to preserve)")))
+		}
 	}
 
 	if r.BrewUninstalled {
@@ -943,6 +1070,20 @@ func printStatusOutput(w io.Writer, home string) {
 		daemonBadge2 = u.Badge("fail", "not running")
 	}
 	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue("daemon", "", daemonBadge2))
+
+	// Secrets broker (ADR 0058): report definition presence + up/dormant state
+	// WITHOUT starting it. Non-activating by design — stat the socket file
+	// (present while listening, removed on exit), never kickstart or connect.
+	var secretsBadge string
+	switch {
+	case !secretsBrokerDefInstalled(home):
+		secretsBadge = u.Badge("fail", "not installed")
+	case fileExists(sandbox.SecretsSocketPath()):
+		secretsBadge = u.Badge("ok", "listening")
+	default:
+		secretsBadge = u.Badge("dim", "on-demand (dormant)")
+	}
+	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue("secrets broker", "", secretsBadge))
 
 	fmt.Fprintln(w)
 
@@ -1065,11 +1206,194 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 		return err
 	}
 
+	// Install the secrets broker as a loaded-but-not-running service (ADR 0058).
+	// Fail-soft: a broker install failure must never block the daemon install,
+	// so errors are logged and swallowed here.
+	if err := installSecretsBrokerService(home, w); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail: warning: secrets broker setup skipped: %v\n", err)
+	}
+
+	// Refresh the shield + netproxy binaries. `agentjail install` historically
+	// refreshed only hook+daemon, so a reinstall left a STALE shield wrapping the
+	// session until the user hand-copied it (a real papercut — a shield fix does
+	// not take effect on reinstall alone). copyBinary uses temp+rename, so
+	// replacing the shield that currently wraps the process is safe: the running
+	// process keeps the old inode and the next launch picks up the new one.
+	refreshAuxiliaryBinaries(home, w)
+
 	// Refresh the PATH shim if one was previously installed. This ensures
 	// brew upgrade / curl|sh reinstall picks up the current template and
 	// does not retain stale flags from a dev build.
 	refreshPathShimIfExists(home)
 
+	return nil
+}
+
+// refreshAuxiliaryBinaries copies the shield and netproxy binaries into
+// ~/.agentjail/bin if they can be located next to the running agentjail binary
+// (or on PATH). Fail-soft: a binary that isn't present in this build context is
+// simply skipped, leaving any existing installed copy untouched. This closes the
+// "install refreshes hook+daemon only" gap so a reinstall picks up a fresh
+// shield/netproxy (effective on the next agent launch, since the shield is
+// stamped onto a process at launch).
+func refreshAuxiliaryBinaries(home string, w io.Writer) {
+	u := ui.New(w)
+	binDir := filepath.Join(home, ".agentjail", "bin")
+	for _, name := range []string{"agentjail-shield", "agentjail-netproxy"} {
+		src, err := findBinary(name)
+		if err != nil {
+			continue // not available in this context; leave any existing copy in place
+		}
+		if err := copyBinary(src, filepath.Join(binDir, name)); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail: warning: refresh %s failed: %v\n", name, err)
+			continue
+		}
+		fmt.Fprintln(w, "      "+u.Badge("dim", name+" refreshed (effective next launch)"))
+	}
+}
+
+// secretsPlistTemplate is the launchd plist for the on-demand secrets broker.
+// Unlike the daemon (RunAtLoad + KeepAlive), this job is loaded-but-not-running:
+// RunAtLoad=false, no KeepAlive, no Sockets key. It is registered so a client
+// can `launchctl kickstart` it on demand (ADR 0058); the broker self-exits on
+// idle. Placeholders: __SECRETS_PATH__, __STORE_DIR__, __KEY_PATH__, __IDLE__,
+// __CRASH_LOG_PATH__.
+const secretsPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agentjail.secrets</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__SECRETS_PATH__</string>
+        <string>serve</string>
+        <string>--store=__STORE_DIR__</string>
+        <string>--key=__KEY_PATH__</string>
+        <string>--log=__LOG_PATH__</string>
+        <string>--idle-timeout=__IDLE__</string>
+    </array>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardErrorPath</key>
+    <string>__CRASH_LOG_PATH__</string>
+    <key>StandardOutPath</key>
+    <string>__CRASH_LOG_PATH__</string>
+</dict>
+</plist>
+`
+
+// installSecretsPlist writes the secrets broker launchd plist to dst.
+func installSecretsPlist(secretsBin, storeDir, keyPath, logPath, idle, crashLogPath, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	content := strings.ReplaceAll(secretsPlistTemplate, "__SECRETS_PATH__", secretsBin)
+	content = strings.ReplaceAll(content, "__STORE_DIR__", storeDir)
+	content = strings.ReplaceAll(content, "__KEY_PATH__", keyPath)
+	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
+	content = strings.ReplaceAll(content, "__IDLE__", idle)
+	content = strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
+	return os.WriteFile(dst, []byte(content), 0o644)
+}
+
+// secretsSystemdServiceTemplate is the systemd --user unit for the on-demand
+// secrets broker. Plain Type=simple with NO Restart= — the broker self-exits on
+// idle by design (ADR 0058) and must not be restarted into an always-on loop.
+// Installed + enabled but not started at boot; a client runs `systemctl --user
+// start` on demand. Placeholders match secretsPlistTemplate.
+const secretsSystemdServiceTemplate = `[Unit]
+Description=agentjail secrets broker — on-demand credential vault (ADR 0058)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=__SECRETS_PATH__ serve --store=__STORE_DIR__ --key=__KEY_PATH__ --log=__LOG_PATH__ --idle-timeout=__IDLE__
+StandardOutput=append:__CRASH_LOG_PATH__
+StandardError=append:__CRASH_LOG_PATH__
+
+[Install]
+WantedBy=default.target
+`
+
+// installSecretsSystemdUnit writes the secrets broker systemd --user unit to dst.
+func installSecretsSystemdUnit(secretsBin, storeDir, keyPath, logPath, idle, crashLogPath, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	content := strings.ReplaceAll(secretsSystemdServiceTemplate, "__SECRETS_PATH__", secretsBin)
+	content = strings.ReplaceAll(content, "__STORE_DIR__", storeDir)
+	content = strings.ReplaceAll(content, "__KEY_PATH__", keyPath)
+	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
+	content = strings.ReplaceAll(content, "__IDLE__", idle)
+	content = strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
+	return os.WriteFile(dst, []byte(content), 0o644)
+}
+
+// installSecretsBrokerService copies the agentjail-secrets binary and installs
+// the loaded-but-not-running service definition (ADR 0058). It does NOT start
+// the broker — clients bring it up on demand via sandbox.EnsureSecretsBroker.
+// Independent and fail-soft: it never blocks the daemon install.
+func installSecretsBrokerService(home string, w io.Writer) error {
+	u := ui.New(w)
+	binDir := filepath.Join(home, ".agentjail", "bin")
+
+	secretsSrc, err := findBinary(secretsBinaryName)
+	if err != nil {
+		return fmt.Errorf("locate %s: %w", secretsBinaryName, err)
+	}
+	secretsDst := filepath.Join(binDir, secretsBinaryName)
+	if err := copyBinary(secretsSrc, secretsDst); err != nil {
+		return fmt.Errorf("copy %s: %w", secretsBinaryName, err)
+	}
+
+	storeDir := filepath.Join(home, ".agentjail", "secrets")
+	keyPath := filepath.Join(home, ".agentjail", "secrets.key")
+	logPath := filepath.Join(home, ".agentjail", "secrets.log")
+	crashLogPath := filepath.Join(home, ".agentjail", "secrets-crash.log")
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, u.Section(u.Emoji("🔐  ")+"Setting up the secrets broker"))
+	fmt.Fprintln(w, u.Step(1, 2, "agentjail-secrets installed", true))
+
+	// Migration note (ADR 0058 OQ5): if a broker is already listening — e.g. a
+	// hand-started `agentjail-secrets serve` or a personal launchd/cron entry —
+	// it will keep owning the socket, so the new on-demand definition can't take
+	// over until that one exits. Warn rather than kill someone else's process.
+	if fileExists(sandbox.SecretsSocketPath()) {
+		fmt.Fprintln(w, "      "+u.Badge("dim", "a secrets broker is already running; stop any manual `agentjail-secrets serve` so the managed on-demand job can own the socket"))
+	}
+
+	if currentGOOS == "darwin" {
+		plistDst := filepath.Join(home, "Library", "LaunchAgents", secretsPlistFilename)
+		if err := installSecretsPlist(secretsDst, storeDir, keyPath, logPath, secretsBrokerIdleTimeout, crashLogPath, plistDst); err != nil {
+			return fmt.Errorf("install secrets launchd plist: %w", err)
+		}
+		// Load registers the job in the domain (RunAtLoad=false → not started),
+		// so a later `launchctl kickstart` can start it on demand.
+		if err := launchctlLoad(plistDst); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail: warning: launchctl load (secrets) failed: %v\n", err)
+		}
+		fmt.Fprintln(w, u.Step(2, 2, "secrets broker registered (on-demand)", true))
+		return nil
+	}
+
+	// Linux (and other non-darwin unix): systemd --user unit, enabled-not-started.
+	unitDst := filepath.Join(systemdUserUnitDir(home), secretsSystemdUnitFilename)
+	if err := installSecretsSystemdUnit(secretsDst, storeDir, keyPath, logPath, secretsBrokerIdleTimeout, crashLogPath, unitDst); err != nil {
+		return fmt.Errorf("install secrets systemd user unit: %w", err)
+	}
+	if systemdUserAvailableFn() {
+		// daemon-reload so `systemctl --user start` can find the new unit;
+		// enable (not --now) so it's known but not started at boot.
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+		if out, err := exec.Command("systemctl", "--user", "enable", secretsSystemdUnitFilename).CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail: warning: systemctl --user enable (secrets) failed: %v: %s\n", err, strings.TrimSpace(string(out)))
+		}
+		fmt.Fprintln(w, u.Step(2, 2, "secrets broker registered (on-demand, systemd --user)", true))
+	} else {
+		fmt.Fprintln(w, u.Step(2, 2, "secrets broker unit installed (no systemd --user session)", true))
+	}
 	return nil
 }
 

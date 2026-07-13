@@ -79,12 +79,16 @@ func requestSecretGrants(cfg *config.PolicyConfig) ([]string, []activeGrant) {
 	if cfg == nil || len(cfg.Secrets.Grants) == 0 {
 		return nil, nil
 	}
-	if !sandbox.SecretsBrokerRunning() {
-		fmt.Fprintln(os.Stderr, "agentjail-shield WARNING: secrets.grants configured but agentjail-secrets broker is not running")
-		return nil, nil
-	}
-
 	socketPath := sandbox.SecretsSocketPath()
+	if !sandbox.SecretsBrokerRunning() {
+		// On-demand start (ADR 0058): bring the loaded-but-not-running broker up
+		// rather than silently dropping the configured grants. Only warn (and
+		// continue without grants) if it genuinely cannot be started.
+		if err := sandbox.EnsureSecretsBroker(socketPath); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: secrets.grants configured but agentjail-secrets broker could not be started: %v\n", err)
+			return nil, nil
+		}
+	}
 	var envVars []string
 	var grants []activeGrant
 
