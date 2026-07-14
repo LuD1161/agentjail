@@ -10,7 +10,7 @@
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.Q98Z3744J2.com.openclaw.agentjail</string>
+		<string>group.Q98Z3744J2.com.blinkerlm.agentjail</string>
 	</array>
 </dict>
 </plist>

@@ -23,7 +23,7 @@ func AgentjailTunnelReadPacket(_ buf: UnsafeMutablePointer<UInt8>, _ maxLength: 
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
-    private let log = OSLog(subsystem: "com.openclaw.agentjail.tunnel", category: "tunnel")
+    private let log = OSLog(subsystem: "com.blinkerlm.agentjail.tunnel", category: "tunnel")
 
     /// Virtual tunnel IP range used by the agent jail network.
     /// The Go gateway listens on the "server" side (.1) and the system
@@ -128,7 +128,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// extension thread.  It sleeps briefly when there are no packets to avoid
     /// busy-spinning.
     private func writeToPacketFlow() {
-        let q = DispatchQueue(label: "com.openclaw.agentjail.tunnel.write", qos: .userInitiated)
+        let q = DispatchQueue(label: "com.blinkerlm.agentjail.tunnel.write", qos: .userInitiated)
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.mtu)
 
         q.async { [weak self] in

@@ -7,7 +7,7 @@
   <key>CFBundleDisplayName</key>
   <string>Agentjail Network Extension</string>
   <key>CFBundleIdentifier</key>
-  <string>com.openclaw.agentjail.app.extension</string>
+  <string>com.blinkerlm.agentjail.app.extension</string>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
   <key>CFBundlePackageType</key>
   <string>SYSX</string>
   <key>CFBundleExecutable</key>
-  <string>com.openclaw.agentjail.app.extension</string>
+  <string>com.blinkerlm.agentjail.app.extension</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSExtension</key>

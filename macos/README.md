@@ -37,7 +37,7 @@ activate/deactivate flow via the CLI shim compiled from `AgentjailTunnel/main.sw
 - A provisioning profile that grants:
   - `com.apple.developer.networking.networkextension` → `packet-tunnel-provider`
   - `com.apple.developer.system-extension.install`
-  - App Group `Q98Z3744J2.com.openclaw.agentjail`
+  - App Group `Q98Z3744J2.com.blinkerlm.agentjail`
 
 ## Step 1 — Build the Go static library
 
@@ -126,7 +126,7 @@ AgentjailTunnel.app/
     │   └── AgentjailTunnel
     └── Library/
         └── SystemExtensions/
-            └── com.openclaw.agentjail.tunnel.extension.systemextension/
+            └── com.blinkerlm.agentjail.tunnel.extension.systemextension/
                 └── Contents/
                     ├── Info.plist
                     └── MacOS/
@@ -135,7 +135,7 @@ AgentjailTunnel.app/
 
 ```sh
 APP=build/AgentjailTunnel.app
-EXT=$APP/Contents/Library/SystemExtensions/com.openclaw.agentjail.tunnel.extension.systemextension
+EXT=$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.tunnel.extension.systemextension
 
 mkdir -p $APP/Contents/MacOS
 mkdir -p $EXT/Contents/MacOS
@@ -188,7 +188,7 @@ Alternatively, for development (SIP disabled):
 ```sh
 # Copy the .systemextension bundle to the correct location then activate.
 systemextensionsctl list
-# Look for com.openclaw.agentjail.tunnel.extension
+# Look for com.blinkerlm.agentjail.tunnel.extension
 ```
 
 ## Step 7 — Activate / deactivate the tunnel
@@ -226,7 +226,7 @@ when the two targets are linked together.
 
 ## Troubleshooting
 
-- **Extension not activating**: check Console.app filtered to `com.openclaw.agentjail.tunnel` for errors from `NEPacketTunnelProvider`.
+- **Extension not activating**: check Console.app filtered to `com.blinkerlm.agentjail.tunnel` for errors from `NEPacketTunnelProvider`.
 - **`AgentjailTunnelStart` returns non-zero**: the Go gateway failed to bind; check for port conflicts on `10.78.0.1`.
 - **DNS not resolving**: confirm `matchDomains = [""]` is set; the empty string is the catch-all magic value.
 - **Packet loop CPU spike**: normal at ~5k pkt/s; `usleep(500)` in `writeToPacketFlow` bounds idle CPU to < 0.1%.

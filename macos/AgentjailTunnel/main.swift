@@ -3,7 +3,7 @@ import Foundation
 import NetworkExtension
 import os.log
 
-private let log = OSLog(subsystem: "com.openclaw.agentjail.tunnel", category: "app")
+private let log = OSLog(subsystem: "com.blinkerlm.agentjail.tunnel", category: "app")
 
 // MARK: - TunnelManager
 
@@ -15,7 +15,7 @@ private let log = OSLog(subsystem: "com.openclaw.agentjail.tunnel", category: "a
 class TunnelManager {
 
     /// Bundle identifier of the TunnelExtension target.
-    private static let extensionBundleID = "com.openclaw.agentjail.tunnel.extension"
+    private static let extensionBundleID = "com.blinkerlm.agentjail.tunnel.extension"
 
     /// Human-readable name shown in System Settings > VPN.
     private static let localizedDescription = "AgentJail"
@@ -157,7 +157,7 @@ default:
 // Host app — activates the system extension and saves a transparent-proxy
 // configuration into NETransparentProxyManager.  The extension does the
 // per-process filtering itself by walking each flow's audit-token chain
-// back to `com.openclaw.agentjail.app`, so we don't need NEAppRule /
+// back to `com.blinkerlm.agentjail.app`, so we don't need NEAppRule /
 // matchTools here (which on macOS require an MDM-pushed appmapping
 // payload).
 //
@@ -174,8 +174,8 @@ import Foundation
 import NetworkExtension
 import SystemExtensions
 
-let extBundleID = "com.openclaw.agentjail.app.extension"
-let parentBundleID = "com.openclaw.agentjail.app"
+let extBundleID = "com.blinkerlm.agentjail.app.extension"
+let parentBundleID = "com.blinkerlm.agentjail.app"
 let proxyProfileName = "agentjail"
 
 // Routine setup progress is noise during a normal `agentjail run`, so

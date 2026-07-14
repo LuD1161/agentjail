@@ -4,7 +4,7 @@
 <dict>
     <!-- Bundle identity -->
     <key>CFBundleIdentifier</key>
-    <string>com.openclaw.agentjail.tunnel.extension</string>
+    <string>com.blinkerlm.agentjail.tunnel.extension</string>
     <key>CFBundleName</key>
     <string>TunnelExtension</string>
     <key>CFBundleDisplayName</key>

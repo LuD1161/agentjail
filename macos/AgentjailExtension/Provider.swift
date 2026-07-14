@@ -31,8 +31,8 @@ import Network
 import NetworkExtension
 import os.log
 
-private let log = OSLog(subsystem: "com.openclaw.agentjail.app.extension", category: "proxy")
-private let parentBundleID = "com.openclaw.agentjail.app"
+private let log = OSLog(subsystem: "com.blinkerlm.agentjail.app.extension", category: "proxy")
+private let parentBundleID = "com.blinkerlm.agentjail.app"
 
 // System daemons that must never be tunneled, even in whole-machine
 // mode. Tunneling these through a WG gateway that might be down

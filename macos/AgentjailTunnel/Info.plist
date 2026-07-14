@@ -7,7 +7,7 @@
   <key>CFBundleExecutable</key>
   <string>AgentjailTunnel</string>
   <key>CFBundleIdentifier</key>
-  <string>com.openclaw.agentjail.app</string>
+  <string>com.blinkerlm.agentjail.app</string>
   <key>CFBundleName</key>
   <string>AgentjailTunnel</string>
   <key>CFBundlePackageType</key>
