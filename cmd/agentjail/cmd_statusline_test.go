@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/LuD1161/agentjail/internal/buildinfo"
+)
 
 // TestDisplayVersion covers the git-describe -> status-line formatting: exact
 // tags pass through, commits-past-tag collapse to "<tag>+N", and a dirty tree
@@ -8,8 +12,8 @@ import "testing"
 // empty-string case, which yields whatever buildCommit() returns in the test
 // binary; we only assert it does NOT surface the raw describe string.
 func TestDisplayVersion(t *testing.T) {
-	orig := version
-	defer func() { version = orig }()
+	orig := buildinfo.Version
+	defer func() { buildinfo.Version = orig }()
 
 	tests := []struct {
 		name string
@@ -26,7 +30,7 @@ func TestDisplayVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			version = tt.in
+			buildinfo.Version = tt.in
 			if got := displayVersion(); got != tt.want {
 				t.Errorf("displayVersion(%q) = %q, want %q", tt.in, got, tt.want)
 			}
@@ -38,11 +42,11 @@ func TestDisplayVersion(t *testing.T) {
 // release information do NOT leak through as-is -- they route to the commit-hash
 // fallback (which is empty in the test binary, built outside any -X ldflag).
 func TestDisplayVersionFallback(t *testing.T) {
-	orig := version
-	defer func() { version = orig }()
+	orig := buildinfo.Version
+	defer func() { buildinfo.Version = orig }()
 
 	for _, in := range []string{"", "dev", "dev-1a2b3c4"} {
-		version = in
+		buildinfo.Version = in
 		if got := displayVersion(); got == in && in != "" {
 			t.Errorf("displayVersion(%q) = %q, want fallback (commit hash or empty)", in, got)
 		}

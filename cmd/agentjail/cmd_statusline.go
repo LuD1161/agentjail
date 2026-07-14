@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +67,7 @@ func buildCommit() string {
 // default), it falls back to the short commit hash from build info, or "" when
 // that too is absent.
 func displayVersion() string {
-	v := strings.TrimSpace(version)
+	v := strings.TrimSpace(buildinfo.Version)
 	if v == "" || v == "dev" || strings.HasPrefix(v, "dev-") {
 		return buildCommit()
 	}

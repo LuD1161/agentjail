@@ -47,6 +47,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/logrotate"
@@ -56,9 +57,6 @@ import (
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
-
-// version is set via -ldflags at build time (mirrors cmd/agentjail).
-var version = ""
 
 // Request is an alias for policyeval.Request used in daemon tests.
 type Request = policyeval.Request
@@ -740,6 +738,7 @@ func Run(args []string) int {
 	slog.SetDefault(logger)
 
 	slog.Info("agentjail-daemon starting",
+		"version", buildinfo.Version,
 		"socket", *socketPath,
 		"policy", *policyPath,
 		"rules_dir", *rulesDir,
@@ -843,7 +842,7 @@ func Run(args []string) int {
 	// daemon continues without telemetry. The same ctx is cancelled on
 	// SIGTERM/SIGINT, which triggers Recorder.Run's final flush on shutdown.
 	if tp, perr := telemetry.DefaultPaths(); perr == nil {
-		if rec, rerr := telemetry.New(tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH, telemetry.DefaultClient()); rerr == nil {
+		if rec, rerr := telemetry.New(tp, os.Getenv, buildinfo.Version, runtime.GOOS, runtime.GOARCH, telemetry.DefaultClient()); rerr == nil {
 			srv.telemetry = rec
 			go rec.Run(ctx) // ctx is cancelled on SIGTERM/SIGINT → triggers final flush
 			srv.recordPolicyConfig(cfg, *rulesDir)
@@ -875,7 +874,7 @@ func Run(args []string) int {
 
 		checker := &selfupdate.Checker{}
 		uc := &UpdateChecker{
-			Version:     version,
+			Version:     buildinfo.Version,
 			BasePath:    filepath.Dir(*socketPath), // ~/.agentjail
 			Fetcher:     checker,
 			Notifier:    &osNotifier{},

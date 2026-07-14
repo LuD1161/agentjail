@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 )
 
@@ -55,7 +56,7 @@ func TestFetchLatestVersion_MockServer(t *testing.T) {
 	defaultChecker.PrimaryURL = srv.URL
 	defer func() { defaultChecker.PrimaryURL = orig }()
 
-	got, err := defaultChecker.FetchLatestVersion(t.Context(), version)
+	got, err := defaultChecker.FetchLatestVersion(t.Context(), buildinfo.Version)
 	if err != nil {
 		t.Fatalf("FetchLatestVersion error: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestFetchLatestVersion_ServerError(t *testing.T) {
 		defaultChecker.FallbackURL = origFallback
 	}()
 
-	got, _ := defaultChecker.FetchLatestVersion(t.Context(), version)
+	got, _ := defaultChecker.FetchLatestVersion(t.Context(), buildinfo.Version)
 	if got != "" {
 		t.Fatalf("expected empty on 500, got %q", got)
 	}

@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -98,7 +99,7 @@ func runUpdate(args []string) int {
 		exeDir := filepath.Dir(exePath)
 		if exeDir != installDir {
 			if brew {
-				current := version
+				current := buildinfo.Version
 				if current == "" {
 					current = "dev"
 				}
@@ -173,7 +174,7 @@ func confirmUpdateInteractive() bool {
 // and force to allow reinstalling the same version.
 // Returns 0 on success, non-zero on error.
 func performUpdate(installDir, goos, goarch string, force bool) int {
-	current := version
+	current := buildinfo.Version
 	if current == "" {
 		current = "dev"
 	}

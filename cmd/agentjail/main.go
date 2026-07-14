@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/daemonapp"
 	"github.com/LuD1161/agentjail/internal/netproxyapp"
 	"github.com/LuD1161/agentjail/internal/secretsapp"
@@ -132,7 +133,7 @@ func usage(w io.Writer) {
 	u := ui.New(w)
 	const bodyIndent = "  "
 
-	ver := version
+	ver := buildinfo.Version
 	if ver == "" {
 		ver = "dev"
 	}

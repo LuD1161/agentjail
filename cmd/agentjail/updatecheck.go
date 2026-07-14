@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -94,8 +95,8 @@ func maybeRunUpdateCheck() func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		latest, _ := defaultChecker.FetchLatestVersion(ctx, version)
-		current := version
+		latest, _ := defaultChecker.FetchLatestVersion(ctx, buildinfo.Version)
+		current := buildinfo.Version
 		newer := selfupdate.IsNewerVersion(current, latest)
 
 		if newer {

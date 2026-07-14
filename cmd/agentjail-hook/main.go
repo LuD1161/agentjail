@@ -39,12 +39,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
-
-// hookVersion is set via -ldflags at build time (mirrors cmd/agentjail version).
-var hookVersion = ""
 
 var (
 	defaultTelemetryPaths = telemetry.DefaultPaths
@@ -236,7 +234,7 @@ func failOpenMarker(agent, category string) {
 	if tp, err := defaultTelemetryPaths(); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		_ = sendFailOpen(ctx, tp, os.Getenv, hookVersion, runtime.GOOS, category)
+		_ = sendFailOpen(ctx, tp, os.Getenv, buildinfo.Version, runtime.GOOS, category)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/picker"
 )
 
@@ -1198,9 +1199,9 @@ func TestPrintUninstallSummaryInstallDirFailed(t *testing.T) {
 // output still contains the verbatim version string so scripts grepping it work.
 func TestPrintVersionOutputContainsVersionString(t *testing.T) {
 	// Override the global version for this test.
-	orig := version
-	version = "v1.2.3-test"
-	defer func() { version = orig }()
+	orig := buildinfo.Version
+	buildinfo.Version = "v1.2.3-test"
+	defer func() { buildinfo.Version = orig }()
 
 	var buf bytes.Buffer
 	printVersionOutput(&buf)
@@ -1220,9 +1221,9 @@ func TestPrintVersionOutputContainsVersionString(t *testing.T) {
 // TestPrintVersionOutputDevFallback verifies that an empty version variable
 // shows "dev" in the output.
 func TestPrintVersionOutputDevFallback(t *testing.T) {
-	orig := version
-	version = ""
-	defer func() { version = orig }()
+	orig := buildinfo.Version
+	buildinfo.Version = ""
+	defer func() { buildinfo.Version = orig }()
 
 	var buf bytes.Buffer
 	printVersionOutput(&buf)

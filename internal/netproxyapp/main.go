@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/hostgrant"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/store"
@@ -175,7 +176,7 @@ func newProxy(addr string, registry *sessionRegistry, emitter audit.Emitter, dur
 // is expected to have fingerprinted and reused the existing proxy instead of
 // spawning us).
 func (p *proxy) run(ctx context.Context) error {
-	cs, err := newControlServer(proxyctl.ControlSocketPath(), p.registry, p.emitter, p.durableAudit, version, p.logger)
+	cs, err := newControlServer(proxyctl.ControlSocketPath(), p.registry, p.emitter, p.durableAudit, buildinfo.Version, p.logger)
 	if err != nil {
 		return fmt.Errorf("acquire control plane: %w", err)
 	}

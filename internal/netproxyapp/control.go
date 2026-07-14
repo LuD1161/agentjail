@@ -39,11 +39,6 @@ import (
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
-// version is the netproxy binary version reported in the control Fingerprint.
-// Overridable at build time via -ldflags "-X main.version=...". The Fingerprint
-// tolerates binary drift; only proxyctl.ProtocolVersion governs compatibility.
-var version = "dev"
-
 // controlLockName is the flock'd lockfile that serializes singleton ownership
 // of the control socket, alongside proxyctl's controlSocketName.
 const controlLockName = "netproxy-ctl.lock"

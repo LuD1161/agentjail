@@ -112,7 +112,7 @@ dist-tarball:  ## build a release-layout tarball for testbed installs (DIST_GOOS
 	@for bin in $(DIST_BINS); do \
 		echo "building $$bin ($(DIST_GOOS)/$(DIST_GOARCH))..."; \
 		GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) CGO_ENABLED=0 \
-		go build -ldflags "-X main.version=$(DIST_VERSION) -s -w" \
+		go build -ldflags "-X github.com/LuD1161/agentjail/internal/buildinfo.Version=$(DIST_VERSION) -s -w" \
 			-o dist/$(DIST_GOOS)-$(DIST_GOARCH)/$$bin ./cmd/$$bin; \
 	done
 	@tar -czf dist/agentjail-$(DIST_VERSION)-$(DIST_GOOS)-$(DIST_GOARCH).tar.gz \

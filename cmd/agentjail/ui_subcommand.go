@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/LuD1161/agentjail/cmd/agentjail/ui"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 )
 
 // runUI is the entry point for `agentjail ui`. Returns an exit code.
@@ -64,12 +65,12 @@ func runUI(args []string) int {
 		return 2
 	}
 
-	fmt.Fprintf(os.Stderr, "agentjail ui — %s\n", version)
+	fmt.Fprintf(os.Stderr, "agentjail ui — %s\n", buildinfo.Version)
 	fmt.Fprintf(os.Stderr, "serving on http://%s\n", addr)
 	fmt.Fprintln(os.Stderr, "press Ctrl-C to stop")
 
 	store := ui.NewStore()
-	srv := ui.NewServer(addr, logPath, dbPath, editPolicy, store, version)
+	srv := ui.NewServer(addr, logPath, dbPath, editPolicy, store, buildinfo.Version)
 
 	// Graceful shutdown on SIGINT / SIGTERM.
 	sigCh := make(chan os.Signal, 1)

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 )
 
@@ -165,9 +166,9 @@ func TestPerformUpdate_AlreadyUpToDate(t *testing.T) {
 
 	setCheckerURL(t, srv.URL)
 
-	origVersion := version
-	version = "v1.0.0"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
 
 	installDir := t.TempDir()
 
@@ -205,9 +206,9 @@ func TestPerformUpdate_DevVersionSkips(t *testing.T) {
 
 	setCheckerURL(t, srv.URL)
 
-	origVersion := version
-	version = "dev"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "dev"
+	defer func() { buildinfo.Version = origVersion }()
 
 	installDir := t.TempDir()
 	oldStdout := os.Stdout
@@ -241,9 +242,9 @@ func TestPerformUpdate_FetchFails(t *testing.T) {
 	setCheckerURL(t, srv.URL)
 	setCheckerFallbackURL(t, srv.URL)
 
-	origVersion := version
-	version = "v1.0.0"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
 
 	installDir := t.TempDir()
 	code := performUpdate(installDir, "linux", "amd64", false)
@@ -290,9 +291,9 @@ func TestPerformUpdate_SHA256Mismatch(t *testing.T) {
 	setCheckerURL(t, srv.URL+"/releases/latest")
 
 	// Patch updateURLBase by overriding version so the tarball name matches.
-	origVersion := version
-	version = "v1.0.0"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
 
 	// Override the URL helper used by performUpdate.
 	origUpdateURLBaseFn := updateURLBaseFn
@@ -359,9 +360,9 @@ func TestPerformUpdate_AtomicSwap(t *testing.T) {
 
 	setCheckerURL(t, verSrv.URL)
 
-	origVersion := version
-	version = "v1.0.0"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
 
 	origURLFn := updateURLBaseFn
 	updateURLBaseFn = func(ver string) string { return srv.URL }
@@ -430,9 +431,9 @@ func TestPerformUpdate_ForceReinstall(t *testing.T) {
 
 	setCheckerURL(t, verSrv.URL)
 
-	origVersion := version
-	version = "v1.0.0"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
 
 	origURLFn := updateURLBaseFn
 	updateURLBaseFn = func(ver string) string { return srv.URL }
@@ -463,9 +464,9 @@ func TestPerformUpdate_DowngradeRefused(t *testing.T) {
 
 	setCheckerURL(t, srv.URL)
 
-	origVersion := version
-	version = "v2.0.0" // current is newer
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v2.0.0" // current is newer
+	defer func() { buildinfo.Version = origVersion }()
 
 	installDir := t.TempDir()
 
@@ -537,9 +538,9 @@ func TestPerformUpdate_RollbackOnSwapFailure(t *testing.T) {
 
 	setCheckerURL(t, verSrv.URL)
 
-	origVersion := version
-	version = "v1.0.0"
-	defer func() { version = origVersion }()
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
 
 	origURLFn := updateURLBaseFn
 	updateURLBaseFn = func(ver string) string { return srv.URL }

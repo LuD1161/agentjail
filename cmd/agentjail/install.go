@@ -59,6 +59,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/picker"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
@@ -191,7 +192,7 @@ func runInstallCmd(args []string) {
 	}
 
 	// Print the header banner.
-	v := version
+	v := buildinfo.Version
 	if v == "" {
 		v = "dev"
 	}
@@ -228,7 +229,7 @@ func runInstallCmd(args []string) {
 			func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				_ = telemetry.SendInstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH,
+				_ = telemetry.SendInstall(ctx, tp, os.Getenv, buildinfo.Version, runtime.GOOS, runtime.GOARCH,
 					os.Getenv("AGENTJAIL_INSTALL_METHOD"), []string{ag.ID()}, 1, isFreshInstall)
 			}()
 		}
@@ -252,7 +253,7 @@ func runInstallCmd(args []string) {
 	// already-protected machine behaves like an update instead of re-prompting.
 	state := computeInstallState(detected, func(a agents.Agent) agents.Status { return a.Status(env) })
 	if state.allProtected() {
-		v := version
+		v := buildinfo.Version
 		if v == "" {
 			v = "dev"
 		}
@@ -396,7 +397,7 @@ func runInstallCmd(args []string) {
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = telemetry.SendInstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH,
+			_ = telemetry.SendInstall(ctx, tp, os.Getenv, buildinfo.Version, runtime.GOOS, runtime.GOARCH,
 				os.Getenv("AGENTJAIL_INSTALL_METHOD"), wiredAgents, len(detected), isFreshInstall)
 		}()
 	}
@@ -521,7 +522,7 @@ func runUninstallCmd(args []string) {
 			func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				_ = telemetry.SendUninstall(ctx, tp, os.Getenv, version, runtime.GOOS, runtime.GOARCH, []string{ag.ID()})
+				_ = telemetry.SendUninstall(ctx, tp, os.Getenv, buildinfo.Version, runtime.GOOS, runtime.GOARCH, []string{ag.ID()})
 			}()
 		}
 		uout := ui.New(os.Stdout)
@@ -605,7 +606,7 @@ func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_ = telemetry.SendUninstall(ctx, tp, os.Getenv, version, goos, runtime.GOARCH, nil)
+			_ = telemetry.SendUninstall(ctx, tp, os.Getenv, buildinfo.Version, goos, runtime.GOARCH, nil)
 		}()
 	}
 
@@ -1013,7 +1014,7 @@ func printStatusOutput(w io.Writer, home string) {
 	u := ui.New(w)
 	const emojiSectionBodyIndent = "      "
 
-	v := version
+	v := buildinfo.Version
 	if v == "" {
 		v = "dev"
 	}
@@ -1121,7 +1122,7 @@ func runVersionCmd() {
 // Separated so tests can pass a bytes.Buffer. The version string itself
 // always appears verbatim so scripts/tests grepping it still work.
 func printVersionOutput(w io.Writer) {
-	v := version
+	v := buildinfo.Version
 	if v == "" {
 		v = "dev"
 	}
@@ -1129,9 +1130,6 @@ func printVersionOutput(w io.Writer) {
 	fmt.Fprintln(w, u.Header("agentjail", v, currentGOOS))
 	fmt.Fprintln(w)
 }
-
-// version is set via -ldflags at build time.
-var version = ""
 
 // ---- daemon preamble -----------------------------------------------------------
 
