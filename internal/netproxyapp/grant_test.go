@@ -1,4 +1,4 @@
-package main
+package netproxyapp
 
 // grant_test.go exercises the runtime host grant flow end-to-end:
 // the data-plane sentinel (main.go: isGrantSentinel/handleGrantSentinel)

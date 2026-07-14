@@ -12,7 +12,7 @@
 // request.
 //
 // Thread safety: all exported methods are safe for concurrent use.
-package main
+package netproxyapp
 
 import (
 	"crypto/rand"

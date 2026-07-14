@@ -1,4 +1,4 @@
-package main
+package netproxyapp
 
 // control.go implements the session-aware control plane for agentjail-netproxy.
 //
