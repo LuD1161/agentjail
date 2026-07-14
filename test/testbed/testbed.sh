@@ -13,6 +13,8 @@
 #                                         build tarball -> install.sh ->
 #                                         Claude Code + agentjail, ready to use
 #   testbed.sh test <name> [scenario]     run a scenario (default: e2e-smoke) in-guest
+#   testbed.sh record <name> [scenario..] record scenarios (asciinema) -> reports/<ts>/
+#                                         with report.html + summary.json (all if none named)
 #   testbed.sh gate [--worktree <path>]   RELEASE GATE: clean box -> provision ->
 #                                         scenario, non-zero exit on any failure.
 #                                         Run before tagging a release.
@@ -110,6 +112,24 @@ do_provision() {
         log "      Run 'claude setup-token' on the host and save the token there (chmod 600)."
     fi
 
+    # Sync the host's global MCP servers into the guest so the testbed's Claude
+    # Code sees the same MCP surface a real session does (agentjail's netproxy
+    # allowlist seeding keys off installed MCPs). We copy only the global
+    # `.mcpServers` block from ~/.claude.json — project-scoped and
+    # claude.ai-connected (OAuth) servers don't travel to a headless guest.
+    local host_claude="$HOME/.claude.json"
+    if command -v jq >/dev/null 2>&1 && [ -f "$host_claude" ] \
+        && jq -e '(.mcpServers // {}) | length > 0' "$host_claude" >/dev/null 2>&1; then
+        local mcp_tmp
+        mcp_tmp="$(mktemp "${TMPDIR:-/tmp}/agentjail-mcp.XXXXXX")"
+        jq '{mcpServers: (.mcpServers // {})}' "$host_claude" > "$mcp_tmp"
+        log "syncing host global MCP servers -> guest ($(jq -r '.mcpServers | keys | join(", ")' "$mcp_tmp"))"
+        guest_push "$name" "$mcp_tmp" /tmp/claude-mcp.json
+        rm -f "$mcp_tmp"
+    else
+        log "no global MCP servers on host (or jq missing) — skipping MCP sync"
+    fi
+
     log "running guest-provision.sh inside the guest"
     guest_exec "$name" "bash /tmp/guest-provision.sh"
     log "provisioned. Try: $0 ssh $name   then: agentjail status && claude"
@@ -174,8 +194,51 @@ do_test() {
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
     [ -f "$script" ] || die "scenario not found: $script"
     log "running scenario '$scenario' in '$name'"
-    guest_push "$name" "$script" "/tmp/${scenario}.sh"
-    guest_exec "$name" "bash /tmp/${scenario}.sh"
+    guest_exec "$name" "mkdir -p /tmp/testbed/scenarios"
+    guest_push "$name" "$TESTBED_DIR/reportlib.sh" "/tmp/testbed/reportlib.sh"
+    guest_push "$name" "$script" "/tmp/testbed/scenarios/${scenario}.sh"
+    guest_exec "$name" "bash /tmp/testbed/scenarios/${scenario}.sh"
+}
+
+# do_record runs scenarios under asciinema in the guest, pulls each recording
+# (.cast) + result (.result.json) back to test/testbed/reports/<ts>/, then
+# builds a self-contained report.html + summary.json. Scenario recording mode
+# comes from a `# testbed-mode: single|tmux` header line (default single):
+#   single -> the runner wraps the whole script in `asciinema rec`
+#   tmux   -> the scenario self-records a 2-pane session to $SCN_CAST
+do_record() {
+    local name="${1:?usage: testbed.sh record <name> [scenario...]}"; shift
+    local scenarios=("$@")
+    if [ ${#scenarios[@]} -eq 0 ]; then
+        for f in "$TESTBED_DIR"/scenarios/*.sh; do scenarios+=("$(basename "$f" .sh)"); done
+    fi
+    local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    local out="$TESTBED_DIR/reports/$ts"; mkdir -p "$out"
+
+    guest_exec "$name" "mkdir -p /tmp/testbed/scenarios"
+    guest_push "$name" "$TESTBED_DIR/reportlib.sh" "/tmp/testbed/reportlib.sh"
+
+    for s in "${scenarios[@]}"; do
+        local script="$TESTBED_DIR/scenarios/${s}.sh"
+        [ -f "$script" ] || { log "skip: no scenario ${s}.sh"; continue; }
+        # `|| true`: single-mode scenarios omit the header, so the grep pipeline
+        # exits 1 — without this, `set -e`/pipefail kills the whole record run.
+        local mode; mode=$(grep -oE '# *testbed-mode: *[a-z]+' "$script" | grep -oE '[a-z]+$' | tail -1 || true); mode="${mode:-single}"
+        log "recording '$s' (mode=$mode)"
+        guest_push "$name" "$script" "/tmp/testbed/scenarios/${s}.sh"
+        local env="SCN_JSON=/tmp/testbed/${s}.result.json SCN_CAST=/tmp/testbed/${s}.cast TERM=xterm-256color"
+        if [ "$mode" = "tmux" ]; then
+            guest_exec "$name" "$env bash /tmp/testbed/scenarios/${s}.sh" || log "  (scenario reported failures)"
+        else
+            guest_exec "$name" "$env asciinema rec --overwrite -q -c 'env $env bash /tmp/testbed/scenarios/${s}.sh' /tmp/testbed/${s}.cast" || log "  (scenario reported failures)"
+        fi
+        guest_pull "$name" "/tmp/testbed/${s}.result.json" "$out/${s}.result.json" 2>/dev/null || log "  (no result json)"
+        guest_pull "$name" "/tmp/testbed/${s}.cast" "$out/${s}.cast" 2>/dev/null || log "  (no cast)"
+    done
+
+    log "building report"
+    bash "$TESTBED_DIR/gen-report.sh" "$out"
+    log "open: $out/report.html"
 }
 
 do_snapshot() {
@@ -230,6 +293,7 @@ case "$cmd" in
     ssh)       do_ssh "$@" ;;
     exec)      do_exec "$@" ;;
     test)      do_test "$@" ;;
+    record)    do_record "$@" ;;
     gate)      do_gate "$@" ;;
     snapshot)  do_snapshot "$@" ;;
     reset)     do_reset "$@" ;;

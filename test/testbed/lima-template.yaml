@@ -38,7 +38,7 @@ provision:
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
       apt-get install -y --no-install-recommends \
-        curl ca-certificates git tmux sqlite3 openssh-client
+        curl ca-certificates git tmux sqlite3 openssh-client asciinema jq neofetch
       # Claude Code requires node >= 22; Ubuntu 24.04's apt ships 18.
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
       apt-get install -y nodejs

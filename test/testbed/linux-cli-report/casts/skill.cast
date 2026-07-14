@@ -1,0 +1,13 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1784012695, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.005684, "o", "=== skill list ===\r\n"]
+[0.014429, "o", "❯ Skills (from audit history)\r\n  (no skills found in audit history)\r\n"]
+[0.015757, "o", "PASS  skill list shows Skills section\r\n"]
+[0.015786, "o", "=== skill ask / skill clear — anti-self-approval guard (non-TTY) ===\r\n"]
+[0.022181, "o", "agentjail skill ask: REFUSED -- no interactive terminal detected.\r\n  Changing the skill allow/block/ask list mutates agentjail's own policy.\r\n  It must be run in a terminal by a human.\r\n  This restriction prevents an agent from self-approving a skill.\r\n"]
+[0.024773, "o", "PASS  skill ask refused (no interactive terminal detected)\r\n"]
+[0.025971, "o", "PASS  skill ask refusal names self-approval risk\r\n"]
+[0.026022, "o", "PASS  skill ask exits 1 in non-TTY\r\n"]
+[0.032376, "o", "agentjail skill clear: REFUSED -- no interactive terminal detected.\r\n  Changing the skill allow/block/ask list mutates agentjail's own policy.\r\n  It must be run in a terminal by a human.\r\n  This restriction prevents an agent from self-approving a skill.\r\n"]
+[0.035477, "o", "PASS  skill clear refused (no interactive terminal detected)\r\n"]
+[0.036992, "o", "PASS  skill clear refusal names self-approval risk\r\n"]
+[0.037362, "o", "PASS  skill clear exits 1 in non-TTY\r\nSKIP  skill ask/clear happy-path (requires interactive TTY confirmation)\r\n=== RESULT: 7 pass, 0 fail, 1 skip ===\r\n"]

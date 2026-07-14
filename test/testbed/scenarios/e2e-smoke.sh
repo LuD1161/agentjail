@@ -1,72 +1,81 @@
 #!/usr/bin/env bash
-# e2e-smoke.sh — the first real testbed scenario (Stage 3 seed).
+# e2e-smoke.sh — single-terminal scenario (recorded whole by the runner).
+# Exercises agentjail as a human's Claude Code session would, across both tiers,
+# on the INSTALLED binaries. Emits a result JSON via reportlib; still runs
+# standalone under `testbed.sh test`.
 #
-# Runs INSIDE a provisioned testbed guest. Exercises agentjail exactly as a
-# human's Claude Code session would, across both enforcement tiers, and asserts
-# on the installed binaries' actual behavior — not on source-tree tests.
-#
-#   Copy in + run:
-#     testbed.sh exec <name> -- 'bash -s' < test/testbed/scenarios/e2e-smoke.sh
-#   or from the host:
-#     limactl cp test/testbed/scenarios/e2e-smoke.sh <inst>:/tmp/ && \
-#       testbed.sh exec <name> -- bash /tmp/e2e-smoke.sh
-#
-# Tiers:
-#   Tier 1 (hook)   — Claude Code invokes agentjail-hook with PreToolUse JSON;
-#                     allow = exit 0, deny = exit 2 (+ remediation hint on stderr).
-#   Tier 2 (shield) — agentjail-shield wraps a process with a kernel sandbox
-#                     (Landlock on Linux). cwd is granted RW, so scenarios run
-#                     from a PROJECT dir (~/work/demo), like a real session —
-#                     NOT from $HOME (that would grant all of home RW).
-#
-# Not covered here: the IMDS/cloud-metadata egress guard is shield-tier and only
-# fires when a metadata service (169.254.169.254) is actually reachable — a
-# plain VM has none, so it is a cloud-only scenario (see ADR 0049).
+# testbed-mode: single
+set -uo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 
-set -u
 HOOK="$HOME/.agentjail/bin/agentjail-hook"
 SHIELD="$HOME/.agentjail/bin/agentjail-shield"
 PROJECT="$HOME/work/demo"
-PASS=0; FAIL=0
-ok()   { echo "PASS  $1"; PASS=$((PASS+1)); }
-bad()  { echo "FAIL  $1"; FAIL=$((FAIL+1)); }
 
-hook() { # <label> <expected-exit> <json>
-    local rc; echo "$3" | "$HOOK" >/dev/null 2>/tmp/he; rc=$?
-    [ "$rc" = "$2" ] && ok "$1 (exit $rc)" || { bad "$1: want exit $2 got $rc"; sed 's/^/      /' /tmp/he | head -2; }
+scn_init "e2e-smoke" "clean-box install + hook & shield policy enforcement"
+
+# hook <label> <expected: allow|deny> <json> — maps exit 0->allow, 2->deny.
+hook() {
+    local rc dec; echo "$3" | "$HOOK" >/dev/null 2>/tmp/he; rc=$?
+    case "$rc" in 0) dec=allow;; 2) dec=deny;; *) dec="exit$rc";; esac
+    scn_check "$1" "$2" "$dec"
 }
 
-echo "=== install wiring ==="
-grep -q agentjail-hook "$HOME/.claude/settings.json" && ok "hook wired into ~/.claude/settings.json" || bad "hook not wired"
+# install wiring
+grep -q agentjail-hook "$HOME/.claude/settings.json" && scn_ok "hook wired in settings.json" || scn_fail "hook wired in settings.json"
 # macOS uses launchd (LaunchAgent plist); Linux uses systemd --user.
 if [ "$(uname -s)" = "Darwin" ]; then
-    launchctl list 2>/dev/null | grep -q agentjail && ok "daemon active (launchd)" || bad "daemon not active (launchctl list has no agentjail entry)"
+    launchctl list 2>/dev/null | grep -q agentjail && scn_ok "daemon active (launchd)" || scn_fail "daemon active (launchd)"
 else
-    systemctl --user is-active agentjail-daemon >/dev/null 2>&1 && ok "daemon active (systemd --user)" || bad "daemon not active"
+    systemctl --user is-active agentjail-daemon >/dev/null 2>&1 && scn_ok "daemon active (systemd --user)" || scn_fail "daemon active (systemd --user)"
 fi
 
-echo "=== Tier 1: hook policy ==="
-hook "allow write inside project"      0 '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$PROJECT"'/note.txt","content":"hi"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
-hook "deny write ~/.ssh/authorized_keys" 2 '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$HOME"'/.ssh/authorized_keys","content":"x"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
-hook "deny write ~/.aws/credentials"   2 '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$HOME"'/.aws/credentials","content":"x"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
-hook "deny rm -rf /"                    2 '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf /"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
+# Tier 1 — hook policy
+hook "hook: allow write inside project"       allow '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$PROJECT"'/note.txt","content":"hi"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
+hook "hook: deny write ~/.ssh/authorized_keys" deny '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$HOME"'/.ssh/authorized_keys","content":"x"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
+hook "hook: deny write ~/.aws/credentials"     deny '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$HOME"'/.aws/credentials","content":"x"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
+hook "hook: deny rm -rf /"                     deny '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf /"},"session_id":"e2e","cwd":"'"$PROJECT"'"}'
 
-echo "=== Tier 1: remediation hint on deny ==="
-echo '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$HOME"'/.ssh/authorized_keys","content":"x"},"session_id":"e2e","cwd":"'"$PROJECT"'"}' \
-    | "$HOOK" 2>&1 >/dev/null | grep -qiE "ssh|sensitive|credential|blocked" && ok "deny carries a hint" || bad "deny hint missing"
+# remediation hint on deny. Capture stderr into a var first: piping the hook
+# (which exits 2 on deny) straight into grep trips `set -o pipefail`.
+hint_out=$(echo '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$HOME"'/.ssh/authorized_keys","content":"x"},"session_id":"e2e","cwd":"'"$PROJECT"'"}' | "$HOOK" 2>&1 1>/dev/null || true)
+if grep -qiE "ssh|sensitive|credential|blocked" <<<"$hint_out"; then scn_ok "deny carries remediation hint"; else scn_fail "deny carries remediation hint"; fi
 
-echo "=== Tier 2: shield kernel sandbox (cwd = project, like a real session) ==="
-cd "$PROJECT" || { bad "no project dir"; }
+# Tier 2 — shield (cwd = project, like a real session)
+cd "$PROJECT" 2>/dev/null || true
 rm -f "$HOME/.ssh/id_rsa"; echo ORIG > "$HOME/.ssh/id_rsa"
 "$SHIELD" -- bash -c 'echo PWNED > ~/.ssh/id_rsa' >/dev/null 2>&1
-grep -q PWNED "$HOME/.ssh/id_rsa" && bad "shield: ~/.ssh write NOT blocked" || ok "shield blocks ~/.ssh write"
-"$SHIELD" -- bash -c 'cat ~/.ssh/id_rsa' 2>/dev/null | grep -q ORIG && bad "shield: private-key read NOT blocked" || ok "shield blocks ~/.ssh read"
+grep -q PWNED "$HOME/.ssh/id_rsa" && scn_fail "shield blocks ~/.ssh write" || scn_ok "shield blocks ~/.ssh write"
+"$SHIELD" -- bash -c 'cat ~/.ssh/id_rsa' 2>/dev/null | grep -q ORIG && scn_fail "shield blocks ~/.ssh read" || scn_ok "shield blocks ~/.ssh read"
 "$SHIELD" -- bash -c 'echo ok > ./shield-ok.txt' >/dev/null 2>&1
-[ -f "$PROJECT/shield-ok.txt" ] && ok "shield allows project write" || bad "shield blocks project write"
+[ -f "$PROJECT/shield-ok.txt" ] && scn_ok "shield allows project write" || scn_fail "shield allows project write"
 
-echo "=== decisions recorded ==="
-DB=$(ls "$HOME"/.agentjail/*.db 2>/dev/null | head -1)
-[ -n "$DB" ] && { N=$(sqlite3 -readonly "$DB" "select count(*) from decisions;" 2>/dev/null); ok "decisions store has $N rows"; } || bad "no decisions store"
+# Secrets broker — on-demand auto-start (ADR 0058, DEFECT-2).
+SECRETS="$HOME/.agentjail/bin/agentjail-secrets"
+SECRETS_SOCK="$HOME/.agentjail/secrets.sock"
+if [ "$(uname -s)" = "Darwin" ]; then
+    SECRETS_SVC_FILE="$HOME/Library/LaunchAgents/com.agentjail.secrets.plist"
+else
+    SECRETS_SVC_FILE="$HOME/.config/systemd/user/agentjail-secrets.service"
+fi
 
-echo "=== RESULT: $PASS pass, $FAIL fail ==="
-[ "$FAIL" = 0 ]
+# a. loaded-but-not-running service definition was installed.
+[ -f "$SECRETS_SVC_FILE" ] && scn_ok "secrets broker service definition installed" || scn_fail "secrets broker service definition installed"
+
+# b. broker is dormant right after install — no manual `serve` was run.
+[ -S "$SECRETS_SOCK" ] && scn_fail "secrets broker dormant after install (no socket yet)" || scn_ok "secrets broker dormant after install (no socket yet)"
+
+# c. setting a secret must succeed WITHOUT a manual `agentjail-secrets serve` —
+# this is the auto-start path (rpcClient -> EnsureSecretsBroker on connect-refused).
+"$SECRETS" set testbed/demo hello-from-e2e-smoke >/tmp/secrets-set.log 2>&1
+set_rc=$?
+[ "$set_rc" -eq 0 ] && scn_ok "secrets broker: set auto-starts broker" || scn_fail "secrets broker: set auto-starts broker"
+
+# d. broker is now reachable — proves auto-start actually brought it up.
+[ -S "$SECRETS_SOCK" ] && scn_ok "secrets broker reachable after set (auto-started)" || scn_fail "secrets broker reachable after set (auto-started)"
+
+# e. round-trip: the secret name comes back from list (never the value).
+list_out=$("$SECRETS" list 2>/tmp/secrets-list.log)
+if grep -qx "testbed/demo" <<<"$list_out"; then scn_ok "secrets broker: list round-trips secret name"; else scn_fail "secrets broker: list round-trips secret name"; fi
+
+scn_finish

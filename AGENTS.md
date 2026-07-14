@@ -207,6 +207,25 @@ This goes in the same commit as the code change, not a follow-up.
 2. `make smoke` — every fixture PASSes or SKIPs cleanly
 3. Updated `README.md` / `docs/adr/` per the cadence rule
 4. Conventional commit message with sign-off
+5. **Recording hygiene (see below)** — never commit a raw testbed recording; it
+   embeds host-identifying data.
+
+### Recording hygiene — never commit a raw cast
+
+Testbed asciinema recordings (`test/testbed/*-cli-report/casts/*.cast`) capture
+the guest's terminal verbatim, which embeds **host-identifying / internal data**:
+the host-derived username (Lima names the guest `<host-user>.guest` /
+`<host-user>.linux`, so it appears throughout every `/home/<user>/...` path),
+plus any MCP server names/paths from the host's `~/.claude.json`. This repo is
+public — that data must never be committed or published.
+
+- The recorder (`record-cli-report.sh`) **auto-sanitizes** casts before building
+  the report (replaces the host username with `agent`). Keep that step in place;
+  do not bypass it by committing casts pulled by hand.
+- If you record by any other path, run the same scrub, and **grep the casts for
+  your username / `$HOME` / MCP names before `git add`**.
+- A leak that reaches history is expensive to remove (requires a history
+  rewrite). Catch it at record time, not at release time.
 
 ### Before cutting a release
 

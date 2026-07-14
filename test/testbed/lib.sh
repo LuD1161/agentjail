@@ -46,6 +46,11 @@ lima_guest_push() {
     limactl cp "$src" "$(inst "$name"):$dst"
 }
 
+lima_guest_pull() {
+    local name=$1 src=$2 dst=$3
+    limactl cp "$(inst "$name"):$src" "$dst"
+}
+
 # ---- Tart driver (macOS) ---------------------------------------------------
 
 TART_GOLDEN="${TART_GOLDEN:-golden-macos}"
@@ -76,7 +81,13 @@ tart_guest_push() {
     ${_tart_ssh_prefix[@]+"${_tart_ssh_prefix[@]}"} scp "${TART_SSH_OPTS[@]}" "$src" "${TART_SSH_USER}@$(tart_ip "$name"):$dst"
 }
 
+tart_guest_pull() {
+    local name=$1 src=$2 dst=$3
+    scp "${TART_SSH_OPTS[@]}" "${TART_SSH_USER}@$(tart_ip "$name"):$src" "$dst"
+}
+
 # ---- Driver-dispatched helpers ---------------------------------------------
 
 guest_exec() { "${DRIVER}_guest_exec" "$@"; }
 guest_push() { "${DRIVER}_guest_push" "$@"; }
+guest_pull() { "${DRIVER}_guest_pull" "$@"; }
