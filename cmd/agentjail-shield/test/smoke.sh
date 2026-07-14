@@ -182,6 +182,13 @@ if [ "${OS}" = "Darwin" ] && command -v curl >/dev/null 2>&1; then
 
     # -------------------------------------------------------------------------
     # Fixtures F-I: per-host netproxy enforcement
+    #
+    # Egress enforcement (agentjail-netproxy) is OPT-IN per ADR 0046: it is OFF
+    # by default and turned on with --netproxy (--no-netproxy is retained but is
+    # now redundant with the default). Fixture H, which asserts the proxy starts
+    # and injects HTTPS_PROXY, therefore passes --netproxy. Fixture I asserts the
+    # default/opt-out path stays port-only. Fixture F stays port-only on purpose
+    # so it leaves :9100 free for Fixture G's direct-to-proxy probe.
     # -------------------------------------------------------------------------
 
     # Build agentjail-netproxy if available.
@@ -194,6 +201,15 @@ if [ "${OS}" = "Darwin" ] && command -v curl >/dev/null 2>&1; then
         info "Could not build agentjail-netproxy — skipping Fixtures F-I"
     fi
 
+    # Fixture H starts a real netproxy via --netproxy; because the shield exec's
+    # into the (instantly-exiting) agent command, that netproxy can outlive the
+    # run and keep :9100 bound, which would make Fixture G's direct-to-9100 probe
+    # hit the *previous* run's proxy (407) instead of a clean skip. Reap any
+    # smoke-spawned netproxy up front (and again at cleanup). Matches only the
+    # uniquely-named smoke binary, never a user's real agentjail-netproxy.
+    cleanup_smoke_netproxy() { pkill -f 'agentjail-netproxy-smoke' 2>/dev/null || true; }
+    cleanup_smoke_netproxy
+
     # Write a test policy that allows api.github.com but NOT attacker.example.com.
     SMOKE_POLICY="/tmp/agentjail-shield-smoke-policy-$$.yaml"
     cat > "${SMOKE_POLICY}" << 'POLICY_EOF'
@@ -204,7 +220,11 @@ network:
 POLICY_EOF
 
     if [ "${NETPROXY_AVAILABLE}" = "true" ]; then
-        # Fixture F: allowed host reaches through the proxy.
+        # Fixture F: allowed host is reachable. NOTE: this runs port-only (no
+        # --netproxy) so it does not start a listener on 9100 -- Fixture G below
+        # relies on 9100 being free to distinguish "proxy denied" from "no proxy".
+        # It therefore exercises the 443 allowance, not per-host proxy routing;
+        # genuine through-proxy allow/deny is covered by Fixtures H (inject) and G.
         LABEL="Fixture F: HTTPS to api.github.com allowed via netproxy"
         F_OUTPUT=""
         F_EXIT=0
@@ -254,15 +274,20 @@ except Exception as e:
 
         echo ""
 
-        # Fixture H: shield without --no-netproxy starts the netproxy process.
-        LABEL="Fixture H: shield without --no-netproxy starts netproxy"
+        # Fixture H: shield WITH --netproxy starts the netproxy and injects
+        # HTTPS_PROXY into the child env (opt-in, ADR 0046). The injected value
+        # carries a per-session auth token (ADR 0042), so the child sees
+        # HTTPS_PROXY=http://<token>:@127.0.0.1:9100 -- assert on the 127.0.0.1:9100
+        # endpoint reaching the child rather than the bare, tokenless URL.
+        LABEL="Fixture H: shield with --netproxy injects HTTPS_PROXY"
         H_OUTPUT=""
         H_EXIT=0
         # Run a very quick command so we can check the output for netproxy startup messages.
         H_OUTPUT=$(AGENTJAIL_NETPROXY="${NETPROXY_BIN}" "${SHIELD_BIN}" \
+            --netproxy \
             --policy="${SMOKE_POLICY}" \
             -- sh -c "echo HTTPS_PROXY=\$HTTPS_PROXY" 2>&1) || H_EXIT=$?
-        if echo "${H_OUTPUT}" | grep -q "HTTPS_PROXY=http://127.0.0.1:9100"; then
+        if echo "${H_OUTPUT}" | grep -qE "HTTPS_PROXY=http.*127\.0\.0\.1:9100"; then
             pass "${LABEL}: HTTPS_PROXY is set by shield"
         elif echo "${H_OUTPUT}" | grep -q "netproxy started"; then
             pass "${LABEL}: shield log shows netproxy started"
@@ -286,6 +311,9 @@ except Exception as e:
             pass "${LABEL}: HTTPS_PROXY not set (correct port-only mode)"
         fi
 
+        # Reap the netproxy Fixture H leaked (see note above) so :9100 is free
+        # for the next run, then drop the smoke binary.
+        cleanup_smoke_netproxy
         rm -f "${NETPROXY_BIN}"
     fi
 
