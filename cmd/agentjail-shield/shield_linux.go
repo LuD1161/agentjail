@@ -386,6 +386,61 @@ func formatDuration(d time.Duration) string {
 // allowed_access. This means cross-directory rename/hardlink is denied by
 // default on v2+ kernels (safe). On v1 kernels REFER is unavailable and such
 // operations follow legacy DAC — an acceptable trade-off for older kernels.
+// cwdEnclosesHome reports whether granting read-write on cwd would also expose
+// the home directory's protected subtree (~/.ssh, ~/.aws, ~/.gnupg) — i.e. cwd
+// is the home directory itself or an ancestor of it. Both paths are cleaned
+// before comparison so trailing slashes / "." segments don't defeat the check.
+// homeChild is a direct child of $HOME to grant as workspace, with the dir flag
+// so the caller can pick directory- vs file-scoped Landlock access.
+type homeChild struct {
+	path  string
+	isDir bool
+}
+
+// visibleHomeChildren returns the non-hidden direct children of home — the set
+// granted read-write as the agent's workspace when it is launched from $HOME.
+// Dotfiles/dotdirs are excluded because that's where credentials live
+// (~/.ssh, ~/.aws, ~/.gnupg, ~/.config, ~/.netrc, ...); the specific dot-entries
+// the agent legitimately needs are re-granted via the home allowlist instead.
+func visibleHomeChildren(home string) ([]homeChild, error) {
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return nil, err
+	}
+	var out []homeChild
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue // hidden — deny by default
+		}
+		out = append(out, homeChild{path: filepath.Join(home, e.Name()), isDir: e.IsDir()})
+	}
+	return out, nil
+}
+
+// resolveSymlinks returns the fully symlink-resolved form of p, falling back to
+// p unchanged if resolution fails (e.g. the path doesn't exist).
+func resolveSymlinks(p string) string {
+	if p == "" {
+		return p
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+func cwdEnclosesHome(cwd, home string) bool {
+	if home == "" {
+		return false
+	}
+	c := filepath.Clean(cwd)
+	h := filepath.Clean(home)
+	if c == h || c == string(filepath.Separator) {
+		return true // same dir, or cwd is the filesystem root (encloses everything)
+	}
+	return strings.HasPrefix(h, c+string(filepath.Separator))
+}
+
 func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Probe supported Landlock ABI version (ruleset_attr=NULL, size=0, flags=VERSION).
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
@@ -495,10 +550,70 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 
 	cwd, _ := os.Getwd()
 
-	// Allow read-write on /tmp and cwd.
-	for _, p := range []string{"/tmp", cwd} {
+	// Allow read-write on /tmp always. cwd is granted read-write too — UNLESS
+	// cwd encloses $HOME. A wholesale grant on such a cwd would swallow the
+	// sensitive home subtree (~/.ssh, ~/.aws, ~/.gnupg, and every other dotfile
+	// where credentials live) that the allowlist below deliberately withholds,
+	// since Landlock has no punch-through deny to carve them back out (macOS
+	// filename-denies private keys regardless of cwd, which is why it was never
+	// exposed there).
+	//
+	// Symlinks are resolved before the check: a cwd that is a symlink INTO $HOME
+	// (e.g. a testbed's /home/<u>.linux -> /home/<u>.guest) must be recognised
+	// as enclosing home, because the Landlock grant applies to the real target
+	// directory, not the link.
+	//
+	// Three cases:
+	//   - cwd IS $HOME → grant the *visible* (non-hidden) home children as the
+	//     agent's workspace, but deny all dotfiles/dotdirs by default (that's
+	//     where secrets live: ~/.ssh, ~/.aws, ~/.config/gh, ~/.netrc, ...). The
+	//     specific dot-entries the agent legitimately needs (~/.claude, etc.)
+	//     are re-granted by the home allowlist below. This keeps $HOME usable
+	//     without a wholesale grant Landlock can't carve secrets out of.
+	//   - cwd is a strict ancestor of $HOME (e.g. /home, /) → too broad to
+	//     enumerate meaningfully; fall back to the home allowlist only.
+	//   - otherwise (a normal project cwd) → grant cwd wholesale as before.
+	resolvedCwd := resolveSymlinks(cwd)
+	resolvedHome := resolveSymlinks(home)
+	rwPaths := []string{"/tmp"}
+	grantVisibleHomeChildren := false
+	switch {
+	case cwd == "":
+		// cwd unknown — grant nothing extra.
+	case resolvedHome != "" && resolvedCwd == resolvedHome:
+		grantVisibleHomeChildren = true
+		fmt.Fprintln(os.Stderr, "agentjail-shield: cwd is $HOME; granting non-hidden home "+
+			"entries as the workspace — dotfiles (~/.ssh, ~/.aws, ~/.gnupg, ~/.config, ...) stay protected")
+	case cwdEnclosesHome(resolvedCwd, resolvedHome):
+		fmt.Fprintf(os.Stderr, "agentjail-shield: cwd %s encloses $HOME; "+
+			"granting the home allowlist only so ~/.ssh, ~/.aws, ~/.gnupg stay protected\n", cwd)
+	default:
+		rwPaths = append(rwPaths, cwd)
+	}
+	for _, p := range rwPaths {
 		if err := allowPath(p, rwAccess); err != nil {
 			return fmt.Errorf("allow %s: %w", p, err)
+		}
+	}
+
+	// Option A: when launched from $HOME, grant each non-hidden child read-write
+	// so the agent can actually work, while every dotfile/dotdir stays denied by
+	// default (hidden == where credentials live). Best-effort: a child that
+	// can't be granted is logged and skipped, never fatal.
+	if grantVisibleHomeChildren {
+		children, rerr := visibleHomeChildren(resolvedHome)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: cannot enumerate $HOME (%v); "+
+				"falling back to home allowlist only\n", rerr)
+		}
+		for _, c := range children {
+			access := rwFileAccess
+			if c.isDir {
+				access = rwAccess
+			}
+			if err := allowPath(c.path, access); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", c.path, err)
+			}
 		}
 	}
 
