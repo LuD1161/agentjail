@@ -385,6 +385,10 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					} else {
 						_ = enc.Encode(wire.ControlResponse{OK: true})
 					}
+				case wire.ControlOpPing:
+					// Side-effect-free liveness probe for the single-instance
+					// guard (see singleton.go). Reply OK and do nothing else.
+					_ = enc.Encode(wire.ControlResponse{OK: true})
 				default:
 					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unknown control op: " + creq.Op})
 				}
@@ -752,12 +756,23 @@ func Run(args []string) int {
 		return 1
 	}
 
-	// Remove a stale socket file from a previous crash. os.Remove is
-	// best-effort; if it fails for any reason other than ENOENT the
-	// subsequent Listen will fail with a clear error.
-	if err := os.Remove(*socketPath); err != nil && !os.IsNotExist(err) {
-		slog.Warn("remove stale socket", "path", *socketPath, "err", err)
+	// Single-instance guard: hold an exclusive flock on daemon.lock (beside the
+	// socket) before touching the socket, so a second daemon — a different
+	// install channel, a manual run, or an upgrade transition — stands down
+	// instead of hijacking daemon.sock. Kept for the process lifetime; the OS
+	// releases it on exit/crash. Stale-socket removal is deferred to
+	// bindAgentSocket, which probes before unlinking. See singleton.go / ADR 0060.
+	lockPath := filepath.Join(socketDir, instanceLockName)
+	instanceLock, acquired, lockErr := acquireInstanceLock(lockPath, instanceLockRetries, instanceLockInterval)
+	if lockErr != nil {
+		slog.Error("acquire instance lock", "path", lockPath, "err", lockErr)
+		return 1
 	}
+	if !acquired {
+		slog.Info("another agentjail-daemon is already running; standing down", "lock", lockPath)
+		return 0
+	}
+	defer func() { _ = instanceLock.Close() }()
 
 	// Load initial policy config — merge policy.yaml over Default(), inject temp roots.
 	cfg, err := loadConfig(*policyPath)
@@ -921,10 +936,14 @@ func Run(args []string) int {
 
 	// Start listening before installing signal handlers so the socket is
 	// ready as soon as we log "listening".
-	ln, err := net.Listen("unix", *socketPath)
-	if err != nil {
-		slog.Error("listen", "socket", *socketPath, "err", err)
+	ln, bound, bindErr := bindAgentSocket(*socketPath)
+	if bindErr != nil {
+		slog.Error("bind agent socket", "socket", *socketPath, "err", bindErr)
 		return 1
+	}
+	if !bound {
+		slog.Info("another agentjail-daemon already owns the socket; standing down", "socket", *socketPath)
+		return 0
 	}
 	// Restrict socket permissions to the current user — no group or world
 	// access. 0600 = read+write for owner only.
