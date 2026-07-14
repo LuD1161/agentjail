@@ -2,7 +2,11 @@
 //
 // What `agentjail install` does on macOS and Linux:
 //  1. Copies agentjail-hook binary to ~/.agentjail/bin/agentjail-hook (0755).
-//  2. Copies agentjail-daemon binary to ~/.agentjail/bin/agentjail-daemon (0755).
+//  2. Copies the agentjail (multicall) binary to ~/.agentjail/bin/agentjail
+//     (0755), then ensures agentjail-daemon, agentjail-shield,
+//     agentjail-netproxy, and agentjail-secrets are relative symlinks to it
+//     (see selfupdate.EnsureRoleSymlinks in internal/selfupdate/rolesymlinks.go) — these four names are
+//     never real files on disk.
 //  3. Copies core .rego rules to ~/.agentjail/rules/ (idempotent).
 //  4. Writes ~/.agentjail/policy.yaml from agentpolicy/default_policy.yaml
 //     if the file does not already exist (never overwrites user customisations).
@@ -38,7 +42,10 @@
 //     collected but do not abort other agents (Uninstall is idempotent).
 //  2. On macOS: unloads the launchd daemon and removes the plist. On Linux:
 //     stops/disables the systemd --user unit and removes the unit file.
-//  3. Removes ~/.agentjail and /tmp/agentjail-daemon.log.
+//  3. Removes the four role symlinks (agentjail-daemon, agentjail-shield,
+//     agentjail-netproxy, agentjail-secrets) — tolerant of them already
+//     being gone.
+//  4. Removes ~/.agentjail and /tmp/agentjail-daemon.log.
 //
 // Use `agentjail uninstall --for <agent>` to remove only that agent's hook
 // without touching the daemon or ~/.agentjail.
@@ -641,6 +648,14 @@ func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 	}
 	uninstallPathShim(home)
 
+	// Step 2.6: remove the four role symlinks (agentjail-daemon, agentjail-shield,
+	// agentjail-netproxy, agentjail-secrets). Best-effort and idempotent —
+	// removeInstallDir below removes the whole ~/.agentjail/bin tree anyway
+	// (unless --keep-secrets, which never preserves bin/), but this makes the
+	// symlink teardown explicit and independently correct even if that ever
+	// changes, and tolerates a bin dir that's already partially torn down.
+	selfupdate.RemoveRoleSymlinks(filepath.Join(home, ".agentjail", "bin"))
+
 	// Step 3: remove ~/.agentjail (optionally preserving the secrets store/key).
 	installDir := filepath.Join(home, ".agentjail")
 	r.SecretsExisted = fileExists(filepath.Join(installDir, "secrets.key")) ||
@@ -1171,16 +1186,24 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 	}
 	fmt.Fprintln(w, u.Step(1, 6, "agentjail-hook installed", true))
 
-	// Step 2: copy agentjail-daemon.
-	daemonSrc, err := findBinary(daemonBinaryName)
+	// Step 2: copy the agentjail (multicall) binary itself, then ensure the
+	// four role names (agentjail-daemon, agentjail-shield, agentjail-netproxy,
+	// agentjail-secrets) are relative symlinks to it. THE WATCHPOINT: this
+	// order matters — selfupdate.EnsureRoleSymlinks must run AFTER the real agentjail
+	// binary lands in binDir, never before, or the symlinks would dangle.
+	cliSrc, err := findBinary(cliBinaryName)
 	if err != nil {
-		return fmt.Errorf("locate agentjail-daemon: %w", err)
+		return fmt.Errorf("locate agentjail: %w", err)
+	}
+	cliDst := filepath.Join(binDir, cliBinaryName)
+	if err := copyBinary(cliSrc, cliDst); err != nil {
+		return fmt.Errorf("copy agentjail: %w", err)
+	}
+	if err := selfupdate.EnsureRoleSymlinks(binDir); err != nil {
+		return fmt.Errorf("ensure role symlinks: %w", err)
 	}
 	daemonDst := filepath.Join(binDir, daemonBinaryName)
-	if err := copyBinary(daemonSrc, daemonDst); err != nil {
-		return fmt.Errorf("copy agentjail-daemon: %w", err)
-	}
-	fmt.Fprintln(w, u.Step(2, 6, "agentjail-daemon installed", true))
+	fmt.Fprintln(w, u.Step(2, 6, "agentjail-daemon, agentjail-shield, agentjail-netproxy, agentjail-secrets symlinked to agentjail", true))
 
 	// Step 3: copy core .rego rules.
 	rulesD := filepath.Join(home, ".agentjail", "rules")
@@ -1211,13 +1234,13 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 		fmt.Fprintf(os.Stderr, "agentjail: warning: secrets broker setup skipped: %v\n", err)
 	}
 
-	// Refresh the shield + netproxy binaries. `agentjail install` historically
-	// refreshed only hook+daemon, so a reinstall left a STALE shield wrapping the
-	// session until the user hand-copied it (a real papercut — a shield fix does
-	// not take effect on reinstall alone). copyBinary uses temp+rename, so
-	// replacing the shield that currently wraps the process is safe: the running
-	// process keeps the old inode and the next launch picks up the new one.
-	refreshAuxiliaryBinaries(home, w)
+	// Note: shield and netproxy no longer need a separate refresh step. They
+	// are role symlinks (agentjail-shield, agentjail-netproxy) to the agentjail
+	// binary copied in Step 2 above, via selfupdate.EnsureRoleSymlinks — so a reinstall's
+	// fresh agentjail binary is picked up automatically without re-copying
+	// anything. (Historically `agentjail install` refreshed only hook+daemon,
+	// leaving a STALE shield wrapping the session until hand-copied — that
+	// papercut is now impossible by construction.)
 
 	// Refresh the PATH shim if one was previously installed. This ensures
 	// brew upgrade / curl|sh reinstall picks up the current template and
@@ -1225,29 +1248,6 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 	refreshPathShimIfExists(home)
 
 	return nil
-}
-
-// refreshAuxiliaryBinaries copies the shield and netproxy binaries into
-// ~/.agentjail/bin if they can be located next to the running agentjail binary
-// (or on PATH). Fail-soft: a binary that isn't present in this build context is
-// simply skipped, leaving any existing installed copy untouched. This closes the
-// "install refreshes hook+daemon only" gap so a reinstall picks up a fresh
-// shield/netproxy (effective on the next agent launch, since the shield is
-// stamped onto a process at launch).
-func refreshAuxiliaryBinaries(home string, w io.Writer) {
-	u := ui.New(w)
-	binDir := filepath.Join(home, ".agentjail", "bin")
-	for _, name := range []string{"agentjail-shield", "agentjail-netproxy"} {
-		src, err := findBinary(name)
-		if err != nil {
-			continue // not available in this context; leave any existing copy in place
-		}
-		if err := copyBinary(src, filepath.Join(binDir, name)); err != nil {
-			fmt.Fprintf(os.Stderr, "agentjail: warning: refresh %s failed: %v\n", name, err)
-			continue
-		}
-		fmt.Fprintln(w, "      "+u.Badge("dim", name+" refreshed (effective next launch)"))
-	}
 }
 
 // secretsPlistTemplate is the launchd plist for the on-demand secrets broker.
@@ -1328,22 +1328,17 @@ func installSecretsSystemdUnit(secretsBin, storeDir, keyPath, logPath, idle, cra
 	return os.WriteFile(dst, []byte(content), 0o644)
 }
 
-// installSecretsBrokerService copies the agentjail-secrets binary and installs
-// the loaded-but-not-running service definition (ADR 0058). It does NOT start
-// the broker — clients bring it up on demand via sandbox.EnsureSecretsBroker.
-// Independent and fail-soft: it never blocks the daemon install.
+// installSecretsBrokerService installs the loaded-but-not-running service
+// definition for the secrets broker (ADR 0058), pointing it at the
+// agentjail-secrets role symlink (created earlier in installDaemonPreamble's
+// Step 2, via selfupdate.EnsureRoleSymlinks — agentjail-secrets is never a real file, see
+// rolesymlinks.go). It does NOT start the broker — clients bring it up on
+// demand via sandbox.EnsureSecretsBroker. Independent and fail-soft: it never
+// blocks the daemon install.
 func installSecretsBrokerService(home string, w io.Writer) error {
 	u := ui.New(w)
 	binDir := filepath.Join(home, ".agentjail", "bin")
-
-	secretsSrc, err := findBinary(secretsBinaryName)
-	if err != nil {
-		return fmt.Errorf("locate %s: %w", secretsBinaryName, err)
-	}
 	secretsDst := filepath.Join(binDir, secretsBinaryName)
-	if err := copyBinary(secretsSrc, secretsDst); err != nil {
-		return fmt.Errorf("copy %s: %w", secretsBinaryName, err)
-	}
 
 	storeDir := filepath.Join(home, ".agentjail", "secrets")
 	keyPath := filepath.Join(home, ".agentjail", "secrets.key")
@@ -1352,7 +1347,7 @@ func installSecretsBrokerService(home string, w io.Writer) error {
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section(u.Emoji("🔐  ")+"Setting up the secrets broker"))
-	fmt.Fprintln(w, u.Step(1, 2, "agentjail-secrets installed", true))
+	fmt.Fprintln(w, u.Step(1, 2, "agentjail-secrets symlinked to agentjail", true))
 
 	// Migration note (ADR 0058 OQ5): if a broker is already listening — e.g. a
 	// hand-started `agentjail-secrets serve` or a personal launchd/cron entry —
