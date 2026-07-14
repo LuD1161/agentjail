@@ -52,6 +52,8 @@ Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for
 
 ## v0.8.0 - 2026-07-14
 
+![v0.8.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.8.0-summary.svg)
+
 #### TL;DR
 
 - agentjail now ships **2 binaries instead of 6** - the daemon, shield, netproxy, and secrets roles are folded into one multicall `agentjail` binary dispatched by its invocation name, so there is half as much to build, sign, notarize, and self-update.
