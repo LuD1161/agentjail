@@ -2,6 +2,51 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.8.0 - 2026-07-14
+
+#### TL;DR
+
+- agentjail now ships **2 binaries instead of 6** - the daemon, shield, netproxy, and secrets roles are folded into one multicall `agentjail` binary dispatched by its invocation name, so there is half as much to build, sign, notarize, and self-update.
+- The four role names are now **symlinks to `agentjail`**, reconciled on every install/update - a role binary can no longer drift out of sync with the build it should track.
+- Caught a release-blocking bug pre-tag: the CI version ldflag stopped reaching the version symbol after the refactor, which would have shipped every tagged release reporting `dev`.
+- The latency-critical hook stays its **own lean binary** (~5 ms, no OPA/SQLite tax) - consolidation never touches the hot path.
+
+### Changed
+
+- **Multicall `agentjail` binary** (ADR 0059) - the daemon, shield, netproxy,
+  and secrets roles are no longer separate executables. They are folded into a
+  single `agentjail` binary that dispatches on its invocation name
+  (`filepath.Base(os.Args[0])`), with a hidden `agentjail <role>` subcommand
+  form as a fallback. Role logic moved into importable `internal/{daemonapp,
+  shieldapp,netproxyapp,secretsapp}` packages. The result: **2 shipped binaries**
+  (`agentjail` + `agentjail-hook`) instead of 6, so half as much to build, sign,
+  notarize, and atomically self-update.
+- **`agentjail-hook` deliberately stays separate** - it runs on every tool call
+  against a single-digit-millisecond budget, and folding the daemon's OPA/SQLite
+  `init()` into it would tax the hot path (~+6 ms). Verified it still links no
+  OPA/store/SQLite and starts in ~5 ms.
+- **Role binaries are now symlinks to `agentjail`** - `agentjail-daemon`,
+  `agentjail-shield`, `agentjail-netproxy`, and `agentjail-secrets` are relative
+  symlinks reconciled by `EnsureRoleSymlinks` on install, update, uninstall, and
+  in `install.sh` / the Homebrew formula. Existing launchd plists, systemd units,
+  PATH shims, and hook-config paths keep working unchanged. Drift is closed by
+  construction: a role name always resolves to the current `agentjail` build.
+- **Unified version injection** behind `internal/buildinfo.Version` - one symbol
+  every binary and reporter reads, injected by a single fully-qualified ldflag.
+- **Self-update payload trimmed** to the two real binaries; role symlinks are
+  reconciled after each swap instead of being downloaded separately.
+
+### Fixed
+
+- **Release-blocking version ldflag** - after the role packages became imports
+  rather than `main`, the CI release build's `-X main.version=` ldflag silently
+  no-oped, so every tagged release would have reported version `dev`. The build
+  now injects `internal/buildinfo.Version`. Caught and fixed before tagging.
+- **Codex / Cursor hook config serialization** - `agentjail` no longer writes a
+  degenerate empty codex hook group or a null Cursor event entry when
+  reconciling an agent's hook config, both of which could produce malformed
+  `hooks.json` that a coding agent would warn on.
+
 ## v0.7.0 - 2026-07-14
 
 #### TL;DR
