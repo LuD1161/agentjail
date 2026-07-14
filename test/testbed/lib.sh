@@ -70,27 +70,55 @@ fi
 tart_ip()     { tart ip "$(inst "$1")"; }
 tart_exists() { tart list | awk '{print $2}' | grep -qx "$(inst "$1")"; }
 
-# tart_wait_ip <name> <timeout-secs>: block until the VM has an IP, using Tart's
-# built-in `--wait` (which distinguishes "still booting" from "never got a
-# lease") instead of a hand-rolled `until tart ip` poll. Tries the default dhcp
-# resolver first, then falls back to the arp resolver for a VM that booted and
-# has an address the host's DHCP-lease file can't see (stale/empty leases).
-# Returns 0 on success, non-zero on timeout.
-tart_wait_ip() {
-    local vm="$(inst "$1")" secs="${2:-120}"
-    tart ip "$vm" --wait "$secs" >/dev/null 2>&1 && return 0
-    tart ip "$vm" --resolver arp --wait 20 >/dev/null 2>&1
+# tart_ip_any <instance>: resolve a running VM's IP, trying the default dhcp
+# resolver (fast, lease-file based) then the arp resolver (live ARP table) as a
+# fallback for a booted VM whose DHCP lease the host can't see. Prints the IP on
+# success; empty + non-zero on failure.
+tart_ip_any() {
+    tart ip "$1" --resolver dhcp 2>/dev/null || tart ip "$1" --resolver arp 2>/dev/null
 }
 
-# tart_running_others <keep-instance>: print the instance names of *running*
-# tb-* VMs other than <keep-instance>. They share the host's vmnet NAT/DHCP
-# pool, and too many at once is the usual cause of "VM never got an IP" on the
-# gate. State is the last column of `tart list`; Name is column 2 (Source is
-# column 1, and the Accessed column is multi-word so it cannot be indexed).
-tart_running_others() {
-    local keep="$1"
-    tart list 2>/dev/null | awk -v p="$TB_PREFIX" -v k="$keep" \
-        'NR>1 && $2 ~ "^"p && $2 != k && $NF ~ /running/ {print $2}'
+# tart_running_count: number of currently-running Tart VMs (any name). macOS
+# Virtualization.framework caps how many VMs run at once (commonly 2), so this
+# is what actually blocks a fresh gate VM from starting - not the DHCP pool.
+tart_running_count() {
+    tart list 2>/dev/null | awk 'NR>1 && $NF ~ /running/' | wc -l | tr -d ' '
+}
+
+# tart_running_names: names of all currently-running Tart VMs. Name is column 2
+# (Source is column 1; the Accessed column is multi-word so State is the last
+# field, $NF).
+tart_running_names() {
+    tart list 2>/dev/null | awk 'NR>1 && $NF ~ /running/ {print $2}'
+}
+
+# tart_wait_ssh <name> <timeout-secs>: block until the guest answers SSH.
+# do_create returns as soon as the VM has an IP, but sshd is not up for a few
+# more seconds — provisioning used to SSH immediately and time out. Retries a
+# trivial command until it succeeds or the deadline passes.
+tart_wait_ssh() {
+    local name="$1" secs="${2:-120}" i=0
+    while ! tart_guest_exec "$name" true >/dev/null 2>&1; do
+        i=$((i+3)); [ "$i" -lt "$secs" ] || return 1; sleep 3
+    done
+}
+
+# tart_stop_other_testbeds <keep-instance>: stop every *running* tb-* VM other
+# than <keep-instance>. macOS caps concurrently running VMs (~2); the gate runs
+# exactly one testbed VM at a time, so it stops the others up front — this frees
+# a slot AND prevents orphaned testbed VMs from accumulating. Non-testbed VMs
+# (anything not prefixed tb-) are never touched.
+tart_stop_other_testbeds() {
+    local keep="$1" vm
+    for vm in $(tart_running_names); do
+        [ "$vm" = "$keep" ] && continue
+        case "$vm" in
+            "$TB_PREFIX"*)
+                log "stopping other testbed VM to keep a single VM running: $vm"
+                tart stop "$vm" >/dev/null 2>&1 || true
+                ;;
+        esac
+    done
 }
 
 tart_guest_exec() {

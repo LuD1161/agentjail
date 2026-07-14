@@ -57,13 +57,33 @@ do_create() {
             log "cloning $TART_GOLDEN -> $(inst "$name") (APFS copy-on-write, instant)"
             tart clone "$TART_GOLDEN" "$(inst "$name")"
             log "starting VM headless"
-            tart run --no-graphics "$(inst "$name")" >/dev/null 2>&1 &
+            # Capture tart run's stderr: Virtualization.framework refusals (most
+            # commonly "The number of VMs exceeds the system limit") land here and
+            # were previously swallowed by >/dev/null, so the code waited 120s and
+            # misblamed DHCP. Poll for both the run process dying AND the IP so a
+            # VM that never starts fails fast with the real reason.
+            local runlog; runlog="$(mktemp -t tart-run.XXXXXX)"
+            tart run --no-graphics "$(inst "$name")" >"$runlog" 2>&1 &
+            local runpid=$!
             log "waiting for IP"
-            if ! tart_wait_ip "$name" 120; then
-                log "diagnostics — Tart VMs currently running (they share the vmnet DHCP pool):"
-                tart list 2>/dev/null | awk 'NR==1 || $NF ~ /running/' >&2 || true
-                die "VM never got an IP after 120s — the shared vmnet DHCP pool is likely exhausted by other running Tart VMs. Stop the ones you are not using ('tart stop <name>') and retry."
-            fi
+            local i=0 ip=""
+            while :; do
+                if ! kill -0 "$runpid" 2>/dev/null; then
+                    log "tart run exited before the VM came up:"
+                    sed 's/^/    /' "$runlog" >&2
+                    rm -f "$runlog"
+                    die "VM failed to start (see error above). macOS caps how many VMs run at once; stop another VM and retry: tart stop <name>  (running now: $(tart_running_names | paste -sd' ' -))"
+                fi
+                ip="$(tart_ip_any "$(inst "$name")" || true)"
+                [ -n "$ip" ] && break
+                i=$((i+1))
+                [ "$i" -lt 60 ] || { rm -f "$runlog"; die "VM is running but never got an IP after 120s (DHCP)"; }
+                sleep 2
+            done
+            rm -f "$runlog"
+            log "waiting for SSH (sshd comes up a few seconds after the IP)"
+            tart_wait_ssh "$name" 120 \
+                || die "VM '$(inst "$name")' got IP $ip but SSH never became reachable within 120s"
             log "testbed '$name' ready. Next: $0 provision $name"
             ;;
     esac
@@ -174,16 +194,14 @@ do_gate() {
     done
 
     log "RELEASE GATE starting (driver=$DRIVER, worktree=$worktree)"
-    # Preflight: on Tart, other running testbed VMs squat the shared vmnet DHCP
-    # pool and are the usual cause of the gate VM never getting an IP. Warn (do
-    # not stop them — they may be in active use) so the failure is diagnosable.
+    # Single-VM invariant (Tart): macOS caps concurrently running VMs (~2), so
+    # the gate runs exactly one testbed VM. Stop any OTHER running testbed VMs up
+    # front to guarantee a free slot, and register a cleanup that stops THIS gate
+    # VM on exit (success, failure, or interrupt) so a run never leaves an orphan
+    # holding a slot. Stopped (not deleted) = reset-and-reuse next run for speed.
     if [ "$DRIVER" = tart ]; then
-        local others; others="$(tart_running_others "$(inst "$name")")"
-        if [ -n "$others" ]; then
-            log "WARNING: other Tart VMs are running and share the vmnet DHCP pool:"
-            printf '  %s\n' $others >&2
-            log "  if the gate VM fails to get an IP, stop them first: tart stop <name>"
-        fi
+        tart_stop_other_testbeds "$(inst "$name")"
+        trap "tart stop '$(inst "$name")' >/dev/null 2>&1 || true" EXIT
     fi
     if "${DRIVER}_exists" "$name"; then
         log "reusing '$name' — resetting to clean golden"
