@@ -12,7 +12,12 @@ $(BIN):
 	go build -o $(BIN) ./cmd/agentjail
 
 INSTALL_DIR ?= $(HOME)/.agentjail/bin
-DEV_BINS    := bin/agentjail bin/agentjail-hook bin/agentjail-daemon
+# Only the 2 real binaries are ever copied into INSTALL_DIR as files. The
+# subsequent `agentjail install` call below reconciles the four role
+# symlinks (agentjail-daemon, agentjail-shield, agentjail-netproxy,
+# agentjail-secrets) itself via selfupdate.EnsureRoleSymlinks -- never cp/mv
+# a real binary over one of those names.
+DEV_BINS    := bin/agentjail bin/agentjail-hook
 
 dev-install: $(DEV_BINS)  ## build + install binaries, policy rules, and restart daemon; verify
 	@echo "Installing binaries..."
@@ -51,7 +56,7 @@ dev-deploy:  ## build all 5 binaries from the working tree + hot-swap the local 
 bin/agentjail-hook:
 	go build -o bin/agentjail-hook ./cmd/agentjail-hook
 
-bin/agentjail-daemon:
+bin/agentjail-daemon:  ## dev-only compile-check artifact; never installed as a real file (see DEV_BINS above)
 	go build -o bin/agentjail-daemon ./cmd/agentjail-daemon
 
 shim:  ## build the C PATH shim into bin/agentjail-shim
@@ -87,7 +92,7 @@ APPLE_IDENTITY ?= $(APPLE_SIGNING_IDENTITY)
 
 sign:  ## codesign macOS binaries (requires Developer ID certificate in keychain)
 ifeq ($(shell uname),Darwin)
-	@for bin in bin/agentjail bin/agentjail-hook bin/agentjail-daemon bin/agentjail-shield bin/agentjail-netproxy bin/agentjail-secrets; do \
+	@for bin in bin/agentjail bin/agentjail-hook; do \
 		if [ -f "$$bin" ]; then \
 			echo "signing $$bin..."; \
 			codesign --force --options runtime --sign "$(APPLE_IDENTITY)" --timestamp "$$bin"; \
@@ -98,14 +103,18 @@ else
 	@echo "skip: codesign is macOS only"
 endif
 
-# dist-tarball builds all six binaries for a target platform and packs them
-# in the flat layout install.sh expects (binaries at tarball top level). Used
-# by test/testbed/testbed.sh provision to install a local build into a clean
-# VM through the REAL user path (install.sh LOCAL_TARBALL= seam).
+# dist-tarball builds the two real binaries for a target platform and packs
+# them in the flat layout install.sh expects (binaries at tarball top level).
+# The four role names (agentjail-daemon, agentjail-shield, agentjail-netproxy,
+# agentjail-secrets) are relative symlinks to agentjail, created at install
+# time by install.sh / selfupdate.EnsureRoleSymlinks -- they are never shipped
+# in the tarball. Used by test/testbed/testbed.sh provision to install a local
+# build into a clean VM through the REAL user path (install.sh
+# LOCAL_TARBALL= seam).
 DIST_GOOS    ?= $(shell go env GOOS)
 DIST_GOARCH  ?= $(shell go env GOARCH)
 DIST_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev-$$(git rev-parse --short HEAD))
-DIST_BINS    := agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets
+DIST_BINS    := agentjail agentjail-hook
 
 dist-tarball:  ## build a release-layout tarball for testbed installs (DIST_GOOS/DIST_GOARCH to cross-build)
 	@mkdir -p dist/$(DIST_GOOS)-$(DIST_GOARCH)
