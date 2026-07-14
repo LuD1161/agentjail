@@ -59,10 +59,11 @@ do_create() {
             log "starting VM headless"
             tart run --no-graphics "$(inst "$name")" >/dev/null 2>&1 &
             log "waiting for IP"
-            local i=0
-            until tart ip "$(inst "$name")" >/dev/null 2>&1; do
-                sleep 2; i=$((i+1)); [ "$i" -lt 60 ] || die "VM never got an IP"
-            done
+            if ! tart_wait_ip "$name" 120; then
+                log "diagnostics — Tart VMs currently running (they share the vmnet DHCP pool):"
+                tart list 2>/dev/null | awk 'NR==1 || $NF ~ /running/' >&2 || true
+                die "VM never got an IP after 120s — the shared vmnet DHCP pool is likely exhausted by other running Tart VMs. Stop the ones you are not using ('tart stop <name>') and retry."
+            fi
             log "testbed '$name' ready. Next: $0 provision $name"
             ;;
     esac
@@ -173,6 +174,17 @@ do_gate() {
     done
 
     log "RELEASE GATE starting (driver=$DRIVER, worktree=$worktree)"
+    # Preflight: on Tart, other running testbed VMs squat the shared vmnet DHCP
+    # pool and are the usual cause of the gate VM never getting an IP. Warn (do
+    # not stop them — they may be in active use) so the failure is diagnosable.
+    if [ "$DRIVER" = tart ]; then
+        local others; others="$(tart_running_others "$(inst "$name")")"
+        if [ -n "$others" ]; then
+            log "WARNING: other Tart VMs are running and share the vmnet DHCP pool:"
+            printf '  %s\n' $others >&2
+            log "  if the gate VM fails to get an IP, stop them first: tart stop <name>"
+        fi
+    fi
     if "${DRIVER}_exists" "$name"; then
         log "reusing '$name' — resetting to clean golden"
         do_reset "$name"
