@@ -10,7 +10,7 @@
 //
 // NOTE: loadModules is also tested indirectly by the full daemon integration
 // tests in main_test.go.
-package main
+package daemonapp
 
 import (
 	"log/slog"

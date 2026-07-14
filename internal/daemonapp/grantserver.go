@@ -17,7 +17,7 @@
 // policy.yaml overlay is written (ADR 0044 fail-closed audit), and only on
 // full success is the claim committed. Any failure along the way rolls the
 // claim back so the request remains pending and retryable.
-package main
+package daemonapp
 
 import (
 	"context"
