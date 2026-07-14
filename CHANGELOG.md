@@ -2,6 +2,28 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.8.1 - 2026-07-14
+
+#### TL;DR
+
+- Fixed the macOS release gate (`make e2e-release`) flaking with a misleading "VM never got an IP": the real cause was the macOS concurrent-VM cap, which the tooling now surfaces instead of hiding.
+- The gate now runs exactly one testbed VM at a time and stops it on exit, so a run never leaves an orphaned VM holding a slot.
+
+### Fixed
+
+- **macOS testbed release gate** (`test/testbed/`, Tart driver) - no shipped
+  binary change; release-tooling only.
+  - `tart run` errors (notably "The number of VMs exceeds the system limit",
+    the macOS Virtualization.framework concurrent-VM cap) are now surfaced and
+    the gate fails fast with the real reason, instead of swallowing the error
+    and blaming a DHCP-lease timeout after 120s.
+  - The gate waits for SSH to become reachable before provisioning (sshd comes
+    up a few seconds after the VM's IP), fixing an intermittent provision-time
+    SSH timeout.
+  - The gate enforces a single testbed VM: it stops other running testbed VMs
+    up front to guarantee a free slot, and stops its own VM on exit
+    (success, failure, or interrupt) so a run never orphans a VM.
+
 ## v0.8.0 - 2026-07-14
 
 #### TL;DR
