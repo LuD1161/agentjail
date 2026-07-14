@@ -2,6 +2,45 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.7.0 - 2026-07-14
+
+#### TL;DR
+
+- New clean-VM testbed engine: a real end-user VM per worktree, a `make e2e-release` release gate, and a 15-scenario CLI suite recorded to asciinema, green on Linux and macOS.
+- The credential broker now auto-starts on demand — `agentjail secret set` and shield grants no longer need a manual `agentjail-secrets serve`.
+- Fixed a Linux shield read-leak: launching from `$HOME` no longer exposed `~/.ssh`/`~/.aws`/`~/.gnupg`.
+
+### Added
+
+- **Clean-VM testbed engine** (`test/testbed/`, ADR 0053) — persistent, isolated
+  VMs (Lima/QEMU on Linux, Tart on macOS) that behave like a real end-user
+  machine: full kernel (Landlock/Seatbelt), a service manager, no host mounts,
+  no Go toolchain. agentjail is installed the true user way — a release-layout
+  tarball fed to the shipped `install.sh`. `make e2e-release` is the release
+  gate: reset to a clean golden, provision, run the `e2e-smoke` scenario, exit
+  non-zero on any failure.
+- **Recorded CLI scenario suite** — 15 scenarios captured with asciinema (tiny
+  `.cast` JSON, not video), each with a structured pass/fail result. Recordings
+  are auto-sanitized of host-identifying data before they are written.
+- **On-demand secrets broker auto-start** (ADR 0058) — the broker is a
+  loaded-but-not-running launchd/systemd definition that clients bring up on
+  first use (`EnsureSecretsBroker`), with an idle self-exit that never tears
+  down live grants. Closes DEFECT-2: `agentjail secret set` / shield grants no
+  longer require a manual `agentjail-secrets serve`. Ships as the sixth binary.
+
+### Fixed
+
+- **Linux shield `$HOME` read-leak** — the shield grants the working directory
+  read-write; when launched with `cwd == $HOME` that grant swallowed the whole
+  home tree, overriding the allowlist that withholds `~/.ssh`, `~/.aws`,
+  `~/.gnupg`. Launching from `$HOME` now grants only the non-hidden home
+  children as a workspace and denies every dotfile/dotdir by default (that's
+  where credentials live), matching the macOS shield. A normal project cwd is
+  unaffected.
+- **`--help` on flag-passthrough commands** — subcommands using
+  `DisableFlagParsing` now intercept `--help` and print usage instead of
+  forwarding it to the wrapped tool.
+
 ## v0.6.2 - 2026-07-09
 
 #### TL;DR
