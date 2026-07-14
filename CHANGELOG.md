@@ -2,6 +2,32 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.8.2 - 2026-07-14
+
+#### TL;DR
+
+- Exactly one `agentjail-daemon` can own the policy socket now, regardless of how it was installed (Homebrew vs curl) or started (service vs manual) — a second daemon stands down instead of hijacking `daemon.sock` and orphaning the incumbent.
+- Closes an enforcement-integrity hazard where two daemons could double-bind the socket, splitting hooks across them with a fail-open window during the handoff.
+
+### Fixed
+
+- **Daemon single-instance guard** (ADR 0060, `internal/daemonapp/`) — the
+  agent-facing policy socket (`daemon.sock`) was bound with a blind `os.Remove`
+  + `net.Listen` and no single-instance lock, so a second daemon — a different
+  install channel, a manual run, or an upgrade transition — could unlink the
+  incumbent's socket and double-bind, leaving two daemons alive with hooks split
+  across them. The daemon now takes an exclusive `flock` on `daemon.lock` (beside
+  the socket) before binding, with a bounded ~1s retry to absorb a
+  supervised-restart handoff, and replaces the blind unlink with `stat →
+  ControlOpPing probe → remove-only-if-stale → ListenUnix`. A healthy incumbent →
+  the newcomer stands down cleanly (`exit 0`, so systemd's `StartLimit` never
+  pins the unit failed and launchd's `KeepAlive` self-heals); a foreign/wedged
+  process squatting on the socket → `exit 1` (never unlink a socket something
+  holds). A new side-effect-free `wire.ControlOpPing` op backs the probe so a
+  bare `connect()` can't be mistaken for a live daemon. Reuses the flock +
+  probe-before-remove pattern already used by the grant control socket and the
+  netproxy. No service-definition or user-facing CLI changes.
+
 ## v0.8.1 - 2026-07-14
 
 #### TL;DR
