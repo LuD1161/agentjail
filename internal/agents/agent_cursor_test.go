@@ -531,10 +531,10 @@ func TestCursorStatusPartialInstall(t *testing.T) {
 	hookCmd := cursorHookCommand(env)
 
 	// Write hooks.json with only one of the three events.
-	partial := map[string]interface{}{
+	partial := map[string]any{
 		"version": 1,
-		"hooks": map[string]interface{}{
-			"beforeShellExecution": []map[string]interface{}{
+		"hooks": map[string]any{
+			"beforeShellExecution": []map[string]any{
 				{"command": hookCmd},
 			},
 			// beforeMCPExecution and beforeReadFile are absent
