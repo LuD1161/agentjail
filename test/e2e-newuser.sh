@@ -90,15 +90,34 @@ mkdir -p "$TMPD/.agentjail"
 DAEMON_PID=$!
 if wait_for_socket "$SOCK"; then pass "Daemon started (pid=$DAEMON_PID)"; else fail "Daemon socket not ready"; exit 1; fi
 
-# Warm up the OPA engine — the first eval is cold (no cache, no JIT) and can
-# exceed the hook's 45 ms round-trip deadline on slow CI runners, causing a
-# spurious fail-open. Fire a throwaway request and ignore its result.
-for _i in 1 2 3; do
-  AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail-hook" \
-    <<< '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"true"},"session_id":"warmup","cwd":"/tmp"}' \
-    >/dev/null 2>&1 && break
-  sleep 0.2
-done
+# Warm up the OPA engine before asserting. The first eval is cold (no cache, no
+# JIT) and can exceed the hook's 45 ms round-trip deadline on slow CI runners,
+# causing a spurious fail-open on the first real assertion.
+#
+# We must wait for a *real daemon decision*, not merely a zero exit: the hook
+# exits 0 on fail-open allow too (reason "daemon unreachable - fail-open"), so
+# "hook && break" would count a warmup request that itself fell open as success
+# and leave the daemon cold. Instead, loop until stdout carries a genuine
+# decision (present, and NOT a fail-open). Even when an early attempt exceeds
+# the 45 ms hook deadline, the daemon keeps processing and warms itself
+# server-side, so a subsequent attempt gets a fast real answer.
+warm_daemon() {
+  local n=0 out
+  while [ "$n" -lt 40 ]; do
+    out=$(AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail-hook" \
+      <<< '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"true"},"session_id":"warmup","cwd":"/tmp"}' \
+      2>/dev/null)
+    # A real daemon reply has a permissionDecisionReason that is not the
+    # fail-open marker. Absence of "unreachable" on a non-empty reply == warmed.
+    if [ -n "$out" ] && ! echo "$out" | grep -qi "unreachable"; then
+      return 0
+    fi
+    sleep 0.1
+    n=$((n+1))
+  done
+  return 1
+}
+if ! warm_daemon; then fail "Daemon never returned a live decision (stayed cold)"; exit 1; fi
 
 # --- Phase 3: Hook decisions ---
 run_hook() {
