@@ -258,9 +258,21 @@ func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 		return
 	}
 
+	// 7. Reconcile the four role symlinks (agentjail-daemon, agentjail-shield,
+	// agentjail-netproxy, agentjail-secrets) against the just-swapped agentjail
+	// binary. THE WATCHPOINT: this must run AFTER the swap above, and must
+	// never be replaced with a direct copy/rename onto a role path — see
+	// selfupdate.EnsureRoleSymlinks. Non-fatal: the daemon binary itself is
+	// already updated at this point, so a symlink reconciliation failure is
+	// logged but does not block the restart (the next auto-update pass or a
+	// manual `agentjail update` retries it).
+	if err := selfupdate.EnsureRoleSymlinks(uc.InstallDir); err != nil {
+		slog.Warn("auto-update: could not reconcile role symlinks", "err", err)
+	}
+
 	slog.Info("auto-update: binaries swapped, exiting for restart", "version", latest, "swapped", swappedCount)
 
-	// 7. Exit — launchd KeepAlive restarts the new daemon.
+	// 8. Exit — launchd KeepAlive restarts the new daemon.
 	osExitFn(0)
 }
 

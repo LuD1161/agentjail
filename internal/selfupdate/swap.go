@@ -8,14 +8,18 @@ import (
 	"path/filepath"
 )
 
-// UpdateBinaries is the ordered list of binaries placed in $INSTALL_DIR,
-// matching install.sh exactly.
+// UpdateBinaries is the ordered list of binaries downloaded and swapped in
+// $INSTALL_DIR, matching install.sh exactly. As of the multicall-binary
+// refactor this is exactly the two real binaries agentjail ships — the
+// multicall `agentjail` binary (which also serves the daemon/shield/
+// netproxy/secrets roles via argv[0] dispatch) and the separate, lean
+// `agentjail-hook`. The four role binary names are never downloaded or
+// swapped directly: they are symlinks to `agentjail` reconciled by
+// EnsureRoleSymlinks after the swap (see rolesymlinks.go), which callers
+// MUST invoke after replacing these binaries.
 var UpdateBinaries = []string{
 	"agentjail",
 	"agentjail-hook",
-	"agentjail-daemon",
-	"agentjail-shield",
-	"agentjail-netproxy",
 }
 
 // CopyFile copies the file at src to dst, creating dst if needed.

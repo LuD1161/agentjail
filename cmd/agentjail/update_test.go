@@ -327,8 +327,12 @@ func TestPerformUpdate_AtomicSwap(t *testing.T) {
 	srcDir := t.TempDir()
 	installDir := t.TempDir()
 
-	// Create a fake v2.0.0 tarball containing all expected binaries.
-	bins := []string{"agentjail", "agentjail-hook", "agentjail-daemon"}
+	// Create a fake v2.0.0 tarball containing all expected binaries. As of
+	// the multicall-binary refactor, selfupdate.UpdateBinaries is exactly
+	// {agentjail, agentjail-hook} — the four role binaries are symlinks to
+	// agentjail, not separately shipped/swapped (see TestPerformUpdate_
+	// ReconcilesRoleSymlinks below for the symlink-reconciliation behavior).
+	bins := []string{"agentjail", "agentjail-hook"}
 	tarball := "agentjail-v2.0.0-linux-amd64.tar.gz"
 	tarballPath, hashHex, _ := makeFakeTarball(t, srcDir, tarball, bins)
 	tarballBytes, _ := os.ReadFile(tarballPath)
@@ -373,7 +377,7 @@ func TestPerformUpdate_AtomicSwap(t *testing.T) {
 		t.Fatalf("performUpdate() = %d, want 0", code)
 	}
 
-	// All three binaries should be present and have the expected content.
+	// Both binaries should be present and have the expected content.
 	for _, bin := range bins {
 		dst := filepath.Join(installDir, bin)
 		fi, err := os.Stat(dst)
@@ -387,6 +391,89 @@ func TestPerformUpdate_AtomicSwap(t *testing.T) {
 		content, _ := os.ReadFile(dst)
 		if string(content) != "fake-binary:"+bin {
 			t.Errorf("binary %s content = %q, want %q", bin, content, "fake-binary:"+bin)
+		}
+	}
+}
+
+// TestPerformUpdate_ReconcilesRoleSymlinks is THE WATCHPOINT test for the
+// update path: a pre-existing install directory has REAL files at the four
+// role binary names (the pre-refactor shape, or an install left behind by a
+// buggy path). After performUpdate swaps in a new agentjail binary, it must
+// reconcile those role paths into symlinks pointing at agentjail — never
+// leave (or re-create) a real file at a role name.
+func TestPerformUpdate_ReconcilesRoleSymlinks(t *testing.T) {
+	disableSignatureVerification(t)
+	srcDir := t.TempDir()
+	installDir := t.TempDir()
+
+	// Seed installDir with stale REAL files at all four role paths, as a
+	// pre-refactor install (or a regression) would leave them.
+	for _, role := range selfupdate.RoleNames {
+		if err := os.WriteFile(filepath.Join(installDir, role), []byte("stale-real-"+role), 0o755); err != nil {
+			t.Fatalf("seed stale %s: %v", role, err)
+		}
+	}
+
+	bins := []string{"agentjail", "agentjail-hook"}
+	tarball := "agentjail-v2.0.0-linux-amd64.tar.gz"
+	tarballPath, hashHex, _ := makeFakeTarball(t, srcDir, tarball, bins)
+	tarballBytes, _ := os.ReadFile(tarballPath)
+	sumsContent := fmt.Sprintf("%s  %s\n", hashHex, tarball)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "SHA256SUMS"):
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(sumsContent))
+		case strings.HasSuffix(path, tarball):
+			w.WriteHeader(200)
+			_, _ = w.Write(tarballBytes)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	verSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := json.Marshal(fakeRelease{TagName: "v2.0.0"})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write(b)
+	}))
+	defer verSrv.Close()
+
+	setCheckerURL(t, verSrv.URL)
+
+	origVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	defer func() { buildinfo.Version = origVersion }()
+
+	origURLFn := updateURLBaseFn
+	updateURLBaseFn = func(ver string) string { return srv.URL }
+	defer func() { updateURLBaseFn = origURLFn }()
+
+	code := performUpdate(installDir, "linux", "amd64", false)
+	if code != 0 {
+		t.Fatalf("performUpdate() = %d, want 0", code)
+	}
+
+	for _, role := range selfupdate.RoleNames {
+		link := filepath.Join(installDir, role)
+		fi, err := os.Lstat(link)
+		if err != nil {
+			t.Fatalf("lstat %s: %v", link, err)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s is a real file after update, want a symlink to agentjail (THE WATCHPOINT)", link)
+			continue
+		}
+		got, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("readlink %s: %v", link, err)
+		}
+		if got != "agentjail" {
+			t.Errorf("%s -> %q, want %q", link, got, "agentjail")
 		}
 	}
 }
