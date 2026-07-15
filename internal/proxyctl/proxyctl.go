@@ -8,15 +8,12 @@
 // two concurrent sessions with different allowlists never bleed.
 //
 // The control plane -- registration, fingerprint negotiation, and (Phase 3)
-// dynamic grants -- lives on a Unix-domain socket (ControlSocketPath) that the
-// sandboxed agent cannot reach: on Linux the socket sits under the read-only
-// ~/.agentjail grant, and AF_UNIX connect() requires WRITE access to the socket
-// inode (the exact inverse of why ~/.agentjail/daemon.sock needs an explicit
-// single-file write grant); on macOS the shield emits an explicit
-// (deny network-outbound (literal ...)) for the path. The Token in the agent's
-// environment is therefore a DATA-PLANE bearer only -- it authorizes "use this
-// session's allowlist" and carries no control/grant power, because the control
-// socket is unreachable.
+// dynamic grants -- lives on a Unix-domain socket (ControlSocketPath). Every
+// authority-bearing verb carries CtlToken, which proves the caller is outside
+// the sandbox; the socket path is NOT the boundary on Linux (ADR 0067). The
+// Token in the agent's environment is therefore a DATA-PLANE bearer only -- it
+// authorizes "use this session's allowlist" and carries no control/grant power,
+// because the agent cannot read CtlToken.
 //
 // Wire format is JSON at the socket boundary only; every field decodes into the
 // typed structs below immediately. Never log a Token or the proxy URL.
@@ -93,7 +90,9 @@ type RequestType string
 
 const (
 	// ReqFingerprint asks the running proxy to identify itself so the shield
-	// can decide reuse vs. fail-closed. No Token required.
+	// can decide reuse vs. fail-closed. The only unauthenticated verb: it is
+	// the version-negotiation channel, so gating it would break the mechanism
+	// that resolves incompatible builds (ADR 0068). Returns version data only.
 	ReqFingerprint RequestType = "fingerprint"
 	// ReqRegister leases a session: it binds Token -> Policy for LeaseTTLMs.
 	// The lease is reaped on expiry regardless of traffic (macOS cannot
@@ -101,27 +100,30 @@ const (
 	// by generating traffic.
 	ReqRegister RequestType = "register"
 	// ReqGrant (Phase 3) additively widens an existing session's allowlist for
-	// a bounded TTL. Accepted only over the control socket (unreachable by the
-	// agent); the grant verb is additionally denied to agents by command
-	// policy. Not wired until Phase 3.
+	// a bounded TTL. CtlToken required; the grant verb is additionally denied
+	// to agents by command policy. Not wired until Phase 3.
 	ReqGrant RequestType = "grant"
 	// ReqGrantList lists the pending grant requests netproxy currently holds
-	// in memory, across all sessions. Control-socket only. Carries no Token
-	// -- callers see the pending set, not who can approve it.
+	// in memory, across all sessions. CtlToken required. Carries no Token --
+	// callers see the pending set, not who can approve it.
 	ReqGrantList RequestType = "grant_list"
 	// ReqGrantApprove claims a pending grant request by GrantID and applies it
-	// to the owning session's allowlist. Control-socket only; netproxy
-	// resolves session->Token from its own in-memory registration -- the
-	// caller supplies no Token and no session identity, only the GrantID.
+	// to the owning session's allowlist. CtlToken required; netproxy resolves
+	// session->Token from its own in-memory registration -- the caller supplies
+	// no Token and no session identity, only the GrantID.
 	ReqGrantApprove RequestType = "grant_approve"
 	// ReqGrantDeny discards a pending grant request by GrantID without
-	// applying it. Control-socket only, same GrantID-only shape as approve.
+	// applying it. CtlToken required, same GrantID-only shape as approve.
 	ReqGrantDeny RequestType = "grant_deny"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
 type Request struct {
 	Type RequestType `json:"type"`
+	// CtlToken authenticates the caller as a process outside the sandbox. It is
+	// required on every verb except fingerprint (ADR 0068). Distinct from Token:
+	// this one carries control authority and the agent never holds it.
+	CtlToken string `json:"ctl_token,omitempty"`
 	// Token is required for register/grant; omitted for fingerprint.
 	Token Token `json:"token,omitempty"`
 	// SessionID is a NON-SECRET handle for register (the Claude Code hook

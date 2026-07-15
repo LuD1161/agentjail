@@ -80,6 +80,10 @@ scoped to "needs Tier 2+".
 `SO_PEERCRED` stays on `daemon-ctl.sock` as defence-in-depth against a different-UID peer —
 all it can honestly do.
 
+Rollout is per socket: `secrets.sock` here, `netproxy-ctl.sock` in
+[ADR 0068](./0068-netproxy-control-token.md) (which names `fingerprint` as the one deliberate
+exception), `daemon-ctl.sock` tracked in AGE-214.
+
 Costs and residuals:
 
 - A stale `control.token` from a previous install is adopted rather than replaced (`O_EXCL`),
