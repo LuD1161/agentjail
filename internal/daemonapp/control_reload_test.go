@@ -1,18 +1,19 @@
 package daemonapp
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/policyeval"
-	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // newTestServerWithReloadPaths is like newTestServer but wires
@@ -64,39 +65,30 @@ func newTestServerWithReloadPaths(t *testing.T, policyPath, rulesDir string) (*s
 	return srv, sockPath
 }
 
-// sendControlReload dials sockPath, sends a ControlOpReload request, and
-// returns the decoded ControlResponse.
-func sendControlReload(t *testing.T, sockPath string) wire.ControlResponse {
+// serveCtlFor starts a grant control server wired to srv.reloadPolicy and
+// returns its socket path. Reload lives on this privileged socket, not the
+// agent-facing daemon.sock (ADR 0066).
+func serveCtlFor(t *testing.T, srv *server) string {
 	t.Helper()
 
-	conn, err := net.Dial("unix", sockPath)
+	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
+	gs, err := newGrantServer(ctlSock, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, srv.reloadPolicy)
 	if err != nil {
-		t.Fatalf("dial: %v", err)
+		t.Fatalf("newGrantServer: %v", err)
 	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(wire.ControlRequest{
-		Type: wire.ControlType,
-		Op:   wire.ControlOpReload,
-	}); err != nil {
-		t.Fatalf("encode control request: %v", err)
-	}
-
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
-		t.Fatal("no response received")
-	}
-	var resp wire.ControlResponse
-	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		t.Fatalf("decode control response: %v", err)
-	}
-	return resp
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		gs.close()
+	})
+	go gs.serveCtl(ctx)
+	return ctlSock
 }
 
-// TestDaemon_ControlReload_Success verifies that a reload control message
-// over daemon.sock reports ok=true when policy.yaml is well-formed, mirroring
-// what a successful SIGHUP reload does today but with an explicit ack instead
-// of a fire-and-forget signal.
+// TestDaemon_ControlReload_Success verifies that a reload over the privileged
+// control socket succeeds when policy.yaml is well-formed — what a successful
+// SIGHUP reload does, but with an explicit ack instead of a fire-and-forget
+// signal.
 func TestDaemon_ControlReload_Success(t *testing.T) {
 	withTempHome(t) // reloadPolicy's writeHookFallback resolves $HOME; keep it off the real home dir.
 	dir := t.TempDir()
@@ -105,22 +97,18 @@ func TestDaemon_ControlReload_Success(t *testing.T) {
 		t.Fatalf("write policy.yaml: %v", err)
 	}
 
-	_, sockPath := newTestServerWithReloadPaths(t, policyPath, "")
+	srv, _ := newTestServerWithReloadPaths(t, policyPath, "")
+	ctlSock := serveCtlFor(t, srv)
 
-	resp := sendControlReload(t, sockPath)
-	if !resp.OK {
-		t.Fatalf("expected ok=true, got ok=false error=%q", resp.Error)
-	}
-	if resp.Error != "" {
-		t.Errorf("expected empty error on success, got %q", resp.Error)
+	if err := grantctl.DaemonReload(ctlSock, 2*time.Second); err != nil {
+		t.Fatalf("expected reload to succeed, got %v", err)
 	}
 }
 
-// TestDaemon_ControlReload_Failure verifies that a reload control message
-// reports ok=false with a non-empty error when policy.yaml is malformed, AND
-// that the daemon keeps serving eval requests afterward using the OLD policy
-// (never-fail-open contract — a bad reload must not silently take effect or
-// crash the daemon).
+// TestDaemon_ControlReload_Failure verifies that a reload reports failure with a
+// non-empty error when policy.yaml is malformed, AND that the daemon keeps
+// serving eval requests afterward using the OLD policy (never-fail-open contract
+// — a bad reload must not silently take effect or crash the daemon).
 func TestDaemon_ControlReload_Failure(t *testing.T) {
 	withTempHome(t) // same rationale as TestDaemon_ControlReload_Success.
 	dir := t.TempDir()
@@ -130,6 +118,7 @@ func TestDaemon_ControlReload_Failure(t *testing.T) {
 	}
 
 	srv, sockPath := newTestServerWithReloadPaths(t, policyPath, "")
+	ctlSock := serveCtlFor(t, srv)
 
 	// Corrupt policy.yaml with an unknown top-level key — loadConfig/
 	// agentconfig.LoadOrDefault rejects this.
@@ -137,11 +126,17 @@ func TestDaemon_ControlReload_Failure(t *testing.T) {
 		t.Fatalf("corrupt policy.yaml: %v", err)
 	}
 
-	resp := sendControlReload(t, sockPath)
-	if resp.OK {
-		t.Fatal("expected ok=false for malformed policy.yaml, got ok=true")
+	err := grantctl.DaemonReload(ctlSock, 2*time.Second)
+	if err == nil {
+		t.Fatal("expected failure for malformed policy.yaml, got success")
 	}
-	if resp.Error == "" {
+	// Must be a refusal (the daemon answered), not a transport error — the CLI
+	// distinguishes these to decide whether to fall back to SIGHUP.
+	var refused *grantctl.RefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("expected *RefusedError, got %T: %v", err, err)
+	}
+	if refused.Reason == "" {
 		t.Error("expected a non-empty error message for the failed reload")
 	}
 

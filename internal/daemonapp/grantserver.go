@@ -67,6 +67,11 @@ type grantServer struct {
 	// without a durable audit record (ADR 0044 / 0047).
 	durableAudit   bool
 	activeSessions *activeTracker
+	// reload reloads policy.yaml + the Rego bundle in place, returning the
+	// compile error when the new rules are rejected. Injected by the daemon
+	// (server.reloadPolicy) rather than reached through a back-pointer, so the
+	// grant server stays independently testable. Nil disables ReqDaemonReload.
+	reload func(context.Context) error
 }
 
 // acquireGrantCtlSocket makes the daemon the singleton owner of the grant
@@ -116,8 +121,9 @@ func acquireGrantCtlSocket(sockPath string) (*net.UnixListener, *os.File, error)
 
 // newGrantServer acquires the grant control socket and returns a ready
 // server. durableAudit must be true only when emitter is backed by a real,
-// writable store -- see grantServer.durableAudit.
-func newGrantServer(sockPath string, registry *grantctl.Registry, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker) (*grantServer, error) {
+// writable store -- see grantServer.durableAudit. reload backs ReqDaemonReload
+// (ADR 0066); pass nil to disable that verb.
+func newGrantServer(sockPath string, registry *grantctl.Registry, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, reload func(context.Context) error) (*grantServer, error) {
 	ln, lock, err := acquireGrantCtlSocket(sockPath)
 	if err != nil {
 		return nil, err
@@ -130,6 +136,7 @@ func newGrantServer(sockPath string, registry *grantctl.Registry, emitter audit.
 		emitter:        emitter,
 		durableAudit:   durableAudit,
 		activeSessions: activeSessions,
+		reload:         reload,
 	}, nil
 }
 
@@ -239,6 +246,24 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 			RefID:     req.GrantID,
 		})
 		gs.reply(conn, grantctl.Response{OK: true, GrantID: req.GrantID})
+
+	case grantctl.ReqDaemonReload:
+		// Lives here, not on the agent-reachable daemon.sock: a Rego recompile
+		// is cheap to ask for and expensive to serve, which on that socket is a
+		// fail-open DoS lever (ADR 0066).
+		if gs.reload == nil {
+			gs.reply(conn, grantctl.Response{OK: false, Error: "daemon_reload unavailable"})
+			return
+		}
+		if err := gs.reload(context.Background()); err != nil {
+			// Compile failed -- the daemon kept the previous bundle. Return the
+			// error verbatim so the caller knows the edit did NOT take effect.
+			slog.Error("control reload failed — keeping old policy", "err", err)
+			gs.reply(conn, grantctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		slog.Info("policy reloaded via grant control socket")
+		gs.reply(conn, grantctl.Response{OK: true})
 
 	default:
 		gs.reply(conn, grantctl.Response{OK: false, Error: fmt.Sprintf("unsupported grant control request %q", req.Type)})

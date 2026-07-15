@@ -108,6 +108,10 @@ type server struct {
 	rulesDir   string
 	policyPath string
 
+	// reloadMu serializes reloadPolicy so at most one Rego recompile -- the
+	// daemon's most expensive operation -- is ever in flight (ADR 0066).
+	reloadMu sync.Mutex
+
 	// idleTimeout bounds how long handleConn blocks on a single read from an
 	// agent-socket connection (P9). Set once at construction and never mutated,
 	// so concurrent handleConn goroutines read it race-free. A zero value falls
@@ -224,8 +228,17 @@ func countCustomRuleFiles(rulesDir string) int {
 // reloadPolicy reloads policy.yaml and the Rego rule bundle in place,
 // rebuilding the OPA engine atomically under the evaluator's lock. It is the
 // single implementation shared by the SIGHUP signal handler and the
-// wire.ControlOpReload control message (see handleConn) so both delivery
-// paths behave identically.
+// grantctl.ReqDaemonReload control message (see grantServer.handleCtlConn) so
+// both delivery paths behave identically.
+//
+// Reloads are serialized by reloadMu. A Rego recompile is the most expensive
+// thing the daemon does, and every socket delivery path is one goroutine per
+// connection, so without this N concurrent callers would mean N concurrent
+// compiles -- CPU amplification against a hook budget that defaults to
+// fail-open (ADR 0066). SIGHUP is already serialized by the signal loop; this
+// makes "at most one compile in flight" a property of the daemon rather than an
+// accident of the delivery path. It does not deduplicate: each caller still gets
+// a real reload and an honest compile verdict, just not concurrently.
 //
 // Fail-safe / never-fail-open contract: reloadPolicy returns a non-nil error
 // on ANY failure -- loading Rego modules, loading policy.yaml, or compiling
@@ -235,6 +248,9 @@ func countCustomRuleFiles(rulesDir string) int {
 // (signal handler or control dispatch) is responsible for logging/reporting
 // the error; the old policy stays in effect either way.
 func (s *server) reloadPolicy(ctx context.Context) error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
 	var mods [][2]string
 	if s.rulesDir != "" {
 		m, err := loadModules(s.rulesDir)
@@ -347,19 +363,25 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 
-		// Route control-plane messages (currently: reload). Delivered over
-		// this agent-reachable socket rather than the privileged
-		// daemon-ctl.sock (ADR 0047) because reload is not a privileged
-		// mutation -- it re-reads policy.yaml/rules that are already on
-		// disk, exactly like SIGHUP. The socket file itself is 0600 (owner
-		// only), the same trust boundary SIGHUP already relies on (same-UID
-		// delivery via os.FindProcess+Signal). Defense-in-depth: also verify
-		// the connecting peer's real UID via SO_PEERCRED/LOCAL_PEERCRED
-		// where available (see peerpid_linux.go / peerpid_darwin.go), so a
-		// same-UID sandboxed peer that can merely connect() to the socket
-		// (e.g. the Linux Landlock single-file write grant, ADR — see
-		// docs/ARCHITECTURE.md "OS-native Sandbox") cannot self-serve a
-		// reload it shouldn't be able to trigger through any other path.
+		// Route control-plane messages. ControlOpPing ONLY: it is
+		// side-effect-free and must live here, because this is the socket the
+		// single-instance guard probes for a squatter (singleton.go).
+		//
+		// ControlOpReload used to be served here too, on the reasoning that
+		// re-reading on-disk rules is not a privileged mutation. That was
+		// wrong (ADR 0066). This socket is reachable by the sandboxed agent BY
+		// DESIGN -- shield_agentpaths.go grants a single-file write on
+		// daemon.sock precisely so the hook can connect() -- and the peer-UID
+		// check below cannot exclude it, because the agent runs as the same
+		// UID as the daemon. SO_PEERCRED proves "same Unix user", not "outside
+		// the sandbox"; it is identity, not authorization. Reload is cheap to
+		// ask for and expensive to serve (a full Rego recompile), so on this
+		// socket it was a DoS lever against a ~30ms hook budget that defaults
+		// to fail-open -- i.e. a policy bypass. It now lives on the
+		// sandbox-denied daemon-ctl.sock as grantctl.ReqDaemonReload.
+		//
+		// The peer-UID check stays as defence-in-depth against a
+		// different-UID peer, which is all it can honestly do.
 		{
 			var probe struct {
 				Type string `json:"type"`
@@ -379,12 +401,15 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 				}
 				switch creq.Op {
 				case wire.ControlOpReload:
-					if rerr := s.reloadPolicy(ctx); rerr != nil {
-						slog.Error("control reload failed — keeping old policy", "err", rerr)
-						_ = enc.Encode(wire.ControlResponse{OK: false, Error: rerr.Error()})
-					} else {
-						_ = enc.Encode(wire.ControlResponse{OK: true})
-					}
+					// Refused here on purpose (ADR 0066) — see the block
+					// comment above. This socket is reachable by the sandboxed
+					// agent by design, and the peer-UID check cannot exclude a
+					// same-UID peer, so serving a Rego recompile here is a
+					// fail-open DoS lever. The CLI uses
+					// grantctl.ReqDaemonReload on the sandbox-denied control
+					// socket instead.
+					slog.Warn("control reload refused on the agent socket — use the daemon control socket", "peer_uid", peerUID)
+					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "reload is not served on the agent socket; use the daemon control socket"})
 				case wire.ControlOpPing:
 					// Side-effect-free liveness probe for the single-instance
 					// guard (see singleton.go). Reply OK and do nothing else.
@@ -923,7 +948,7 @@ func Run(args []string) int {
 		if srv.eventStore != nil {
 			grantEmitter = srv.eventStore
 		}
-		gs, gerr := newGrantServer(ctlSockPath, grantctl.NewRegistry(), grantEmitter, durableAudit, srv.activeSessions)
+		gs, gerr := newGrantServer(ctlSockPath, grantctl.NewRegistry(), grantEmitter, durableAudit, srv.activeSessions, srv.reloadPolicy)
 		if gerr != nil {
 			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
 		} else {
