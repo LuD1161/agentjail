@@ -193,12 +193,22 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 
 ```sh
 agentjail status                      # verify everything is wired
+agentjail doctor                      # diagnose a specific setup problem
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail sessions list               # active and past agent sessions
 agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay
 ```
+
+**Is this session actually protected?** In Claude Code, the status line tells you, for the whole life of the session:
+
+```
+🔒 [secured by agentjail (v0.8.2)]     ← running inside the shield
+⚠  [UNSECURED · agentjail]             ← hooks may apply, but no kernel sandbox
+```
+
+It never renders nothing while agentjail is installed — silence would be indistinguishable from protection. Launch warnings go to stderr and get scrolled away the moment Claude Code takes over the terminal, so the badge is the one signal that survives ([ADR 0064](./docs/adr/0064-statusline-always-attests.md)). `UNSECURED` means the session is not running under `agentjail-shield`: use `agentjail claude`, or install the [PATH shim](#install) to get it automatically. When agentjail is uninstalled the badge disappears entirely.
 
 <details>
 <summary><b>More install options</b></summary>
@@ -212,6 +222,19 @@ agentjail install --all               # non-interactive, install all detected
 **Agent discovery + picker:** the installer presents a styled interactive multi-select - all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
 
 **Linux note:** a fully supported install target. `agentjail install` writes a systemd `--user` unit at `~/.config/systemd/user/agentjail-daemon.service` (`Restart=on-failure`) and runs `systemctl --user enable --now` to start it — no root required. Auto-update, hook wiring, and all policies work the same as on macOS (launchd), just backed by systemd instead. Requires a systemd `--user` session (present on any normal desktop or SSH login on a systemd-based distro); if none is reachable (e.g. a bare container with no login session), the unit is still written and `agentjail install` prints the manual `systemctl --user enable --now agentjail-daemon.service` command to run once a session exists. See [ADR 0051](./docs/adr/0051-linux-install-support.md).
+
+**Terminal PATH shim (opt-in):**
+```sh
+agentjail install --with-path-shim    # wrap `claude` in the shield automatically
+```
+
+By default, hooks are wired but you launch the sandbox explicitly with `agentjail claude`. The PATH shim installs a `claude` wrapper at `~/.agentjail/bin/claude` and prepends that directory to your shell profile, so a plain `claude` runs shielded without you thinking about it.
+
+It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstalls and upgrades restore the shim rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
+
+The shim **fails open**. If the shield binary is missing (interrupted upgrade, partial uninstall), it warns loudly and runs your real `claude` unshielded rather than breaking it ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
+
+It only covers profile-sourcing interactive shells. VS Code/Cursor use the process wrapper (`agentjail install --for vscode`); cron, non-interactive shells, and absolute-path invocations are not covered.
 
 **From source:**
 ```sh
@@ -315,6 +338,38 @@ For systemd-managed daemons (Linux), set via an environment override file:
     systemctl --user edit agentjail-daemon.service
     # Add under [Service]:
     # Environment=AGENTJAIL_AUTO_UPDATE=false
+
+---
+
+## Uninstall
+
+```sh
+agentjail uninstall                   # remove everything
+agentjail uninstall --keep-secrets    # keep the encrypted store + master key
+agentjail uninstall --for claude-code # just unhook one agent
+```
+
+Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. Your Claude Code `statusLine` is removed too — and if agentjail wrapped a statusline you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
+
+> **`policy.yaml` is deleted.** Reinstalling writes a **fresh default**, where `mcp.allowed: []` denies every MCP server. If you have customised your MCP allowlist or `network.allowed_hosts`, back it up first:
+> ```sh
+> cp ~/.agentjail/policy.yaml ~/policy.yaml.bak
+> ```
+> `--keep-secrets` preserves only `secrets/` and `secrets.key`, not your policy.
+
+**If the daemon wasn't started by your service manager** (a manual run, a different install channel, an upgrade transition), uninstall stops and removes nothing:
+
+```
+🛑  uninstall aborted
+✗ daemon STILL RUNNING — the service manager does not own it, so it was not stopped
+```
+
+That is deliberate. The daemon's `hookwatch` re-injects the agentjail hook the moment anything removes it — it cannot tell an uninstall from tampering — so tearing down around a live daemon would delete agentjail while leaving your agents wired to a hook binary that no longer exists. Kill it and re-run, or force it ([ADR 0065](./docs/adr/0065-stop-the-daemon-before-unhooking.md)):
+
+```sh
+pkill -u $(id -u) -f agentjail-daemon && agentjail uninstall
+agentjail uninstall --force           # tear down anyway (leaves hooks re-injected)
+```
 
 ---
 
