@@ -4,6 +4,12 @@ Status: Accepted (Phases 1 and 2 implemented; updates the prior fail-open
 stance). Phase 3 (auto-recovery) is a separate follow-up — see
 [plans/011-daemon-unreachable-policy.md](../../plans/011-daemon-unreachable-policy.md).
 
+> **Amended by [ADR 0073](./0073-fail-open-notice-uses-systemmessage.md).** The
+> per-occurrence banner below is printed to stderr, which Claude Code discards
+> on an exit-0 allow — so on the fail-open allow path it never reached the user
+> and the silent-drift problem this ADR set out to fix survived (AGE-212). The
+> notice now rides the response's `systemMessage` field.
+
 ## Context
 
 When `agentjail-hook` cannot reach the daemon within its dial/round-trip
