@@ -40,7 +40,7 @@ func TestDaemonReload_ServedOnControlSocket(t *testing.T) {
 	}
 }
 
-// TestCtlSocket_RequiresCtlToken is the AGE-214 regression: a caller that can
+// TestCtlSocket_RequiresCtlToken is the ADR 0069 regression: a caller that can
 // reach daemon-ctl.sock but cannot read ~/.agentjail/control.token gets nothing.
 // That is exactly the sandboxed agent's position on Linux, where Landlock permits
 // the connect() and the same-UID peer check passes (ADR 0069).

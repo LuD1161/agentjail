@@ -134,7 +134,7 @@ func rawControlRoundTrip(t *testing.T, sock string, req proxyctl.Request) proxyc
 	return resp
 }
 
-// TestControlServerRequiresCtlToken is the AGE-214 regression: a caller that can
+// TestControlServerRequiresCtlToken is the ADR 0068 regression: a caller that can
 // reach the socket but cannot read ~/.agentjail/control.token gets nothing. That
 // is exactly the sandboxed agent's position on Linux, where Landlock permits the
 // connect() but denies the read (ADR 0068).

@@ -665,7 +665,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 				// grant listing on the directory itself (READ_DIR only, no
 				// READ_FILE/EXECUTE) and then grant full read-only access to
 				// each child individually, skipping AgentjailReadDeniedNames (the
-				// secrets store plus the control-plane token, AGE-214).
+				// secrets store plus the control-plane token, ADR 0067).
 				if err := allowPath(p, uint64(unix.LANDLOCK_ACCESS_FS_READ_DIR)); err != nil {
 					fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 				}
