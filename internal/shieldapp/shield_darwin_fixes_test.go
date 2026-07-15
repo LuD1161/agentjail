@@ -166,10 +166,13 @@ func runBindProbe(t *testing.T, profileBody, addr string) string {
 //
 //   - `(local ip "127.0.0.1:*")` -- rejected outright by sandbox-exec's
 //     parser ("host must be * or localhost in network address"); not usable.
-//   - `(local tcp "localhost:*")` -- parses, but measured to allow BOTH a
-//     127.0.0.1 bind AND a 0.0.0.0 bind. It is NOT loopback-scoped; it is
-//     equivalent (for enforcement purposes) to `"*:*"` with a fixed port
-//     range of "any".
+//   - `(local tcp "localhost:*")` -- parses, but measured to allow a 0.0.0.0
+//     bind. It is NOT loopback-scoped; it is equivalent (for enforcement
+//     purposes) to `"*:*"` with a fixed port range of "any". Whether it also
+//     permits an explicit 127.0.0.1 bind depends on how the host's sandbox
+//     resolves "localhost": allowed on a typical dev Mac, EPERM on GitHub's
+//     macos-14 runners. That detail is recorded below, not asserted - it does
+//     not change the conclusion (see the comment on the 0.0.0.0 check).
 //
 // Neither form enforces loopback-only, so per the plan's decision rule,
 // Approach B is NOT shipped; Approach A (any-interface, per-port bind) ships
@@ -192,14 +195,21 @@ func TestDarwinLoopbackScopedBindForm_NotEnforced(t *testing.T) {
 	t.Logf(`(local tcp "localhost:*"): 127.0.0.1:0 -> %s`, loopbackOK)
 	t.Logf(`(local tcp "localhost:*"): 0.0.0.0:0 -> %s`, anyIfaceResult)
 
-	if !strings.HasSuffix(loopbackOK, "=OK") {
-		t.Fatalf(`(local tcp "localhost:*") unexpectedly denied a loopback bind: %s`, loopbackOK)
-	}
+	// The 0.0.0.0 result is the only load-bearing observation: a NON-loopback
+	// bind succeeding is what proves the form is not loopback-scoped, which is
+	// the finding that justifies shipping Approach A. The 127.0.0.1 result is
+	// deliberately recorded (t.Logf above) rather than asserted: it is a
+	// property of how the host resolves "localhost" inside the sandbox, it has
+	// been measured to differ between a dev Mac (allowed) and GitHub's macos-14
+	// runners (EPERM), and it cannot change the conclusion either way - if a
+	// 0.0.0.0 bind is permitted, the form is not loopback-scoped no matter what
+	// 127.0.0.1 does. Asserting on it only produced intermittent CI failures
+	// with no signal about our own code (see ci #179).
 	if !strings.HasSuffix(anyIfaceResult, "=OK") {
 		t.Skipf(`(local tcp "localhost:*") DENIED a 0.0.0.0 bind (%s) -- this would mean the form IS loopback-scoped; re-evaluate shipping Approach B`, anyIfaceResult)
 	}
-	// Both succeeded: confirmed NOT loopback-scoped. This is the expected,
-	// documented outcome that justifies shipping Approach A instead.
+	// The 0.0.0.0 bind succeeded: confirmed NOT loopback-scoped. This is the
+	// expected, documented outcome that justifies shipping Approach A instead.
 }
 
 // TestDarwinLiteralIPBindForm_RejectedBySandboxExec confirms the other
