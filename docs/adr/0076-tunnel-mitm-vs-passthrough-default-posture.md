@@ -1,6 +1,6 @@
 # ADR 0076: TLS-terminating MITM vs. transparent passthrough as the tunnel's default posture
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0077](./0077-mitm-is-opt-in.md) — the default is reversed to opt-in; conditions 2 (namespace-scoped CA) and 3 (key in memory only) survive there unchanged.
 
 ## Context
 
