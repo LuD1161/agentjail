@@ -8,7 +8,7 @@ import (
 
 // The fail-open notice must reach the user via systemMessage: Claude Code
 // sends hook stderr to the debug log only on an exit-0 allow, so the stderr
-// banner alone left daemon-down windows silent for days (ADR 0073, AGE-212).
+// banner alone left daemon-down windows silent for days (ADR 0073).
 func TestFailOpenAllowCarriesSystemMessage(t *testing.T) {
 	for _, level := range []string{levelAllow, levelDegraded} {
 		t.Run(level, func(t *testing.T) {
