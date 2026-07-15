@@ -698,27 +698,83 @@ func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 	return r
 }
 
-// pathRCMarker is the comment line install.sh writes immediately above the PATH
-// export it appends to a shell rc. uninstall scrubs this marker and the PATH
-// line that follows it.
-const pathRCMarker = "# added by agentjail installer"
+// Two different writers append an agentjail PATH export to a shell rc, each
+// with its own marker. Both must be listed here: a marker that any writer can
+// emit but the scrubber does not know about outlives uninstall and leaves the
+// user's PATH pointing into a directory agentjail no longer owns (ADR 0062).
+//
+//   - pathRCMarker      — install.sh, a bare comment above its PATH line.
+//   - shimRCMarkerStart — addToShellProfile (installPathShim), a fenced block
+//     closed by shimRCMarkerEnd. It also records that the user opted into the
+//     PATH shim; see shimConsentRecorded.
+const (
+	pathRCMarker      = "# added by agentjail installer"
+	shimRCMarkerStart = "# >>> agentjail >>>"
+	shimRCMarkerEnd   = "# <<< agentjail <<<"
+)
 
-// stripAgentjailPathBlock removes every agentjail-installer PATH block from shell
-// rc content: the marker line, the line right after it (only when it references
-// ~/.agentjail/bin, so unrelated user lines are never touched), and a single
-// blank line directly preceding the marker (install.sh prepends one). It returns
-// the rewritten content and whether anything changed.
+// shellRCCandidates lists every shell rc agentjail may have written a PATH
+// export into, honoring $ZDOTDIR. Single source of truth for the writer
+// (addToShellProfile), the scrubber (cleanupShellRCPath), and the consent
+// probe (shimConsentRecorded) — they must agree on the file set or each will
+// disagree about whether the shim is installed.
+func shellRCCandidates(home string) []string {
+	candidates := []string{
+		filepath.Join(home, ".zshrc"),
+		filepath.Join(home, ".bashrc"),
+		filepath.Join(home, ".bash_profile"),
+		filepath.Join(home, ".profile"),
+		filepath.Join(home, ".config", "fish", "config.fish"),
+	}
+	if zd := os.Getenv("ZDOTDIR"); zd != "" {
+		candidates = append(candidates, filepath.Join(zd, ".zshrc"))
+	}
+	return candidates
+}
+
+// stripAgentjailPathBlock removes every agentjail PATH block from shell rc
+// content, in both marker forms (see the marker consts). For the bare
+// install.sh marker it drops the marker, the line right after it (only when it
+// references ~/.agentjail/bin, so unrelated user lines are never touched), and
+// a single preceding blank line. For the fenced shim block it drops everything
+// from the start marker through the end marker inclusive, plus a preceding
+// blank line. Returns the rewritten content and whether anything changed.
 func stripAgentjailPathBlock(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 	out := make([]string, 0, len(lines))
 	changed := false
+	dropBlankBefore := func() {
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+			out = out[:len(out)-1]
+		}
+	}
 	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == shimRCMarkerStart {
+			changed = true
+			dropBlankBefore()
+			// Find the closing fence before consuming anything: a hand-edited rc
+			// whose end marker was deleted must not swallow the rest of the file.
+			end := -1
+			for j := i + 1; j < len(lines); j++ {
+				if strings.TrimSpace(lines[j]) == shimRCMarkerEnd {
+					end = j
+					break
+				}
+			}
+			if end >= 0 {
+				i = end // drop start..end inclusive
+				continue
+			}
+			// Unterminated: fall back to the conservative bare-marker rule —
+			// drop the next line only when it is our PATH export.
+			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
+				i++
+			}
+			continue
+		}
 		if strings.TrimSpace(lines[i]) == pathRCMarker {
 			changed = true
-			// Drop a single blank line we may have emitted before the marker.
-			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
-				out = out[:len(out)-1]
-			}
+			dropBlankBefore()
 			// Skip the following line only when it's our PATH line, so a marker
 			// left dangling above unrelated content can't eat a user line.
 			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
@@ -737,20 +793,9 @@ func stripAgentjailPathBlock(content string) (string, bool) {
 // modified. Each modified file is rewritten atomically (temp + rename) preserving
 // its original permissions.
 func cleanupShellRCPath(home string) []string {
-	candidates := []string{
-		filepath.Join(home, ".zshrc"),
-		filepath.Join(home, ".bashrc"),
-		filepath.Join(home, ".bash_profile"),
-		filepath.Join(home, ".profile"),
-		filepath.Join(home, ".config", "fish", "config.fish"),
-	}
-	if zd := os.Getenv("ZDOTDIR"); zd != "" {
-		candidates = append(candidates, filepath.Join(zd, ".zshrc"))
-	}
-
 	var cleaned []string
 	seen := map[string]bool{}
-	for _, rc := range candidates {
+	for _, rc := range shellRCCandidates(home) {
 		if seen[rc] {
 			continue
 		}
@@ -1247,7 +1292,7 @@ func installDaemonPreamble(home string, w io.Writer, mcpSeed []string) error {
 	// Refresh the PATH shim if one was previously installed. This ensures
 	// brew upgrade / curl|sh reinstall picks up the current template and
 	// does not retain stale flags from a dev build.
-	refreshPathShimIfExists(home)
+	reassertPathShim(home)
 
 	return nil
 }
