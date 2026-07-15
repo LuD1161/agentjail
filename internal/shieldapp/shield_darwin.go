@@ -785,7 +785,7 @@ func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, w
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}
 	// Unlike Linux, this process is not yet sandboxed -- the sbpl profile
-	// applies at syscall.Exec below -- so the token can be read here (AGE-214).
+	// applies at syscall.Exec below -- so the token can be read here (ADR 0067).
 	darwinCtlToken, _ := ctlauth.Load()
 	grantEnvVars, _ := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)

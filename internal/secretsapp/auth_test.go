@@ -79,7 +79,7 @@ func ask(t *testing.T, sock string, req RPCRequest) RPCResponse {
 	return resp
 }
 
-// TestBroker_NoTokenIsRejected is the AGE-214 regression: a sandboxed agent can
+// TestBroker_NoTokenIsRejected is the ADR 0067 regression: a sandboxed agent can
 // reach this socket (Landlock does not mediate AF_UNIX connect) and shares the
 // broker's UID (so SO_PEERCRED cannot exclude it). The token is the only
 // boundary, so a request without one must never be served.

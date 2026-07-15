@@ -65,4 +65,4 @@ socket therefore lost its (imagined) filesystem protection; since the path was n
 boundary, the fallback is no weaker than the normal path. The token file follows the same
 fallback and carries the same 0600 protection.
 
-`daemon-ctl.sock` remains, tracked in AGE-214.
+`daemon-ctl.sock` is the last of the three; see [ADR 0069](./0069-daemon-control-token.md).

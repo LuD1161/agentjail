@@ -99,4 +99,4 @@ Costs and residuals:
 
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
-which this makes a real boundary on Linux rather than a structural one), AGE-214.
+which this makes a real boundary on Linux rather than a structural one).
