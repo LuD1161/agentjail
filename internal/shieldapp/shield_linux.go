@@ -18,6 +18,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 
@@ -234,6 +235,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		os.Exit(0)
 	}
 
+	// Capture the control token BEFORE Landlock: applyLandlock restricts THIS
+	// process, and the token is excluded from the agent's read grants, so after
+	// this point we cannot read it either (ADR 0067). Best-effort -- a missing
+	// token costs the grants, it must not block the sandbox.
+	ctlToken, ctlTokenErr := ctlauth.Load()
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -286,7 +293,10 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}
 	env = append(env, "AGENTJAIL_SHIELDED=1")
-	grantEnvVars, activeGrants := requestSecretGrants(cfg)
+	if ctlTokenErr != nil && cfg != nil && len(cfg.Secrets.Grants) > 0 {
+		fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: no control token (%v); configured secret grants will be refused\n", ctlTokenErr)
+	}
+	grantEnvVars, activeGrants := requestSecretGrants(cfg, ctlToken)
 	env = append(env, grantEnvVars...)
 
 	elapsed := time.Since(startTime)
@@ -329,7 +339,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 
 	// Kill and reap the netproxy child (zombie cleanup).
 	cleanupNetproxy(netproxyCmd)
-	revokeSecretGrants(activeGrants)
+	revokeSecretGrants(activeGrants, ctlToken)
 
 	// Print session summary.
 	printSessionSummary(noColor, sessionDuration)
@@ -654,7 +664,8 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 				// punch-through deny, so instead of one recursive grant we
 				// grant listing on the directory itself (READ_DIR only, no
 				// READ_FILE/EXECUTE) and then grant full read-only access to
-				// each child individually, skipping AgentjailSecretsProtectedNames.
+				// each child individually, skipping AgentjailReadDeniedNames (the
+				// secrets store plus the control-plane token, AGE-214).
 				if err := allowPath(p, uint64(unix.LANDLOCK_ACCESS_FS_READ_DIR)); err != nil {
 					fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 				}
@@ -662,7 +673,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 				if rerr != nil {
 					continue // directory absent (fresh install) — nothing to grant
 				}
-				protected := AgentjailSecretsProtectedNames()
+				protected := AgentjailReadDeniedNames()
 				for _, e := range entries {
 					if protected[e.Name()] {
 						continue

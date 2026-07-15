@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 )
 
 // AccessMode is the access level granted for a PathGrant.
@@ -175,6 +177,20 @@ func AgentjailSecretsProtectedNames() map[string]bool {
 		"secrets.key": true,
 		"secrets":     true,
 	}
+}
+
+// AgentjailReadDeniedNames returns every ~/.agentjail child the sandboxed agent
+// must not be able to READ: the secrets set above plus the control-plane token.
+// shield_linux.go enumerates against this.
+//
+// Dropping the token from this set silently disarms control-plane auth — the
+// read denial IS the boundary (ADR 0067). Kept separate from
+// AgentjailSecretsProtectedNames because that set mirrors uninstall's
+// --keep-secrets preserve list (ADR 0048) and the token must not be preserved.
+func AgentjailReadDeniedNames() map[string]bool {
+	m := AgentjailSecretsProtectedNames()
+	m[ctlauth.TokenFileName] = true
+	return m
 }
 
 // CloudMetadataDenyIP is a single well-known cloud-provider instance
