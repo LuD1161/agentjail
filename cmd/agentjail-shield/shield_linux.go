@@ -156,7 +156,7 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	ctx := context.Background()
 	noColor := os.Getenv("NO_COLOR") != ""
 	if noColor {
@@ -171,14 +171,19 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// skipped. On ANY failure we fall back to netproxy (fail-open).
 	var tunnelSess *tunnelSession
 	if tunnelMode {
-		if s, ready := startTunnel(ctx); ready {
+		if s, ready := startTunnel(ctx, mitmMode); ready {
 			tunnelSess = s
 			noNetproxy = true
 			defer tunnelSess.cleanup()
+			// Announce the posture both ways. ADR 0077 (D4).
+			posture := "TLS interception off — visibility only"
+			if mitmMode {
+				posture = "TLS interception ON — decrypting this agent's HTTPS"
+			}
 			if noColor {
-				fmt.Fprintln(os.Stderr, "  ✓ transparent tunnel active (userns)")
+				fmt.Fprintf(os.Stderr, "  ✓ transparent tunnel active (userns) · %s\n", posture)
 			} else {
-				fmt.Fprintln(os.Stderr, "  \033[32m✓\033[0m transparent tunnel active (userns)")
+				fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m transparent tunnel active (userns) · %s\n", posture)
 			}
 		} else {
 			fmt.Fprintln(os.Stderr, "  ⚠ tunnel not available, falling back to netproxy")

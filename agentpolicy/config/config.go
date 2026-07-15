@@ -198,6 +198,11 @@ type NetworkConfig struct {
 	// This is the extended/editable list -- see EffectiveAllowedHosts for the
 	// enforced set, which always includes the non-removable essentials.
 	AllowedHosts []string `yaml:"allowed_hosts"`
+
+	// TunnelMITM gives this install standing consent to TLS interception under
+	// --tunnel, instead of passing --mitm every launch. Absent means false:
+	// agentjail does not decrypt. See ADR 0077 (D3).
+	TunnelMITM bool `yaml:"tunnel_mitm"`
 }
 
 // EssentialAllowedHosts returns the minimal, non-removable set of hosts an

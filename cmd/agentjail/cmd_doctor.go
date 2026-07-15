@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/sshagent"
 	"github.com/spf13/cobra"
 )
@@ -68,6 +69,7 @@ func runDoctor() int {
 	for _, c := range checkNetworkInterception() {
 		printCheck(c)
 	}
+	printCheck(checkTLSInterceptionPosture())
 	fmt.Fprintln(os.Stdout)
 
 	// ── Daemon ──────────────────────────────────────────────────────────
@@ -481,6 +483,35 @@ func detectLandlockABI() int {
 // findShieldBinary is defined in cmd_run.go but used by doctor too.
 // If cmd_run.go is not compiled (shouldn't happen), this would fail at link time
 // which is the correct behavior — both commands should always be present.
+
+// checkTLSInterceptionPosture reports whether agentjail would decrypt a
+// shielded agent's HTTPS. Cross-platform by contract, so it lives here rather
+// than in the per-OS checkNetworkInterception. ADR 0077 (D4).
+func checkTLSInterceptionPosture() doctorCheck {
+	const label = "TLS interception"
+
+	path, err := policyConfigPath()
+	if err != nil {
+		return doctorCheck{label: label, status: "skip", detail: "cannot locate policy.yaml: " + err.Error()}
+	}
+	cfg, err := config.LoadOrDefault(path)
+	if err != nil {
+		return doctorCheck{label: label, status: "skip", detail: "cannot read policy.yaml: " + err.Error()}
+	}
+
+	if cfg.Network.TunnelMITM {
+		return doctorCheck{
+			label:  label,
+			status: "warn",
+			detail: "ON by default — network.tunnel_mitm is true in policy.yaml, so --tunnel runs decrypt this agent's HTTPS via a per-session CA. Run with --no-mitm, or unset it, to relay TLS opaquely",
+		}
+	}
+	return doctorCheck{
+		label:  label,
+		status: "ok",
+		detail: "off — agentjail does not decrypt agent traffic; --tunnel gives visibility only (IP/SNI/size). Pass --mitm for per-endpoint and body policy, or set network.tunnel_mitm: true to opt in every run",
+	}
+}
 
 // findAgentBinary checks if an agent binary exists on PATH.
 func findAgentBinary(name string) string {

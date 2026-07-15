@@ -70,7 +70,10 @@ func main() {
 	// See ADR 0046.
 	netproxyEnable := flag.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
 	noNetproxy := flag.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
-	tunnelMode := flag.Bool("tunnel", false, "route agent traffic through the unprivileged-userns transparent gVisor forwarder for interception (Linux only; no privileged daemon; TLS-terminating MITM when policy packs are present)")
+	tunnelMode := flag.Bool("tunnel", false, "route agent traffic through the unprivileged-userns transparent gVisor forwarder (Linux only; no privileged daemon). Visibility only: TLS is relayed opaquely unless --mitm is given")
+	// Separate switch from --tunnel; off by default. ADR 0077 (D1, D2).
+	mitmMode := flag.Bool("mitm", false, "decrypt the agent's HTTPS through a per-session in-memory CA injected into the agent's namespace trust store (opt-in; enables per-endpoint and request-body policy; may break cert-pinned endpoints)")
+	noMITM := flag.Bool("no-mitm", false, "force TLS interception off for this launch, overriding network.tunnel_mitm in policy.yaml")
 	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	flag.Usage = func() {
@@ -201,7 +204,18 @@ func main() {
 	}
 
 	// Delegate to the OS-specific sandbox implementation.
-	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode, *policyPath, startTime, emitter)
+	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode,
+		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM), *policyPath, startTime, emitter)
+}
+
+// resolveMITM decides whether this launch decrypts TLS: only when asked for
+// (--mitm, or network.tunnel_mitm standing consent), and --no-mitm always wins.
+// Never inferred from --tunnel. ADR 0077 (D1, D2, D3).
+func resolveMITM(mitmFlag, noMITMFlag, cfgTunnelMITM bool) bool {
+	if noMITMFlag {
+		return false
+	}
+	return mitmFlag || cfgTunnelMITM
 }
 
 // resolveNoNetproxy computes the effective "netproxy disabled" value from the
