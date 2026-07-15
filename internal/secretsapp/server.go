@@ -18,13 +18,17 @@ import (
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/credentials"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 	auditstore "github.com/LuD1161/agentjail/internal/store"
 )
 
 // RPCRequest is the newline-delimited JSON request sent by CLI clients.
 type RPCRequest struct {
-	Action  string `json:"action"`
+	Action string `json:"action"`
+	// Token authenticates the caller as a process outside the sandbox. Required
+	// on every action (ADR 0067).
+	Token   string `json:"token,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Value   string `json:"value,omitempty"`
 	Scope   string `json:"scope,omitempty"`
@@ -130,6 +134,14 @@ func runServer(args []string) {
 		}
 	}
 
+	// Fail CLOSED: without a token this broker would serve credentials to any
+	// caller that connects (ADR 0067).
+	ctlToken, err := ctlauth.Ensure()
+	if err != nil {
+		slog.Error("cannot establish control token; refusing to serve credentials", "err", err)
+		os.Exit(1)
+	}
+
 	socketDir := filepath.Dir(*socketPath)
 	if err := os.MkdirAll(socketDir, 0o700); err != nil {
 		slog.Error("create socket dir", "dir", socketDir, "err", err)
@@ -164,7 +176,7 @@ func runServer(args []string) {
 				return
 			}
 			activity.touch()
-			go handleConn(conn, store, gm, emitter)
+			go handleConn(conn, store, gm, emitter, ctlToken)
 		}
 	}()
 
@@ -214,7 +226,7 @@ func idleWatchdog(timeout time.Duration, clock *idleClock, gm *credentials.Grant
 }
 
 // handleConn serves one client connection.
-func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) {
+func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitter audit.Emitter, token string) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -228,12 +240,22 @@ func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitt
 			continue
 		}
 
+		// Every verb here is privileged (grant returns credentials; set/delete
+		// mutate the store), so authenticate per request, before dispatch.
+		// The token is the boundary -- see ADR 0067.
+		if !ctlauth.Valid(req.Token, token) {
+			slog.Warn("secrets: rejecting unauthenticated request", "action", req.Action)
+			_ = enc.Encode(RPCResponse{OK: false, Error: "unauthorized: control token required"})
+			continue
+		}
+
 		resp := handleRPC(&req, store, gm, emitter)
 		_ = enc.Encode(resp)
 	}
 }
 
-// handleRPC dispatches an RPC request to the appropriate handler.
+// handleRPC dispatches an RPC request to the appropriate handler. The caller
+// MUST have authenticated req.Token first (see handleConn).
 func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) RPCResponse {
 	ctx := context.Background()
 	switch req.Action {
@@ -361,6 +383,15 @@ func handleGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, em
 
 // rpcClient sends a request to the secrets server and returns the response.
 func rpcClient(socketPath string, req *RPCRequest) (*RPCResponse, error) {
+	// Attach the token unless the caller supplied one (the shield passes its
+	// own, captured pre-Landlock). A read failure is not fatal: let the server
+	// answer "unauthorized" rather than guess locally (ADR 0067).
+	if req.Token == "" {
+		if tok, terr := ctlauth.Load(); terr == nil {
+			req.Token = tok
+		}
+	}
+
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
 		// On-demand start (ADR 0058): the broker is a loaded-but-not-running

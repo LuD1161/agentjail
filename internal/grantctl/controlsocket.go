@@ -14,30 +14,14 @@ const controlLockName = "daemon-ctl.lock"
 // ControlSocketPath returns the absolute path of the daemon grant control
 // socket, at ~/.agentjail/run/daemon-ctl.sock on every OS.
 //
-// REACHABILITY — read this before putting a privileged verb here:
+// REACHABILITY — do not treat the path as the boundary. On macOS the shield
+// denies network-outbound to it, but on Linux the agent CAN connect: Landlock is
+// a filesystem LSM and does not mediate AF_UNIX connect() (the shield's own
+// enforcement test records ctl_connect=ok). The same-UID peer check cannot
+// exclude the agent either. Verbs here are gated by the ctlauth token; see
+// ADR 0067.
 //
-//   - macOS: the shield explicitly denies network-outbound to this path, so a
-//     sandboxed agent genuinely cannot connect.
-//   - Linux: the agent CAN connect. Landlock is a filesystem LSM and does not
-//     mediate AF_UNIX connect(), so leaving the socket outside the allowlist
-//     withholds nothing. This is proven, not theorised: the shield's own
-//     Landlock enforcement test observes ctl_connect=ok and records it as a
-//     known limitation (shield_linux_enforce_test.go, "grant-socket isolation
-//     needs Tier 2+"). An earlier version of this comment claimed the opposite
-//     and was believed; it is what let ADR 0066 ship a Linux no-op.
-//
-// So on Linux the only thing standing between a prompt-injected agent and this
-// socket's verbs is the same-UID peer check — which the agent passes, since it
-// runs as the daemon's UID. SO_PEERCRED is identity, not authorization.
-//
-// Consequence: grant_approve, grant_deny, grant_list, and daemon_reload are all
-// agent-reachable on Linux today. Path separation is a real boundary on macOS
-// and a structural one on Linux. Closing it needs a secret the sandbox cannot
-// read — Landlock DOES mediate file reads (see AgentjailSecretsProtectedNames),
-// so a token under a read-denied child of ~/.agentjail is the available fix.
-//
-// The daemon itself runs outside the sandbox and creates/binds the socket
-// freely.
+// The daemon itself runs outside the sandbox and binds the socket freely.
 //
 // If the home directory cannot be resolved (rare), it falls back to
 // /tmp/agentjail-run/daemon-ctl.sock, mirroring the daemon socket's /tmp
