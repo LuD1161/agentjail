@@ -85,6 +85,10 @@ func TestSessionRegistryLeaseCapped(t *testing.T) {
 	}
 }
 
+// testCtlToken is the injected control token for tests. Injecting it keeps the
+// suite off the real ~/.agentjail/control.token.
+const testCtlToken = "test-control-token"
+
 // startTestControlServer spins a control server on a temp socket and serves it
 // until the returned cancel is called. durableAudit is forwarded to
 // newControlServer so tests can exercise the fail-closed grant_approve gate.
@@ -93,7 +97,7 @@ func startTestControlServer(t *testing.T, emitter audit.Emitter, durableAudit bo
 	dir := shortSocketDir(t)
 	sock := filepath.Join(dir, "netproxy-ctl.sock")
 	reg := newSessionRegistry()
-	cs, err := newControlServer(sock, reg, emitter, durableAudit, "test-1.2.3", testLogger())
+	cs, err := newControlServer(sock, testCtlToken, reg, emitter, durableAudit, "test-1.2.3", testLogger())
 	if err != nil {
 		t.Fatalf("newControlServer: %v", err)
 	}
@@ -102,7 +106,18 @@ func startTestControlServer(t *testing.T, emitter audit.Emitter, durableAudit bo
 	return cs, sock, func() { cancel(); cs.close() }
 }
 
+// controlRoundTrip sends req, defaulting CtlToken to the valid test token so
+// tests of the verbs themselves are not restating auth. Auth tests set CtlToken
+// explicitly (including to a bogus value); rawControlRoundTrip sends verbatim.
 func controlRoundTrip(t *testing.T, sock string, req proxyctl.Request) proxyctl.Response {
+	t.Helper()
+	if req.CtlToken == "" {
+		req.CtlToken = testCtlToken
+	}
+	return rawControlRoundTrip(t, sock, req)
+}
+
+func rawControlRoundTrip(t *testing.T, sock string, req proxyctl.Request) proxyctl.Response {
 	t.Helper()
 	conn, err := net.DialTimeout("unix", sock, time.Second)
 	if err != nil {
@@ -117,6 +132,79 @@ func controlRoundTrip(t *testing.T, sock string, req proxyctl.Request) proxyctl.
 		t.Fatalf("decode response: %v", err)
 	}
 	return resp
+}
+
+// TestControlServerRequiresCtlToken is the AGE-214 regression: a caller that can
+// reach the socket but cannot read ~/.agentjail/control.token gets nothing. That
+// is exactly the sandboxed agent's position on Linux, where Landlock permits the
+// connect() but denies the read (ADR 0068).
+func TestControlServerRequiresCtlToken(t *testing.T) {
+	pol := proxyctl.SessionPolicy{AllowedHosts: []string{"evil.example.com"}}
+	gated := []proxyctl.Request{
+		{Type: proxyctl.ReqRegister, Token: "tok-attacker", Policy: &pol, LeaseTTLMs: 60_000},
+		{Type: proxyctl.ReqGrantList},
+		{Type: proxyctl.ReqGrantApprove, GrantID: "g1"},
+		{Type: proxyctl.ReqGrantDeny, GrantID: "g1"},
+		{Type: proxyctl.ReqGrant, Token: "tok-attacker", Hosts: []string{"evil.example.com"}},
+	}
+	for _, tokenCase := range []struct{ name, token string }{
+		{"missing", ""},
+		{"wrong", "not-the-token"},
+		// A near-miss must not pass: Valid compares the whole value.
+		{"prefix", testCtlToken[:len(testCtlToken)-1]},
+	} {
+		for _, req := range gated {
+			t.Run(string(req.Type)+"/"+tokenCase.name, func(t *testing.T) {
+				cs, sock, done := startTestControlServer(t, audit.NopEmitter{}, true)
+				defer done()
+
+				req.CtlToken = tokenCase.token
+				resp := rawControlRoundTrip(t, sock, req)
+				if resp.OK {
+					t.Fatalf("%s with %s token was accepted; want unauthorized", req.Type, tokenCase.name)
+				}
+				if resp.Error != "unauthorized" {
+					t.Errorf("error = %q; want %q (a distinguishable reply leaks whether the verb exists)", resp.Error, "unauthorized")
+				}
+				// The rejection must precede any side effect: an unauthorized
+				// register that still registered would be the whole bug.
+				if n := cs.registry.count(); n != 0 {
+					t.Errorf("registry has %d sessions after an unauthorized %s; want 0", n, req.Type)
+				}
+				if g := resp.Grants; g != nil {
+					t.Errorf("unauthorized %s leaked grants: %+v", req.Type, g)
+				}
+			})
+		}
+	}
+}
+
+// TestControlServerFingerprintNeedsNoCtlToken pins the one deliberate exception:
+// fingerprint is the version-negotiation channel, so gating it would break the
+// mechanism that resolves incompatible builds. It returns version data only.
+func TestControlServerFingerprintNeedsNoCtlToken(t *testing.T) {
+	_, sock, done := startTestControlServer(t, audit.NopEmitter{}, true)
+	defer done()
+
+	resp := rawControlRoundTrip(t, sock, proxyctl.Request{Type: proxyctl.ReqFingerprint})
+	if !resp.OK || resp.Fingerprint == nil {
+		t.Fatalf("fingerprint without a control token was refused: %+v", resp)
+	}
+}
+
+// TestNewControlServerRefusesEmptyToken: an empty token makes ctlauth.Valid
+// reject every caller, which would surface as a mysteriously unregisterable
+// proxy. Fail at startup instead.
+func TestNewControlServerRefusesEmptyToken(t *testing.T) {
+	sock := filepath.Join(shortSocketDir(t), "netproxy-ctl.sock")
+	cs, err := newControlServer(sock, "", newSessionRegistry(), audit.NopEmitter{}, true, "test", testLogger())
+	if err == nil {
+		cs.close()
+		t.Fatal("newControlServer accepted an empty control token; want refusal")
+	}
+	if _, statErr := os.Stat(sock); statErr == nil {
+		t.Error("refused server still bound the socket; it must not be reachable at all")
+	}
 }
 
 func TestControlServerFingerprint(t *testing.T) {

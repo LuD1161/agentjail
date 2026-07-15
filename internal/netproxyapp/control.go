@@ -4,8 +4,9 @@ package netproxyapp
 //
 // One netproxy serves every shielded session on the single TCP port
 // (127.0.0.1:9100). Each session registers a per-session allowlist over a Unix
-// control socket (proxyctl.ControlSocketPath) that the sandboxed agent cannot
-// reach. The data plane (handleConn) then keys the effective allowlist by the
+// control socket (proxyctl.ControlSocketPath), authenticated by the ctlauth
+// token rather than by the socket path (ADR 0068). The data plane (handleConn)
+// then keys the effective allowlist by the
 // session Token carried as the Proxy-Authorization credential -- there is NO
 // global fallback, so an unknown/missing token is denied.
 //
@@ -36,6 +37,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
@@ -435,6 +437,9 @@ type controlServer struct {
 	durableAudit bool
 	logger       *slog.Logger
 	binVer       string
+	// ctlToken authenticates callers as processes outside the sandbox. Every
+	// verb but fingerprint requires it (ADR 0068).
+	ctlToken string
 }
 
 // acquireControlSocket makes netproxy the singleton owner of the control socket.
@@ -488,7 +493,15 @@ func acquireControlSocket(sockPath string, logger *slog.Logger) (*net.UnixListen
 // newControlServer acquires the control socket and returns a ready server.
 // durableAudit must be true only when emitter is backed by a real, writable
 // store -- see controlServer.durableAudit.
-func newControlServer(sockPath string, registry *sessionRegistry, emitter audit.Emitter, durableAudit bool, binVer string, logger *slog.Logger) (*controlServer, error) {
+//
+// ctlToken is injected rather than read here so the caller owns the fail-closed
+// decision (see run) and tests do not touch the real ~/.agentjail. An empty
+// ctlToken is refused: ctlauth.Valid would reject every caller, which would
+// present as an unregisterable proxy rather than as the misconfiguration it is.
+func newControlServer(sockPath, ctlToken string, registry *sessionRegistry, emitter audit.Emitter, durableAudit bool, binVer string, logger *slog.Logger) (*controlServer, error) {
+	if ctlToken == "" {
+		return nil, errors.New("refusing to serve the control plane without a control token")
+	}
 	ln, lock, err := acquireControlSocket(sockPath, logger)
 	if err != nil {
 		return nil, err
@@ -502,6 +515,7 @@ func newControlServer(sockPath string, registry *sessionRegistry, emitter audit.
 		durableAudit: durableAudit,
 		logger:       logger,
 		binVer:       binVer,
+		ctlToken:     ctlToken,
 	}, nil
 }
 
@@ -546,6 +560,14 @@ func (cs *controlServer) handle(conn net.Conn) {
 	var req proxyctl.Request
 	if err := json.NewDecoder(io.LimitReader(conn, proxyctl.MaxControlMsgBytes)).Decode(&req); err != nil {
 		cs.reply(conn, proxyctl.Response{OK: false, Error: "malformed control request"})
+		return
+	}
+
+	// Authenticate before dispatch, so a verb added later is gated by default
+	// rather than by remembering to gate it (ADR 0068).
+	if req.Type != proxyctl.ReqFingerprint && !ctlauth.Valid(req.CtlToken, cs.ctlToken) {
+		cs.logger.Warn("control request rejected: invalid control token", "type", req.Type)
+		cs.reply(conn, proxyctl.Response{OK: false, Error: "unauthorized"})
 		return
 	}
 

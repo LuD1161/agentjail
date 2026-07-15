@@ -45,6 +45,7 @@ import (
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/hostgrant"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/store"
@@ -176,7 +177,13 @@ func newProxy(addr string, registry *sessionRegistry, emitter audit.Emitter, dur
 // is expected to have fingerprinted and reused the existing proxy instead of
 // spawning us).
 func (p *proxy) run(ctx context.Context) error {
-	cs, err := newControlServer(proxyctl.ControlSocketPath(), p.registry, p.emitter, p.durableAudit, buildinfo.Version, p.logger)
+	// Mint before binding: serving register unauthenticated would let the
+	// sandboxed agent set its own egress allowlist (ADR 0068).
+	ctlToken, err := ctlauth.Ensure()
+	if err != nil {
+		return fmt.Errorf("control token unavailable, refusing to serve the control plane: %w", err)
+	}
+	cs, err := newControlServer(proxyctl.ControlSocketPath(), ctlToken, p.registry, p.emitter, p.durableAudit, buildinfo.Version, p.logger)
 	if err != nil {
 		return fmt.Errorf("acquire control plane: %w", err)
 	}
