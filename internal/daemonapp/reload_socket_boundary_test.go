@@ -21,7 +21,7 @@ func TestDaemonReload_ServedOnControlSocket(t *testing.T) {
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
 	var called atomic.Int32
-	gs, err := newGrantServer(ctlSock, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil,
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil,
 		func(context.Context) error { called.Add(1); return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -32,12 +32,87 @@ func TestDaemonReload_ServedOnControlSocket(t *testing.T) {
 	defer cancel()
 	go gs.serveCtl(ctx)
 
-	if err := grantctl.DaemonReload(ctlSock, 2*time.Second); err != nil {
+	if err := grantctl.DaemonReload(ctlSock, testCtlToken, 2*time.Second); err != nil {
 		t.Fatalf("reload over the control socket should succeed: %v", err)
 	}
 	if got := called.Load(); got != 1 {
 		t.Errorf("expected exactly one reload, got %d", got)
 	}
+}
+
+// TestCtlSocket_RequiresCtlToken is the AGE-214 regression: a caller that can
+// reach daemon-ctl.sock but cannot read ~/.agentjail/control.token gets nothing.
+// That is exactly the sandboxed agent's position on Linux, where Landlock permits
+// the connect() and the same-UID peer check passes (ADR 0069).
+//
+// reload is the one that matters most: it is a full Rego recompile, so an
+// unauthenticated caller could spend the daemon's CPU on demand while the hook's
+// ~30ms budget fails open.
+func TestCtlSocket_RequiresCtlToken(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"missing", ""},
+		{"wrong", "not-the-token"},
+		{"prefix", testCtlToken[:len(testCtlToken)-1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
+
+			var reloads atomic.Int32
+			gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, true, nil,
+				func(context.Context) error { reloads.Add(1); return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gs.close()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go gs.serveCtl(ctx)
+
+			for _, req := range []grantctl.Request{
+				{Type: grantctl.ReqDaemonReload},
+				{Type: grantctl.ReqGrantList},
+				{Type: grantctl.ReqGrantApprove, GrantID: "g1"},
+				{Type: grantctl.ReqGrantDeny, GrantID: "g1"},
+			} {
+				req.CtlToken = tc.token
+				resp := rawCtlRoundTrip(t, ctlSock, req)
+				if resp.OK {
+					t.Errorf("%s with a %s token was accepted; want unauthorized", req.Type, tc.name)
+				}
+				if resp.Error != "unauthorized" {
+					t.Errorf("%s error = %q; want %q", req.Type, resp.Error, "unauthorized")
+				}
+				if resp.Grants != nil {
+					t.Errorf("unauthorized %s leaked grants: %+v", req.Type, resp.Grants)
+				}
+			}
+			// The rejection must precede the work, not just the reply.
+			if got := reloads.Load(); got != 0 {
+				t.Errorf("unauthorized reload still recompiled %d time(s); the DoS lever is open", got)
+			}
+		})
+	}
+}
+
+// rawCtlRoundTrip sends req verbatim, with no token defaulting, so auth tests
+// can express "sent nothing".
+func rawCtlRoundTrip(t *testing.T, sock string, req grantctl.Request) grantctl.Response {
+	t.Helper()
+	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	var resp grantctl.Response
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
 }
 
 // TestDaemonReload_CompileFailureIsRefusedNotTransport: a rejected policy must
@@ -47,7 +122,7 @@ func TestDaemonReload_ServedOnControlSocket(t *testing.T) {
 func TestDaemonReload_CompileFailureIsRefusedNotTransport(t *testing.T) {
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
-	gs, err := newGrantServer(ctlSock, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil,
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil,
 		func(context.Context) error { return errors.New("reload: compile: rego parse error") })
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +133,7 @@ func TestDaemonReload_CompileFailureIsRefusedNotTransport(t *testing.T) {
 	defer cancel()
 	go gs.serveCtl(ctx)
 
-	err = grantctl.DaemonReload(ctlSock, 2*time.Second)
+	err = grantctl.DaemonReload(ctlSock, testCtlToken, 2*time.Second)
 	if err == nil {
 		t.Fatal("expected an error when the daemon rejects the policy")
 	}
@@ -76,7 +151,7 @@ func TestDaemonReload_CompileFailureIsRefusedNotTransport(t *testing.T) {
 func TestDaemonReload_NilReloadIsRefused(t *testing.T) {
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
-	gs, err := newGrantServer(ctlSock, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +161,7 @@ func TestDaemonReload_NilReloadIsRefused(t *testing.T) {
 	defer cancel()
 	go gs.serveCtl(ctx)
 
-	if err := grantctl.DaemonReload(ctlSock, 2*time.Second); err == nil {
+	if err := grantctl.DaemonReload(ctlSock, testCtlToken, 2*time.Second); err == nil {
 		t.Error("expected refusal when no reload func is wired")
 	}
 }

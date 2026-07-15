@@ -35,6 +35,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hostgrant"
 	"github.com/LuD1161/agentjail/internal/projectpolicy"
@@ -72,6 +73,9 @@ type grantServer struct {
 	// (server.reloadPolicy) rather than reached through a back-pointer, so the
 	// grant server stays independently testable. Nil disables ReqDaemonReload.
 	reload func(context.Context) error
+	// ctlToken authenticates callers as processes outside the sandbox. Every
+	// verb on this socket requires it (ADR 0069).
+	ctlToken string
 }
 
 // acquireGrantCtlSocket makes the daemon the singleton owner of the grant
@@ -123,7 +127,15 @@ func acquireGrantCtlSocket(sockPath string) (*net.UnixListener, *os.File, error)
 // server. durableAudit must be true only when emitter is backed by a real,
 // writable store -- see grantServer.durableAudit. reload backs ReqDaemonReload
 // (ADR 0066); pass nil to disable that verb.
-func newGrantServer(sockPath string, registry *grantctl.Registry, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, reload func(context.Context) error) (*grantServer, error) {
+//
+// ctlToken is injected rather than read here so the caller owns the fail-closed
+// decision and tests do not touch the real ~/.agentjail. An empty ctlToken is
+// refused: ctlauth.Valid would reject every caller, which would present as a
+// dead control socket rather than as the misconfiguration it is (ADR 0069).
+func newGrantServer(sockPath, ctlToken string, registry *grantctl.Registry, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, reload func(context.Context) error) (*grantServer, error) {
+	if ctlToken == "" {
+		return nil, errors.New("refusing to serve the grant control socket without a control token")
+	}
 	ln, lock, err := acquireGrantCtlSocket(sockPath)
 	if err != nil {
 		return nil, err
@@ -137,7 +149,19 @@ func newGrantServer(sockPath string, registry *grantctl.Registry, emitter audit.
 		durableAudit:   durableAudit,
 		activeSessions: activeSessions,
 		reload:         reload,
+		ctlToken:       ctlToken,
 	}, nil
+}
+
+// startGrantServer mints the control token and hands it to newGrantServer. It
+// is the daemon's single entry point for standing the control socket up, so the
+// token is never read in one place and forgotten in another.
+func startGrantServer(sockPath string, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, reload func(context.Context) error) (*grantServer, error) {
+	ctlToken, err := ctlauth.Ensure()
+	if err != nil {
+		return nil, fmt.Errorf("control token unavailable: %w", err)
+	}
+	return newGrantServer(sockPath, ctlToken, grantctl.NewRegistry(), emitter, durableAudit, activeSessions, reload)
 }
 
 // close stops serving, removes the socket, and releases the lock.
@@ -173,14 +197,12 @@ func (gs *grantServer) serveCtl(ctx context.Context) {
 	}
 }
 
-// peerUIDAllowed reports whether a connection to the privileged grant
-// control socket (daemon-ctl.sock) should be dispatched (P5). uidErr is the
-// error (if any) from extracting the peer's real UID via SO_PEERCRED /
-// LOCAL_PEERCRED -- fail closed on any error (unknown UID is never treated
-// as allowed). Otherwise the peer UID must exactly match daemonUID
-// (os.Getuid()): filesystem permissions on the socket path (0600, in a 0700
-// dir) are necessary but not sufficient -- any same-UID, non-sandboxed
-// process on the box can otherwise open the path and self-approve grants.
+// peerUIDAllowed reports whether the peer on daemon-ctl.sock shares the
+// daemon's UID. Fails closed on any SO_PEERCRED/LOCAL_PEERCRED error.
+//
+// This is identity, not authorization: it cannot exclude the sandboxed agent,
+// which runs as the same UID. It is defence-in-depth against a different-UID
+// peer -- all it can honestly do. The ctlauth token is the boundary (ADR 0069).
 func peerUIDAllowed(peerUID, daemonUID int, uidErr error) bool {
 	if uidErr != nil {
 		return false
@@ -200,13 +222,9 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	// Filesystem permissions on daemon-ctl.sock (0600, owner-only dir) are
-	// not sufficient authentication on their own -- any same-UID process
-	// that can open the socket path can reach this privileged verb set
-	// (grant_approve, in particular, mutates policy.yaml). Verify the
-	// connecting peer's real UID via SO_PEERCRED/LOCAL_PEERCRED before
-	// dispatching anything. This cannot be spoofed by the client: the
-	// kernel populates it from the actual connecting process.
+	// Excludes a different-UID peer, and nothing else: the agent runs as the
+	// daemon's own UID, so this check passes for it (ADR 0069). Kept as
+	// defence-in-depth; the token below is the boundary.
 	peerUID, uidErr := extractPeerUID(conn)
 	if !peerUIDAllowed(peerUID, os.Getuid(), uidErr) {
 		slog.Warn("grant control: rejecting connection", "peer_uid", peerUID, "daemon_uid", os.Getuid(), "err", uidErr)
@@ -216,6 +234,14 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	var req grantctl.Request
 	if err := json.NewDecoder(io.LimitReader(conn, grantctl.MaxControlMsgBytes)).Decode(&req); err != nil {
 		gs.reply(conn, grantctl.Response{OK: false, Error: "malformed grant control request"})
+		return
+	}
+
+	// Authenticate before dispatch, so a verb added later is gated by default
+	// rather than by remembering to gate it (ADR 0069).
+	if !ctlauth.Valid(req.CtlToken, gs.ctlToken) {
+		slog.Warn("grant control: rejecting request with an invalid control token", "type", req.Type)
+		gs.reply(conn, grantctl.Response{OK: false, Error: "unauthorized"})
 		return
 	}
 

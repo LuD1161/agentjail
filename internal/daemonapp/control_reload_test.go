@@ -72,7 +72,7 @@ func serveCtlFor(t *testing.T, srv *server) string {
 	t.Helper()
 
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
-	gs, err := newGrantServer(ctlSock, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, srv.reloadPolicy)
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, srv.reloadPolicy)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestDaemon_ControlReload_Success(t *testing.T) {
 	srv, _ := newTestServerWithReloadPaths(t, policyPath, "")
 	ctlSock := serveCtlFor(t, srv)
 
-	if err := grantctl.DaemonReload(ctlSock, 2*time.Second); err != nil {
+	if err := grantctl.DaemonReload(ctlSock, testCtlToken, 2*time.Second); err != nil {
 		t.Fatalf("expected reload to succeed, got %v", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestDaemon_ControlReload_Failure(t *testing.T) {
 		t.Fatalf("corrupt policy.yaml: %v", err)
 	}
 
-	err := grantctl.DaemonReload(ctlSock, 2*time.Second)
+	err := grantctl.DaemonReload(ctlSock, testCtlToken, 2*time.Second)
 	if err == nil {
 		t.Fatal("expected failure for malformed policy.yaml, got success")
 	}

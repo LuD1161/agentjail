@@ -14,6 +14,10 @@ import (
 	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
+// testCtlToken is the injected control token for tests. Injecting it keeps the
+// suite off the real ~/.agentjail/control.token.
+const testCtlToken = "test-control-token"
+
 // shortTempDir returns a short-lived temp directory whose path stays well
 // under the ~104-byte sockaddr_un limit (unlike t.TempDir(), which embeds the
 // full test name and can overflow it on macOS/BSD).
@@ -33,7 +37,7 @@ func TestGrantServerE2E_RequestListDeny(t *testing.T) {
 	reqSock := filepath.Join(tmpDir, "daemon.sock")
 
 	registry := grantctl.NewRegistry()
-	gs, err := newGrantServer(ctlSock, registry, audit.NopEmitter{}, false, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, false, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -79,7 +83,7 @@ func TestGrantServerE2E_RequestListDeny(t *testing.T) {
 	}
 
 	// List grants
-	grants, err := grantctl.GrantList(ctlSock, timeout)
+	grants, err := grantctl.GrantList(ctlSock, testCtlToken, timeout)
 	if err != nil {
 		t.Fatalf("GrantList: %v", err)
 	}
@@ -91,12 +95,12 @@ func TestGrantServerE2E_RequestListDeny(t *testing.T) {
 	}
 
 	// Deny
-	if err := grantctl.GrantDeny(ctlSock, grantID, timeout); err != nil {
+	if err := grantctl.GrantDeny(ctlSock, testCtlToken, grantID, timeout); err != nil {
 		t.Fatalf("GrantDeny: %v", err)
 	}
 
 	// Verify empty
-	grants, err = grantctl.GrantList(ctlSock, timeout)
+	grants, err = grantctl.GrantList(ctlSock, testCtlToken, timeout)
 	if err != nil {
 		t.Fatalf("GrantList after deny: %v", err)
 	}
@@ -111,7 +115,7 @@ func TestGrantServerE2E_ApproveDeniedWithoutAudit(t *testing.T) {
 
 	registry := grantctl.NewRegistry()
 	// durableAudit=false
-	gs, err := newGrantServer(ctlSock, registry, audit.NopEmitter{}, false, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, false, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -122,7 +126,7 @@ func TestGrantServerE2E_ApproveDeniedWithoutAudit(t *testing.T) {
 	go gs.serveCtl(ctx)
 
 	gi, _ := registry.RequestGrant("s1", "/tmp", "api.example.com", 3600000, "", time.Now())
-	if err := grantctl.GrantApprove(ctlSock, gi.GrantID, 3*time.Second); err == nil {
+	if err := grantctl.GrantApprove(ctlSock, testCtlToken, gi.GrantID, 3*time.Second); err == nil {
 		t.Fatal("expected approve to fail with durableAudit=false")
 	}
 }
@@ -133,7 +137,7 @@ func TestGrantServerE2E_UnboundGrantApproveRejected(t *testing.T) {
 
 	registry := grantctl.NewRegistry()
 	// durableAudit=true but grant has no BoundCWD
-	gs, err := newGrantServer(ctlSock, registry, audit.NopEmitter{}, true, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -145,7 +149,7 @@ func TestGrantServerE2E_UnboundGrantApproveRejected(t *testing.T) {
 
 	gi, _ := registry.RequestGrant("s1", "/tmp", "api.example.com", 3600000, "", time.Now())
 	// No SetBoundCWD called - grant is unbound
-	err = grantctl.GrantApprove(ctlSock, gi.GrantID, 3*time.Second)
+	err = grantctl.GrantApprove(ctlSock, testCtlToken, gi.GrantID, 3*time.Second)
 	if err == nil {
 		t.Fatal("expected approve to fail for unbound grant")
 	}
@@ -179,7 +183,7 @@ func TestHandleGrantRequest_CWDMismatchLeavesGrantUnbound(t *testing.T) {
 	// durableAudit=true so the ONLY reason approve can fail is the unbound
 	// grant, isolating the CWD-mismatch behavior from the audit-gate
 	// behavior already covered by TestGrantServerE2E_ApproveDeniedWithoutAudit.
-	gs, err := newGrantServer(ctlSock, registry, audit.NopEmitter{}, true, activeSessions, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, activeSessions, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -227,7 +231,7 @@ func TestHandleGrantRequest_CWDMismatchLeavesGrantUnbound(t *testing.T) {
 		t.Fatalf("handleGrantRequest failed: %s", gi.Error)
 	}
 
-	if err := grantctl.GrantApprove(ctlSock, gi.GrantID, 3*time.Second); err == nil {
+	if err := grantctl.GrantApprove(ctlSock, testCtlToken, gi.GrantID, 3*time.Second); err == nil {
 		t.Fatal("expected approve to fail: grant should be unbound because claimed CWD did not verify")
 	}
 
