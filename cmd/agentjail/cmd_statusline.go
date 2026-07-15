@@ -107,17 +107,31 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-func runStatusline(cmd *cobra.Command, args []string) {
-	var parts []string
-
+// shieldBadge renders the session's protection state. It always returns a
+// badge: silence is not an option here, because this status line is the only
+// channel that survives. agentjail-shield and the PATH shim warn on stderr when
+// a session is unprotected, but Claude Code takes over the terminal on startup
+// and those warnings scroll away unread — an unprotected session then looks
+// exactly like a protected one. See ADR 0064.
+//
+// Two states, keyed on shield activation only (ADR 0064): the badge attests
+// kernel-level enforcement, which is precisely what AGENTJAIL_SHIELDED records.
+// Rendering nothing is reserved for agentjail not being installed at all, which
+// happens by construction — uninstall removes the statusLine entry (ADR 0063),
+// so this code is not running.
+func shieldBadge() string {
 	if os.Getenv("AGENTJAIL_SHIELDED") == "1" {
-		byline := "🔒 [secured by \033[38;5;208magentjail\033[0m"
+		b := "🔒 [secured by \033[38;5;208magentjail\033[0m"
 		if v := displayVersion(); v != "" {
-			byline += " (" + v + ")"
+			b += " (" + v + ")"
 		}
-		byline += "]"
-		parts = append(parts, byline)
+		return b + "]"
 	}
+	return "⚠ [\033[1;31mUNSECURED\033[0m · \033[38;5;208magentjail\033[0m]"
+}
+
+func runStatusline(cmd *cobra.Command, args []string) {
+	parts := []string{shieldBadge()}
 
 	if statuslineChain != "" {
 		stdin, _ := io.ReadAll(os.Stdin)
@@ -135,7 +149,5 @@ func runStatusline(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if len(parts) > 0 {
-		fmt.Print(strings.Join(parts, " · "))
-	}
+	fmt.Print(strings.Join(parts, " · "))
 }
