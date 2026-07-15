@@ -56,8 +56,14 @@ func TestEnsure_FileIsOwnerOnly(t *testing.T) {
 	}
 }
 
-// TestEnsure_ConcurrentStartersAgree: two servers starting together must end up
-// with the same token, or clients authenticate against one and fail the other.
+// TestEnsure_ConcurrentStartersAgree: the daemon, netproxy, and secrets broker
+// all Ensure() at startup. They must end up with the same token, or clients
+// authenticate against one and fail the others — and none may error, because the
+// broker fails closed on a token error (ADR 0067) and would refuse to serve.
+//
+// Errors are collected rather than swallowed: the losing racer erroring out is
+// the exact failure this guards, so discarding err would report it as a
+// miscount and hide the cause.
 func TestEnsure_ConcurrentStartersAgree(t *testing.T) {
 	tempHome(t)
 
@@ -65,6 +71,7 @@ func TestEnsure_ConcurrentStartersAgree(t *testing.T) {
 	var (
 		mu   sync.Mutex
 		toks []string
+		errs []error
 		wg   sync.WaitGroup
 	)
 	for i := 0; i < n; i++ {
@@ -72,22 +79,54 @@ func TestEnsure_ConcurrentStartersAgree(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			tok, err := Ensure()
+			mu.Lock()
+			defer mu.Unlock()
 			if err != nil {
+				errs = append(errs, err)
 				return
 			}
-			mu.Lock()
 			toks = append(toks, tok)
-			mu.Unlock()
 		}()
 	}
 	wg.Wait()
 
+	for _, err := range errs {
+		t.Errorf("concurrent Ensure failed: %v", err)
+	}
 	if len(toks) != n {
 		t.Fatalf("expected %d successful Ensure calls, got %d", n, len(toks))
 	}
 	for _, tok := range toks {
 		if tok != toks[0] {
 			t.Fatal("concurrent Ensure calls produced different tokens")
+		}
+	}
+}
+
+// TestEnsure_ConcurrentStartersLeaveNoTempFiles: the write-then-link publish
+// must not litter ~/.agentjail with temp tokens. A stray readable token file is
+// a credential the read-deny list does not name (it lists control.token only),
+// so cleanup is a boundary concern, not tidiness.
+func TestEnsure_ConcurrentStartersLeaveNoTempFiles(t *testing.T) {
+	home := tempHome(t)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = Ensure()
+		}()
+	}
+	wg.Wait()
+
+	entries, err := os.ReadDir(filepath.Join(home, ".agentjail"))
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != TokenFileName {
+			t.Errorf("leftover file in ~/.agentjail after concurrent Ensure: %s", e.Name())
 		}
 	}
 }

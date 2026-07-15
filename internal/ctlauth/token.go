@@ -45,15 +45,30 @@ func TokenPathForHome(home string) string {
 }
 
 // Ensure returns the control token, creating it if absent. Servers call this at
-// startup. O_EXCL so concurrent starters converge on one value instead of
-// clobbering live clients' token (ADR 0067).
+// startup: the daemon, netproxy, and the secrets broker all do, concurrently.
+// Concurrent starters converge on one value instead of clobbering live clients'
+// token (ADR 0067).
 func Ensure() (string, error) {
 	return ensureAt(TokenPath())
 }
 
+// ensureAt publishes the token with write-then-link rather than O_EXCL on the
+// final path.
+//
+// O_EXCL alone is not enough here, despite excluding a second creator: it makes
+// the file visible EMPTY, before the write lands. A concurrent Ensure then sees
+// EEXIST, reads an empty file, and fails — so the loser of the race errors out
+// instead of adopting the winner's token. The secrets broker fails closed on a
+// token error (ADR 0067), so that race can refuse to serve the control plane at
+// startup, exactly when all three servers come up together.
+//
+// link() publishes a fully-written file in one atomic step and fails with
+// EEXIST if someone else got there first, which is the property O_EXCL was
+// reached for. The loser then reads a file that is complete by construction.
 func ensureAt(path string) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("ctlauth: mkdir %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("ctlauth: mkdir %s: %w", dir, err)
 	}
 
 	raw := make([]byte, tokenBytes)
@@ -62,17 +77,32 @@ func ensureAt(path string) (string, error) {
 	}
 	tok := hex.EncodeToString(raw)
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	tmp, err := os.CreateTemp(dir, ".control.token-*")
 	if err != nil {
+		return "", fmt.Errorf("ctlauth: create temp token in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }() // no-op once linked and unlinked below
+
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("ctlauth: chmod temp token: %w", err)
+	}
+	if _, err := tmp.WriteString(tok); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("ctlauth: write temp token: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("ctlauth: close temp token: %w", err)
+	}
+
+	if err := os.Link(tmpPath, path); err != nil {
 		if os.IsExist(err) {
-			// Someone won the race (or a previous run wrote it). Use theirs.
+			// Someone won the race (or a previous run wrote it). Use theirs —
+			// complete by construction, since it was linked only after writing.
 			return loadAt(path)
 		}
-		return "", fmt.Errorf("ctlauth: create %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(tok); err != nil {
-		return "", fmt.Errorf("ctlauth: write %s: %w", path, err)
+		return "", fmt.Errorf("ctlauth: link token into %s: %w", path, err)
 	}
 	return tok, nil
 }
