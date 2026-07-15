@@ -15,7 +15,7 @@
 //     with ProgramArguments patched to ~/.agentjail/bin/agentjail-daemon.
 //     - Linux: the systemd --user unit at
 //     ~/.config/systemd/user/agentjail-daemon.service with ExecStart patched
-//     to ~/.agentjail/bin/agentjail-daemon and Restart=on-failure.
+//     to ~/.agentjail/bin/agentjail-daemon and Restart=always.
 //  6. (Re)starts the daemon: launchctl unload/load on macOS, `systemctl --user
 //     enable --now` + `restart` on Linux. When no systemd user session is
 //     reachable (e.g. a bare container with no login session), the unit is
@@ -1921,8 +1921,15 @@ func systemdUserUnitDir(home string) string {
 //     output) across restarts, appended rather than truncated so a crash loop
 //     doesn't erase prior history
 //
-// Restart=on-failure + RestartSec gives the daemon the same self-recovery
-// launchd's KeepAlive provides on macOS. WantedBy=default.target (not
+// Restart=always + RestartSec gives the daemon the same self-recovery
+// launchd's KeepAlive=true provides on macOS. It must be "always", not
+// "on-failure": the auto-updater deliberately exits 0 after swapping binaries
+// and relies on the supervisor to bring the new daemon back (see
+// daemonapp.UpdateChecker), and systemd does not restart a clean exit under
+// on-failure — which left the Linux daemon down permanently and silently
+// after every auto-update. An explicit `systemctl --user stop` still stops
+// the unit for good; Restart=always does not override a manual stop.
+// WantedBy=default.target (not
 // graphical-session.target) so the unit starts in headless/SSH user sessions
 // too, not only desktop logins.
 const systemdUnitTemplate = `[Unit]
@@ -1931,7 +1938,7 @@ After=default.target
 
 [Service]
 ExecStart=__DAEMON_PATH__ --rules=__RULES_DIR__ --log=__LOG_PATH__
-Restart=on-failure
+Restart=always
 RestartSec=2
 StandardOutput=append:__CRASH_LOG_PATH__
 StandardError=append:__CRASH_LOG_PATH__
