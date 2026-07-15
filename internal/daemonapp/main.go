@@ -39,8 +39,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -85,6 +87,11 @@ type server struct {
 	eventStore store.EventStore
 	decCh      chan store.DecisionRecord
 	decWg      sync.WaitGroup
+
+	// decDropped counts decisions the writer could not persist. Incremented
+	// on the hot path (atomic, no IO); flushed to a decisions.dropped audit
+	// event by drainDecisions so under-recording is visible (ADR 0072).
+	decDropped atomic.Int64
 
 	// activeSessions tracks which session IDs have open connections.
 	activeSessions *activeTracker
@@ -154,6 +161,11 @@ func (s *server) recordPolicyConfig(cfg *agentconfig.PolicyConfig, rulesDir stri
 	}
 }
 
+// droppedDecisionFlushInterval bounds how often the writer turns dropped
+// decisions into an audit event — often enough to bound the loss window,
+// rarely enough that a saturated store is not hammered further (ADR 0072).
+const droppedDecisionFlushInterval = 30 * time.Second
+
 // enqueueDecision enqueues a decision record for async SQLite persistence
 // (ADR 0018). Fail-open: if the store is nil or the buffer is full, the
 // record is dropped with a Warn log — the policy decision was already
@@ -166,7 +178,26 @@ func (s *server) enqueueDecision(d store.DecisionRecord) {
 	select {
 	case s.decCh <- d:
 	default:
+		s.decDropped.Add(1)
 		slog.Warn("store buffer full; dropping decision record (fail-open on logging)", "session_id", d.SessionID, "action", d.Action)
+	}
+}
+
+// flushDroppedDecisions emits a decisions.dropped audit event for any
+// decisions lost since the last flush, so a silent under-recording window
+// leaves a durable trace (ADR 0072). Best-effort and off the hot path: the
+// count is restored on failure so the next flush retries it.
+func (s *server) flushDroppedDecisions(ctx context.Context) {
+	n := s.decDropped.Swap(0)
+	if n == 0 {
+		return
+	}
+	if err := s.eventStore.Emit(ctx, audit.Event{
+		EventType: audit.DecisionsDropped,
+		Detail:    map[string]string{"count": strconv.FormatInt(n, 10)},
+	}); err != nil {
+		s.decDropped.Add(n)
+		slog.Warn("audit emit failed for dropped decisions", "count", n, "err", err)
 	}
 }
 
@@ -175,21 +206,29 @@ func (s *server) enqueueDecision(d store.DecisionRecord) {
 // so graceful shutdown flushes pending writes.
 func (s *server) drainDecisions(ctx context.Context) {
 	defer s.decWg.Done()
+	tick := time.NewTicker(droppedDecisionFlushInterval)
+	defer tick.Stop()
 	for {
 		select {
 		case d := <-s.decCh:
 			if err := s.eventStore.RecordDecision(ctx, d); err != nil {
+				s.decDropped.Add(1)
 				slog.Warn("store write decision failed (fail-open)", "err", err, "session_id", d.SessionID)
 			}
+		case <-tick.C:
+			s.flushDroppedDecisions(ctx)
 		case <-ctx.Done():
 			// Flush remaining records before exiting.
 			for {
 				select {
 				case d := <-s.decCh:
 					if err := s.eventStore.RecordDecision(context.Background(), d); err != nil {
+						s.decDropped.Add(1)
 						slog.Warn("store write decision failed during drain", "err", err)
 					}
 				default:
+					// Record the shutdown's own losses too, on a live context.
+					s.flushDroppedDecisions(context.Background())
 					return
 				}
 			}
