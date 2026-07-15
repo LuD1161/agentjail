@@ -56,6 +56,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +73,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/ui"
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // plistLabel is the launchd service identifier.
@@ -1743,17 +1745,20 @@ func launchctlUnload(plistPath string) error {
 	return selfupdate.LaunchctlUnload(plistPath)
 }
 
-// isDaemonRunning asks the platform service manager whether the daemon
-// service is active: launchctl on macOS, systemctl --user on Linux.
+// daemonProbeTimeout caps the liveness dial so status can never hang; a
+// healthy local answer arrives in well under a millisecond.
+const daemonProbeTimeout = 200 * time.Millisecond
+
+// isDaemonRunning reports whether a daemon is listening, by dialing the socket
+// every other client uses. Deliberately not a service-manager query and not a
+// stat: see ADR 0061.
 func isDaemonRunning() bool {
-	if currentGOOS == "darwin" {
-		out, err := exec.Command("launchctl", "list", plistLabel).Output()
-		if err != nil {
-			return false
-		}
-		return len(out) > 0
+	conn, err := net.DialTimeout("unix", wire.DefaultSocketPath(), daemonProbeTimeout)
+	if err != nil {
+		return false
 	}
-	return exec.Command("systemctl", "--user", "is-active", "--quiet", systemdUnitFilename).Run() == nil
+	_ = conn.Close()
+	return true
 }
 
 // ---- systemd --user (Linux) helpers ----------------------------------------
