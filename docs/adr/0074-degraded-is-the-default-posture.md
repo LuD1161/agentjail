@@ -85,13 +85,27 @@ daemon has never run. Closing that would mean teaching the hook a hardcoded rule
 set, which contradicts ADR 0050's "the daemon owns the rule definitions; the hook
 is a dumb, fast matcher" split — worth doing only with a reason to reopen it.
 
-Drift risk, inherited from ADR 0050 and now load-bearing for the default rather
-than an opt-in: `compileOfflineRules` is kept in sync **by hand** with
-`resolver.rego`'s `locked_rules`, `file_policy.rego`, and `command_policy.rego`.
-If a locked rule changes online and not offline, `degraded` quietly stops
-mirroring it. The subset argument this ADR rests on holds only while that sync
-holds. A test asserting the two sets agree would make it structural; that does
-not exist today.
+Drift risk, inherited from ADR 0050 and load-bearing for a default in a way it
+never was for an opt-in: `compileOfflineRules` mirrors `resolver.rego`'s
+`locked_rules` and `command_policy.rego` **by hand**, so the subset argument
+above was a convention, not a mechanism.
+
+`internal/daemonapp/offlinerules_drift_test.go` now makes it a mechanism. It
+reads the rego source (not the compiled bundle — `locked_rules` is a Rego
+constant precisely so it sits outside anything Go or config can influence) and
+asserts both directions:
+
+- No offline rule ID or command pattern exists that is not locked online — the
+  containment property the default depends on.
+- No locked rule goes unmirrored offline without being a **named** exception
+  (`resolver/default` is the resolver's own fallthrough verdict, not a matchable
+  tool-call rule; the shell-redirect pattern needs a Bash path scan the hook
+  does not do). Under-matching is safe for the argument, but it should be a
+  decision rather than an accident.
+
+Drift is therefore a test failure, not a silent weakening. The tests are
+mutation-tested against the rego side: adding a locked rule, loosening an online
+pattern, or introducing an unlocked offline rule each fail them.
 
 Related: ADR 0050 (the mechanism and the tiers), ADR 0073 (the fail-open notice
 now rides `systemMessage`, so the user actually sees the level), ADR 0066 /
