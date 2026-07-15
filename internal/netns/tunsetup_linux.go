@@ -52,9 +52,22 @@ const (
 	// then execve's the agent. Used by AgentCommand via nsenter.
 	reexecHardenArg = "__agentjail_harden_exec"
 
+	// hardenLandlockFDFlag precedes the fd number of an inherited Landlock
+	// ruleset in the harden shim's args. When present, the shim applies that
+	// ruleset (landlock_restrict_self) AFTER nsenter has joined the namespaces
+	// (AGE-166) — the shield cannot restrict itself before nsenter because
+	// nsenter must open the holder's nsfs ns files, which Landlock cannot cover.
+	hardenLandlockFDFlag = "--landlock-fd"
+
 	// tunHandoffFD is the fd number the inherited handoff socket lands on in the
 	// re-exec'd holder (ExtraFiles[0] => fd 3).
 	tunHandoffFD = 3
+
+	// landlockHandoffFD is the fd number an inherited Landlock ruleset lands on
+	// in the harden shim. exec.Cmd.ExtraFiles[0] is deterministically dup'd to
+	// fd 3 in the immediate child (nsenter), and survives (CLOEXEC cleared) the
+	// execve into the shim, so the shim reads the ruleset from fd 3.
+	landlockHandoffFD = 3
 
 	// TUNIfName is the TUN interface name created inside the agent's netns.
 	TUNIfName = "ajtun0"
@@ -292,10 +305,16 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 //
 // It execs, via nsenter joining the holder's user+net+mount namespaces, a
 // re-exec shim (reexecHardenArg) that applies ApplyHardening (PR_SET_NO_NEW_PRIVS,
-// cap-drop, SECBIT_NOROOT, non-dumpable) and then execve's the agent. Landlock,
-// already applied to the shield before this fork, is inherited across nsenter,
-// the shim, and the agent.
-func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string) *exec.Cmd {
+// cap-drop, SECBIT_NOROOT, non-dumpable) and then execve's the agent.
+//
+// landlockFD, when >= 0, is an OPEN Landlock ruleset fd built by the shield.
+// Because nsenter must open the holder's nsfs ns files — which Landlock cannot
+// cover — the shield cannot restrict itself before nsenter (AGE-166). Instead
+// the ruleset fd is inherited by the shim (via ExtraFiles => fd landlockHandoffFD)
+// and the shim calls landlock_restrict_self AFTER nsenter, so the agent is
+// FS-sandboxed without breaking namespace entry. Pass -1 to skip Landlock (e.g.
+// unsupported kernel / fail-open).
+func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlockFD int) *exec.Cmd {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = "/proc/self/exe"
@@ -305,16 +324,40 @@ func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string) *exec.Cm
 		"--user", "--preserve-credentials",
 		"--net", "--mount",
 		"--",
-		exe, reexecHardenArg, "--", agentPath,
+		exe, reexecHardenArg,
 	}
+	if landlockFD >= 0 {
+		args = append(args, hardenLandlockFDFlag, strconv.Itoa(landlockHandoffFD))
+	}
+	args = append(args, "--", agentPath)
 	args = append(args, agentArgs...)
-	return exec.Command("nsenter", args...)
+	cmd := exec.Command("nsenter", args...)
+	if landlockFD >= 0 {
+		// Dup'd to fd landlockHandoffFD in nsenter (CLOEXEC cleared), inherited
+		// by the shim across nsenter's execve.
+		cmd.ExtraFiles = []*os.File{os.NewFile(uintptr(landlockFD), "landlock-ruleset")}
+	}
+	return cmd
 }
 
 // runHardenExec is the hardened-exec shim entrypoint. It runs after nsenter has
-// joined the agent's namespaces. Args (after reexecHardenArg): ["--", agentPath,
-// agentArgs...]. It hardens the current process, then execve's the agent.
+// joined the agent's namespaces. Args (after reexecHardenArg):
+// [[--landlock-fd N] "--" agentPath agentArgs...]. It hardens the current
+// process, applies the inherited Landlock ruleset (if any) now that nsenter is
+// done, then execve's the agent.
 func runHardenExec(args []string) {
+	// Optional inherited Landlock ruleset fd, applied AFTER nsenter (AGE-166).
+	landlockFD := -1
+	if len(args) >= 2 && args[0] == hardenLandlockFDFlag {
+		fd, err := strconv.Atoi(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "netns harden-exec: bad %s value %q: %v\n", hardenLandlockFDFlag, args[1], err)
+			os.Exit(2)
+		}
+		landlockFD = fd
+		args = args[2:]
+	}
+
 	// Strip the leading "--" separator that AgentCommand inserts.
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
@@ -327,6 +370,18 @@ func runHardenExec(args []string) {
 	if err := ApplyHardening(); err != nil {
 		fmt.Fprintf(os.Stderr, "netns harden-exec: hardening failed: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Apply the Landlock ruleset the shield built, now that we are inside the
+	// namespaces (so nsenter's nsfs ns-file open is not blocked; AGE-166).
+	// ApplyHardening already set PR_SET_NO_NEW_PRIVS (a restrict_self
+	// precondition). This is irreversible; the agent inherits it across execve.
+	if landlockFD >= 0 {
+		if _, _, errno := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, uintptr(landlockFD), 0, 0); errno != 0 {
+			fmt.Fprintf(os.Stderr, "netns harden-exec: landlock_restrict_self(fd %d): %v\n", landlockFD, errno)
+			os.Exit(1)
+		}
+		_ = unix.Close(landlockFD)
 	}
 
 	if err := syscall.Exec(args[0], args, os.Environ()); err != nil {

@@ -257,9 +257,36 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
+	// Landlock application differs between the two exec paths (AGE-166):
+	//
+	//   - Non-tunnel: restrict the shield itself now; the agent child inherits
+	//     the restriction across fork/exec (applyLandlock).
+	//   - Tunnel: the agent is exec'd via nsenter, which must open the holder's
+	//     /proc/<pid>/ns/{user,net,mnt}. Those are nsfs inodes Landlock cannot
+	//     cover (landlock_add_rule returns EBADFD on nsfs), so restricting the
+	//     shield BEFORE nsenter denies that open (nsenter: cannot open
+	//     /proc/<pid>/ns/user: Permission denied). Instead we BUILD the ruleset
+	//     here (no restrict_self) and hand the fd to the post-nsenter harden
+	//     shim, which calls restrict_self AFTER it has joined the namespaces.
+	//     The agent still ends up fully FS-sandboxed; only the timing moves.
+	//
+	// landlockRulesetFD is >= 0 only in the tunnel path when a ruleset was
+	// successfully built; it is passed to AgentCommand for in-shim restrict.
+	landlockRulesetFD := -1
+	var landlockErr error
+	if tunnelSess != nil {
+		fd, err := buildLandlockRuleset(cfg, netproxyPort)
+		landlockErr = err
+		if err == nil {
+			landlockRulesetFD = fd
+		}
+	} else {
+		landlockErr = applyLandlock(cfg, netproxyPort)
+	}
+
 	// Apply Landlock to the current process.  The agent (run as a child
 	// below) inherits all Landlock restrictions.
-	if err := applyLandlock(cfg, netproxyPort); err != nil {
+	if err := landlockErr; err != nil {
 		if errors.Is(err, errLandlockUnsupported) {
 			stepFail(noColor, "Landlock unavailable — sandbox enforcement disabled")
 			fmt.Fprintf(os.Stderr, "  Requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y.\n"+
@@ -328,11 +355,13 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// When the transparent tunnel is active, the agent must run INSIDE the
 	// network namespace so its traffic hits the TUN/forwarder. AgentCommand
 	// runs it via nsenter + a hardening shim (cap-drop + secbits) so the
-	// uid-0-in-userns agent cannot regain privileges. Landlock — applied above,
-	// before this fork — is inherited across nsenter, the shim, and the agent.
+	// uid-0-in-userns agent cannot regain privileges. The Landlock ruleset built
+	// above is handed to the shim via landlockRulesetFD, which applies
+	// restrict_self AFTER nsenter has joined the namespaces (AGE-166) — so the
+	// agent is FS-sandboxed without blocking nsenter's open of the nsfs ns files.
 	var agentCmd *exec.Cmd
 	if tunnelSess != nil {
-		agentCmd = tunnelSess.ns.AgentCommand(agentPath, agentArgs)
+		agentCmd = tunnelSess.ns.AgentCommand(agentPath, agentArgs, landlockRulesetFD)
 	} else {
 		agentCmd = exec.Command(agentPath, agentArgs...)
 	}
@@ -417,14 +446,53 @@ func formatDuration(d time.Duration) string {
 // allowed_access. This means cross-directory rename/hardlink is denied by
 // default on v2+ kernels (safe). On v1 kernels REFER is unavailable and such
 // operations follow legacy DAC — an acceptable trade-off for older kernels.
+//
+// applyLandlock restricts the CURRENT process (and its fork/exec descendants).
+// It is used by the non-tunnel path, where the shield itself is the direct
+// parent of the agent. The transparent-tunnel path instead builds the ruleset
+// with buildLandlockRuleset and hands the fd to the post-nsenter harden shim,
+// which calls restrict_self AFTER nsenter has joined the namespaces — see
+// restrictSelfWithRuleset and the AGE-166 note in runShield.
 func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
+	rulesetFd, err := buildLandlockRuleset(cfg, netproxyPort)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(rulesetFd)
+	return restrictSelfWithRuleset(rulesetFd)
+}
+
+// restrictSelfWithRuleset irreversibly applies an already-built Landlock
+// ruleset fd to the current process. PR_SET_NO_NEW_PRIVS is a precondition for
+// landlock_restrict_self; it is idempotent, so setting it here is safe even
+// when the caller (the harden shim) already set it via ApplyHardening.
+func restrictSelfWithRuleset(rulesetFd int) error {
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return fmt.Errorf("prctl(PR_SET_NO_NEW_PRIVS): %w", err)
+	}
+	if _, _, errno := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, uintptr(rulesetFd), 0, 0); errno != 0 {
+		return fmt.Errorf("landlock_restrict_self: %w", errno)
+	}
+	return nil
+}
+
+// buildLandlockRuleset probes the Landlock ABI, constructs the ruleset, and
+// adds every filesystem and network allow-rule, returning the OPEN ruleset fd
+// WITHOUT calling landlock_restrict_self. The caller owns the fd and must
+// either apply it (restrictSelfWithRuleset) and close it, or hand it to the
+// process that will (the transparent-tunnel harden shim). Splitting build from
+// restrict lets the tunnel path defer restrict_self until AFTER nsenter has
+// entered the namespaces: nsenter opens the holder's /proc/<pid>/ns/* (nsfs
+// inodes that Landlock cannot grant — landlock_add_rule returns EBADFD on
+// nsfs), so restricting before nsenter would deny that open (AGE-166).
+func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, error) {
 	// Probe supported Landlock ABI version (ruleset_attr=NULL, size=0, flags=VERSION).
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if errno != 0 {
 		if errno == unix.ENOSYS || errno == unix.EOPNOTSUPP {
-			return errLandlockUnsupported
+			return -1, errLandlockUnsupported
 		}
-		return fmt.Errorf("landlock_create_ruleset(probe): %w", errno)
+		return -1, fmt.Errorf("landlock_create_ruleset(probe): %w", errno)
 	}
 
 	// v1 (Linux 5.13) base FS access set — excludes REFER/TRUNCATE/IOCTL_DEV.
@@ -473,10 +541,9 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET,
 		uintptr(unsafe.Pointer(&rulesetAttr)), unsafe.Sizeof(rulesetAttr), 0)
 	if errno != 0 {
-		return fmt.Errorf("landlock_create_ruleset: %w", errno)
+		return -1, fmt.Errorf("landlock_create_ruleset: %w", errno)
 	}
 	rulesetFd := int(fd)
-	defer unix.Close(rulesetFd)
 
 	// Read-write access: places where the agent legitimately writes output.
 	// The & handled masking inside allowPath ensures we never request bits
@@ -529,7 +596,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Allow read-write on /tmp and cwd.
 	for _, p := range []string{"/tmp", cwd} {
 		if err := allowPath(p, rwAccess); err != nil {
-			return fmt.Errorf("allow %s: %w", p, err)
+			return -1, fmt.Errorf("allow %s: %w", p, err)
 		}
 	}
 
@@ -640,12 +707,12 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	}
 	for _, p := range roSysDirs {
 		if err := allowPath(p, roAccess); err != nil {
-			return fmt.Errorf("allow %s: %w", p, err)
+			return -1, fmt.Errorf("allow %s: %w", p, err)
 		}
 	}
 	// /dev needs write access for /dev/null, /dev/zero, /dev/urandom, ptys, etc.
 	if err := allowPath("/dev", rwAccess); err != nil {
-		return fmt.Errorf("allow /dev: %w", err)
+		return -1, fmt.Errorf("allow /dev: %w", err)
 	}
 
 	// Resolve common runtime binaries that MCP servers depend on. If they
@@ -720,7 +787,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	if cfg != nil {
 		for _, p := range cfg.File.ExtraAllow {
 			if err := allowPath(p, rwAccess); err != nil {
-				return fmt.Errorf("allow extra %s: %w", p, err)
+				return -1, fmt.Errorf("allow extra %s: %w", p, err)
 			}
 		}
 	}
@@ -740,7 +807,7 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 			if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE,
 				uintptr(rulesetFd), uintptr(landlockRuleNetPort),
 				uintptr(unsafe.Pointer(&netAttr)), 0, 0, 0); e != 0 {
-				return fmt.Errorf("landlock_add_rule(net connect port %d): %w", port, e)
+				return -1, fmt.Errorf("landlock_add_rule(net connect port %d): %w", port, e)
 			}
 		}
 		for _, port := range netPlan.BindPorts {
@@ -756,19 +823,11 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		}
 	}
 
-	// PR_SET_NO_NEW_PRIVS: required before landlock_restrict_self.
-	// Prevents the sandboxed process from gaining privileges via setuid/setgid.
-	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
-		return fmt.Errorf("prctl(PR_SET_NO_NEW_PRIVS): %w", err)
-	}
-
-	// Apply the ruleset.  From this point forward, the process and all
-	// its descendants are restricted.  This call is irreversible.
-	if _, _, errno := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, uintptr(rulesetFd), 0, 0); errno != 0 {
-		return fmt.Errorf("landlock_restrict_self: %w", errno)
-	}
-
-	return nil
+	// The ruleset is fully populated but NOT yet applied. restrict_self is the
+	// caller's responsibility (restrictSelfWithRuleset): the non-tunnel path
+	// applies it here in the shield; the tunnel path applies it in the harden
+	// shim after nsenter. Both set PR_SET_NO_NEW_PRIVS immediately before.
+	return rulesetFd, nil
 }
 
 func step(noColor bool, msg string) {
