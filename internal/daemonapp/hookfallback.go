@@ -24,7 +24,7 @@ import (
 func writeHookFallback(cfg *agentconfig.PolicyConfig) error {
 	level := string(cfg.DaemonUnreachable)
 	if level == "" {
-		level = string(agentconfig.DaemonUnreachableAllow)
+		level = string(agentconfig.DaemonUnreachableDegraded)
 	}
 
 	fb := wire.HookFallback{

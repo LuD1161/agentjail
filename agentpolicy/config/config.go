@@ -61,9 +61,9 @@ type PolicyConfig struct {
 	// daemon serializes the resolved level into the hook-fallback sidecar
 	// (internal/wire.HookFallbackPath) on startup and every SIGHUP reload.
 	//
-	// Empty string defaults to DaemonUnreachableAllow (fail-open, current
-	// behavior) so upgrading is behavior-preserving. Load/decode rejects any
-	// non-empty value that is not one of the three named levels.
+	// Empty string defaults to DaemonUnreachableDegraded (ADR 0074).
+	// Load/decode rejects any non-empty value that is not one of the three
+	// named levels.
 	DaemonUnreachable DaemonUnreachableLevel `yaml:"daemon_unreachable"`
 }
 
@@ -73,13 +73,14 @@ type DaemonUnreachableLevel string
 
 const (
 	// DaemonUnreachableAllow fails open: the tool call is allowed exactly as
-	// before this feature existed. Default when unset.
+	// before this feature existed. Opt-in since ADR 0074.
 	DaemonUnreachableAllow DaemonUnreachableLevel = "allow"
 
 	// DaemonUnreachableDegraded enforces a small offline critical denylist
 	// (the locked-rule set, compiled by the daemon into the sidecar's
 	// OfflineRules) via stdlib pattern-matching in the hook; everything else
 	// is allowed. Reduced-but-nonzero protection, work continues.
+	// Default when unset (ADR 0074).
 	DaemonUnreachableDegraded DaemonUnreachableLevel = "degraded"
 
 	// DaemonUnreachableDeny fails closed: the tool call is denied with a
@@ -617,9 +618,10 @@ func Default() *PolicyConfig {
 			Blocked: []string{},
 			Ask:     []string{},
 		},
-		// DaemonUnreachable: fail-open by default so upgrading is
-		// behavior-preserving (ADR 0050). Users opt into degraded/deny.
-		DaemonUnreachable: DaemonUnreachableAllow,
+		// DaemonUnreachable: degraded by default — the offline denials are a
+		// subset of the permanently-locked online rules, so no working call is
+		// newly refused (ADR 0074, superseding 0050's allow default).
+		DaemonUnreachable: DaemonUnreachableDegraded,
 	}
 }
 
@@ -851,15 +853,15 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Skills.Ask = append([]string(nil), base.Skills.Ask...)
 	}
 
-	// DaemonUnreachable — overlay wins if set, else base, else the fail-safe
-	// "allow" default (mirrors AWS.DefaultPosture's three-way fallback above).
+	// DaemonUnreachable — overlay wins if set, else base, else the "degraded"
+	// default (mirrors AWS.DefaultPosture's three-way fallback above).
 	switch {
 	case overlay.DaemonUnreachable != "":
 		result.DaemonUnreachable = overlay.DaemonUnreachable
 	case base.DaemonUnreachable != "":
 		result.DaemonUnreachable = base.DaemonUnreachable
 	default:
-		result.DaemonUnreachable = DaemonUnreachableAllow
+		result.DaemonUnreachable = DaemonUnreachableDegraded
 	}
 
 	return result
