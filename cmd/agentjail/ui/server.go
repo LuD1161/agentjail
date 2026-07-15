@@ -41,6 +41,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
+	"github.com/LuD1161/agentjail/internal/procutil"
 	localstore "github.com/LuD1161/agentjail/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -1205,26 +1206,36 @@ func getRulesDir() (string, error) {
 // concurrently under go test ./...).
 var sighupDaemonFn = sighupDaemon
 
+// daemonProcessName is the daemon binary's name, as reported by the kernel.
+const daemonProcessName = "agentjail-daemon"
+
 // sighupDaemon sends SIGHUP to the agentjail-daemon process if found.
+//
+// Candidates are verified against their comm: `pgrep -f` matches any process
+// whose command LINE contains the pattern (a build, a test binary, an editor),
+// and SIGHUP terminates by default, so an unverified match could kill an
+// unrelated process. Skips ourselves.
 func sighupDaemon() {
-	out, err := exec.Command("pgrep", "-f", "agentjail-daemon").Output()
+	out, err := exec.Command("pgrep", "-f", daemonProcessName).Output()
 	if err != nil {
 		return
 	}
-	line := strings.TrimSpace(string(out))
-	if line == "" {
+	self := os.Getpid()
+	for _, field := range strings.Fields(strings.TrimSpace(string(out))) {
+		pid, convErr := strconv.Atoi(field)
+		if convErr != nil || pid <= 1 || pid == self {
+			continue
+		}
+		if !procutil.PIDHasComm(pid, daemonProcessName) {
+			continue
+		}
+		proc, findErr := os.FindProcess(pid)
+		if findErr != nil {
+			return
+		}
+		_ = proc.Signal(syscall.SIGHUP)
 		return
 	}
-	parts := strings.Fields(line)
-	pid, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return
-	}
-	_ = proc.Signal(syscall.SIGHUP)
 }
 
 // isLoopback reports whether the host part of addr is a loopback address.

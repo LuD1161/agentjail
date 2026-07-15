@@ -4,6 +4,40 @@
 // claude, codex, or cursor) by walking up the parent-PID chain.
 package procutil
 
+import "strings"
+
+// commTruncateLen is the longest comm the kernel will report. Linux caps
+// /proc/<pid>/comm at 15 bytes (TASK_COMM_LEN-1) and Darwin's p_comm is
+// similarly bounded, so any process name at or beyond this length is only
+// ever observable as a prefix.
+const commTruncateLen = 15
+
+// CommMatches reports whether the kernel-reported comm of a process refers to
+// the binary named want.
+//
+// It exists because a name like "agentjail-daemon" (16 bytes) is NEVER
+// reported verbatim on Linux — comm is "agentjail-daemo". A plain equality
+// check against the full name silently matches nothing, so callers must
+// compare through this function rather than against comm directly.
+//
+// A truncated comm is accepted only at exactly the kernel's cap, so this
+// stays a truncation rule and not a loose prefix match ("a" never matches).
+func CommMatches(comm, want string) bool {
+	if comm == "" || want == "" {
+		return false
+	}
+	if comm == want {
+		return true
+	}
+	return len(comm) >= commTruncateLen && len(comm) < len(want) && strings.HasPrefix(want, comm)
+}
+
+// PIDHasComm reports whether pid is a live process whose comm refers to the
+// binary named want. Returns false if the process is gone or unreadable.
+func PIDHasComm(pid int, want string) bool {
+	return CommMatches(readComm(pid), want)
+}
+
 // ReadProcessComm returns the command name (comm) for the given PID, or ""
 // if it cannot be determined. The implementation is platform-specific.
 func ReadProcessComm(pid int) string {
