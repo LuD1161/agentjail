@@ -105,6 +105,10 @@ type daemonResponse = wire.Response
 //	{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"..."}}
 type claudeHookOutput struct {
 	HookSpecificOutput claudePermissionOutput `json:"hookSpecificOutput"`
+	// SystemMessage is surfaced to the user in the normal TUI. On an exit-0
+	// allow it is the ONLY channel that reaches them — Claude Code sends hook
+	// stderr to the debug log only (ADR 0073).
+	SystemMessage string `json:"systemMessage,omitempty"`
 }
 
 type claudePermissionOutput struct {
@@ -265,7 +269,7 @@ func failOpenClaudeLike(agent, category, detail, toolName string, toolInput map[
 	if agent == "codex" {
 		os.Exit(0)
 	}
-	writeAllow(decision.Reason)
+	writeAllowWithSystemMessage(decision.Reason, failOpenSystemMessage(fb.Level))
 	os.Exit(0)
 }
 
@@ -313,12 +317,20 @@ func printPolicyEval(noColor bool, toolName, action, ruleID, reason string, ms i
 
 // writeAllow writes a Claude Code "allow" hook response to stdout.
 func writeAllow(reason string) {
+	writeAllowWithSystemMessage(reason, "")
+}
+
+// writeAllowWithSystemMessage writes an "allow" response carrying a
+// user-visible systemMessage. Used by the fail-open path, where stderr would
+// otherwise be swallowed (ADR 0073). An empty msg is omitted from the JSON.
+func writeAllowWithSystemMessage(reason, msg string) {
 	out := claudeHookOutput{
 		HookSpecificOutput: claudePermissionOutput{
 			HookEventName:            "PreToolUse",
 			PermissionDecision:       "allow",
 			PermissionDecisionReason: reason,
 		},
+		SystemMessage: msg,
 	}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(out)
