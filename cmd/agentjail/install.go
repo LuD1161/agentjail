@@ -1921,14 +1921,8 @@ func systemdUserUnitDir(home string) string {
 //     output) across restarts, appended rather than truncated so a crash loop
 //     doesn't erase prior history
 //
-// Restart=always + RestartSec gives the daemon the same self-recovery
-// launchd's KeepAlive=true provides on macOS. It must be "always", not
-// "on-failure": the auto-updater deliberately exits 0 after swapping binaries
-// and relies on the supervisor to bring the new daemon back (see
-// daemonapp.UpdateChecker), and systemd does not restart a clean exit under
-// on-failure — which left the Linux daemon down permanently and silently
-// after every auto-update. An explicit `systemctl --user stop` still stops
-// the unit for good; Restart=always does not override a manual stop.
+// Restart=always (NOT on-failure — the auto-updater exits 0 and relies on the
+// supervisor to restart it; ADR 0070) matches launchd KeepAlive=true on macOS.
 // WantedBy=default.target (not
 // graphical-session.target) so the unit starts in headless/SSH user sessions
 // too, not only desktop logins.

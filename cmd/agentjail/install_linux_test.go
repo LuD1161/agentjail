@@ -90,16 +90,13 @@ func TestInstallSystemdUnitContent(t *testing.T) {
 			t.Errorf("unit missing section %q\ngot:\n%s", section, content)
 		}
 	}
-	// Must be "always", not "on-failure": the auto-updater exits 0 after
-	// swapping binaries and relies on the supervisor to restart the daemon,
-	// and systemd does not restart a clean exit under on-failure — that left
-	// the Linux daemon down permanently and silently after every auto-update,
-	// while macOS (KeepAlive=true) recovered. Keep the two platforms at parity.
+	// Must be "always", not "on-failure" — the auto-updater exits 0 and relies
+	// on the supervisor to restart it (ADR 0070).
 	if !strings.Contains(content, "Restart=always") {
-		t.Errorf("unit missing Restart=always (self-recovery incl. clean exit-0 from auto-update)\ngot:\n%s", content)
+		t.Errorf("unit missing Restart=always (self-recovery incl. clean exit-0)\ngot:\n%s", content)
 	}
 	if strings.Contains(content, "Restart=on-failure") {
-		t.Errorf("unit must not use Restart=on-failure — it strands the daemon after the auto-updater's exit(0)\ngot:\n%s", content)
+		t.Errorf("unit must not use Restart=on-failure — it strands the daemon after exit(0)\ngot:\n%s", content)
 	}
 	if !strings.Contains(content, "ExecStart="+daemonBin) {
 		t.Errorf("unit ExecStart does not reference daemon binary %q\ngot:\n%s", daemonBin, content)
