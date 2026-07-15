@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" fill="none">
+  <rect width="720" height="220" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Title bar -->
+  <rect x="0" y="0" width="720" height="48" rx="12" fill="#161b22"/>
+  <rect x="0" y="12" width="720" height="36" fill="#161b22"/>
+  <circle cx="24" cy="24" r="6" fill="#3fb950"/>
+  <text x="44" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v0.8.1</text>
+  <text x="210" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Release-gate hardening (macOS testbed) - no shipped-binary change</text>
+
+  <!-- Card 1: real error, fast fail -->
+  <rect x="20" y="60" width="216" height="144" rx="8" fill="#1c2128" stroke="#3fb95044" stroke-width="1"/>
+  <text x="36" y="80" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950">REAL ERROR, FAST FAIL</text>
+  <text x="36" y="100" font-family="monospace" font-size="10" fill="#8b949e">was: "VM never got an IP"</text>
+  <text x="36" y="116" font-family="monospace" font-size="10" fill="#8b949e">after a 120s DHCP timeout</text>
+  <text x="36" y="132" font-family="monospace" font-size="10" fill="#8b949e">now: surfaces tart run error</text>
+  <text x="36" y="148" font-family="monospace" font-size="10" fill="#8b949e">"exceeds the system limit"</text>
+  <text x="36" y="164" font-family="monospace" font-size="10" fill="#8b949e">fails in ~5s, not 120s</text>
+  <text x="36" y="188" font-family="monospace" font-size="10" fill="#6e7681">no more swallowed stderr</text>
+
+  <!-- Card 2: SSH readiness -->
+  <rect x="252" y="60" width="216" height="144" rx="8" fill="#1c2128" stroke="#58a6ff44" stroke-width="1"/>
+  <text x="268" y="80" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#58a6ff">SSH-READY BEFORE PROVISION</text>
+  <text x="268" y="100" font-family="monospace" font-size="10" fill="#8b949e">sshd lags the IP by a few s</text>
+  <text x="268" y="116" font-family="monospace" font-size="10" fill="#8b949e">provisioning SSH'd too early</text>
+  <text x="268" y="132" font-family="monospace" font-size="10" fill="#8b949e">and timed out intermittently</text>
+  <text x="268" y="148" font-family="monospace" font-size="10" fill="#8b949e">now waits for SSH to answer</text>
+  <text x="268" y="164" font-family="monospace" font-size="10" fill="#8b949e">before marking VM ready</text>
+  <text x="268" y="188" font-family="monospace" font-size="10" fill="#6e7681">green: e2e-smoke 15/15</text>
+
+  <!-- Card 3: single VM + cleanup -->
+  <rect x="484" y="60" width="216" height="144" rx="8" fill="#1c2128" stroke="#f8514944" stroke-width="1"/>
+  <text x="500" y="80" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f85149">ONE VM, NO ORPHANS</text>
+  <text x="500" y="100" font-family="monospace" font-size="10" fill="#8b949e">macOS caps concurrent VMs</text>
+  <text x="500" y="116" font-family="monospace" font-size="10" fill="#8b949e">gate runs a single VM</text>
+  <text x="500" y="132" font-family="monospace" font-size="10" fill="#8b949e">stops other testbed VMs</text>
+  <text x="500" y="148" font-family="monospace" font-size="10" fill="#8b949e">trap stops the gate VM</text>
+  <text x="500" y="164" font-family="monospace" font-size="10" fill="#8b949e">on exit / failure / interrupt</text>
+  <text x="500" y="188" font-family="monospace" font-size="10" fill="#6e7681">never leaves a running VM</text>
+</svg>

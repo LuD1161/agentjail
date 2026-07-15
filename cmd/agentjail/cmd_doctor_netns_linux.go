@@ -14,7 +14,7 @@ import (
 // tunnel path (AGE-148) depends on: unprivileged user namespaces and
 // /dev/net/tun. When both are available the shield can run the transparent
 // forwarder; when either is missing the shield falls back to netproxy, which is
-// a supported, documented configuration (ADR 0075). These checks are therefore
+// a supported, documented configuration (ADR 0079). These checks are therefore
 // informational — runDoctor must not fold them into hasFailure.
 func checkNetworkInterception() []doctorCheck {
 	var checks []doctorCheck

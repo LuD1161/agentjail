@@ -1,42 +1,64 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/LuD1161/agentjail/internal/wire"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
-// fakeControlDaemonSocket is a minimal stand-in for the daemon's
-// agent-reachable socket (daemon.sock) that only understands
-// wire.ControlType/wire.ControlOpReload -- the verb sighupDaemon's
-// socket-first path sends. It binds at exactly wire.DefaultSocketPath() for
-// the given home dir, same pattern as fakeDaemonSocket in cmd_allow_test.go.
+// fakeControlDaemonSocket is a minimal stand-in for the daemon's PRIVILEGED
+// control socket (daemon-ctl.sock) that only understands
+// grantctl.ReqDaemonReload -- the verb sighupDaemon's socket-first path sends.
+// It binds at exactly grantctl.ControlSocketPathForHome(home).
+//
+// It deliberately does NOT bind daemon.sock: reload moved off the agent-facing
+// socket because the sandboxed agent can reach that one by design (ADR 0066).
+// A fake listening on the wrong socket would let a regression pass.
 type fakeControlDaemonSocket struct {
+	mu      sync.Mutex
 	ok      bool
 	errMsg  string
 	calls   int
-	lastReq wire.ControlRequest
+	lastReq grantctl.Request
+}
+
+func (f *fakeControlDaemonSocket) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func (f *fakeControlDaemonSocket) request() grantctl.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReq
 }
 
 func startFakeControlDaemonSocket(t *testing.T, home string, ok bool, errMsg string) *fakeControlDaemonSocket {
 	t.Helper()
-	dir := filepath.Join(home, ".agentjail")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("mkdir daemon socket dir: %v", err)
+	sockPath := grantctl.ControlSocketPathForHome(home)
+	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
+		t.Fatalf("mkdir control socket dir: %v", err)
 	}
-	sockPath := filepath.Join(dir, "daemon.sock")
+
+	// Callers set HOME to this dir, so Ensure writes the token where the CLI
+	// under test will look for it -- the same handoff a real daemon performs.
+	if _, err := ctlauth.Ensure(); err != nil {
+		t.Fatalf("mint control token: %v", err)
+	}
 
 	f := &fakeControlDaemonSocket{ok: ok, errMsg: errMsg}
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
-		t.Fatalf("listen on fake daemon socket: %v", err)
+		t.Fatalf("listen on fake control socket: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -55,19 +77,17 @@ func startFakeControlDaemonSocket(t *testing.T, home string, ok bool, errMsg str
 func (f *fakeControlDaemonSocket) serve(conn net.Conn) {
 	defer conn.Close()
 
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
+	var req grantctl.Request
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		return
 	}
-	var req wire.ControlRequest
-	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-		return
-	}
+	f.mu.Lock()
 	f.calls++
 	f.lastReq = req
+	ok, errMsg := f.ok, f.errMsg
+	f.mu.Unlock()
 
-	resp := wire.ControlResponse{OK: f.ok, Error: f.errMsg}
-	_ = json.NewEncoder(conn).Encode(resp)
+	_ = json.NewEncoder(conn).Encode(grantctl.Response{OK: ok, Error: errMsg})
 }
 
 // TestSighupDaemon_ControlSocketSuccess verifies that when the daemon's
@@ -84,11 +104,11 @@ func TestSighupDaemon_ControlSocketSuccess(t *testing.T) {
 		return 0
 	})
 
-	if fake.calls != 1 {
-		t.Fatalf("expected exactly 1 control-socket call, got %d", fake.calls)
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 control-socket call, got %d", got)
 	}
-	if fake.lastReq.Type != wire.ControlType || fake.lastReq.Op != wire.ControlOpReload {
-		t.Errorf("request = %+v, want Type=%q Op=%q", fake.lastReq, wire.ControlType, wire.ControlOpReload)
+	if got := fake.request().Type; got != grantctl.ReqDaemonReload {
+		t.Errorf("request type = %q, want %q", got, grantctl.ReqDaemonReload)
 	}
 	if strings.Contains(stderr, "warning") {
 		t.Errorf("expected no warning on stderr for a successful reload, got %q", stderr)
@@ -110,8 +130,8 @@ func TestSighupDaemon_ControlSocketFailureSurfacesError(t *testing.T) {
 		return 0
 	})
 
-	if fake.calls != 1 {
-		t.Fatalf("expected exactly 1 control-socket call, got %d", fake.calls)
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 control-socket call, got %d", got)
 	}
 	if !strings.Contains(stderr, "compile rego: unexpected token") {
 		t.Errorf("stderr missing daemon error message: %q", stderr)

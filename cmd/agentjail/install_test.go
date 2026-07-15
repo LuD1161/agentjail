@@ -11,6 +11,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/picker"
 )
 
@@ -574,7 +575,7 @@ func TestFullUninstallOnLinuxTearsDownDaemon(t *testing.T) {
 	}
 
 	// Run full teardown with goos="linux" so daemon steps are skipped.
-	result := performFullUninstall(home, "linux")
+	result := performFullUninstall(home, "linux", false, false)
 
 	// All agent results should have no error.
 	for _, ar := range result.Agents {
@@ -699,7 +700,7 @@ func TestParseOptionalForFlagAbsent(t *testing.T) {
 // path is a no-op.
 func TestFullUninstallIdempotentOnFreshHome(t *testing.T) {
 	home := t.TempDir()
-	result := performFullUninstall(home, "linux")
+	result := performFullUninstall(home, "linux", false, false)
 	if result.HardFailed {
 		t.Errorf("HardFailed should be false on a fresh home; agents=%v daemonErr=%v installDirErr=%v",
 			result.Agents, result.DaemonErr, result.InstallDirErr)
@@ -1198,9 +1199,9 @@ func TestPrintUninstallSummaryInstallDirFailed(t *testing.T) {
 // output still contains the verbatim version string so scripts grepping it work.
 func TestPrintVersionOutputContainsVersionString(t *testing.T) {
 	// Override the global version for this test.
-	orig := version
-	version = "v1.2.3-test"
-	defer func() { version = orig }()
+	orig := buildinfo.Version
+	buildinfo.Version = "v1.2.3-test"
+	defer func() { buildinfo.Version = orig }()
 
 	var buf bytes.Buffer
 	printVersionOutput(&buf)
@@ -1220,9 +1221,9 @@ func TestPrintVersionOutputContainsVersionString(t *testing.T) {
 // TestPrintVersionOutputDevFallback verifies that an empty version variable
 // shows "dev" in the output.
 func TestPrintVersionOutputDevFallback(t *testing.T) {
-	orig := version
-	version = ""
-	defer func() { version = orig }()
+	orig := buildinfo.Version
+	buildinfo.Version = ""
+	defer func() { buildinfo.Version = orig }()
 
 	var buf bytes.Buffer
 	printVersionOutput(&buf)
@@ -1389,7 +1390,7 @@ func TestFullUninstallCleansShellRCPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := performFullUninstall(home, "linux")
+	r := performFullUninstall(home, "linux", false, false)
 
 	for _, rc := range []string{zshrc, bashrc} {
 		b, err := os.ReadFile(rc)

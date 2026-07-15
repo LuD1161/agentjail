@@ -12,17 +12,16 @@ const controlSocketName = "daemon-ctl.sock"
 const controlLockName = "daemon-ctl.lock"
 
 // ControlSocketPath returns the absolute path of the daemon grant control
-// socket.
+// socket, at ~/.agentjail/run/daemon-ctl.sock on every OS.
 //
-// It lives at ~/.agentjail/run/daemon-ctl.sock on every OS. This socket is
-// only accessible to privileged or host-resident processes (e.g., root, the
-// CLI running with elevated privilege, or the sbpl policy generator on macOS).
-// The sandboxed agent cannot reach it: on Linux the socket sits outside the
-// agent's Landlock allowlist, and on macOS the shield explicitly denies
-// network-outbound to the path.
+// REACHABILITY — do not treat the path as the boundary. On macOS the shield
+// denies network-outbound to it, but on Linux the agent CAN connect: Landlock is
+// a filesystem LSM and does not mediate AF_UNIX connect() (the shield's own
+// enforcement test records ctl_connect=ok). The same-UID peer check cannot
+// exclude the agent either. Verbs here are gated by the ctlauth token; see
+// ADR 0067.
 //
-// The daemon itself runs outside the sandbox and creates/binds the socket
-// freely.
+// The daemon itself runs outside the sandbox and binds the socket freely.
 //
 // If the home directory cannot be resolved (rare), it falls back to
 // /tmp/agentjail-run/daemon-ctl.sock, mirroring the daemon socket's /tmp

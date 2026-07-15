@@ -49,9 +49,9 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          LDFLAGS="-X main.version=${VERSION} -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=${POSTHOG_KEY} -X github.com/LuD1161/agentjail/internal/selfupdate.SigningPubKey=RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ -s -w"
+          LDFLAGS="-X github.com/LuD1161/agentjail/internal/buildinfo.Version=${VERSION} -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=${POSTHOG_KEY} -X github.com/LuD1161/agentjail/internal/selfupdate.SigningPubKey=RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ -s -w"
           mkdir -p dist
-          for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
+          for bin in agentjail agentjail-hook; do
             echo "building ${bin}..."
             go build -ldflags "${LDFLAGS}" -o "dist/${bin}" "./cmd/${bin}"
           done
@@ -86,7 +86,7 @@ jobs:
           IDENTITY="${APPLE_SIGNING_IDENTITY}"
 
           # Sign each binary
-          for bin in dist/agentjail dist/agentjail-hook dist/agentjail-daemon dist/agentjail-shield dist/agentjail-netproxy; do
+          for bin in dist/agentjail dist/agentjail-hook; do
             echo "signing $(basename ${bin})..."
             codesign --force --options runtime --sign "${IDENTITY}" \
               --timestamp "${bin}"
@@ -106,7 +106,7 @@ jobs:
           rm -f /tmp/agentjail-notarize.zip
 
           # Verify signatures
-          for bin in dist/agentjail dist/agentjail-hook dist/agentjail-daemon dist/agentjail-shield dist/agentjail-netproxy; do
+          for bin in dist/agentjail dist/agentjail-hook; do
             echo "verifying $(basename ${bin})..."
             codesign --verify --verbose=2 "${bin}"
           done
@@ -122,7 +122,7 @@ jobs:
           cp LICENSE THIRD_PARTY_LICENSES dist/
           cd dist
           tar -czf "../${TARBALL}" \
-            agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy \
+            agentjail agentjail-hook \
             LICENSE THIRD_PARTY_LICENSES
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
 
@@ -169,7 +169,7 @@ jobs:
           test/macos-gatekeeper/verify.sh "extracted/agentjail"
 
           # Verify code signature if binaries are signed
-          for bin in extracted/agentjail extracted/agentjail-hook extracted/agentjail-daemon extracted/agentjail-shield extracted/agentjail-netproxy; do
+          for bin in extracted/agentjail extracted/agentjail-hook; do
             if codesign --verify "${bin}" 2>/dev/null; then
               echo "✓ $(basename ${bin}): signed and valid"
               codesign -dvv "${bin}" 2>&1 | grep -E "Authority|TeamIdentifier" || true
@@ -309,8 +309,10 @@ jobs:
             end
 
             def install
-              bin.install "agentjail", "agentjail-hook", "agentjail-daemon",
-                          "agentjail-shield", "agentjail-netproxy"
+              bin.install "agentjail", "agentjail-hook"
+              %w[agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets].each do |role|
+                bin.install_symlink "agentjail" => role
+              end
             end
 
             def post_install

@@ -13,7 +13,7 @@ A safety rail for Claude Code, Codex, and Cursor. <br>
 Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v0.5.0](https://img.shields.io/badge/v0.5.1-released-orange)
+&nbsp;![v0.8.2](https://img.shields.io/badge/v0.8.2-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,6 +43,9 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.8.0** | Jul 14, 2026 | Multicall binary consolidation: 6 shipped binaries become 2 (`agentjail` + `agentjail-hook`), role names kept as symlinks. Release version-stamp fix. |
+| **v0.7.0** | Jul 14, 2026 | Clean-VM testbed engine (`make e2e-release` gate) + recorded CLI suite. On-demand secrets-broker auto-start. Linux shield `$HOME` read-leak fix. |
+| **v0.6.0** | Jul 8, 2026 | Credential broker + secrets vault. Env-stripping in the shield. Fail-open sidecar and daemon-unreachable policy. |
 | **v0.5.0** | Jul 6, 2026 | Daemon-hosted grant server. Policy simplification. Self-update and shield fixes. |
 | **v0.4.0** | Jul 5, 2026 | Session-aware network proxy. Per-folder project overlays. Runtime host grants. Shared sandbox contract. macOS code signing. |
 | **v0.3.0** | Jun 27, 2026 | Sessions subsystem (`agentjail sessions list`). Cobra CLI migration. Platform-specific procwalk. |
@@ -190,12 +193,22 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 
 ```sh
 agentjail status                      # verify everything is wired
+agentjail doctor                      # diagnose a specific setup problem
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail sessions list               # active and past agent sessions
 agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay
 ```
+
+**Is this session actually protected?** In Claude Code, the status line tells you, for the whole life of the session:
+
+```
+🔒 [secured by agentjail (v0.8.2)]     ← running inside the shield
+⚠  [UNSECURED · agentjail]             ← hooks may apply, but no kernel sandbox
+```
+
+It never renders nothing while agentjail is installed — silence would be indistinguishable from protection. Launch warnings go to stderr and get scrolled away the moment Claude Code takes over the terminal, so the badge is the one signal that survives ([ADR 0064](./docs/adr/0064-statusline-always-attests.md)). `UNSECURED` means the session is not running under `agentjail-shield`: use `agentjail claude`, or install the [PATH shim](#install) to get it automatically. When agentjail is uninstalled the badge disappears entirely.
 
 <details>
 <summary><b>More install options</b></summary>
@@ -208,13 +221,32 @@ agentjail install --all               # non-interactive, install all detected
 
 **Agent discovery + picker:** the installer presents a styled interactive multi-select - all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
 
-**Linux note:** a fully supported install target. `agentjail install` writes a systemd `--user` unit at `~/.config/systemd/user/agentjail-daemon.service` (`Restart=on-failure`) and runs `systemctl --user enable --now` to start it — no root required. Auto-update, hook wiring, and all policies work the same as on macOS (launchd), just backed by systemd instead. Requires a systemd `--user` session (present on any normal desktop or SSH login on a systemd-based distro); if none is reachable (e.g. a bare container with no login session), the unit is still written and `agentjail install` prints the manual `systemctl --user enable --now agentjail-daemon.service` command to run once a session exists. See [ADR 0051](./docs/adr/0051-linux-install-support.md).
+**Linux note:** a fully supported install target. `agentjail install` writes a systemd `--user` unit at `~/.config/systemd/user/agentjail-daemon.service` (`Restart=always`) and runs `systemctl --user enable --now` to start it — no root required. Auto-update, hook wiring, and all policies work the same as on macOS (launchd), just backed by systemd instead. Requires a systemd `--user` session (present on any normal desktop or SSH login on a systemd-based distro); if none is reachable (e.g. a bare container with no login session), the unit is still written and `agentjail install` prints the manual `systemctl --user enable --now agentjail-daemon.service` command to run once a session exists. See [ADR 0051](./docs/adr/0051-linux-install-support.md).
+
+**Terminal PATH shim (opt-in):**
+```sh
+agentjail install --with-path-shim    # wrap `claude` in the shield automatically
+```
+
+By default, hooks are wired but you launch the sandbox explicitly with `agentjail claude`. The PATH shim installs a `claude` wrapper at `~/.agentjail/bin/claude` and prepends that directory to your shell profile, so a plain `claude` runs shielded without you thinking about it.
+
+It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstalls and upgrades restore the shim rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
+
+The shim **fails open**. If the shield binary is missing (interrupted upgrade, partial uninstall), it warns loudly and runs your real `claude` unshielded rather than breaking it ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
+
+It only covers profile-sourcing interactive shells. VS Code/Cursor use the process wrapper (`agentjail install --for vscode`); cron, non-interactive shells, and absolute-path invocations are not covered.
 
 **From source:**
 ```sh
 git clone https://github.com/LuD1161/agentjail.git && cd agentjail
-for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
-    go build -o ~/.agentjail/bin/$bin ./cmd/$bin
+# agentjail ships two real binaries: the multicall `agentjail` (which is also the
+# daemon, shield, netproxy, and secrets roles, dispatched by argv[0]) and the lean
+# `agentjail-hook`. See ADR 0059.
+go build -o ~/.agentjail/bin/agentjail ./cmd/agentjail
+go build -o ~/.agentjail/bin/agentjail-hook ./cmd/agentjail-hook
+# the four role names are symlinks to the multicall binary
+for role in agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
+    ln -sf agentjail ~/.agentjail/bin/$role
 done
 ~/.agentjail/bin/agentjail install
 ```
@@ -306,6 +338,38 @@ For systemd-managed daemons (Linux), set via an environment override file:
     systemctl --user edit agentjail-daemon.service
     # Add under [Service]:
     # Environment=AGENTJAIL_AUTO_UPDATE=false
+
+---
+
+## Uninstall
+
+```sh
+agentjail uninstall                   # remove everything
+agentjail uninstall --keep-secrets    # keep the encrypted store + master key
+agentjail uninstall --for claude-code # just unhook one agent
+```
+
+Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. Your Claude Code `statusLine` is removed too — and if agentjail wrapped a statusline you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
+
+> **`policy.yaml` is deleted.** Reinstalling writes a **fresh default**, where `mcp.allowed: []` denies every MCP server. If you have customised your MCP allowlist or `network.allowed_hosts`, back it up first:
+> ```sh
+> cp ~/.agentjail/policy.yaml ~/policy.yaml.bak
+> ```
+> `--keep-secrets` preserves only `secrets/` and `secrets.key`, not your policy.
+
+**If the daemon wasn't started by your service manager** (a manual run, a different install channel, an upgrade transition), uninstall stops and removes nothing:
+
+```
+🛑  uninstall aborted
+✗ daemon STILL RUNNING — the service manager does not own it, so it was not stopped
+```
+
+That is deliberate. The daemon's `hookwatch` re-injects the agentjail hook the moment anything removes it — it cannot tell an uninstall from tampering — so tearing down around a live daemon would delete agentjail while leaving your agents wired to a hook binary that no longer exists. Kill it and re-run, or force it ([ADR 0065](./docs/adr/0065-stop-the-daemon-before-unhooking.md)):
+
+```sh
+pkill -u $(id -u) -f agentjail-daemon && agentjail uninstall
+agentjail uninstall --force           # tear down anyway (leaves hooks re-injected)
+```
 
 ---
 
@@ -430,28 +494,35 @@ agentjail policy list
 ## When the daemon is unreachable
 
 `agentjail-hook` is stdlib-only and dials the daemon with a 30 ms budget. If
-the daemon is down (crashed, OOM, not yet started), the default has always
-been to **fail open** — allow the call, so a dead daemon never blocks the
-agent. That default is now a configurable, tiered policy ([ADR 0050](./docs/adr/0050-daemon-unreachable-policy.md)):
+the daemon is down (crashed, OOM, not yet started), behavior is a configurable,
+tiered policy ([ADR 0050](./docs/adr/0050-daemon-unreachable-policy.md),
+default set by [ADR 0074](./docs/adr/0074-degraded-is-the-default-posture.md)):
 
 ```yaml
 # ~/.agentjail/policy.yaml
-daemon_unreachable: degraded   # allow (default) | degraded (recommended) | deny
+daemon_unreachable: degraded   # allow | degraded (default) | deny
 ```
 
 | Level | Behavior when the daemon can't be reached |
 |---|---|
-| `allow` (default) | Fail open — unchanged from prior releases. |
-| `degraded` (recommended) | Enforce a small offline denylist (self-protection: no writes under `~/.agentjail`, no reads of the secrets store, no `agentjail policy disable`-style mutation) via stdlib pattern-matching; allow everything else. |
+| `allow` | Fail open — allow every call. Opt in if you want a dead daemon to be fully transparent. |
+| `degraded` (**default**) | Enforce a small offline denylist (self-protection: no writes under `~/.agentjail`, no reads of the secrets store, no `agentjail policy disable`-style mutation) via stdlib pattern-matching; allow everything else. |
 | `deny` | Fail closed — deny with restart instructions. For regulated/high-assurance setups. |
+
+`degraded` is the default because everything it denies offline is already
+**permanently denied online** — it mirrors the locked rule set that no
+`policy.yaml` can switch off. So it cannot refuse a call that would have
+succeeded against a healthy daemon; it only keeps agentjail's self-protection
+standing while the daemon is away.
 
 Every fail-open occurrence now prints a loud, per-occurrence stderr banner
 naming the active level and the exact recovery command
 (`agentjail daemon restart`, diagnose with `agentjail doctor`) — replacing
 the old one-time warning. The daemon compiles the current level (and, for
 `degraded`, the offline rule set) into `~/.agentjail/hook-fallback.json` on
-startup and every config reload; a missing or unreadable sidecar always
-falls back to `allow`, so upgrading never changes behavior unless you opt in.
+startup and every config reload; a missing or unreadable sidecar falls back to
+`allow`, since a daemon that never started has published no rules to enforce —
+`degraded` protects you from a daemon that *died*, not one that never ran.
 
 ---
 

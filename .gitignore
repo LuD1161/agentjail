@@ -62,3 +62,6 @@ docs/superpowers/
 
 # UI testing screenshots (local only)
 screenshots/
+
+# testbed recordings (generated)
+/test/testbed/reports/

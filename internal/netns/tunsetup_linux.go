@@ -1,6 +1,6 @@
 //go:build linux
 
-// This file implements the unprivileged-userns TUN handoff (ADR 0075,
+// This file implements the unprivileged-userns TUN handoff (ADR 0079,
 // AGE-148). It replaces the deprecated host-veth + privileged-daemon path
 // (veth_linux.go / internal/daemon/namespace*.go): no host CAP_NET_ADMIN, no
 // privileged socket, no install password.

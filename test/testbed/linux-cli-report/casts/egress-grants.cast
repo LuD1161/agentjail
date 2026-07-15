@@ -1,0 +1,13 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1784012696, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.005697, "o", "=== grants (expected empty) ===\r\n"]
+[0.013894, "o", "no pending grant requests\r\n"]
+[0.015539, "o", "PASS  grants (empty) reports no pending grant requests\r\n=== allow host (creates a pending grant) ===\r\n"]
+[0.024208, "o", "requested host egress-grants-test.example.com (ttl 1h) - pending human approval (grant_id a51217effc7851932a06452d9d7baa1c); run 'agentjail grants' in a trusted terminal to approve\r\n"]
+[0.02573, "o", "PASS  allow host reports requested host\r\n"]
+[0.027392, "o", "PASS  allow host reports pending human approval\r\n"]
+[0.028957, "o", "PASS  allow host reports a grant_id\r\nPASS  allow host exits 0\r\n"]
+[0.029033, "o", "=== grants (should now list the pending request) ===\r\n"]
+[0.037641, "o", "GRANT_ID                          HOST                            TTL     CWD                   REASON\r\na51217effc7851932a06452d9d7baa1c  egress-grants-test.example.com  1h0m0s  /home/agent.linux  -\r\n"]
+[0.039028, "o", "PASS  grants lists the pending host request\r\n"]
+[0.039042, "o", "SKIP  grant approve/deny (requires interactive human-approval flow, not exercised here)\r\n"]
+[0.039099, "o", "=== RESULT: 6 pass, 0 fail, 1 skip ===\r\n"]

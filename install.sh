@@ -214,10 +214,20 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # --- Install binaries ---
+#
+# As of the multicall-binary refactor, the tarball ships exactly two real
+# binaries: agentjail (the multicall CLI, which also serves the daemon/
+# shield/netproxy/secrets roles via argv[0] dispatch) and agentjail-hook (a
+# separate, lean binary). The loop below still probes the legacy names too,
+# purely for back-compat with an older tarball fetched via AGENTJAIL_VERSION
+# or LOCAL_TARBALL — if a role binary happens to be shipped as a real file,
+# it is installed as one; the symlink step further below then reconciles it
+# (THE WATCHPOINT: never leave a stale real file at a role name after that
+# step runs).
 
 mkdir -p "$INSTALL_DIR"
 INSTALLED=""
-for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy; do
+for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
     if [ -f "$TMP/$bin" ]; then
         # Install atomically: stage into a temp file in the SAME dir, then
         # rename over the target. A plain `cp` rewrites the existing inode in
@@ -236,6 +246,23 @@ done
 # shellcheck disable=SC2086  # intentional word-split to count installed binaries
 set -- $INSTALLED
 echo "✅  installed $# binaries  →  ${INSTALL_DIR}"
+
+# --- Reconcile role binary symlinks ---
+#
+# agentjail-daemon, agentjail-shield, agentjail-netproxy, and agentjail-secrets
+# are never real files — they are relative symlinks to agentjail in the same
+# directory, so argv[0] dispatch (cmd/agentjail/main.go) routes to the right
+# role regardless of which name the binary was invoked as. THE WATCHPOINT:
+# remove whatever currently occupies a role path (a stale real file from a
+# pre-refactor install, or an existing symlink) with rm -f — never `mv`/`cp`
+# a real agentjail binary directly over a role path — then `ln -sf` a fresh
+# relative symlink. This mirrors selfupdate.EnsureRoleSymlinks
+# (internal/selfupdate/rolesymlinks.go), which the Go install/update paths use.
+for role in agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
+    rm -f "$INSTALL_DIR/$role"
+    ln -sf agentjail "$INSTALL_DIR/$role"
+done
+echo "🔗  linked agentjail-daemon, agentjail-shield, agentjail-netproxy, agentjail-secrets → agentjail"
 
 # --- Register hooks with detected coding agents ---
 # The Go installer prints its own setup / discovery / summary sections below;

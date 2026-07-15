@@ -12,6 +12,15 @@ set -euo pipefail
 
 log() { echo "==> [guest] $*"; }
 
+# ---- 0. recording niceties --------------------------------------------------
+# Each CLI recording opens with a system-info banner for context (mirrors the
+# macOS suite, which uses fastfetch). Ubuntu's apt ships neofetch, not
+# fastfetch, so Linux uses neofetch as the equivalent opener.
+if [ "$(uname -s)" = "Linux" ] && ! command -v neofetch >/dev/null 2>&1; then
+    log "installing neofetch (recording banner)"
+    sudo apt-get install -y -q neofetch >/dev/null 2>&1 || log "neofetch install failed (non-fatal)"
+fi
+
 # ---- 1. Claude Code ---------------------------------------------------------
 
 if ! command -v claude >/dev/null 2>&1; then
@@ -30,6 +39,23 @@ fi
 # agentjail's Claude Code detection requires ~/.claude to exist.
 mkdir -p "$HOME/.claude"
 [ -f "$HOME/.claude/settings.json" ] || echo '{}' > "$HOME/.claude/settings.json"
+
+# Merge any host-synced MCP servers into ~/.claude.json (Claude Code's global
+# config). node is guaranteed here (Claude Code needs it); the guest has no jq.
+if [ -f /tmp/claude-mcp.json ]; then
+    log "syncing MCP servers into ~/.claude.json"
+    node -e '
+        const fs = require("fs");
+        const dst = process.env.HOME + "/.claude.json";
+        const add = (JSON.parse(fs.readFileSync("/tmp/claude-mcp.json", "utf8")).mcpServers) || {};
+        let cur = {};
+        try { cur = JSON.parse(fs.readFileSync(dst, "utf8")); } catch (e) {}
+        cur.mcpServers = Object.assign({}, cur.mcpServers || {}, add);
+        fs.writeFileSync(dst, JSON.stringify(cur, null, 2));
+        console.log("==> [guest] merged MCP servers: " + Object.keys(add).join(", "));
+    '
+    rm -f /tmp/claude-mcp.json
+fi
 
 # ---- 2. Credential seeding (optional) ----------------------------------------
 

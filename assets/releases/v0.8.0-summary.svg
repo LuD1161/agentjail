@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" fill="none">
+  <rect width="720" height="220" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Title bar -->
+  <rect x="0" y="0" width="720" height="48" rx="12" fill="#161b22"/>
+  <rect x="0" y="12" width="720" height="36" fill="#161b22"/>
+  <circle cx="24" cy="24" r="6" fill="#3fb950"/>
+  <text x="44" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v0.8.0</text>
+  <text x="210" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Multicall Binary Consolidation (6 to 2), Symlink Roles, Release Fix</text>
+
+  <!-- Card 1: multicall binary -->
+  <rect x="20" y="60" width="216" height="144" rx="8" fill="#1c2128" stroke="#3fb95044" stroke-width="1"/>
+  <text x="36" y="80" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950">MULTICALL BINARY (6 to 2)</text>
+  <text x="36" y="100" font-family="monospace" font-size="10" fill="#8b949e">argv[0] dispatch (ADR 0059)</text>
+  <text x="36" y="116" font-family="monospace" font-size="10" fill="#8b949e">daemon/shield/netproxy/secrets</text>
+  <text x="36" y="132" font-family="monospace" font-size="10" fill="#8b949e">folded into one agentjail</text>
+  <text x="36" y="148" font-family="monospace" font-size="10" fill="#8b949e">hook stays a lean binary</text>
+  <text x="36" y="164" font-family="monospace" font-size="10" fill="#8b949e">~5ms, no opa/sqlite tax</text>
+  <text x="36" y="188" font-family="monospace" font-size="10" fill="#6e7681">2 files to sign, notarize, update</text>
+
+  <!-- Card 2: symlink role model -->
+  <rect x="252" y="60" width="216" height="144" rx="8" fill="#1c2128" stroke="#58a6ff44" stroke-width="1"/>
+  <text x="268" y="80" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#58a6ff">SYMLINK ROLE MODEL</text>
+  <text x="268" y="100" font-family="monospace" font-size="10" fill="#8b949e">role names -&gt; agentjail symlink</text>
+  <text x="268" y="116" font-family="monospace" font-size="10" fill="#8b949e">EnsureRoleSymlinks reconciles</text>
+  <text x="268" y="132" font-family="monospace" font-size="10" fill="#8b949e">install / update / uninstall</text>
+  <text x="268" y="148" font-family="monospace" font-size="10" fill="#8b949e">stale real file -&gt; symlink</text>
+  <text x="268" y="164" font-family="monospace" font-size="10" fill="#8b949e">buildinfo.Version unified</text>
+  <text x="268" y="188" font-family="monospace" font-size="10" fill="#6e7681">drift closed by construction</text>
+
+  <!-- Card 3: release ldflag fix -->
+  <rect x="484" y="60" width="216" height="144" rx="8" fill="#1c2128" stroke="#f8514944" stroke-width="1"/>
+  <text x="500" y="80" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f85149">RELEASE LDFLAG FIX</text>
+  <text x="500" y="100" font-family="monospace" font-size="10" fill="#8b949e">-X main.version no longer</text>
+  <text x="500" y="116" font-family="monospace" font-size="10" fill="#8b949e">reaches imported packages</text>
+  <text x="500" y="132" font-family="monospace" font-size="10" fill="#8b949e">every tag would ship as dev</text>
+  <text x="500" y="148" font-family="monospace" font-size="10" fill="#8b949e">now buildinfo.Version ldflag</text>
+  <text x="500" y="164" font-family="monospace" font-size="10" fill="#8b949e">codex/cursor hook null fixes</text>
+  <text x="500" y="188" font-family="monospace" font-size="10" fill="#6e7681">caught pre-tag, CI + Homebrew</text>
+</svg>

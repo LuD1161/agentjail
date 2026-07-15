@@ -91,6 +91,23 @@ func printFailOpenBanner(level string) {
 	}
 }
 
+// failOpenSystemMessage renders the fail-open banner as a single-line
+// systemMessage. printFailOpenBanner's stderr copy only reaches a debug log on
+// an exit-0 allow, so this is what the user actually sees (ADR 0073).
+func failOpenSystemMessage(level string) string {
+	switch level {
+	case levelDegraded:
+		return "⚠ agentjail: daemon unreachable — running at REDUCED protection (degraded). " +
+			"Critical self-protection rules still enforced; other policy is OFF. " + restartInstructions
+	case levelDeny:
+		return "⚠ agentjail: daemon unreachable — DENYING by policy (deny). " + restartInstructions
+	default: // levelAllow, or any fallback value
+		// Deliberately not failOpenFriendlyMessage + restartInstructions: both
+		// name `agentjail doctor`, and the seam is user-visible here.
+		return "⚠ agentjail: daemon not running — policy enforcement is DISABLED. " + restartInstructions
+	}
+}
+
 // failOpenDecision is the resolved allow/deny outcome for a fail-open
 // occurrence, given the sidecar's level and (if known) the tool call.
 type failOpenDecision struct {

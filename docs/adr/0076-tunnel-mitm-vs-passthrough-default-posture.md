@@ -4,7 +4,7 @@
 
 ## Context
 
-The transparent tunnel ([ADR 0075](./0075-agent-netns-veth-vs-userns-tunfd.md),
+The transparent tunnel ([ADR 0079](./0079-agent-netns-veth-vs-userns-tunfd.md),
 AGE-148) routes an agent's traffic through a userspace forwarder
 (`internal/tunnel/`) running in the shield process, fed by an in-namespace TUN
 fd. Once packets reach that forwarder, it can operate in one of **two postures**,
@@ -82,7 +82,7 @@ Four conditions make MITM-by-default acceptable:
    accompanied by an `audit_log` event per AGENTS.md's state-change rule).
 2. **Scoped to the agent's own namespace trust store only — never the host.** The
    CA is injected via `ns.InjectCA` into the mount-namespace trust store of the
-   sandboxed agent ([ADR 0075](./0075-agent-netns-veth-vs-userns-tunfd.md)). It
+   sandboxed agent ([ADR 0079](./0079-agent-netns-veth-vs-userns-tunfd.md)). It
    MUST NOT touch the host system trust store, the user's browsers, or any
    process outside the shielded session. The blast radius of the injected CA is
    exactly one agent session.
@@ -148,13 +148,13 @@ than re-deciding the posture.
 **Fail-open remains the floor.** Independent of posture, any tunnel failure still
 falls back — MITM failure → passthrough, tunnel failure → netproxy — so a broken
 interception path never chokes the agent's network (the hard constraint from
-AGE-148 / ADR 0075).
+AGE-148 / ADR 0079).
 
 ## Related
 
 - AGE-148 (transparent passthrough tunnel), AGE-149 (TLS-terminating MITM;
   macOS half still open), AGE-165, AGE-170 (this decision).
-- [ADR 0075](./0075-agent-netns-veth-vs-userns-tunfd.md) — the unprivileged
+- [ADR 0079](./0079-agent-netns-veth-vs-userns-tunfd.md) — the unprivileged
   userns + TUN-fd tunnel this posture rides on.
 - [ADR 0034](./0034-platform-backend-shared-contract.md) — per-OS backends share
   a canonical contract; the posture, notice, and override belong to that

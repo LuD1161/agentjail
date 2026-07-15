@@ -16,9 +16,12 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
@@ -32,20 +35,20 @@ import (
 // this list — they must go through the secrets broker.
 var EnvAllowlistBaseline = map[string]bool{
 	// Core POSIX / shell
-	"PATH":    true,
-	"HOME":    true,
-	"USER":    true,
-	"SHELL":   true,
-	"TERM":    true,
-	"TZ":      true,
-	"LANG":    true,
-	"LC_ALL":  true,
-	"TMPDIR":  true,
+	"PATH":   true,
+	"HOME":   true,
+	"USER":   true,
+	"SHELL":  true,
+	"TERM":   true,
+	"TZ":     true,
+	"LANG":   true,
+	"LC_ALL": true,
+	"TMPDIR": true,
 
 	// Display / Wayland / X11
-	"DISPLAY":          true,
-	"WAYLAND_DISPLAY":  true,
-	"XDG_RUNTIME_DIR":  true,
+	"DISPLAY":         true,
+	"WAYLAND_DISPLAY": true,
+	"XDG_RUNTIME_DIR": true,
 
 	// TLS / proxy
 	"SSL_CERT_FILE":       true,
@@ -67,19 +70,19 @@ var EnvAllowlistBaseline = map[string]bool{
 	"AGENTJAIL_SESSION":  true,
 
 	// Agent tooling
-	"DISABLE_AUTOUPDATER": true,
-	"CLAUDECODE":          true,
-	"AI_AGENT":            true,
+	"DISABLE_AUTOUPDATER":      true,
+	"CLAUDECODE":               true,
+	"AI_AGENT":                 true,
 	"COREPACK_ENABLE_AUTO_PIN": true,
 
 	// Process / session context
-	"PWD":     true,
-	"OLDPWD":  true,
-	"LOGNAME": true,
-	"SHLVL":   true,
-	"SSH_TTY":       true,
-	"SSH_AUTH_SOCK": true,
-	"COLORTERM": true,
+	"PWD":                  true,
+	"OLDPWD":               true,
+	"LOGNAME":              true,
+	"SHLVL":                true,
+	"SSH_TTY":              true,
+	"SSH_AUTH_SOCK":        true,
+	"COLORTERM":            true,
 	"TERM_PROGRAM":         true,
 	"TERM_PROGRAM_VERSION": true,
 
@@ -127,20 +130,20 @@ var EnvDenylist = map[string]bool{
 	"GLOBIGNORE":     true,
 
 	// Language runtime injection
-	"PYTHONSTARTUP":         true,
-	"PYTHONPATH":            true,
-	"NODE_OPTIONS":          true,
-	"NODE_PATH":             true,
-	"PERL5OPT":              true,
-	"PERL5LIB":              true,
-	"RUBYOPT":               true,
-	"RUBYLIB":               true,
-	"GEM_PATH":              true,
-	"GEM_HOME":              true,
-	"JAVA_TOOL_OPTIONS":     true,
-	"_JAVA_OPTIONS":         true,
-	"DOTNET_STARTUP_HOOKS":  true,
-	"GOFLAGS":               true,
+	"PYTHONSTARTUP":        true,
+	"PYTHONPATH":           true,
+	"NODE_OPTIONS":         true,
+	"NODE_PATH":            true,
+	"PERL5OPT":             true,
+	"PERL5LIB":             true,
+	"RUBYOPT":              true,
+	"RUBYLIB":              true,
+	"GEM_PATH":             true,
+	"GEM_HOME":             true,
+	"JAVA_TOOL_OPTIONS":    true,
+	"_JAVA_OPTIONS":        true,
+	"DOTNET_STARTUP_HOOKS": true,
+	"GOFLAGS":              true,
 }
 
 // EnvDenyPrefixes blocks any env var starting with these prefixes.
@@ -247,12 +250,102 @@ func SecretsSocketPath() string {
 // listening on its Unix socket.  Best-effort: if the check fails for any
 // reason, returns false.
 func SecretsBrokerRunning() bool {
-	conn, err := net.DialTimeout("unix", SecretsSocketPath(), 200*time.Millisecond)
+	return brokerReachable(SecretsSocketPath(), 200*time.Millisecond)
+}
+
+// Service identifiers for the on-demand secrets broker (ADR 0058). Both name a
+// loaded-but-not-running definition installed by `agentjail install`, that
+// EnsureSecretsBroker starts on demand — there is NO socket activation (that
+// would need cgo, which the CGO_ENABLED=0 release build forbids).
+const (
+	SecretsBrokerLaunchdLabel  = "com.agentjail.secrets"
+	SecretsBrokerSystemdUnit   = "agentjail-secrets.service"
+	secretsBrokerBinary        = "agentjail-secrets"
+	secretsBrokerStartDeadline = 3 * time.Second
+)
+
+// EnsureSecretsBroker brings the secrets broker up on demand if it is not
+// already listening (ADR 0058, client-triggered start). It asks the OS service
+// manager to start the loaded-but-not-running job (launchctl kickstart /
+// systemctl --user start), falling back to a detached exec of agentjail-secrets
+// when no service manager is reachable, then waits a bounded time for the
+// socket. Returns nil once the socket is reachable, or an error describing why
+// the broker could not be started. Safe to call when the broker is already up
+// (fast no-op).
+func EnsureSecretsBroker(socketPath string) error {
+	if socketPath == "" {
+		socketPath = SecretsSocketPath()
+	}
+	if brokerReachable(socketPath, 200*time.Millisecond) {
+		return nil
+	}
+
+	svcErr := startSecretsBrokerService()
+	if svcErr != nil {
+		if execErr := startSecretsBrokerDetached(); execErr != nil {
+			return fmt.Errorf("start secrets broker: service manager: %v; detached exec: %w", svcErr, execErr)
+		}
+	}
+
+	deadline := time.Now().Add(secretsBrokerStartDeadline)
+	for time.Now().Before(deadline) {
+		if brokerReachable(socketPath, 200*time.Millisecond) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("secrets broker did not begin listening on %s within %s", socketPath, secretsBrokerStartDeadline)
+}
+
+// brokerReachable reports whether a Unix socket accepts a connection within the
+// timeout. Shared by SecretsBrokerRunning and EnsureSecretsBroker.
+func brokerReachable(socketPath string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("unix", socketPath, timeout)
 	if err != nil {
 		return false
 	}
 	_ = conn.Close()
 	return true
+}
+
+// startSecretsBrokerService asks the OS service manager to start the
+// loaded-but-not-running broker job. Returns an error if no service manager is
+// available (or the start command fails), so the caller can fall back to a
+// detached exec.
+func startSecretsBrokerService() error {
+	switch runtime.GOOS {
+	case "darwin":
+		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), SecretsBrokerLaunchdLabel)
+		return exec.Command("launchctl", "kickstart", target).Run()
+	case "linux":
+		return exec.Command("systemctl", "--user", "start", SecretsBrokerSystemdUnit).Run()
+	default:
+		return fmt.Errorf("no service manager for GOOS %q", runtime.GOOS)
+	}
+}
+
+// startSecretsBrokerDetached execs `agentjail-secrets serve` in its own session
+// (setsid) as a last resort when no service manager is reachable. The broker
+// self-exits on idle (ADR 0058), so a detached process is not a permanent leak.
+func startSecretsBrokerDetached() error {
+	bin, err := exec.LookPath(secretsBrokerBinary)
+	if err != nil {
+		self, selfErr := os.Executable()
+		if selfErr != nil {
+			return fmt.Errorf("locate %s: %w", secretsBrokerBinary, err)
+		}
+		cand := filepath.Join(filepath.Dir(self), secretsBrokerBinary)
+		if _, statErr := os.Stat(cand); statErr != nil {
+			return fmt.Errorf("locate %s: %w", secretsBrokerBinary, err)
+		}
+		bin = cand
+	}
+	cmd := exec.Command(bin, "serve", "--idle-timeout=15m")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0); err == nil {
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	}
+	return cmd.Start()
 }
 
 // StripEnv removes env vars matching the blocklist from env, returning a
@@ -431,7 +524,7 @@ func hasControlChar(s string) bool {
 }
 
 // shellSingleQuote wraps s in POSIX single quotes, escaping any embedded
-// single quote as '\'' (close quote, escaped literal quote, reopen quote).
+// single quote as '\” (close quote, escaped literal quote, reopen quote).
 // This makes s safe to embed in a shell command string such as the ssh -o
 // IdentityAgent=<sock> value, even if s contains spaces or shell
 // metacharacters.

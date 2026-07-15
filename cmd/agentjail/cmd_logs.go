@@ -11,6 +11,9 @@ var logsCmd = &cobra.Command{
 	Short:              "View policy decisions",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runLogs(args))
 	},
 }

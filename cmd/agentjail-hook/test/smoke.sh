@@ -19,8 +19,15 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-SOCK="/tmp/agentjail-smoke-$$.sock"
-DAEMON_LOG="/tmp/agentjail-smoke-$$.daemon.log"
+# Isolate HOME inside a temp tree so the trusted state dir ($HOME/.agentjail)
+# resolves here and the socket sits under it. The hook only honors
+# AGENTJAIL_SOCKET when it resolves under $HOME/.agentjail
+# (isTrustedSocketOverride, commit 947c93fe); a bare /tmp socket is rejected,
+# the hook falls back to the real default socket, and every deny fixture fails
+# open. HOME is exported after the go build so the build keeps its real GOCACHE.
+SMOKE_HOME="$(mktemp -d)"
+SOCK="${SMOKE_HOME}/.agentjail/daemon.sock"
+DAEMON_LOG="${SMOKE_HOME}/.agentjail/daemon.log"
 DAEMON_BIN="${REPO_ROOT}/agentjail-daemon"
 HOOK_BIN="${REPO_ROOT}/agentjail-hook"
 RULES_DIR="${REPO_ROOT}/agentpolicy/policies"
@@ -38,7 +45,7 @@ cleanup() {
         kill "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
-    rm -f "$SOCK" "$DAEMON_LOG"
+    rm -rf "$SMOKE_HOME"
     rm -f "${DAEMON_BIN}" "${HOOK_BIN}"
 }
 trap cleanup EXIT
@@ -135,6 +142,10 @@ info "Building agentjail-hook..."
 (cd "${REPO_ROOT}" && go build -o "${HOOK_BIN}" ./cmd/agentjail-hook/)
 info "Binaries built."
 echo ""
+
+# Isolate HOME now that the build is done (see SMOKE_HOME above).
+export HOME="${SMOKE_HOME}"
+mkdir -p "${SMOKE_HOME}/.agentjail"
 
 # ---------------------------------------------------------------------------
 # Step 2 — Start daemon in background

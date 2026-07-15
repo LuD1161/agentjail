@@ -2,7 +2,7 @@
 
 // This file wires an already-open TUN device fd (opened by the shield inside
 // the agent's network namespace and handed over) into the gateway's transparent
-// forwarder via the fd<->forwarder packet pump. See ADR 0075 and AGE-148.
+// forwarder via the fd<->forwarder packet pump. See ADR 0079 and AGE-148.
 package tunnel
 
 import (

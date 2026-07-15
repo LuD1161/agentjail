@@ -1,0 +1,442 @@
+==> running scenario 'cli-tour' in 'mac-dev'
+###################################################################
+#  agentjail CLI tour —                                        
+#  host: Darwin arm64  user: admin  Fri 10 Jul 2026 04:36:21 UTC
+###################################################################
+
+===================================================================
+  1. Version / health / diagnostics
+===================================================================
+
+$ agentjail version
+                                       
+  █ █ █  AgentJail                     
+  █ █ █  policy guardrails for agents  
+  █ █ █  dev-add2fa0a · darwin         
+                                       
+  -> exit 0
+
+$ agentjail status
+                                       
+  █ █ █  AgentJail                     
+  █ █ █  policy guardrails for agents  
+  █ █ █  dev-add2fa0a · darwin         
+                                       
+
+❯ 🧱  Infrastructure
+      hook binary         ✓ ok
+      daemon binary       ✓ ok
+      policy.yaml         ✓ ok
+      launchd plist       ✓ ok
+      daemon              ✓ running
+
+❯ 🔌  Agent hooks
+      Claude Code         ✓ detected (~/.claude exists)  ✓ installed
+      Cursor              ✗ not detected  ✗ not installed
+      Codex               ✗ not detected  ✗ not installed
+        note: hooks.json not found or unreadable
+        note: config.toml not found (features.hooks unknown)
+        note: grant trust once in Codex: run /hooks (agentjail can't read Codex trust state)
+  -> exit 0
+
+$ agentjail doctor
+Platform
+  [ok]  OS                             darwin/arm64
+  [ok]  Seatbelt                       available
+
+Shield
+  [ok]  agentjail-shield               /Users/admin/.agentjail/bin/agentjail-shield
+
+Daemon
+  [ok]  Socket                         connected
+
+Hooks
+  [ok]  Hook binary                    /Users/admin/.agentjail/bin/agentjail-hook
+  [ok]  Claude Code                    hook installed
+
+Launch Integration
+  [-]   PATH shim                      not installed (opt-in: agentjail install --with-path-shim)
+  [-]   Code wrapper                   Code not detected
+  [-]   Cursor wrapper                 Cursor not detected
+
+All checks passed.
+  -> exit 0
+   PASS  install present (~/.agentjail)
+
+===================================================================
+  2. Policy — inspection
+===================================================================
+
+$ agentjail policy list
+❯ Core Rules
+  ✓ on                   aws_policy/posture                       Per-account AWS posture: sandbox asks on delete, prod denies delete, locked denies CUD; fails safe to prod
+  ✓ on                   command_policy/no-sudo                   Block sudo invocations
+  ✓ on                   command_policy/no-rm-rf-absolute         Block rm -rf on absolute paths
+  ✓ on                   command_policy/no-git-push-force         Block git force-push to the default branch (main/master)
+  ✓ on                   command_policy/no-chmod-777              Block chmod 777 / world-write operations
+  ✓ on                   command_policy/no-dd-device-read         Block dd reads from raw block devices
+  ✓ on                   command_policy/no-device-overwrite       Block writes to raw block/char devices
+  ✓ on                   command_policy/no-env-exfil              Block environment-variable exfiltration via curl/wget
+  ✓ on                   command_policy/no-gpg-secret-export      Block GPG secret key export
+  ✓ on                   command_policy/no-launchctl-remove       Block launchctl remove / unload of system services
+  ✓ on                   command_policy/no-pipe-to-shell          Block curl/wget | sh pipe-to-shell patterns
+  ✓ on                   command_policy/no-ssh-keygen-outside-tmp Block ssh-keygen writing keys outside /tmp
+  ✓ on                   command_policy/no-systemctl-disrupt      Block systemctl stop/disable/mask on critical services
+  ✓ on                   command_policy/no-bash-touch-sensitive-path Block bash touch/truncation of sensitive paths
+  ✓ on                   command_policy/confirm-curl-download     Ask before downloading via curl (non-pipe)
+  ✓ on                   command_policy/confirm-git-push          Ask before git push to a remote
+  ✓ on                   command_policy/confirm-git-push-force    Ask before a force-push whose target branch is implicit (bare git push -f)
+  ✓ on                   command_policy/confirm-publish           Ask before npm/cargo/pip publish
+  ✓ on                   command_policy/default-allow             Allow commands that match no other rule
+  locked                 command_policy/no-policy-mutation        Block agents from running agentjail policy/mcp mutation commands
+  locked                 file_policy/agentjail_self               Block reads/writes to ~/.agentjail/ (agentjail self-protection)
+  -> exit 0
+
+===================================================================
+  3. try — enforcement decisions (dry-run)
+===================================================================
+
+$ agentjail try --write ~/.ssh/authorized_keys
+  Write     /Users/admin/.ssh/authorized_keys                             ✗ deny  file_policy/sensitive_credential  would access sensitive path "/Users/admin/.ssh/au…
+  -> exit 0
+   PASS  try --write /Users/admin/.ssh/authorized_keys -> deny
+   PASS  try --write /Users/admin/.aws/credentials -> deny
+   PASS  try --read /Users/admin/.ssh/id_rsa -> deny
+   PASS  try --write /Users/admin/work/demo/note.txt -> allow
+   PASS  try --read /Users/admin/work/demo/README.md -> allow
+   PASS  try sudo rm -rf / -> deny
+   PASS  try rm -rf / -> deny
+   PASS  try chmod 777 /etc/hosts -> deny
+
+$ agentjail try --json (sample)
+{"tool":"Write","input":"/Users/admin/.ssh/authorized_keys","action":"deny","rule_id":"file_policy/sensitive_credential","reason":"access to sensitive path \"/Users/admin/.ssh/authorized_keys\" is denied by file policy","impact":"would access sensitive path \"/Users/admin/.ssh/authorized_keys\""}
+  -> exit 0
+
+===================================================================
+  4. run — execute inside the shield
+===================================================================
+
+$ agentjail run -- echo hello-from-shield
+agentjail: starting shielded session for echo
+hello-from-shield
+  -> exit 0
+$ agentjail run -- cat ~/.ssh/id_rsa   (shield should block the read)
+   PASS  shield blocked private-key read via run
+
+===================================================================
+  5. mcp — allow / block / inspect
+===================================================================
+
+$ agentjail mcp list
+❯ Installed MCP servers
+  ✓ chrome-devtools  allowed
+  ✓ linear-server    allowed
+
+❯ MCP allowed
+  chrome-devtools
+  linear-server
+
+❯ MCP blocked
+  *stripe*
+  *payment*
+  *billing*
+  *twilio*
+  *sendgrid*
+  -> exit 0
+
+$ agentjail mcp tools
+no MCP tool data found -- run 'agentjail mcp scan' first to populate the audit database
+  -> exit 0
+
+$ agentjail mcp where linear-server
+
+❯ 🔍  MCP server "linear-server" is used in:
+
+  ❯ Global Config
+  ✓ ~ (user-installed)
+
+  Not found in: 1 other known project(s)
+  -> exit 0
+
+$ agentjail mcp scan
+
+❯ 🔍  MCP Server Scan
+
+❯ Configured Servers (from agent configs)
+  ✓ chrome-devtools  stdio   global    user-installed          npx
+  ✓ linear-server    http    global    user-installed          
+
+  Summary: 2 configured, 0 installed (not configured), 0 docker, 0 audit-only, 0 remote connector(s)
+  -> exit 0
+
+--- mutate (non-TTY): allow 'context7', block 'evilcorp' — MUST be refused ---
+
+$ agentjail mcp allow context7
+agentjail mcp allow: REFUSED — no interactive terminal detected.
+  Changing the MCP allow/block list mutates agentjail's own policy.
+  It must be run in a terminal by a human.
+  This restriction prevents an agent from self-approving an MCP server.
+  -> exit 1
+   PASS  mcp allow context7 -> correctly REFUSED (non-TTY self-approval guard)
+
+$ agentjail mcp block evilcorp
+agentjail mcp block: REFUSED — no interactive terminal detected.
+  Changing the MCP allow/block list mutates agentjail's own policy.
+  It must be run in a terminal by a human.
+  This restriction prevents an agent from self-approving an MCP server.
+  -> exit 1
+   PASS  mcp block evilcorp -> correctly REFUSED (non-TTY self-approval guard)
+
+===================================================================
+  6. policy — add / remove / disable-guard
+===================================================================
+
+$ agentjail policy add /tmp/tour-custom-rule.rego
+added: tour-custom-rule (installed to /Users/admin/.agentjail/rules/tour-custom-rule.rego)
+  Run 'agentjail policy list' to see it under Custom.
+  -> exit 0
+   PASS  custom rule listed under Custom (tour-custom-rule)
+
+$ agentjail policy remove tour-custom-rule
+removed: tour-custom-rule
+  -> exit 0
+$ agentjail policy disable command_policy/no-sudo   (core rule → must refuse without --force + TTY)
+   PASS  core-rule disable guarded (needs --force/TTY)
+
+===================================================================
+  7. secret — set / list / remove
+===================================================================
+   FINDING  agentjail-secrets vault binary is NOT shipped in this install (checked $HOME/.agentjail/bin and $PATH).
+   FINDING  'secret set/remove' depend on it and cannot function without it — this is a real packaging gap, not a test bug.
+
+$ agentjail secret list (vault unavailable)
+no credentials configured
+  -> exit 0
+  (skipping secret set/remove round-trip — no vault binary to exercise)
+
+===================================================================
+  8. skill — list / ask / clear
+===================================================================
+
+$ agentjail skill list
+❯ Skills (from audit history)
+  (no skills found in audit history)
+  -> exit 0
+
+$ agentjail skill ask kills
+agentjail skill ask: REFUSED -- no interactive terminal detected.
+  Changing the skill allow/block/ask list mutates agentjail's own policy.
+  It must be run in a terminal by a human.
+  This restriction prevents an agent from self-approving a skill.
+  -> exit 1
+   PASS  skill ask kills -> correctly REFUSED (non-TTY self-approval guard)
+
+$ agentjail skill clear kills
+agentjail skill clear: REFUSED -- no interactive terminal detected.
+  Changing the skill allow/block/ask list mutates agentjail's own policy.
+  It must be run in a terminal by a human.
+  This restriction prevents an agent from self-approving a skill.
+  -> exit 1
+   PASS  skill clear kills -> correctly REFUSED (non-TTY self-approval guard)
+
+===================================================================
+  9. trust — project overlay trust/untrust
+===================================================================
+
+$ agentjail trust /Users/admin/work/demo
+  adds allowed hosts: [tour-overlay.example.com]
+trusted: /Users/admin/work/demo/.agentjail/policy.yaml (sha256 e5e9dbc92e1f)
+   PASS  trust overlay parsed cleanly (well-formed PolicyConfig fragment)
+
+$ agentjail trust list
+/Users/admin/work/demo/.agentjail/policy.yaml  sha256 e5e9dbc92e1f  [ok]
+  -> exit 0
+
+$ agentjail untrust /Users/admin/work/demo
+untrusted: /Users/admin/work/demo/.agentjail/policy.yaml
+  -> exit 0
+
+===================================================================
+  10. sessions / logs / replay
+===================================================================
+
+$ agentjail sessions list
+SESSION                 NAME              ACTIVE  START                END                  COUNT     AGENT       CWD
+agentjai                                          2026-07-10 04:36:21  2026-07-10 04:36:21  10        try         /Users/admin
+  -> exit 0
+$ agentjail logs   (TUI — capped at 5s)
+04:36:21  * try (manual)                        DENY     Write               file_policy/sensitive_credential      27867µs
+04:36:21  * try (manual)                        DENY     Write               file_policy/sensitive_credential      66µs
+04:36:21  * try (manual)                        DENY     Write               file_policy/sensitive_credential      472µs
+04:36:21  * try (manual)                        DENY     Read                file_policy/sensitive_credential      404µs
+04:36:21  * try (manual)                        ALLOW    Write               file_policy/project_allow             904µs
+04:36:21  * try (manual)                        ALLOW    Read                file_policy/project_allow             1119µs
+04:36:21  * try (manual)                        DENY     Bash                command_policy/no-rm-rf-absolute      704µs
+04:36:21  * try (manual)                        DENY     Bash                command_policy/no-rm-rf-absolute      455µs
+04:36:21  * try (manual)                        DENY     Bash                command_policy/no-bash-touch-sensitive-path  492µs
+04:36:21  * try (manual)                        DENY     Write               file_policy/sensitive_credential      41µs
+  -> (logs capped)
+
+$ agentjail replay (no session id available)
+SESSION                 NAME              ACTIVE  START                END                  COUNT     AGENT       CWD
+agentjai                                          2026-07-10 04:36:21  2026-07-10 04:36:21  10        try         /Users/admin
+(no session id to replay)
+  -> exit 0
+
+===================================================================
+  11. allow / grants / grant (runtime host grants)
+===================================================================
+
+$ agentjail grants
+no pending grant requests
+  -> exit 0
+
+$ agentjail allow host api.example.com
+requested host api.example.com (ttl 1h) - pending human approval (grant_id 123f1542f19d1f73b0f36ac64b4ec7a3); run 'agentjail grants' in a trusted terminal to approve
+  -> exit 0
+
+===================================================================
+  12. telemetry — view / disable / enable
+===================================================================
+
+$ agentjail telemetry view
+[
+  {
+    "event": "feature_used",
+    "properties": {
+      "$insert_id": "fc515d88-2aaa-4879-b482-263ab074b2d0",
+      "agentjail_version": "dev-add2fa0a",
+      "command": "install",
+      "distinct_id": "51cdae1bf171ec42a34592a80e8b6d195ee5fddef5c5625ad94ce69adf482a8e"
+    },
+    "$set": {
+      "agentjail_version": "dev-add2fa0a"
+    }
+  },
+  {
+    "event": "feature_used",
+    "properties": {
+      "$insert_id": "7c01e66a-fe56-4192-9552-85f7cdf95a41",
+      "agentjail_version": "dev-add2fa0a",
+      "command": "install",
+      "distinct_id": "51cdae1bf171ec42a34592a80e8b6d195ee5fddef5c5625ad94ce69adf482a8e"
+    },
+    "$set": {
+  -> exit 0
+
+$ agentjail telemetry disable
+telemetry disabled
+  -> exit 0
+
+$ agentjail telemetry view (after disable)
+[
+  {
+    "event": "feature_used",
+    "properties": {
+      "$insert_id": "fc515d88-2aaa-4879-b482-263ab074b2d0",
+      "agentjail_version": "dev-add2fa0a",
+      "command": "install",
+      "distinct_id": "51cdae1bf171ec42a34592a80e8b6d195ee5fddef5c5625ad94ce69adf482a8e"
+    },
+    "$set": {
+      "agentjail_version": "dev-add2fa0a"
+    }
+  },
+  {
+    "event": "feature_used",
+    "properties": {
+      "$insert_id": "7c01e66a-fe56-4192-9552-85f7cdf95a41",
+      "agentjail_version": "dev-add2fa0a",
+      "command": "install",
+      "distinct_id": "51cdae1bf171ec42a34592a80e8b6d195ee5fddef5c5625ad94ce69adf482a8e"
+    },
+    "$set": {
+  -> exit 0
+
+$ agentjail telemetry enable
+telemetry enabled
+  -> exit 0
+
+===================================================================
+  13. completion / help
+===================================================================
+
+$ agentjail completion bash (head)
+# bash completion V2 for agentjail                            -*- shell-script -*-
+
+__agentjail_debug()
+{
+    if [[ -n ${BASH_COMP_DEBUG_FILE-} ]]; then
+        echo "$*" >> "${BASH_COMP_DEBUG_FILE}"
+    fi
+}
+  -> exit 0
+
+$ agentjail help
+                                       
+  █ █ █  AgentJail                     
+  █ █ █  policy guardrails for agents  
+  █ █ █  dev-add2fa0a · darwin         
+                                       
+
+❯ Usage
+  agentjail <command> [flags]
+
+❯ Commands
+  allow             Request a runtime widening of this session's network egress
+  claude            Run Claude Code inside the agentjail shield
+  doctor            Check agentjail installation health
+  feedback          Send anonymous feedback to the maintainers
+  grant             Approve or deny a pending runtime host grant request
+  grants            List pending runtime host grant requests
+  install           Install hooks for supported coding agents
+  logs              View policy decisions
+  mcp               Manage MCP server allow/block lists
+  policy            Manage optional hardening rules
+  replay            Replay decisions from a saved session
+  run               Run a command inside the agentjail shield
+  -> exit 0
+
+===================================================================
+  14. ui — local web server (headless probe)
+===================================================================
+  ui log:
+    agentjail ui — dev-add2fa0a
+    serving on http://127.0.0.1:9101
+    press Ctrl-C to stop
+  GET http://127.0.0.1:9101/ -> HTTP 200
+   PASS  ui served HTTP 200 (<title>agentjail ui — dev tool)
+
+===================================================================
+  15. Not exercised unattended (reason stated)
+===================================================================
+  update   : replaces installed binaries from the network release channel;
+             would clobber the dev build under test. (also: --help is a no-op)
+  claude   : launches an interactive Claude Code session; needs an OAuth token.
+  feedback : transmits a message to the maintainers (external side effect).
+
+===================================================================
+  16. uninstall (FINALE) + DisableFlagParsing --help defect
+===================================================================
+$ agentjail uninstall --help    (EXPECT: --help ignored; a REAL uninstall runs — bug)
+
+$ agentjail uninstall --help
+
+╭───────────────────────────────────────────────────────────────────────────────────╮
+│ 🧹  uninstall summary                                                             │
+│ Claude Code         ✓ unhooked                                                    │
+│ Cursor              ✓ unhooked                                                    │
+│ Codex               ✓ unhooked                                                    │
+│ daemon              ✓ stopped and plist removed                                   │
+│ ~/.agentjail        ✓ removed                                                     │
+│                                                                                   │
+│ ✓ agentjail fully removed                                                         │
+│ ✓ PATH: removed the installer line from ~/.zshrc                                  │
+│ open a new shell (or unset PATH manually) for it to drop from the current session │
+╰───────────────────────────────────────────────────────────────────────────────────╯
+  -> exit 0
+   PASS  DEFECT CONFIRMED: 'uninstall --help' performed a full uninstall (~/.agentjail removed)
+
+###################################################################
+#  RESULT: 19 pass, 0 fail
+###################################################################

@@ -46,8 +46,8 @@ type cursorHookEntry struct {
 // cursorHooksJSON is the on-disk shape of ~/.cursor/hooks.json.
 // "version":1 is required by Cursor (T0 confirmed).
 type cursorHooksJSON struct {
-	Version int                              `json:"version"`
-	Hooks   map[string][]cursorHookEntry     `json:"hooks"`
+	Version int                          `json:"version"`
+	Hooks   map[string][]cursorHookEntry `json:"hooks"`
 }
 
 // cursorHookCommand returns the command string agentjail registers in Cursor.
@@ -126,7 +126,14 @@ func (Cursor) Uninstall(env Env) error {
 	for _, event := range cursorHookEvents {
 		filtered := cursorRemoveEntry(root.Hooks[event], hookCmd)
 		if len(filtered) != len(root.Hooks[event]) {
-			root.Hooks[event] = filtered
+			if len(filtered) == 0 {
+				// Deleting the map key (rather than assigning a nil/empty
+				// slice) avoids ever emitting "event": null for this event
+				// in the marshaled hooks.json.
+				delete(root.Hooks, event)
+			} else {
+				root.Hooks[event] = filtered
+			}
 			changed = true
 		}
 	}

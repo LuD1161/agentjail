@@ -11,6 +11,9 @@ var tryCmd = &cobra.Command{
 	Short:              "Check whether an action would be allowed by policy (nothing is executed)",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runTry(args))
 	},
 }

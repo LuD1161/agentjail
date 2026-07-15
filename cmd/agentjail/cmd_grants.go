@@ -8,9 +8,9 @@
 //
 // These commands are the HUMAN (approve) side of runtime host grants
 // (see ADR 0047). The daemon hosts the grant control plane on
-// daemon-ctl.sock (internal/grantctl); this socket is agent-unreachable
-// by construction. A sandboxed agent cannot run these -- it can only file
-// a request via `agentjail allow host` (cmd_allow.go).
+// daemon-ctl.sock (internal/grantctl). A sandboxed agent cannot run these:
+// they authenticate with the ctlauth token, which it cannot read (ADR 0069).
+// It can only file a request via `agentjail allow host` (cmd_allow.go).
 package main
 
 import (
@@ -22,6 +22,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/spf13/cobra"
@@ -91,9 +92,26 @@ func init() {
 	rootCmd.AddCommand(grantCmd)
 }
 
+// ctlToken reads the control token for daemon-ctl.sock. A read failure inside a
+// shielded session is the boundary doing its job (ADR 0069), not a
+// misconfiguration -- approving a grant is a human's decision, made from outside.
+func ctlToken(cmdName string) (string, bool) {
+	tok, err := ctlauth.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail %s: %v\n", cmdName, err)
+		fmt.Fprintln(os.Stderr, "  This command must run outside a shielded agent session.")
+		return "", false
+	}
+	return tok, true
+}
+
 func runGrantsList() int {
 	sock := grantctl.ControlSocketPath()
-	grants, err := grantctl.GrantList(sock, grantControlTimeout)
+	tok, ok := ctlToken("grants")
+	if !ok {
+		return 1
+	}
+	grants, err := grantctl.GrantList(sock, tok, grantControlTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail grants: %v\n", err)
 		return 1
@@ -125,7 +143,11 @@ func runGrantsList() int {
 
 func runGrantApprove(grantID string) int {
 	sock := grantctl.ControlSocketPath()
-	if err := grantctl.GrantApprove(sock, grantID, grantControlTimeout); err != nil {
+	tok, ok := ctlToken("grant approve")
+	if !ok {
+		return 1
+	}
+	if err := grantctl.GrantApprove(sock, tok, grantID, grantControlTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail grant approve: %v\n", err)
 		return 1
 	}
@@ -135,7 +157,11 @@ func runGrantApprove(grantID string) int {
 
 func runGrantDeny(grantID string) int {
 	sock := grantctl.ControlSocketPath()
-	if err := grantctl.GrantDeny(sock, grantID, grantControlTimeout); err != nil {
+	tok, ok := ctlToken("grant deny")
+	if !ok {
+		return 1
+	}
+	if err := grantctl.GrantDeny(sock, tok, grantID, grantControlTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail grant deny: %v\n", err)
 		return 1
 	}

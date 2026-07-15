@@ -87,7 +87,7 @@ is inspectable without launching.
 ### D5 — Requested-but-unavailable is loud
 
 If interception cannot be set up (CA failure, `network.db` failure), the tunnel
-falls back to the plain relay — fail-open is the floor (ADR 0075) — but says so
+falls back to the plain relay — fail-open is the floor (ADR 0079) — but says so
 plainly, because policy silently stops covering HTTP(S) at that moment.
 
 ### Retained from ADR 0076
@@ -127,7 +127,7 @@ stores metadata plus a verdict, not a transcript.
   AGE-170 (the posture question), AGE-173 (this decision).
 - [ADR 0078](./0078-lazy-tunnel-consent.md) — whether a session is tunneled, and
   when the user is asked. This ADR assumes that consent already happened.
-- [ADR 0075](./0075-agent-netns-veth-vs-userns-tunfd.md) — the userns tunnel;
+- [ADR 0079](./0079-agent-netns-veth-vs-userns-tunfd.md) — the userns tunnel;
   fail-open floor.
 - [ADR 0046](./0046-netproxy-egress-enforcement-opt-in.md) — the
   `--flag`/`--no-flag` shape `--mitm`/`--no-mitm` mirrors.

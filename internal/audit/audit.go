@@ -25,6 +25,10 @@ const (
 	CredentialIssued      = "credential.issued"
 	CredentialRevoked     = "credential.revoked"
 	RetentionPurged       = "retention.purged"
+	// DecisionsDropped reports decisions the async writer could not persist
+	// (buffer full or write error). Under-recording is otherwise invisible;
+	// see ADR 0072.
+	DecisionsDropped = "decisions.dropped"
 	DaemonStarted         = "daemon.started"
 	DaemonStopped         = "daemon.stopped"
 	DaemonFailopen        = "daemon.failopen"

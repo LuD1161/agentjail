@@ -1,7 +1,7 @@
 //go:build linux
 
 // This file bridges a Linux TUN file descriptor to the transparent forwarder
-// (forwardStack). See ADR 0075 for the network-interception design and AGE-148
+// (forwardStack). See ADR 0079 for the network-interception design and AGE-148
 // for the netns TUN handoff slice this belongs to.
 //
 // # fd <-> forwarder packet pump (AGE-148 slice 2b)

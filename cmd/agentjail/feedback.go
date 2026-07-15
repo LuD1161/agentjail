@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
 
@@ -51,7 +52,7 @@ func runFeedbackWith(args []string, contactOverride string, out io.Writer, in io
 	fmt.Fprintln(out, "Sending your feedback (message + agentjail version + OS, tied to a random ID)...")
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	err := telemetry.SendFeedback(ctx, mustPaths(), os.Getenv, version, runtime.GOOS, msg, contact)
+	err := telemetry.SendFeedback(ctx, mustPaths(), os.Getenv, buildinfo.Version, runtime.GOOS, msg, contact)
 	switch {
 	case err == nil:
 		fmt.Fprintln(out, "Thanks — your feedback was sent.")

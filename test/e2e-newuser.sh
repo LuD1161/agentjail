@@ -5,9 +5,16 @@ set -euo pipefail
 # Runs in an isolated temp directory; does not touch the real ~/.agentjail.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Capture the real HOME before we isolate it below. Sensitive-path fixtures
+# (~/.ssh/id_rsa) must deny against a NON-temp path: file_policy excludes temp
+# subtrees from the sensitive-credential deny (Rule 5 temp_allow), so a path
+# under the isolated /tmp HOME would fail open on Linux. The fixture only tests
+# a policy decision (no file is written), so pointing it at the real HOME is
+# safe and denies correctly on every platform.
+ORIG_HOME="$HOME"
 TMPD=$(mktemp -d)
 BIN="$TMPD/bin"
-SOCK="$TMPD/daemon.sock"
+SOCK="$TMPD/.agentjail/daemon.sock"
 DB="$TMPD/agentjail.db"
 LOG="$TMPD/daemon.log"
 RULES="$REPO_ROOT/agentpolicy/policies"
@@ -70,20 +77,47 @@ mkdir -p "$BIN"
 (cd "$REPO_ROOT" && go build -o "$BIN/agentjail-hook" ./cmd/agentjail-hook)
 pass "Build: 3 binaries compiled"
 
+# Isolate HOME inside the temp tree so the trusted state dir ($HOME/.agentjail)
+# resolves here. The hook only honors AGENTJAIL_SOCKET when the socket path is
+# under $HOME/.agentjail (isTrustedSocketOverride, commit 947c93fe) — a bare
+# $TMPD socket is rejected and the hook falls back to the real default socket,
+# failing open. Set HOME *after* the build so `go build` keeps its real GOCACHE.
+export HOME="$TMPD"
+mkdir -p "$TMPD/.agentjail"
+
 # --- Phase 2: Daemon startup ---
 "$BIN/agentjail-daemon" --socket "$SOCK" --db "$DB" --log "$LOG" --rules "$RULES" &
 DAEMON_PID=$!
 if wait_for_socket "$SOCK"; then pass "Daemon started (pid=$DAEMON_PID)"; else fail "Daemon socket not ready"; exit 1; fi
 
-# Warm up the OPA engine — the first eval is cold (no cache, no JIT) and can
-# exceed the hook's 45 ms round-trip deadline on slow CI runners, causing a
-# spurious fail-open. Fire a throwaway request and ignore its result.
-for _i in 1 2 3; do
-  AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail-hook" \
-    <<< '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"true"},"session_id":"warmup","cwd":"/tmp"}' \
-    >/dev/null 2>&1 && break
-  sleep 0.2
-done
+# Warm up the OPA engine before asserting. The first eval is cold (no cache, no
+# JIT) and can exceed the hook's 45 ms round-trip deadline on slow CI runners,
+# causing a spurious fail-open on the first real assertion.
+#
+# We must wait for a *real daemon decision*, not merely a zero exit: the hook
+# exits 0 on fail-open allow too (reason "daemon unreachable - fail-open"), so
+# "hook && break" would count a warmup request that itself fell open as success
+# and leave the daemon cold. Instead, loop until stdout carries a genuine
+# decision (present, and NOT a fail-open). Even when an early attempt exceeds
+# the 45 ms hook deadline, the daemon keeps processing and warms itself
+# server-side, so a subsequent attempt gets a fast real answer.
+warm_daemon() {
+  local n=0 out
+  while [ "$n" -lt 40 ]; do
+    out=$(AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail-hook" \
+      <<< '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"true"},"session_id":"warmup","cwd":"/tmp"}' \
+      2>/dev/null)
+    # A real daemon reply has a permissionDecisionReason that is not the
+    # fail-open marker. Absence of "unreachable" on a non-empty reply == warmed.
+    if [ -n "$out" ] && ! echo "$out" | grep -qi "unreachable"; then
+      return 0
+    fi
+    sleep 0.1
+    n=$((n+1))
+  done
+  return 1
+}
+if ! warm_daemon; then fail "Daemon never returned a live decision (stayed cold)"; exit 1; fi
 
 # --- Phase 3: Hook decisions ---
 run_hook() {
@@ -97,7 +131,11 @@ run_hook() {
   rm -f "$stderr_f" "$json_f"
 }
 
-REAL_HOME=$(eval echo ~)
+# Use the pre-isolation HOME: the isolated $HOME lives under /tmp (a policy
+# temp-root), and file_policy allows writes under temp roots, so a temp-rooted
+# ~/.ssh/id_rsa would fail open. ORIG_HOME is a real, non-temp path the deny
+# fires on. No file is written here -- the fixture only exercises the decision.
+REAL_HOME="$ORIG_HOME"
 
 # 3a: DENY write to ~/.ssh/id_rsa
 run_hook "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$REAL_HOME/.ssh/id_rsa\",\"content\":\"x\"},\"session_id\":\"e2e-1\",\"cwd\":\"/tmp\"}"

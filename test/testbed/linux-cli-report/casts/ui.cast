@@ -1,0 +1,9 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1784012702, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.011256, "o", "=== ui — start headless, probe, stop ===\r\n"]
+[5.013636, "o", "  ui log:\r\n"]
+[5.015786, "o", "    agentjail ui — dev-02bb499\r\n    serving on http://127.0.0.1:9101\r\n    press Ctrl-C to stop\r\n"]
+[5.019983, "o", "PASS  ui listening port: 9101\r\n"]
+[5.033361, "o", "  GET http://127.0.0.1:9101/ -> HTTP 200\r\nPASS  ui served HTTP 200\r\n"]
+[5.037742, "o", "  title: <title>agentjail ui — dev tool\r\n"]
+[5.040806, "o", "PASS  ui page title contains 'agentjail ui'\r\n"]
+[6.071437, "o", "PASS  ui process stopped\r\n=== RESULT: 4 pass, 0 fail, 0 skip ===\r\n"]

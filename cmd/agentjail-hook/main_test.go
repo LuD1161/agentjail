@@ -302,6 +302,12 @@ func TestCodexHook_AskBlocks(t *testing.T) {
 
 // TestCodexHook_FailOpenNoStdout verifies that daemon-unreachable fail-open
 // remains an exit-0 allow for Codex without unsupported stdout decisions.
+//
+// Codex documents systemMessage as supported for PreToolUse, so the fail-open
+// response now carries it — that notice is the only thing the user sees, since
+// Codex reads stderr solely as the exit-2 blocking reason (ADR 0073). The
+// invariant this test protects is unchanged: no unsupported *decision* fields
+// (permissionDecision / Claude's hookSpecificOutput), so default-allow stands.
 func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildHook(t, dir)
@@ -324,8 +330,17 @@ func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0 (fail-open), got %d; stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	if len(stdout) != 0 {
-		t.Errorf("expected empty stdout for Codex fail-open, got %q", stdout)
+	var codexOut map[string]any
+	if err := json.Unmarshal(stdout, &codexOut); err != nil {
+		t.Fatalf("Codex fail-open stdout is not JSON: %q (%v)", stdout, err)
+	}
+	if sm, ok := codexOut["systemMessage"].(string); !ok || sm == "" {
+		t.Errorf("Codex fail-open must warn the user via systemMessage; got %q", stdout)
+	}
+	for _, forbidden := range []string{"hookSpecificOutput", "permissionDecision", "permissionDecisionReason"} {
+		if _, ok := codexOut[forbidden]; ok {
+			t.Errorf("Codex fail-open leaked unsupported decision field %q: %q", forbidden, stdout)
+		}
 	}
 	stderrStr := string(stderr)
 	if !strings.Contains(stderrStr, "daemon not running - policy enforcement disabled") {

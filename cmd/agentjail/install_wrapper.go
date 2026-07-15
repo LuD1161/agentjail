@@ -1,7 +1,9 @@
 // install_wrapper.go — VS Code/Cursor process wrapper and PATH shim installation.
 //
-// These are called by the install command when --for vscode, --for cursor,
-// --with-path-shim, or --all is passed.
+// The VS Code/Cursor wrappers are installed by --for vscode, --for cursor, or
+// --all. The PATH shim is opt-in and installed ONLY by --with-path-shim —
+// never by --all, which is what `curl | sh` runs (see install.go). Once opted
+// in, reassertPathShim keeps it alive across reinstalls (ADR 0062).
 package main
 
 import (
@@ -174,12 +176,18 @@ func installPathShim(home string) error {
 	}
 
 	// Create a shell script shim (not a compiled binary — simpler for now).
+	//
+	// The shim sits on PATH ahead of the real claude, so every failure mode here
+	// is a failure mode of the user's claude. It therefore fails OPEN: if the
+	// shield is gone, claude still runs (unshielded, loudly). See ADR 0063.
 	shimContent := fmt.Sprintf(`#!/bin/sh
 # agentjail PATH shim — transparently wraps claude with agentjail-shield.
 # Installed by: agentjail install --with-path-shim
 # Remove with:  agentjail uninstall
 
 set -e
+
+SHIELD="%s"
 
 # Find the real claude binary, excluding our own directory.
 find_real_claude() {
@@ -207,8 +215,19 @@ if [ "$REAL_CLAUDE" = "%s" ]; then
     exit 1
 fi
 
-exec "%s" -- "$REAL_CLAUDE" "$@"
-`, shimDir, shimDir, shimPath, shimPath, shimPath, shieldBin)
+# Fail open. A missing shield must never brick claude: an interrupted upgrade,
+# a partial uninstall, or a quarantined binary would otherwise leave every
+# claude invocation dead with a cryptic "exec: not found". -x also catches a
+# dangling agentjail-shield -> agentjail role symlink, since it follows links.
+if [ ! -x "$SHIELD" ]; then
+    echo "WARNING: agentjail-shield is missing or not executable at $SHIELD" >&2
+    echo "  Running claude UNSHIELDED — policy hooks may still apply." >&2
+    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: rm %s" >&2
+    exec "$REAL_CLAUDE" "$@"
+fi
+
+exec "$SHIELD" -- "$REAL_CLAUDE" "$@"
+`, shieldBin, shimDir, shimDir, shimPath, shimPath, shimPath, shimPath)
 
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create shim directory: %v", err)
@@ -238,24 +257,59 @@ func uninstallPathShim(home string) {
 	os.Remove(shimPath)
 }
 
-// refreshPathShimIfExists regenerates the PATH shim if one already exists
-// on disk. Called unconditionally during install so that brew upgrade and
-// curl|sh reinstall pick up the current binary's template instead of
-// retaining stale flags from a previous build.
-func refreshPathShimIfExists(home string) {
+// shimConsentRecorded reports whether the user opted into the PATH shim, by
+// looking for the fenced marker installPathShim writes into a shell rc.
+//
+// The rc block — not the shim file — is the durable record of that choice. The
+// shim lives in ~/.agentjail/bin, which uninstall removes wholesale
+// (removeInstallDir), so the file's absence cannot distinguish "never opted in"
+// from "opted in, then wiped by an uninstall/reinstall cycle". The rc block
+// survives both. See ADR 0062.
+func shimConsentRecorded(home string) bool {
+	for _, rc := range shellRCCandidates(home) {
+		b, err := os.ReadFile(rc)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(b), shimRCMarkerStart) {
+			return true
+		}
+	}
+	return false
+}
+
+// reassertPathShim regenerates the PATH shim whenever the user has opted in —
+// either the shim is already on disk (refresh it, so a brew upgrade or curl|sh
+// reinstall picks up the current template instead of stale flags from an older
+// build), or consent is recorded in a shell rc but the file is gone (restore it).
+//
+// The restore case is the one that matters: without it, the rc still prepends
+// ~/.agentjail/bin to PATH but no claude sits there, so the shell resolves
+// straight past it to the real unshielded binary — silently, with no error and
+// no missing-command. The user believes they are shielded and is not. Called
+// unconditionally from install. See ADR 0062.
+func reassertPathShim(home string) {
 	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
-	if _, err := os.Stat(shimPath); os.IsNotExist(err) {
+	_, statErr := os.Stat(shimPath)
+	onDisk := statErr == nil
+
+	if !onDisk && !shimConsentRecorded(home) {
+		return // never opted in — nothing to reassert
+	}
+
+	if err := installPathShim(home); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail: warning: could not reassert PATH shim: %v\n", err)
 		return
 	}
-	if err := installPathShim(home); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail: warning: could not refresh PATH shim: %v\n", err)
+	if !onDisk {
+		fmt.Fprintln(os.Stderr, "agentjail: restored the PATH shim (your shell profile opts into it, but the shim was missing)")
 	}
 }
 
 // addToShellProfile adds the agentjail bin directory to PATH in the
 // appropriate shell profile. Idempotent — skips if already present.
 func addToShellProfile(home, binDir string) error {
-	block := fmt.Sprintf("\n# >>> agentjail >>>\nexport PATH=\"%s:$PATH\"\n# <<< agentjail <<<\n", binDir)
+	block := fmt.Sprintf("\n%s\nexport PATH=\"%s:$PATH\"\n%s\n", shimRCMarkerStart, binDir, shimRCMarkerEnd)
 
 	// Determine which rc file to use.
 	rcPath := ""
@@ -273,7 +327,7 @@ func addToShellProfile(home, binDir string) error {
 
 	// Check if already present.
 	content, _ := os.ReadFile(rcPath)
-	if strings.Contains(string(content), "# >>> agentjail >>>") {
+	if strings.Contains(string(content), shimRCMarkerStart) {
 		return nil // already present
 	}
 

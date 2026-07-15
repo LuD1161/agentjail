@@ -39,12 +39,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
-
-// hookVersion is set via -ldflags at build time (mirrors cmd/agentjail version).
-var hookVersion = ""
 
 var (
 	defaultTelemetryPaths = telemetry.DefaultPaths
@@ -107,6 +105,10 @@ type daemonResponse = wire.Response
 //	{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"..."}}
 type claudeHookOutput struct {
 	HookSpecificOutput claudePermissionOutput `json:"hookSpecificOutput"`
+	// SystemMessage is surfaced to the user in the normal TUI. On an exit-0
+	// allow it is the ONLY channel that reaches them — Claude Code sends hook
+	// stderr to the debug log only (ADR 0073).
+	SystemMessage string `json:"systemMessage,omitempty"`
 }
 
 type claudePermissionOutput struct {
@@ -236,7 +238,7 @@ func failOpenMarker(agent, category string) {
 	if tp, err := defaultTelemetryPaths(); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		_ = sendFailOpen(ctx, tp, os.Getenv, hookVersion, runtime.GOOS, category)
+		_ = sendFailOpen(ctx, tp, os.Getenv, buildinfo.Version, runtime.GOOS, category)
 	}
 }
 
@@ -265,9 +267,10 @@ func failOpenClaudeLike(agent, category, detail, toolName string, toolInput map[
 	}
 
 	if agent == "codex" {
+		writeCodexSystemMessage(failOpenSystemMessage(fb.Level))
 		os.Exit(0)
 	}
-	writeAllow(decision.Reason)
+	writeAllowWithSystemMessage(decision.Reason, failOpenSystemMessage(fb.Level))
 	os.Exit(0)
 }
 
@@ -315,12 +318,40 @@ func printPolicyEval(noColor bool, toolName, action, ruleID, reason string, ms i
 
 // writeAllow writes a Claude Code "allow" hook response to stdout.
 func writeAllow(reason string) {
+	writeAllowWithSystemMessage(reason, "")
+}
+
+// codexSystemMessageOutput is the minimal Codex PreToolUse response: a
+// systemMessage and nothing else. Codex's allow convention is an empty
+// stdout, so omitting permissionDecision keeps the default-allow semantics
+// and adds only the warning (ADR 0073).
+type codexSystemMessageOutput struct {
+	SystemMessage string `json:"systemMessage"`
+}
+
+// writeCodexSystemMessage emits a user-visible warning on Codex's allow path.
+// Codex documents systemMessage as supported for PreToolUse and surfaces it as
+// a warning; stderr is only read as the blocking reason on exit 2, so this is
+// the fail-open path's only channel to the user (ADR 0073).
+func writeCodexSystemMessage(msg string) {
+	if msg == "" {
+		return
+	}
+	enc := json.NewEncoder(os.Stdout)
+	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
+}
+
+// writeAllowWithSystemMessage writes an "allow" response carrying a
+// user-visible systemMessage. Used by the fail-open path, where stderr would
+// otherwise be swallowed (ADR 0073). An empty msg is omitted from the JSON.
+func writeAllowWithSystemMessage(reason, msg string) {
 	out := claudeHookOutput{
 		HookSpecificOutput: claudePermissionOutput{
 			HookEventName:            "PreToolUse",
 			PermissionDecision:       "allow",
 			PermissionDecisionReason: reason,
 		},
+		SystemMessage: msg,
 	}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(out)

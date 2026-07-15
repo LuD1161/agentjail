@@ -509,8 +509,9 @@ func (s *sqliteStore) CountActionsBySession(ctx context.Context) ([]ActionCount,
 }
 
 // Cleanup deletes decisions, audit_log entries, and sessions older than
-// maxAge, then VACUUMs to reclaim space. A retention.purged audit event is
-// emitted post-commit (best-effort).
+// maxAge, VACUUMs if anything was purged, then checkpoints the WAL
+// (ADR 0071). A retention.purged audit event is emitted post-commit
+// (best-effort).
 func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge).UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -524,6 +525,7 @@ func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 		count int64
 	}
 	var results []deleteResult
+	var totalDeleted int64
 	for _, q := range []struct {
 		sql   string
 		table string
@@ -537,6 +539,7 @@ func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 			return fmt.Errorf("store: cleanup delete: %w", err)
 		}
 		n, _ := res.RowsAffected()
+		totalDeleted += n
 		results = append(results, deleteResult{table: q.table, count: n})
 	}
 
@@ -544,9 +547,22 @@ func (s *sqliteStore) Cleanup(ctx context.Context, maxAge time.Duration) error {
 		return fmt.Errorf("store: cleanup commit: %w", err)
 	}
 
-	// VACUUM cannot run inside a transaction.
-	if _, err := s.db.ExecContext(ctx, `VACUUM`); err != nil {
-		return fmt.Errorf("store: vacuum: %w", err)
+	// VACUUM only when rows were purged; nothing deleted, nothing to reclaim
+	// (ADR 0071). VACUUM cannot run inside a transaction.
+	if totalDeleted > 0 {
+		if _, err := s.db.ExecContext(ctx, `VACUUM`); err != nil {
+			return fmt.Errorf("store: vacuum: %w", err)
+		}
+	}
+
+	// Fold the WAL back into the main DB, best-effort (ADR 0071). Owning
+	// connection only — never checkpoint this DB from another process.
+	var walBusy, walLog, walCheckpointed int
+	if err := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).
+		Scan(&walBusy, &walLog, &walCheckpointed); err != nil {
+		slog.Warn("store: wal checkpoint failed (non-fatal)", "error", err)
+	} else if walBusy != 0 {
+		slog.Warn("store: wal checkpoint blocked by an active reader; WAL not truncated", "wal_frames", walLog)
 	}
 
 	// Emit retention.purged best-effort (fire-and-forget).

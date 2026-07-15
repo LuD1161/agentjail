@@ -7,6 +7,9 @@ var installCmd = &cobra.Command{
 	Short:              "Install hooks for supported coding agents",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		runInstallCmd(args)
 	},
 }
@@ -16,6 +19,9 @@ var uninstallCmd = &cobra.Command{
 	Short:              "Remove hooks, daemon service, and local policy state",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		runUninstallCmd(args)
 	},
 }

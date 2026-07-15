@@ -2,6 +2,239 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.8.2 - 2026-07-14
+
+#### TL;DR
+
+- Exactly one `agentjail-daemon` can own the policy socket now, regardless of how it was installed (Homebrew vs curl) or started (service vs manual) — a second daemon stands down instead of hijacking `daemon.sock` and orphaning the incumbent.
+- Closes an enforcement-integrity hazard where two daemons could double-bind the socket, splitting hooks across them with a fail-open window during the handoff.
+
+### Fixed
+
+- **Daemon single-instance guard** (ADR 0060, `internal/daemonapp/`) — the
+  agent-facing policy socket (`daemon.sock`) was bound with a blind `os.Remove`
+  + `net.Listen` and no single-instance lock, so a second daemon — a different
+  install channel, a manual run, or an upgrade transition — could unlink the
+  incumbent's socket and double-bind, leaving two daemons alive with hooks split
+  across them. The daemon now takes an exclusive `flock` on `daemon.lock` (beside
+  the socket) before binding, with a bounded ~1s retry to absorb a
+  supervised-restart handoff, and replaces the blind unlink with `stat →
+  ControlOpPing probe → remove-only-if-stale → ListenUnix`. A healthy incumbent →
+  the newcomer stands down cleanly (`exit 0`, so systemd's `StartLimit` never
+  pins the unit failed and launchd's `KeepAlive` self-heals); a foreign/wedged
+  process squatting on the socket → `exit 1` (never unlink a socket something
+  holds). A new side-effect-free `wire.ControlOpPing` op backs the probe so a
+  bare `connect()` can't be mistaken for a live daemon. Reuses the flock +
+  probe-before-remove pattern already used by the grant control socket and the
+  netproxy. No service-definition or user-facing CLI changes.
+
+## v0.8.1 - 2026-07-14
+
+#### TL;DR
+
+- Fixed the macOS release gate (`make e2e-release`) flaking with a misleading "VM never got an IP": the real cause was the macOS concurrent-VM cap, which the tooling now surfaces instead of hiding.
+- The gate now runs exactly one testbed VM at a time and stops it on exit, so a run never leaves an orphaned VM holding a slot.
+
+### Fixed
+
+- **macOS testbed release gate** (`test/testbed/`, Tart driver) - no shipped
+  binary change; release-tooling only.
+  - `tart run` errors (notably "The number of VMs exceeds the system limit",
+    the macOS Virtualization.framework concurrent-VM cap) are now surfaced and
+    the gate fails fast with the real reason, instead of swallowing the error
+    and blaming a DHCP-lease timeout after 120s.
+  - The gate waits for SSH to become reachable before provisioning (sshd comes
+    up a few seconds after the VM's IP), fixing an intermittent provision-time
+    SSH timeout.
+  - The gate enforces a single testbed VM: it stops other running testbed VMs
+    up front to guarantee a free slot, and stops its own VM on exit
+    (success, failure, or interrupt) so a run never orphans a VM.
+
+## v0.8.0 - 2026-07-14
+
+![v0.8.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.8.0-summary.svg)
+
+#### TL;DR
+
+- agentjail now ships **2 binaries instead of 6** - the daemon, shield, netproxy, and secrets roles are folded into one multicall `agentjail` binary dispatched by its invocation name, so there is half as much to build, sign, notarize, and self-update.
+- The four role names are now **symlinks to `agentjail`**, reconciled on every install/update - a role binary can no longer drift out of sync with the build it should track.
+- Caught a release-blocking bug pre-tag: the CI version ldflag stopped reaching the version symbol after the refactor, which would have shipped every tagged release reporting `dev`.
+- The latency-critical hook stays its **own lean binary** (~5 ms, no OPA/SQLite tax) - consolidation never touches the hot path.
+
+### Changed
+
+- **Multicall `agentjail` binary** (ADR 0059) - the daemon, shield, netproxy,
+  and secrets roles are no longer separate executables. They are folded into a
+  single `agentjail` binary that dispatches on its invocation name
+  (`filepath.Base(os.Args[0])`), with a hidden `agentjail <role>` subcommand
+  form as a fallback. Role logic moved into importable `internal/{daemonapp,
+  shieldapp,netproxyapp,secretsapp}` packages. The result: **2 shipped binaries**
+  (`agentjail` + `agentjail-hook`) instead of 6, so half as much to build, sign,
+  notarize, and atomically self-update.
+- **`agentjail-hook` deliberately stays separate** - it runs on every tool call
+  against a single-digit-millisecond budget, and folding the daemon's OPA/SQLite
+  `init()` into it would tax the hot path (~+6 ms). Verified it still links no
+  OPA/store/SQLite and starts in ~5 ms.
+- **Role binaries are now symlinks to `agentjail`** - `agentjail-daemon`,
+  `agentjail-shield`, `agentjail-netproxy`, and `agentjail-secrets` are relative
+  symlinks reconciled by `EnsureRoleSymlinks` on install, update, uninstall, and
+  in `install.sh` / the Homebrew formula. Existing launchd plists, systemd units,
+  PATH shims, and hook-config paths keep working unchanged. Drift is closed by
+  construction: a role name always resolves to the current `agentjail` build.
+- **Unified version injection** behind `internal/buildinfo.Version` - one symbol
+  every binary and reporter reads, injected by a single fully-qualified ldflag.
+- **Self-update payload trimmed** to the two real binaries; role symlinks are
+  reconciled after each swap instead of being downloaded separately.
+
+### Fixed
+
+- **Release-blocking version ldflag** - after the role packages became imports
+  rather than `main`, the CI release build's `-X main.version=` ldflag silently
+  no-oped, so every tagged release would have reported version `dev`. The build
+  now injects `internal/buildinfo.Version`. Caught and fixed before tagging.
+- **Codex / Cursor hook config serialization** - `agentjail` no longer writes a
+  degenerate empty codex hook group or a null Cursor event entry when
+  reconciling an agent's hook config, both of which could produce malformed
+  `hooks.json` that a coding agent would warn on.
+
+## v0.7.0 - 2026-07-14
+
+#### TL;DR
+
+- New clean-VM testbed engine: a real end-user VM per worktree, a `make e2e-release` release gate, and a 15-scenario CLI suite recorded to asciinema, green on Linux and macOS.
+- The credential broker now auto-starts on demand — `agentjail secret set` and shield grants no longer need a manual `agentjail-secrets serve`.
+- Fixed a Linux shield read-leak: launching from `$HOME` no longer exposed `~/.ssh`/`~/.aws`/`~/.gnupg`.
+
+### Added
+
+- **Clean-VM testbed engine** (`test/testbed/`, ADR 0053) — persistent, isolated
+  VMs (Lima/QEMU on Linux, Tart on macOS) that behave like a real end-user
+  machine: full kernel (Landlock/Seatbelt), a service manager, no host mounts,
+  no Go toolchain. agentjail is installed the true user way — a release-layout
+  tarball fed to the shipped `install.sh`. `make e2e-release` is the release
+  gate: reset to a clean golden, provision, run the `e2e-smoke` scenario, exit
+  non-zero on any failure.
+- **Recorded CLI scenario suite** — 15 scenarios captured with asciinema (tiny
+  `.cast` JSON, not video), each with a structured pass/fail result. Recordings
+  are auto-sanitized of host-identifying data before they are written.
+- **On-demand secrets broker auto-start** (ADR 0058) — the broker is a
+  loaded-but-not-running launchd/systemd definition that clients bring up on
+  first use (`EnsureSecretsBroker`), with an idle self-exit that never tears
+  down live grants. Closes DEFECT-2: `agentjail secret set` / shield grants no
+  longer require a manual `agentjail-secrets serve`. Ships as the sixth binary.
+
+### Fixed
+
+- **Linux shield `$HOME` read-leak** — the shield grants the working directory
+  read-write; when launched with `cwd == $HOME` that grant swallowed the whole
+  home tree, overriding the allowlist that withholds `~/.ssh`, `~/.aws`,
+  `~/.gnupg`. Launching from `$HOME` now grants only the non-hidden home
+  children as a workspace and denies every dotfile/dotdir by default (that's
+  where credentials live), matching the macOS shield. A normal project cwd is
+  unaffected.
+- **`--help` on flag-passthrough commands** — subcommands using
+  `DisableFlagParsing` now intercept `--help` and print usage instead of
+  forwarding it to the wrapped tool.
+
+## v0.6.2 - 2026-07-09
+
+#### TL;DR
+
+- Restore a green CI pipeline - the e2e, smoke, and race-enabled unit tests pass again on macOS and Linux (they had been red since v0.6.0 due to test-harness assumptions the v0.6.0 hardening invalidated).
+- Fix a data race in the daemon's agent-connection idle-timeout handling that the race detector flagged.
+
+### Fixed
+
+- **Daemon idle-timeout data race** - the agent-connection idle timeout moved
+  from a mutable package global to an immutable per-server field
+  (`server.idleTimeout`), set once at construction. The old global was written
+  by a test while a `handleConn` goroutine read it concurrently, which
+  `go test -race` flagged. Production behavior is unchanged (still a 5s idle
+  deadline).
+- **CI test harnesses green again** - the e2e/smoke harnesses now isolate HOME
+  so the hook honors their test socket (v0.6.0 restricted `AGENTJAIL_SOCKET` to
+  paths under `~/.agentjail`), and the sensitive-path fixtures (e2e `~/.ssh`
+  deny, shield known-hosts read-only) run against non-temp paths so the
+  policy/shield temp-write carve-outs no longer mask them. Test-only changes;
+  no shipped behavior is affected.
+
+## v0.6.1 - 2026-07-09
+
+#### TL;DR
+
+- Surface the enforcing build's version in the shielded status line instead of a bare commit hash - it reads `v0.6.1` on a release and `v0.6.0+5` between releases.
+
+### Changed
+
+- **Status line shows the version** - `agentjail statusline` now renders the
+  build version parsed from `git describe`: an exact release tag (`v0.6.1`),
+  `+N` commits past the last tag (`v0.6.0+5`), and a trailing `*` for a dirty
+  tree. It falls back to the short commit hash when no version was embedded.
+  Dev builds (`scripts/dev-deploy.sh`, `make dist`) now embed the describe
+  string so the `+N` suffix shows up between releases; the release build
+  already stamps the exact tag.
+
+## v0.6.0 - 2026-07-08
+
+![v0.6.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v0.6.0-summary.svg)
+
+#### TL;DR
+
+- Hardened the credential broker and daemon control plane - master key is now unreadable by the agent, grants auto-expire, and the daemon verifies peer UID/CWD instead of trusting self-reported claims.
+- Brought the macOS shield to parity with Linux for ssh-agent auth, including a fix for the pinned-IdentityFile blind spot that silently broke `git` over SSH under the sandbox.
+- Added first-class Linux install via a systemd `--user` service and a clean-VM testbed with a `make e2e-release` gate.
+- Inverted the over-broad `.env` write-deny to a secret-form deny-list so cloning repos that commit `.env.example`/`.env.docker` templates no longer fails.
+
+### Added
+
+- **ssh-agent auth under the shield** - `SSH_AUTH_SOCK` passthrough, agent-socket
+  connect allowed on the macOS seatbelt, and per-user temp + AF_UNIX local sockets
+- **ssh-agent readiness tooling** - typed prober, a `doctor` warning when keys are
+  on disk but not loaded, and a one-shot hook advisory on the allow path
+- **Pinned-IdentityFile fix** (ADR 0056) - the shield injects an agent-backed
+  `GIT_SSH_COMMAND` with `IdentitiesOnly=no` so a pinned on-disk key no longer
+  breaks `git` over SSH under the sandbox
+- **Daemon control-plane socket** (ADR 0052) - policy reload over the control
+  socket with SIGHUP fallback
+- **`daemon_unreachable` policy knob** (ADR 0050) with a hook-fallback sidecar the
+  hook acts on
+- **Linux install support** (ADR 0051) via a systemd `--user` daemon service
+- **Clean-VM testbed + `make e2e-release` gate** (ADR 0053) - installs through the
+  real `install.sh` and asserts enforcement on a clean box
+- **Remediation hints** on `file_policy` and `command_policy` denies, and the exact
+  MCP server name in the unknown-server deny hint
+
+### Changed
+
+- **`.env` write-deny inverted to a secret-form deny-list** (ADR 0057) - only
+  secret-bearing forms are denied; templates like `.env.example` and `.env.docker`
+  are allowed
+- **Shell parsing** now unwraps interpreter and process wrappers
+  (python/node/perl/ruby/php), newlines, and command substitutions
+- **The shield re-asserts the agentjail hook** right before exec
+
+### Fixed
+
+- **`install.sh`** no longer aborts the outer script under `set -eu`
+- **Daemon agent-socket** connections are bounded with an idle read deadline
+- **README MCP inventory** references now point at the real `mcp scan`/`mcp where`
+  commands
+
+### Security
+
+- **Secrets-broker master key** is protected from agent reads (policy + shield)
+- **Postgres passwords** no longer leak via `psql` argv; grants auto-expire and
+  requested TTL is capped
+- **Daemon peer identity** - verify peer UID and CWD instead of trusting
+  self-reported claims
+- **`AGENTJAIL_SOCKET`** is honored only when it resolves under `~/.agentjail`;
+  the fail-open sentinel re-arms on startup
+- **Credential-dir grants** - block MCP-command credential-dir grants and deny
+  `.config` credential subdirs
+- **Cloud-metadata (IMDS) egress** guarded in port-only mode
+- **Per-project policy overlay** is trust-gated before it is applied; store
+  redaction extended to more credential shapes
+
 ## v0.5.1 - 2026-07-06
 
 ### Added

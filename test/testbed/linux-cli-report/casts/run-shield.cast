@@ -1,0 +1,12 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1784012694, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.011088, "o", "=== run -- echo (allowed exec) ===\r\n"]
+[0.068872, "o", "agentjail: starting shielded session for echo\r\n  \u001b[38;5;208magentjail\u001b[0m — setting up sandbox...\r\nagentjail-shield INFO: agentjail-secrets broker detected — scoped creds available via broker\r\n  \u001b[38;5;208magentjail\u001b[0m — sandbox ready in 45ms\r\nhi\r\n\r\n  \u001b[38;5;208magentjail\u001b[0m — session ended (0s) · secured throughout\r\n"]
+[0.070564, "o", "PASS  run announces shielded session\r\n"]
+[0.072115, "o", "PASS  run -- echo hi produced 'hi'\r\n"]
+[0.072166, "o", "=== run -- cat ~/.ssh/id_rsa (blocked read) ===\r\n"]
+[0.131792, "o", "agentjail: starting shielded session for cat\r\n  \u001b[38;5;208magentjail\u001b[0m — setting up sandbox...\r\nagentjail-shield INFO: agentjail-secrets broker detected — scoped creds available via broker\r\n  \u001b[38;5;208magentjail\u001b[0m — sandbox ready in 44ms\r\n/usr/bin/cat: /home/agent.guest/.ssh/id_rsa: Permission denied\r\n\r\n  \u001b[38;5;208magentjail\u001b[0m — session ended (0s) · secured throughout\r\n"]
+[0.134682, "o", "PASS  shield blocked private-key read via run\r\n"]
+[0.13471, "o", "=== run -- write to ~/.ssh (blocked write) ===\r\n"]
+[0.203129, "o", "agentjail: starting shielded session for bash\r\n  \u001b[38;5;208magentjail\u001b[0m — setting up sandbox...\r\nagentjail-shield INFO: agentjail-secrets broker detected — scoped creds available via broker\r\n  \u001b[38;5;208magentjail\u001b[0m — sandbox ready in 46ms\r\n/usr/bin/bash: line 1: /home/agent.guest/.ssh/id_rsa: Permission denied\r\n\r\n  \u001b[38;5;208magentjail\u001b[0m — session ended (0s) · secured throughout\r\n"]
+[0.205958, "o", "PASS  shield blocked ~/.ssh write via run\r\n=== run -- write inside project cwd (allowed) ===\r\n"]
+[0.27761, "o", "agentjail: starting shielded session for bash\r\n  \u001b[38;5;208magentjail\u001b[0m — setting up sandbox...\r\nagentjail-shield INFO: agentjail-secrets broker detected — scoped creds available via broker\r\n  \u001b[38;5;208magentjail\u001b[0m — sandbox ready in 46ms\r\n\r\n  \u001b[38;5;208magentjail\u001b[0m — session ended (0s) · secured throughout\r\nPASS  run allows project-cwd write\r\n=== RESULT: 5 pass, 0 fail, 0 skip ===\r\n"]

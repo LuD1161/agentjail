@@ -11,6 +11,9 @@ var updateCmd = &cobra.Command{
 	Short:              "Update agentjail binaries to the latest release",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runUpdate(args))
 	},
 }

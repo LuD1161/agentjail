@@ -3,8 +3,9 @@
 // generator for macOS sandbox policy).
 //
 // The daemon maintains a privileged grant control socket at
-// ~/.agentjail/run/daemon-ctl.sock that only privileged or host-resident
-// processes can access. Runtime host grant requests (for elevated network,
+// ~/.agentjail/run/daemon-ctl.sock. Its verbs are gated by the ctlauth control
+// token, which the sandboxed agent cannot read; the socket path itself is not a
+// boundary on Linux (ADR 0069). Runtime host grant requests (for elevated network,
 // filesystem, or capability access) flow through this socket: a sandboxed
 // agent sends a grant request (via the hook, which forwards to daemon), the
 // daemon holds it in a pending queue, and a human operator approves or denies
@@ -42,20 +43,36 @@ const (
 	// approval.
 	ReqGrantRequest RequestType = "grant_request"
 	// ReqGrantList lists all pending grant requests the daemon holds. Control-
-	// socket only. Carries no authentication beyond socket access.
+	// socket only; CtlToken required.
 	ReqGrantList RequestType = "grant_list"
 	// ReqGrantApprove claims a pending grant request by GrantID and applies it
-	// to the owning session. Control-socket only. The daemon resolves
-	// SessionID/CWD from its own in-memory grant map by GrantID.
+	// to the owning session. Control-socket only; CtlToken required. The daemon
+	// resolves SessionID/CWD from its own in-memory grant map by GrantID.
 	ReqGrantApprove RequestType = "grant_approve"
 	// ReqGrantDeny discards a pending grant request by GrantID without
-	// applying it. Control-socket only.
+	// applying it. Control-socket only; CtlToken required.
 	ReqGrantDeny RequestType = "grant_deny"
+	// ReqDaemonReload asks the daemon to reload policy.yaml and recompile the
+	// Rego bundle in place -- what SIGHUP does, but with a response so the
+	// caller learns whether the rules actually compiled.
+	//
+	// Control-socket ONLY, and deliberately so (ADR 0066): reload is cheap to
+	// ask for and expensive to serve (a full Rego recompile), so on the
+	// agent-reachable daemon.sock it is a fail-open DoS lever -- the sandboxed
+	// agent must be able to reach that socket for hooks to work at all, the
+	// hook's budget is ~30ms, and DaemonUnreachable defaults to Allow. Moving it
+	// here is necessary but not sufficient: on Linux the agent can reach this
+	// socket too, so CtlToken is what actually gates it (ADR 0069).
+	ReqDaemonReload RequestType = "daemon_reload"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
 type Request struct {
-	Type      RequestType `json:"type"`
+	Type RequestType `json:"type"`
+	// CtlToken authenticates the caller as a process outside the sandbox. Every
+	// verb served on daemon-ctl.sock requires it (ADR 0069). ReqGrantRequest is
+	// exempt: it is the agent's own verb and is served on daemon.sock.
+	CtlToken  string      `json:"ctl_token,omitempty"`
 	SessionID string      `json:"session_id,omitempty"`
 	CWD       string      `json:"cwd,omitempty"`
 	Host      string      `json:"host,omitempty"`

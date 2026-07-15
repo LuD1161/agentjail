@@ -146,8 +146,13 @@ type codexHooksRoot struct {
 }
 
 type codexMatcherGroup struct {
-	Matcher string      `json:"matcher"`
-	Hooks   []codexHook `json:"hooks"`
+	Matcher string `json:"matcher"`
+	// omitempty is defense-in-depth: a nil Hooks slice must never marshal to
+	// JSON `null`, which Codex's own hooks.json parser rejects ("invalid
+	// type: null, expected a sequence"). dropDegenerateGroups is the primary
+	// fix — this only guards against a nil slice reaching MarshalIndent by
+	// some other path.
+	Hooks []codexHook `json:"hooks,omitempty"`
 }
 
 type codexHook struct {
@@ -232,6 +237,8 @@ func codexMergeHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 		filtered = append(filtered, g)
 	}
 
+	filtered = dropDegenerateGroups(filtered)
+
 	desired := append(filtered, codexMatcherGroup{
 		Matcher: ".*",
 		Hooks: []codexHook{
@@ -298,6 +305,8 @@ func codexRemoveHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 		filtered = append(filtered, g)
 	}
 
+	filtered = dropDegenerateGroups(filtered)
+
 	if len(filtered) == len(ptu) {
 		return raw, false, nil
 	}
@@ -311,6 +320,22 @@ func codexRemoveHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 	return out, true, nil
 }
 
+// dropDegenerateGroups returns only the matcher groups that have at least one
+// hook. A group with zero hooks is a no-op for Codex (it never fires), but if
+// it is re-serialized as-is its nil Hooks slice marshals to JSON `null`
+// ("hooks":null), which Codex's own hooks.json parser rejects with
+// "invalid type: null, expected a sequence". Dropping degenerate groups before
+// marshaling keeps the file always parseable by Codex, at the cost of
+// silently discarding an already-inert foreign entry.
+func dropDegenerateGroups(groups []codexMatcherGroup) []codexMatcherGroup {
+	var out []codexMatcherGroup
+	for _, g := range groups {
+		if len(g.Hooks) > 0 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
 
 // groupContainsCmdMatcher reports whether any hook in the matcher group matches
 // the agentjail command in either the legacy bare form or the new --agent=codex form.

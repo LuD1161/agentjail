@@ -68,9 +68,13 @@ func (ClaudeCode) Install(env Env) error {
 	return writeFileAtomic(settingsPath, updated, 0o600)
 }
 
-// Uninstall removes the agentjail hook entry for env.HookBin from
-// ~/.claude/settings.json. It is idempotent: if the entry is not present,
-// or the file does not exist, Uninstall returns nil.
+// Uninstall removes the agentjail hook entry for env.HookBin and the agentjail
+// statusLine entry from ~/.claude/settings.json, restoring any statusline that
+// was preserved by chaining. It is idempotent: if neither is present, or the
+// file does not exist, Uninstall returns nil.
+//
+// Both must be removed: Install writes both, so removing only the hook leaves a
+// statusLine invoking a binary uninstall just deleted (ADR 0063).
 func (ClaudeCode) Uninstall(env Env) error {
 	settingsPath := filepath.Join(env.Home, ".claude", "settings.json")
 
@@ -83,8 +87,9 @@ func (ClaudeCode) Uninstall(env Env) error {
 	}
 
 	updated := claudeRemoveHookEntry(existing, env.HookBin)
+	updated, _ = claudeRemoveStatusLineEntry(updated)
 	if string(updated) == string(existing) {
-		// Nothing changed — hook was not present.
+		// Nothing changed — neither entry was present.
 		return nil
 	}
 
@@ -220,6 +225,56 @@ func claudeMergeStatusLineEntry(settings []byte, cliBin string) ([]byte, bool) {
 		"type":    "command",
 		"command": newCommand,
 	}
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return settings, false
+	}
+	return append(out, '\n'), true
+}
+
+// claudeRemoveStatusLineEntry inverts claudeMergeStatusLineEntry. It returns
+// the updated JSON and whether a change was made.
+//
+// Behavior:
+//   - statusLine is not structurally ours (or absent): left untouched. A user
+//     who set their own statusline after installing keeps it.
+//   - Ours, carrying `--chain <cmd>`: restore <cmd> as the statusLine. The
+//     merge preserved a foreign statusline by chaining it; uninstall must hand
+//     it back, or the user silently loses a statusline agentjail never owned.
+//   - Ours, with no chain: remove the statusLine key entirely.
+//
+// Without this, uninstall leaves a statusLine pointing at the deleted agentjail
+// binary. See ADR 0063.
+func claudeRemoveStatusLineEntry(settings []byte) ([]byte, bool) {
+	if len(settings) == 0 {
+		return settings, false
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal(settings, &root); err != nil {
+		return settings, false
+	}
+
+	existing, _ := root["statusLine"].(map[string]interface{})
+	if existing == nil {
+		return settings, false
+	}
+	existingCmd, _ := existing["command"].(string)
+	fields := strings.Fields(existingCmd)
+	if len(fields) < 2 || fields[1] != "statusline" {
+		return settings, false // not ours
+	}
+
+	remainder := strings.TrimSpace(strings.TrimPrefix(existingCmd, fields[0]+claudeStatuslineSuffix))
+	if chained := strings.TrimSpace(strings.TrimPrefix(remainder, "--chain")); remainder != "" && chained != remainder {
+		// We wrapped someone else's statusline — give it back verbatim.
+		root["statusLine"] = map[string]interface{}{
+			"type":    "command",
+			"command": chained,
+		}
+	} else {
+		delete(root, "statusLine")
+	}
+
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return settings, false

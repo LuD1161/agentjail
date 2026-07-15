@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
 
@@ -80,5 +81,5 @@ func recordFeatureUsed(cmd string) {
 	if err != nil {
 		return
 	}
-	telemetry.RecordFeature(p, os.Getenv, version, featureName(cmd), nil)
+	telemetry.RecordFeature(p, os.Getenv, buildinfo.Version, featureName(cmd), nil)
 }

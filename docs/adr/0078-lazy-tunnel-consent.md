@@ -21,7 +21,7 @@ one-time privilege (avoid per-run sudo)". That is the wrong shape:
   for it. "Allow network tunnelling?" means nothing during install; it means
   something concrete when you are starting a tunneled session.
 
-Today's Linux path already has the right shape, by construction (ADR 0075): the
+Today's Linux path already has the right shape, by construction (ADR 0079): the
 tunnel uses unprivileged user+net+mnt namespaces, so it needs **no sudo ever**,
 and the interception CA is bind-mounted over the trust store **inside the agent's
 mount namespace** (`netns.InjectCA`) with its private key in memory only
@@ -58,7 +58,7 @@ second consent mechanism. Revocable.
 In a non-interactive context (CI, a nested agent, no TTY), a consent prompt
 cannot be answered. Such a session must fall back to netproxy with a clear
 message — never hang waiting on stdin, and never silently self-grant. Fail-open
-to netproxy is the floor (ADR 0075).
+to netproxy is the floor (ADR 0079).
 
 ### D5 — Per-platform cost, one shape
 
@@ -84,7 +84,7 @@ target state, reached for free.
   sudo on every run: the first tunneled session provisions the LaunchDaemon, and
   later sessions reuse it (D3).
 - **Nothing to build on Linux today.** The requirement is already met by ADR
-  0075's zero-privilege design. This ADR exists to keep it that way and to
+  0079's zero-privilege design. This ADR exists to keep it that way and to
   constrain the macOS work before it lands the wrong way.
 - **Tunnelling stays per-session opt-in for now** (`--tunnel`). Making it
   default-on (AGE-171) is a separate decision; when it happens, D1/D2/D4 still
@@ -93,7 +93,7 @@ target state, reached for free.
 
 ## Related
 
-- [ADR 0075](./0075-agent-netns-veth-vs-userns-tunfd.md) — unprivileged userns;
+- [ADR 0079](./0079-agent-netns-veth-vs-userns-tunfd.md) — unprivileged userns;
   why Linux costs nothing.
 - [ADR 0077](./0077-tunnel-mitm-default-and-consent.md) — the posture *inside* a
   tunneled session (interception on by default, announced, overridable). This

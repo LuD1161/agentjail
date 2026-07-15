@@ -4,14 +4,37 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/daemonapp"
+	"github.com/LuD1161/agentjail/internal/netproxyapp"
+	"github.com/LuD1161/agentjail/internal/secretsapp"
+	"github.com/LuD1161/agentjail/internal/shieldapp"
 	"github.com/LuD1161/agentjail/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 func main() {
+	// Multicall dispatch: when this binary is invoked via a role symlink
+	// (e.g. `agentjail-daemon`), route straight to that role's Run() before
+	// any cobra parsing happens. This lets a single `agentjail` binary serve
+	// as the daemon/shield/netproxy/secrets binaries too (see T3 of the
+	// multicall-binary refactor). The `agentjail <role> ...` subcommand form
+	// (cmd_role.go) covers the non-symlinked case.
+	switch filepath.Base(os.Args[0]) {
+	case "agentjail-daemon":
+		os.Exit(daemonapp.Run(os.Args[1:]))
+	case "agentjail-shield":
+		os.Exit(shieldapp.Run(os.Args[1:]))
+	case "agentjail-netproxy":
+		os.Exit(netproxyapp.Run(os.Args[1:]))
+	case "agentjail-secrets":
+		os.Exit(secretsapp.Run(os.Args[1:]))
+	}
+
 	Execute()
 }
 
@@ -110,7 +133,7 @@ func usage(w io.Writer) {
 	u := ui.New(w)
 	const bodyIndent = "  "
 
-	ver := version
+	ver := buildinfo.Version
 	if ver == "" {
 		ver = "dev"
 	}

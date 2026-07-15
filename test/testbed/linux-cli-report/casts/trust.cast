@@ -1,0 +1,11 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1784012696, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.010329, "o", "=== trust ===\r\n"]
+[0.018481, "o", "trusted: /home/agent.guest/work/demo/.agentjail/policy.yaml (sha256 06220c09180c)\r\n"]
+[0.021092, "o", "PASS  trust reports trusted: <path> (sha256 ...)\r\nPASS  trust exits 0\r\n=== trust list ===\r\n"]
+[0.028893, "o", "/home/agent.guest/work/demo/.agentjail/policy.yaml  sha256 06220c09180c  [ok]\r\n"]
+[0.031447, "o", "PASS  trust list shows the trusted project path\r\n"]
+[0.033301, "o", "PASS  trust list shows sha256 digest\r\n=== untrust ===\r\n"]
+[0.040531, "o", "untrusted: /home/agent.guest/work/demo/.agentjail/policy.yaml\r\n"]
+[0.041839, "o", "PASS  untrust reports untrusted: <path>\r\nPASS  untrust exits 0\r\n=== trust list (after untrust) ===\r\n"]
+[0.05049, "o", "no trusted project overlays\r\n"]
+[0.052783, "o", "PASS  trust list no longer shows project after untrust\r\n=== RESULT: 7 pass, 0 fail, 0 skip ===\r\n"]

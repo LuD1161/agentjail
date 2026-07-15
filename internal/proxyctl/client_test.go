@@ -77,7 +77,7 @@ func TestRegister(t *testing.T) {
 	})
 	defer stop()
 
-	err := Register(sock, Token("tok-1"), "sess-1", "/home/agent/proj", SessionPolicy{AllowedHosts: []string{"a.com", "b.com"}}, time.Hour, time.Second)
+	err := Register(sock, "ctl-tok", Token("tok-1"), "sess-1", "/home/agent/proj", SessionPolicy{AllowedHosts: []string{"a.com", "b.com"}}, time.Hour, time.Second)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRegisterRefused(t *testing.T) {
 	})
 	defer stop()
 
-	if err := Register(sock, Token("t"), "sess", "/cwd", SessionPolicy{}, time.Hour, time.Second); err == nil {
+	if err := Register(sock, "ctl-tok", Token("t"), "sess", "/cwd", SessionPolicy{}, time.Hour, time.Second); err == nil {
 		t.Error("expected error when the proxy refuses the register")
 	}
 }
@@ -119,7 +119,7 @@ func TestGrantList(t *testing.T) {
 	})
 	defer stop()
 
-	got, err := GrantList(sock, time.Second)
+	got, err := GrantList(sock, "ctl-tok", time.Second)
 	if err != nil {
 		t.Fatalf("GrantList: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestGrantListRefused(t *testing.T) {
 	})
 	defer stop()
 
-	if _, err := GrantList(sock, time.Second); err == nil {
+	if _, err := GrantList(sock, "ctl-tok", time.Second); err == nil {
 		t.Error("expected error when the proxy refuses grant_list")
 	}
 }
@@ -153,7 +153,7 @@ func TestGrantApprove(t *testing.T) {
 	})
 	defer stop()
 
-	if err := GrantApprove(sock, "g1", time.Second); err != nil {
+	if err := GrantApprove(sock, "ctl-tok", "g1", time.Second); err != nil {
 		t.Fatalf("GrantApprove: %v", err)
 	}
 	if got.GrantID != "g1" {
@@ -167,7 +167,7 @@ func TestGrantApproveRefused(t *testing.T) {
 	})
 	defer stop()
 
-	if err := GrantApprove(sock, "missing", time.Second); err == nil {
+	if err := GrantApprove(sock, "ctl-tok", "missing", time.Second); err == nil {
 		t.Error("expected error when the proxy refuses grant_approve")
 	}
 }
@@ -183,7 +183,7 @@ func TestGrantDeny(t *testing.T) {
 	})
 	defer stop()
 
-	if err := GrantDeny(sock, "g2", time.Second); err != nil {
+	if err := GrantDeny(sock, "ctl-tok", "g2", time.Second); err != nil {
 		t.Fatalf("GrantDeny: %v", err)
 	}
 	if got.GrantID != "g2" {
@@ -197,7 +197,7 @@ func TestGrantDenyRefused(t *testing.T) {
 	})
 	defer stop()
 
-	if err := GrantDeny(sock, "missing", time.Second); err == nil {
+	if err := GrantDeny(sock, "ctl-tok", "missing", time.Second); err == nil {
 		t.Error("expected error when the proxy refuses grant_deny")
 	}
 }

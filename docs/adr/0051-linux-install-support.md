@@ -46,8 +46,8 @@ launchd plist.**
      `~/Library/LaunchAgents/com.agentjail.daemon.plist`.
    - Linux: a systemd `--user` unit at
      `~/.config/systemd/user/agentjail-daemon.service`, with
-     `Restart=on-failure` / `RestartSec=2` for the same self-recovery
-     `KeepAlive` gives on macOS, and `WantedBy=default.target` (not
+     `Restart=always` / `RestartSec=2` for the same self-recovery
+     `KeepAlive=true` gives on macOS, and `WantedBy=default.target` (not
      `graphical-session.target`) so it starts in headless SSH sessions, not
      only desktop logins.
 3. **Step 6 (start) branches by `currentGOOS`:**
@@ -95,7 +95,7 @@ tests against an empty tmp `$HOME` never touch systemd regardless of stubbing.
 ## Consequences
 
 - Linux users installing via `curl | sh` or a release tarball now get a
-  running, self-recovering daemon (`Restart=on-failure`) with no manual setup,
+  running, self-recovering daemon (`Restart=always`) with no manual setup,
   matching the macOS experience.
 - Environments without a systemd `--user` session (some containers, some CI)
   degrade gracefully: hooks are wired, the unit is written, and the install

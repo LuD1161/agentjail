@@ -180,9 +180,17 @@ const ControlType = "control"
 // succeeded.
 const ControlOpReload = "reload"
 
+// ControlOpPing is a side-effect-free liveness probe: the daemon replies
+// ControlResponse{OK:true} and does nothing else (no reload, no decision
+// recorded). The single-instance guard uses it to tell a live agentjail daemon
+// from a foreign process merely squatting on the socket, so a bare successful
+// connect() is never mistaken for a healthy daemon (see
+// internal/daemonapp/singleton.go).
+const ControlOpPing = "ping"
+
 // ControlRequest is the wire shape for a daemon control-plane message. Type
-// must equal ControlType; Op selects the operation (currently only
-// ControlOpReload).
+// must equal ControlType; Op selects the operation (ControlOpReload or
+// ControlOpPing).
 type ControlRequest struct {
 	Type string `json:"type"`
 	Op   string `json:"op"`

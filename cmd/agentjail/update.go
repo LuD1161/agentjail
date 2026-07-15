@@ -13,9 +13,11 @@
 //     swapped atomically. The daemon must be restarted manually or via the
 //     user's init system.
 //
-// Binary list: agentjail, agentjail-hook, agentjail-daemon,
-//
-//	agentjail-shield, agentjail-netproxy  (mirrors install.sh).
+// Binary list: agentjail, agentjail-hook (mirrors install.sh and
+// selfupdate.UpdateBinaries). agentjail-daemon, agentjail-shield,
+// agentjail-netproxy, and agentjail-secrets are never downloaded or swapped
+// directly — they are symlinks to agentjail, reconciled by
+// selfupdate.EnsureRoleSymlinks after the swap.
 //
 // Atomic swap: each binary is downloaded to a temp file in the SAME directory
 // as the target (guarantees os.Rename is on the same filesystem), chmod 0755,
@@ -34,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -98,7 +101,7 @@ func runUpdate(args []string) int {
 		exeDir := filepath.Dir(exePath)
 		if exeDir != installDir {
 			if brew {
-				current := version
+				current := buildinfo.Version
 				if current == "" {
 					current = "dev"
 				}
@@ -173,7 +176,7 @@ func confirmUpdateInteractive() bool {
 // and force to allow reinstalling the same version.
 // Returns 0 on success, non-zero on error.
 func performUpdate(installDir, goos, goarch string, force bool) int {
-	current := version
+	current := buildinfo.Version
 	if current == "" {
 		current = "dev"
 	}
@@ -366,6 +369,19 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 			_ = selfupdate.LaunchctlLoad(plistPath)
 		}
 		return 1
+	}
+
+	// Step 8b: reconcile the four role symlinks (agentjail-daemon,
+	// agentjail-shield, agentjail-netproxy, agentjail-secrets) against the
+	// just-swapped agentjail binary. THE WATCHPOINT: this MUST run after the
+	// real agentjail binary lands in installDir, and must never be replaced
+	// with a direct copy/rename onto a role path — see
+	// selfupdate.EnsureRoleSymlinks for why. Non-fatal: the CLI itself is
+	// already updated at this point, so a symlink reconciliation failure is
+	// reported but does not fail the whole update (re-running `agentjail
+	// update --force` retries it).
+	if err := selfupdate.EnsureRoleSymlinks(installDir); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not reconcile role symlinks: %v\n", err)
 	}
 
 	// Step 9: restart the daemon.

@@ -11,6 +11,9 @@ var replayCmd = &cobra.Command{
 	Short:              "Replay decisions from a saved session",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runReplay(args))
 	},
 }

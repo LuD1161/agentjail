@@ -11,6 +11,9 @@ var sessionsCmd = &cobra.Command{
 	Short:              "List and inspect agent sessions",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
 		os.Exit(runSessions(args))
 	},
 }
