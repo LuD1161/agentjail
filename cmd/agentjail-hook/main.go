@@ -267,6 +267,7 @@ func failOpenClaudeLike(agent, category, detail, toolName string, toolInput map[
 	}
 
 	if agent == "codex" {
+		writeCodexSystemMessage(failOpenSystemMessage(fb.Level))
 		os.Exit(0)
 	}
 	writeAllowWithSystemMessage(decision.Reason, failOpenSystemMessage(fb.Level))
@@ -318,6 +319,26 @@ func printPolicyEval(noColor bool, toolName, action, ruleID, reason string, ms i
 // writeAllow writes a Claude Code "allow" hook response to stdout.
 func writeAllow(reason string) {
 	writeAllowWithSystemMessage(reason, "")
+}
+
+// codexSystemMessageOutput is the minimal Codex PreToolUse response: a
+// systemMessage and nothing else. Codex's allow convention is an empty
+// stdout, so omitting permissionDecision keeps the default-allow semantics
+// and adds only the warning (ADR 0073).
+type codexSystemMessageOutput struct {
+	SystemMessage string `json:"systemMessage"`
+}
+
+// writeCodexSystemMessage emits a user-visible warning on Codex's allow path.
+// Codex documents systemMessage as supported for PreToolUse and surfaces it as
+// a warning; stderr is only read as the blocking reason on exit 2, so this is
+// the fail-open path's only channel to the user (ADR 0073).
+func writeCodexSystemMessage(msg string) {
+	if msg == "" {
+		return
+	}
+	enc := json.NewEncoder(os.Stdout)
+	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
 }
 
 // writeAllowWithSystemMessage writes an "allow" response carrying a
