@@ -176,7 +176,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			noNetproxy = true
 			defer tunnelSess.cleanup()
 			// Announce the posture both ways. ADR 0077 (D4).
-			posture := "TLS interception off — visibility only"
+			posture := "TLS interception off — transparent-only, HTTP(S) policy will not match"
 			if mitmMode {
 				posture = "TLS interception ON — decrypting this agent's HTTPS"
 			}

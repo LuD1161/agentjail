@@ -122,10 +122,10 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 	sess := &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}
 	if !mitmEnabled {
 		// No CA minted, no SetMITM: the gateway relays TLS byte-for-byte.
-		logger.Info("tunnel TLS interception OFF — visibility only (destination IP, SNI, byte counts); pass --mitm to decrypt HTTPS")
+		logger.Info("tunnel TLS interception OFF (transparent-only) — HTTP(S) policy templates will NOT match; visibility is destination IP, SNI and byte counts only")
 	} else if caDir, caCert, caKey, caCleanup, err := setupTunnelCA(ns); err != nil {
-		// Asked for but unavailable: fail open to the relay, loudly. ADR 0077 (D5).
-		logger.Warn("tunnel TLS interception UNAVAILABLE despite --mitm (CA setup failed); relaying HTTPS opaque", "err", err)
+		// Expected but unavailable: fail open to the relay, loudly. ADR 0077 (D5).
+		logger.Warn("tunnel TLS interception UNAVAILABLE (CA setup failed); relaying HTTPS opaque — HTTP(S) policy templates will NOT match", "err", err)
 	} else {
 		sess.caCleanup = caCleanup
 		_ = caDir

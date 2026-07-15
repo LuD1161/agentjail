@@ -70,10 +70,11 @@ func main() {
 	// See ADR 0046.
 	netproxyEnable := flag.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
 	noNetproxy := flag.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
-	tunnelMode := flag.Bool("tunnel", false, "route agent traffic through the unprivileged-userns transparent gVisor forwarder (Linux only; no privileged daemon). Visibility only: TLS is relayed opaquely unless --mitm is given")
-	// Separate switch from --tunnel; off by default. ADR 0077 (D1, D2).
-	mitmMode := flag.Bool("mitm", false, "decrypt the agent's HTTPS through a per-session in-memory CA injected into the agent's namespace trust store (opt-in; enables per-endpoint and request-body policy; may break cert-pinned endpoints)")
-	noMITM := flag.Bool("no-mitm", false, "force TLS interception off for this launch, overriding network.tunnel_mitm in policy.yaml")
+	tunnelMode := flag.Bool("tunnel", false, "route agent traffic through the unprivileged-userns transparent gVisor forwarder for interception (Linux only; no privileged daemon). Decrypts HTTPS by default so policy templates apply; --no-mitm relays TLS opaquely instead")
+	// Separate switch from --tunnel, on by default, overridable both ways.
+	// ADR 0077 (D1, D2).
+	mitmMode := flag.Bool("mitm", false, "force TLS interception on for this launch, overriding a network.tunnel_mitm: false opt-out (interception is already the default)")
+	noMITM := flag.Bool("no-mitm", false, "transparent-only: relay the agent's TLS opaquely instead of decrypting it. Keeps netns isolation and IP/SNI visibility, but HTTP(S) policy templates cannot match (ADR 0077)")
 	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	flag.Usage = func() {
@@ -208,14 +209,21 @@ func main() {
 		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM), *policyPath, startTime, emitter)
 }
 
-// resolveMITM decides whether this launch decrypts TLS: only when asked for
-// (--mitm, or network.tunnel_mitm standing consent), and --no-mitm always wins.
-// Never inferred from --tunnel. ADR 0077 (D1, D2, D3).
-func resolveMITM(mitmFlag, noMITMFlag, cfgTunnelMITM bool) bool {
-	if noMITMFlag {
+// resolveMITM decides whether this launch decrypts TLS. On by default -- it is
+// the only way the DSL reaches HTTP(S) -- but always overridable: --no-mitm
+// wins outright, then --mitm, then network.tunnel_mitm's standing posture.
+// ADR 0077 (D2, D3).
+func resolveMITM(mitmFlag, noMITMFlag bool, cfgTunnelMITM *bool) bool {
+	switch {
+	case noMITMFlag:
 		return false
+	case mitmFlag:
+		return true
+	case cfgTunnelMITM != nil:
+		return *cfgTunnelMITM
+	default:
+		return true
 	}
-	return mitmFlag || cfgTunnelMITM
 }
 
 // resolveNoNetproxy computes the effective "netproxy disabled" value from the

@@ -309,9 +309,9 @@ The `--` separator between shield flags and the agent command is **required**.
 | `--profile-print` | `false` | Print the generated sandbox profile to stderr and exit (does not run the agent) |
 | `--netproxy` | `false` | Enable `agentjail-netproxy` per-host egress enforcement (opt-in; default off until the transparent tunnel lands -- ADR 0046) |
 | `--no-netproxy` | `false` | Explicitly select port-based filtering (now the default); retained for back-compat |
-| `--tunnel` | `false` | Route agent traffic through the unprivileged-userns transparent forwarder (Linux only; no sudo, no daemon). Visibility only -- TLS is relayed opaquely unless `--mitm` is also given |
-| `--mitm` | `false` | Decrypt the agent's HTTPS via a per-session in-memory CA injected into the agent's namespace trust store. Enables per-endpoint and request-body policy; may break cert-pinned endpoints. Opt-in -- `--tunnel` never implies it (ADR 0077) |
-| `--no-mitm` | `false` | Force TLS interception off for this launch, overriding `network.tunnel_mitm` in policy.yaml |
+| `--tunnel` | `false` | Route agent traffic through the unprivileged-userns transparent forwarder (Linux only; no sudo, no daemon). Decrypts HTTPS by default so policy templates apply -- see `--no-mitm` |
+| `--mitm` | *(on)* | Force TLS interception on, overriding a `network.tunnel_mitm: false` opt-out. Interception is already the default inside a tunnel, so this is normally redundant (ADR 0077) |
+| `--no-mitm` | `false` | Transparent-only: relay the agent's TLS opaquely instead of decrypting it. Keeps netns isolation and IP/SNI visibility, but **HTTP(S) policy templates cannot match** -- `netpolicy` only recognizes HTTP through the interception path. Use for cert-pinned endpoints (ADR 0077) |
 | `--audit-json=PATH` | `""` | Write environment audit findings as JSON to PATH (use `-` for stdout) |
 | `--audit-strict` | `false` | Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1), or if cloud metadata (IMDS) is reachable in port-only mode |
 

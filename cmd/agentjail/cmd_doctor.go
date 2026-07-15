@@ -499,17 +499,17 @@ func checkTLSInterceptionPosture() doctorCheck {
 		return doctorCheck{label: label, status: "skip", detail: "cannot read policy.yaml: " + err.Error()}
 	}
 
-	if cfg.Network.TunnelMITM {
+	if cfg.Network.TunnelMITM != nil && !*cfg.Network.TunnelMITM {
 		return doctorCheck{
 			label:  label,
 			status: "warn",
-			detail: "ON by default — network.tunnel_mitm is true in policy.yaml, so --tunnel runs decrypt this agent's HTTPS via a per-session CA. Run with --no-mitm, or unset it, to relay TLS opaquely",
+			detail: "OFF — network.tunnel_mitm: false in policy.yaml. --tunnel relays TLS opaquely, so HTTP(S) policy templates cannot match (host/SNI visibility only). Remove it, or pass --mitm, to restore L7 policy",
 		}
 	}
 	return doctorCheck{
 		label:  label,
 		status: "ok",
-		detail: "off — agentjail does not decrypt agent traffic; --tunnel gives visibility only (IP/SNI/size). Pass --mitm for per-endpoint and body policy, or set network.tunnel_mitm: true to opt in every run",
+		detail: "on — under --tunnel, agentjail decrypts the agent's HTTPS via a per-session CA scoped to that agent's namespace (never the host), so policy templates apply. Pass --no-mitm, or set network.tunnel_mitm: false, to relay TLS opaquely instead",
 	}
 }
 
