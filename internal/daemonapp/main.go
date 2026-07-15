@@ -1075,14 +1075,49 @@ func Run(args []string) int {
 		}
 	}()
 
+	// SIGHUP-driven reloads are coalesced (ADR 0075): a full Rego recompile is
+	// the daemon's most expensive operation, and SIGHUP is the one reload
+	// trigger that cannot be authenticated — Landlock does not mediate signals,
+	// so a same-UID process reaches it regardless of the sandbox.
+	coalescer := newReloadCoalescer(minReloadInterval, time.Now)
+	var coalesceC <-chan time.Time
+
+	reload := func(why string) {
+		slog.Info(why + " — reloading policy")
+		if err := srv.reloadPolicy(ctx); err != nil {
+			slog.Error("reload failed — keeping old policy", "err", err)
+		}
+	}
+
 	// Block waiting for signals.
-	for sig := range sigCh {
+	for {
+		var sig os.Signal
+		select {
+		case <-coalesceC:
+			// A deferred reload came due: one recompile covering however many
+			// SIGHUPs arrived during the cooldown.
+			coalesceC = nil
+			coalescer.deferredFired()
+			reload("coalesced SIGHUP")
+			continue
+		case s, ok := <-sigCh:
+			if !ok {
+				return 0
+			}
+			sig = s
+		}
+
 		switch sig {
 		case syscall.SIGHUP:
-			slog.Info("SIGHUP received — reloading policy")
-			if err := srv.reloadPolicy(ctx); err != nil {
-				slog.Error("reload failed — keeping old policy", "err", err)
-				continue
+			runNow, wait := coalescer.request()
+			switch {
+			case runNow:
+				reload("SIGHUP received")
+			case wait > 0:
+				slog.Info("SIGHUP received — reload deferred to bound recompile rate", "in", wait)
+				coalesceC = time.After(wait)
+			default:
+				slog.Info("SIGHUP received — collapsed into the pending reload")
 			}
 
 		case syscall.SIGTERM, syscall.SIGINT:
@@ -1134,7 +1169,6 @@ func Run(args []string) int {
 			return 0
 		}
 	}
-	return 0
 }
 
 // migrateDaemonLog imports historical decisions from an existing daemon.log
