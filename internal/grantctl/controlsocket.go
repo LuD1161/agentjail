@@ -12,14 +12,29 @@ const controlSocketName = "daemon-ctl.sock"
 const controlLockName = "daemon-ctl.lock"
 
 // ControlSocketPath returns the absolute path of the daemon grant control
-// socket.
+// socket, at ~/.agentjail/run/daemon-ctl.sock on every OS.
 //
-// It lives at ~/.agentjail/run/daemon-ctl.sock on every OS. This socket is
-// only accessible to privileged or host-resident processes (e.g., root, the
-// CLI running with elevated privilege, or the sbpl policy generator on macOS).
-// The sandboxed agent cannot reach it: on Linux the socket sits outside the
-// agent's Landlock allowlist, and on macOS the shield explicitly denies
-// network-outbound to the path.
+// REACHABILITY — read this before putting a privileged verb here:
+//
+//   - macOS: the shield explicitly denies network-outbound to this path, so a
+//     sandboxed agent genuinely cannot connect.
+//   - Linux: the agent CAN connect. Landlock is a filesystem LSM and does not
+//     mediate AF_UNIX connect(), so leaving the socket outside the allowlist
+//     withholds nothing. This is proven, not theorised: the shield's own
+//     Landlock enforcement test observes ctl_connect=ok and records it as a
+//     known limitation (shield_linux_enforce_test.go, "grant-socket isolation
+//     needs Tier 2+"). An earlier version of this comment claimed the opposite
+//     and was believed; it is what let ADR 0066 ship a Linux no-op.
+//
+// So on Linux the only thing standing between a prompt-injected agent and this
+// socket's verbs is the same-UID peer check — which the agent passes, since it
+// runs as the daemon's UID. SO_PEERCRED is identity, not authorization.
+//
+// Consequence: grant_approve, grant_deny, grant_list, and daemon_reload are all
+// agent-reachable on Linux today. Path separation is a real boundary on macOS
+// and a structural one on Linux. Closing it needs a secret the sandbox cannot
+// read — Landlock DOES mediate file reads (see AgentjailSecretsProtectedNames),
+// so a token under a read-denied child of ~/.agentjail is the available fix.
 //
 // The daemon itself runs outside the sandbox and creates/binds the socket
 // freely.

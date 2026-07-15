@@ -8,15 +8,32 @@ import (
 	"time"
 )
 
-// roundTrip sends one request over the control socket and reads one response.
-// It never retries and never blocks longer than timeout.
+// roundTrip sends one request over the control socket and reads one response,
+// using timeout for both the dial and the reply. Suitable for verbs the daemon
+// answers from memory; see roundTripSlow for ones it has to work for.
 func roundTrip(sockPath string, req Request, timeout time.Duration) (Response, error) {
-	conn, err := net.DialTimeout("unix", sockPath, timeout)
+	return roundTripSlow(sockPath, req, timeout, timeout)
+}
+
+// roundTripSlow is roundTrip with the dial budget and the reply budget split.
+//
+// The two measure different things and must not share a number. dialTimeout
+// answers "is anyone listening?" and should stay short so an absent daemon fails
+// fast. replyTimeout must cover however long the daemon takes to SERVE the verb
+// — for daemon_reload that is a full Rego recompile, which can exceed a dial
+// budget sized in milliseconds.
+//
+// Collapsing them makes a slow refusal indistinguishable from an absent daemon:
+// the caller times out mid-compile, reports "unreachable", and falls back to
+// another delivery path — losing the compile verdict that says the operator's
+// policy was rejected and never took effect.
+func roundTripSlow(sockPath string, req Request, dialTimeout, replyTimeout time.Duration) (Response, error) {
+	conn, err := net.DialTimeout("unix", sockPath, dialTimeout)
 	if err != nil {
 		return Response{}, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(timeout))
+	_ = conn.SetDeadline(time.Now().Add(replyTimeout))
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return Response{}, fmt.Errorf("send control request: %w", err)
@@ -106,17 +123,26 @@ func (e *RefusedError) Error() string {
 	return string(e.Op) + " refused: " + e.Reason
 }
 
+// DaemonReloadReplyTimeout bounds how long DaemonReload waits for the daemon to
+// finish reloading, as opposed to how long it waits to connect. Sized for a full
+// Rego recompile on a cold, contended box, since the alternative -- timing out
+// mid-compile -- makes a rejected policy look like an absent daemon.
+const DaemonReloadReplyTimeout = 10 * time.Second
+
 // DaemonReload asks the daemon on sockPath (the privileged control socket) to
-// reload policy.yaml and recompile the Rego bundle. A *RefusedError carries the
-// compile error verbatim when the new rules are rejected -- the daemon keeps the
-// old bundle in that case, so the caller must surface it rather than assume the
-// edit took effect. Any other error means the daemon could not be reached.
+// reload policy.yaml and recompile the Rego bundle. dialTimeout bounds only the
+// connect; the reply is given DaemonReloadReplyTimeout, because serving this verb
+// means compiling.
+//
+// A *RefusedError carries the compile error verbatim when the new rules are
+// rejected -- the daemon keeps the old bundle in that case, so the caller must
+// surface it rather than assume the edit took effect. Any other error means the
+// daemon could not be reached.
 //
 // sockPath must be the privileged control socket, never the agent-facing
-// daemon.sock: reload is a full Rego recompile, and the agent can reach that
-// socket by design, which made it a fail-open DoS lever (ADR 0066).
-func DaemonReload(sockPath string, timeout time.Duration) error {
-	resp, err := roundTrip(sockPath, Request{Type: ReqDaemonReload}, timeout)
+// daemon.sock (ADR 0066).
+func DaemonReload(sockPath string, dialTimeout time.Duration) error {
+	resp, err := roundTripSlow(sockPath, Request{Type: ReqDaemonReload}, dialTimeout, DaemonReloadReplyTimeout)
 	if err != nil {
 		return err
 	}
