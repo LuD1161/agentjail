@@ -51,6 +51,18 @@ const (
 	// ReqGrantDeny discards a pending grant request by GrantID without
 	// applying it. Control-socket only.
 	ReqGrantDeny RequestType = "grant_deny"
+	// ReqDaemonReload asks the daemon to reload policy.yaml and recompile the
+	// Rego bundle in place -- what SIGHUP does, but with a response so the
+	// caller learns whether the rules actually compiled.
+	//
+	// Control-socket ONLY, and deliberately so (ADR 0066): reload is cheap to
+	// ask for and expensive to serve (a full Rego recompile), so on the
+	// agent-reachable daemon.sock it is a fail-open DoS lever -- the sandboxed
+	// agent must be able to reach that socket for hooks to work at all, the
+	// hook's budget is ~30ms, and DaemonUnreachable defaults to Allow. This
+	// socket is denied to the sandbox on both platforms, which is the actual
+	// boundary; the same-UID peer check is identity, not authorization.
+	ReqDaemonReload RequestType = "daemon_reload"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
