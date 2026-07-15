@@ -59,11 +59,19 @@ narrowing it.
 `isDaemonRunning()` (the ADR 0061 socket probe) for up to 3s. A daemon still answering means
 the stop did not happen, regardless of what the service manager reported.
 
-**Never claim what did not happen.** `UninstallResult.DaemonStillRunning` marks the run as
-hard-failed and the summary says so plainly — that the daemon was not started by the service
-manager and therefore was not stopped, that it will re-inject hooks until killed, and how to
-kill it. The previous "✓ stopped and systemd unit removed" is only printed when the socket
-is actually dead.
+**Abort rather than proceed.** Detecting the live daemon is not enough: continuing would
+still let hookwatch re-inject every hook removed, producing exactly the broken end state
+above — agentjail deleted, agents wired to a deleted binary — merely with a better error
+message. So a surviving daemon aborts the run *before* anything is torn down, leaving a
+consistent, working install to retry from. `--force` overrides, for a daemon that genuinely
+cannot be killed, so uninstall is never a trap.
+
+**Never claim what did not happen.** `UninstallResult.DaemonStillRunning` and `Aborted` mark
+the run as hard-failed, and the summary reports only what actually happened: that the daemon
+was not started by the service manager and so was not stopped, that it re-injects hooks
+until killed, how to kill it, and that nothing was removed. The previous "✓ stopped and
+systemd unit removed" prints only when the socket is actually dead; the per-step lines are
+suppressed entirely on an abort, since none of those steps ran.
 
 ## Consequences
 
@@ -72,11 +80,12 @@ genuinely stopped, teardown is total: `~/.agentjail`, both rc PATH blocks (ADR 0
 hook entries, and the statusLine with any chained command restored (ADR 0063) — verified
 end-to-end on the box where this was found.
 
-An unmanaged daemon now fails the uninstall instead of being silently worked around. This is
-intentional — a partial teardown that says so is strictly better than a total one that
-isn't — but it means a developer who starts daemons by hand must kill them before
-uninstalling, and `--keep-secrets`-style unattended flows will surface a new hard failure
-where they previously (wrongly) reported success.
+An unmanaged daemon now blocks the uninstall instead of being silently worked around. This
+is intentional — refusing to start is better than a teardown that cannot succeed — but it
+means a developer who starts daemons by hand must kill them first, and unattended flows will
+surface a new hard failure (exit 1, nothing removed) where they previously reported a
+success that was not real. `--force` preserves the old behavior for anyone who needs it, and
+says plainly that it leaves hooks re-injected.
 
 Uninstall still cannot *stop* a daemon it does not own; it can only detect and report. The
 complete fix is a `wire.ControlOpShutdown` on the existing control socket (ADR 0060 already

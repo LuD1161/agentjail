@@ -540,7 +540,7 @@ func runUninstallCmd(args []string) {
 	}
 
 	// ── Full teardown path ────────────────────────────────────────────────
-	result := performFullUninstall(home, currentGOOS, hasFlag(args, "--keep-secrets"))
+	result := performFullUninstall(home, currentGOOS, hasFlag(args, "--keep-secrets"), hasFlag(args, "--force"))
 	printUninstallResult(result)
 	if result.HardFailed {
 		os.Exit(1)
@@ -570,6 +570,11 @@ type UninstallResult struct {
 	// service manager, so the stop was a no-op. Its hookwatch will re-inject
 	// the hooks this teardown removes (ADR 0065).
 	DaemonStillRunning bool
+
+	// Aborted is true when the run stopped before tearing anything down,
+	// because the daemon could not be stopped and --force was not given. The
+	// install is left intact and working (ADR 0065).
+	Aborted bool
 
 	// InstallDirErr is non-nil when ~/.agentjail removal failed.
 	InstallDirErr error
@@ -609,7 +614,10 @@ type UninstallResult struct {
 //     to skip the real launchctl calls).
 //   - keepSecrets, when true, preserves the encrypted secrets store and master
 //     key (~/.agentjail/secrets + secrets.key) across the ~/.agentjail wipe.
-func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
+//   - force, when true, proceeds with teardown even if the daemon could not be
+//     stopped. Without it, a surviving daemon aborts the run untouched, because
+//     its hookwatch would re-inject everything we remove (ADR 0065).
+func performFullUninstall(home, goos string, keepSecrets, force bool) UninstallResult {
 	var r UninstallResult
 	env := buildAgentsEnv(home)
 
@@ -646,6 +654,18 @@ func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 		r.DaemonStillRunning = waitForDaemonStop(daemonStopDeadline)
 		if r.DaemonStillRunning {
 			r.HardFailed = true
+			// Abort before touching anything else. A live daemon's hookwatch
+			// re-injects every hook we remove, so continuing cannot produce a
+			// clean uninstall — it produces the exact broken end state this ADR
+			// exists to prevent: agentjail deleted from disk, agent configs
+			// still pointing at the deleted hook binary. Stopping here instead
+			// leaves a consistent, working install the user can retry from,
+			// which is strictly better than a half-torn-down one. --force
+			// overrides for a daemon that cannot be killed (ADR 0065).
+			if !force {
+				r.Aborted = true
+				return r
+			}
 		}
 		// Secrets broker teardown (ADR 0058). Best-effort: a leftover
 		// loaded-but-not-running definition is harmless, so a failure here does
@@ -1009,6 +1029,30 @@ func printUninstallResult(r UninstallResult) {
 // It mirrors printInstallSummary and is the testable core of printUninstallResult.
 func printUninstallSummary(w io.Writer, r UninstallResult) {
 	u := ui.New(w)
+
+	// Aborted before teardown: report only why, and that nothing was touched.
+	// The per-step lines below would all be misleading — none of those steps ran.
+	if r.Aborted {
+		body := strings.Join([]string{
+			u.Badge("fail", "daemon STILL RUNNING — the service manager does not own it, so it was not stopped"),
+			"",
+			"It re-injects the agentjail hook into your agent configs as fast as uninstall",
+			"removes it, so continuing would delete agentjail while leaving Claude Code and",
+			"Codex wired to a hook binary that no longer exists.",
+			"",
+			"Kill it, then re-run:",
+			"  pkill -u $(id -u) -f agentjail-daemon && agentjail uninstall",
+			"",
+			"Or tear down anyway (leaves hooks re-injected):",
+			"  agentjail uninstall --force",
+			"",
+			u.Badge("ok", "Nothing was removed — your install is intact and still working."),
+		}, "\n")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, u.Box(u.Emoji("🛑  ")+"uninstall aborted", body))
+		fmt.Fprintln(w)
+		return
+	}
 
 	var lines []string
 	for _, ar := range r.Agents {
