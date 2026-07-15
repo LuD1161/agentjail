@@ -188,9 +188,14 @@ func peerUIDAllowed(peerUID, daemonUID int, uidErr error) bool {
 	return peerUID == daemonUID
 }
 
+// ctlReloadDeadline bounds a daemon_reload connection. Deliberately larger than
+// grantctl.DaemonReloadReplyTimeout so the client's budget is the one that
+// governs, rather than both sides racing to time out first (ADR 0066).
+const ctlReloadDeadline = 15 * time.Second
+
 // handleCtlConn reads one control request off the privileged grant control
-// socket and writes one response. Dispatches grant_list, grant_approve, and
-// grant_deny; anything else is rejected.
+// socket and writes one response. Dispatches grant_list, grant_approve,
+// grant_deny, and daemon_reload; anything else is rejected.
 func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -255,6 +260,13 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "daemon_reload unavailable"})
 			return
 		}
+		// Extend past the 5s blanket deadline set above: that one is sized for
+		// verbs answered from memory, but serving this one means a full Rego
+		// compile. Letting it expire mid-compile would close the connection
+		// under the client, turning a compile verdict it must see ("your policy
+		// was rejected") into a transport error it reads as "daemon absent".
+		// Kept above the client's own reply budget so the CLI's timeout governs.
+		_ = conn.SetDeadline(time.Now().Add(ctlReloadDeadline))
 		if err := gs.reload(context.Background()); err != nil {
 			// Compile failed -- the daemon kept the previous bundle. Return the
 			// error verbatim so the caller knows the edit did NOT take effect.
