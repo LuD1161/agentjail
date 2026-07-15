@@ -45,9 +45,13 @@ response, which Claude Code renders in the normal TUI on an exit-0 allow.
   deliberate: the failure mode this exists to prevent is a silent window that
   lasts for days.
 - Cursor already had a message channel on its allow response
-  (`writeCursorAllowWithMessage`) and is unaffected. Codex still relies on
-  stderr — its hook contract has no equivalent field; a Codex user in a
-  daemon-down window remains under-warned. Tracked as a follow-up.
+  (`writeCursorAllowWithMessage`) and is unaffected.
+- Codex documents `systemMessage` as supported for PreToolUse and surfaces it
+  as a warning, so it gets the notice too. Its allow convention is an empty
+  stdout, so the fail-open response carries **only** `systemMessage` — no
+  `permissionDecision`, which keeps default-allow semantics, and none of
+  Claude's `hookSpecificOutput`, which Codex does not read. Normal Codex
+  allows still write nothing at all.
 - Any future user-facing notice on an exit-0 hook path must use
   `systemMessage`. Writing it to stderr is the same bug.
 
