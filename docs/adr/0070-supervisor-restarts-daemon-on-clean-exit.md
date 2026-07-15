@@ -19,8 +19,8 @@ asserted the two were equivalent. They are not.
 Consequence on Linux: every auto-update permanently stopped the daemon. The
 shield kept activating (it writes to the store on its own path, independent of
 the daemon), so telemetry still showed activity while no decisions were
-recorded and nothing surfaced the gap to the user — the silent-unprotected
-window described in AGE-212.
+recorded and nothing surfaced the gap to the user — a silent unprotected
+window.
 
 ## Decision
 
@@ -47,5 +47,5 @@ implement it, and drift here is a bug.
   disables enforcement.
 - Pinned by `TestInstallSystemdUnitContent`, which rejects `Restart=on-failure`.
 
-Refs: AGE-212. Related: ADR 0034 (platform contract), ADR 0050
-(daemon-unreachable policy), ADR 0051 (Linux install), ADR 0060.
+Related: ADR 0034 (platform contract), ADR 0050 (daemon-unreachable policy),
+ADR 0051 (Linux install), ADR 0060 (daemon single-instance guard).

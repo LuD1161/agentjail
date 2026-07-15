@@ -14,13 +14,12 @@ the user just on exit 2 (fed back to Claude) or another non-zero exit (shown as
 a hook error). So on the one path that matters — fail-open **allow** — the
 banner went to a stream nobody reads. ADR 0050's fix was never visible.
 
-This is not theoretical. AGE-212: the daemon exited cleanly on 2026-07-10 and
-was not restarted until 07-14. The build in use predated neither ADR 0050 nor
-the shield's hook re-assert, so the banner *was* firing — on every tool call,
-for three days, into the debug log. The user worked through the whole window
-unprotected, committing daily, and noticed nothing. The `decisions` table
-stayed empty while `shield.activated` kept climbing, which is why the gap was
-eventually found in a metrics review rather than at the time.
+This is not theoretical. It was found in a real multi-day window: the daemon
+exited cleanly, was not restarted, and the banner fired on every tool call for
+three days straight — into the debug log. Work continued unprotected the whole
+time and nothing surfaced it. `decisions` stayed empty while `shield.activated`
+kept climbing, so the gap was eventually caught in a metrics review rather than
+at the time it opened.
 
 The deny path was always fine: level=deny exits 2, and stderr on exit 2 is
 shown. Only the allow paths (level=allow, and degraded-with-no-rule-match) were
@@ -48,8 +47,8 @@ response, which Claude Code renders in the normal TUI on an exit-0 allow.
 - Cursor already had a message channel on its allow response
   (`writeCursorAllowWithMessage`) and is unaffected. Codex still relies on
   stderr — its hook contract has no equivalent field; a Codex user in a
-  daemon-down window remains under-warned. Tracked separately.
+  daemon-down window remains under-warned. Tracked as a follow-up.
 - Any future user-facing notice on an exit-0 hook path must use
   `systemMessage`. Writing it to stderr is the same bug.
 
-Refs: AGE-212. Amends ADR 0050 (daemon-unreachable policy). Related: ADR 0072.
+Amends ADR 0050 (daemon-unreachable policy). Related: ADR 0072.

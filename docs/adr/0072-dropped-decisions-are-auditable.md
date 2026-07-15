@@ -12,9 +12,8 @@ already returned to the hook, and enforcement is unaffected.
 What was wrong is that the loss was **invisible**. A full buffer or a failed
 write dropped the record with only an `slog.Warn` to `daemon.log`. Nothing
 durable recorded it, so after the fact the `decisions` table simply
-under-reported with no way to tell an idle period from a lossy one. AGE-212
-started as exactly this question — "is this table missing rows?" — and could
-not be answered from the data.
+under-reported with no way to tell an idle period from a lossy one. "Is this
+table missing rows?" was not answerable from the data it holds.
 
 The count matters more than the individual rows here. Knowing "412 decisions
 were dropped in this window" is what distinguishes a quiet day from a broken
@@ -43,7 +42,7 @@ counter, and emit a `decisions.dropped` audit event carrying the count.
   decisions that never reached it — a daemon that is down, or a hook that
   never fired, is a different gap with no in-daemon detector today. The
   divergence signal for that (`shield.activated` climbing while `decisions`
-  stays flat) is noted in AGE-212 and not yet built.
+  stays flat) is a known follow-up, not yet built.
 
-Refs: AGE-212. Related: ADR 0018 (SQLite store), ADR 0050 (daemon
-unreachable), Plan 009 (unified audit log).
+Related: ADR 0018 (SQLite store), ADR 0050 (daemon unreachable), Plan 009
+(unified audit log).
