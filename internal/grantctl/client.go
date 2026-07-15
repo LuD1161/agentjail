@@ -70,8 +70,8 @@ func GrantRequest(sockPath string, sessionID, cwd, host string, ttlMs int64, rea
 
 // GrantList lists the pending grant requests the daemon currently holds, across
 // all sessions. The result never contains a Token (see GrantInfo).
-func GrantList(sockPath string, timeout time.Duration) ([]GrantInfo, error) {
-	resp, err := roundTrip(sockPath, Request{Type: ReqGrantList}, timeout)
+func GrantList(sockPath, ctlToken string, timeout time.Duration) ([]GrantInfo, error) {
+	resp, err := roundTrip(sockPath, Request{Type: ReqGrantList, CtlToken: ctlToken}, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +84,8 @@ func GrantList(sockPath string, timeout time.Duration) ([]GrantInfo, error) {
 // GrantApprove claims the pending grant request identified by grantID and
 // applies it to its owning session's allowlist. The daemon resolves
 // SessionID/CWD from its own in-memory grant map by GrantID.
-func GrantApprove(sockPath, grantID string, timeout time.Duration) error {
-	resp, err := roundTrip(sockPath, Request{Type: ReqGrantApprove, GrantID: grantID}, timeout)
+func GrantApprove(sockPath, ctlToken, grantID string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqGrantApprove, CtlToken: ctlToken, GrantID: grantID}, timeout)
 	if err != nil {
 		return err
 	}
@@ -97,8 +97,8 @@ func GrantApprove(sockPath, grantID string, timeout time.Duration) error {
 
 // GrantDeny discards the pending grant request identified by grantID without
 // applying it. Same GrantID-only shape as GrantApprove.
-func GrantDeny(sockPath, grantID string, timeout time.Duration) error {
-	resp, err := roundTrip(sockPath, Request{Type: ReqGrantDeny, GrantID: grantID}, timeout)
+func GrantDeny(sockPath, ctlToken, grantID string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqGrantDeny, CtlToken: ctlToken, GrantID: grantID}, timeout)
 	if err != nil {
 		return err
 	}
@@ -141,8 +141,8 @@ const DaemonReloadReplyTimeout = 10 * time.Second
 //
 // sockPath must be the privileged control socket, never the agent-facing
 // daemon.sock (ADR 0066).
-func DaemonReload(sockPath string, dialTimeout time.Duration) error {
-	resp, err := roundTripSlow(sockPath, Request{Type: ReqDaemonReload}, dialTimeout, DaemonReloadReplyTimeout)
+func DaemonReload(sockPath, ctlToken string, dialTimeout time.Duration) error {
+	resp, err := roundTripSlow(sockPath, Request{Type: ReqDaemonReload, CtlToken: ctlToken}, dialTimeout, DaemonReloadReplyTimeout)
 	if err != nil {
 		return err
 	}
