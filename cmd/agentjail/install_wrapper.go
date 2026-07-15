@@ -176,12 +176,18 @@ func installPathShim(home string) error {
 	}
 
 	// Create a shell script shim (not a compiled binary — simpler for now).
+	//
+	// The shim sits on PATH ahead of the real claude, so every failure mode here
+	// is a failure mode of the user's claude. It therefore fails OPEN: if the
+	// shield is gone, claude still runs (unshielded, loudly). See ADR 0063.
 	shimContent := fmt.Sprintf(`#!/bin/sh
 # agentjail PATH shim — transparently wraps claude with agentjail-shield.
 # Installed by: agentjail install --with-path-shim
 # Remove with:  agentjail uninstall
 
 set -e
+
+SHIELD="%s"
 
 # Find the real claude binary, excluding our own directory.
 find_real_claude() {
@@ -209,8 +215,19 @@ if [ "$REAL_CLAUDE" = "%s" ]; then
     exit 1
 fi
 
-exec "%s" -- "$REAL_CLAUDE" "$@"
-`, shimDir, shimDir, shimPath, shimPath, shimPath, shieldBin)
+# Fail open. A missing shield must never brick claude: an interrupted upgrade,
+# a partial uninstall, or a quarantined binary would otherwise leave every
+# claude invocation dead with a cryptic "exec: not found". -x also catches a
+# dangling agentjail-shield -> agentjail role symlink, since it follows links.
+if [ ! -x "$SHIELD" ]; then
+    echo "WARNING: agentjail-shield is missing or not executable at $SHIELD" >&2
+    echo "  Running claude UNSHIELDED — policy hooks may still apply." >&2
+    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: rm %s" >&2
+    exec "$REAL_CLAUDE" "$@"
+fi
+
+exec "$SHIELD" -- "$REAL_CLAUDE" "$@"
+`, shieldBin, shimDir, shimDir, shimPath, shimPath, shimPath, shimPath)
 
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create shim directory: %v", err)
