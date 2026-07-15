@@ -26,6 +26,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/projectpolicy"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
@@ -175,7 +176,11 @@ func ensureSessionProxy(netproxyPath, proxyAddr, sessionID, cwd string, policy p
 					"end other shielded sessions or restart the proxy (fail closed)",
 				fp.ProtocolVersion, proxyctl.CurrentProtocolVersion)
 		}
-		if err := proxyctl.Register(ctlPath, tok, sessionID, cwd, policy, sessionLeaseTTL, registerTimeout); err != nil {
+		ctlToken, err := loadCtlToken()
+		if err != nil {
+			return nil, "", err
+		}
+		if err := proxyctl.Register(ctlPath, ctlToken, tok, sessionID, cwd, policy, sessionLeaseTTL, registerTimeout); err != nil {
 			return nil, "", fmt.Errorf("register session with running proxy: %w", err)
 		}
 		return nil, tok, nil // reuse; not ours to reap
@@ -200,11 +205,30 @@ func ensureSessionProxy(netproxyPath, proxyAddr, sessionID, cwd string, policy p
 		_ = cmd.Process.Kill()
 		return nil, "", fmt.Errorf("netproxy did not expose its control socket: %w", err)
 	}
-	if err := proxyctl.Register(ctlPath, tok, sessionID, cwd, policy, sessionLeaseTTL, registerTimeout); err != nil {
+	// After waitForControlSocket: the proxy mints the token before it binds, so
+	// the file is guaranteed to exist by the time it answers.
+	ctlToken, err := loadCtlToken()
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return nil, "", err
+	}
+	if err := proxyctl.Register(ctlPath, ctlToken, tok, sessionID, cwd, policy, sessionLeaseTTL, registerTimeout); err != nil {
 		_ = cmd.Process.Kill()
 		return nil, "", fmt.Errorf("register session with new proxy: %w", err)
 	}
 	return cmd, tok, nil
+}
+
+// loadCtlToken reads the control token for a netproxy known to be running (it
+// mints the token at startup). Callers must be pre-Landlock -- ensureSessionProxy
+// is, by construction (ADR 0067). A missing token is fatal to the session rather
+// than a reason to proceed unregistered: no registration means no egress.
+func loadCtlToken() (string, error) {
+	ctlToken, err := ctlauth.Load()
+	if err != nil {
+		return "", fmt.Errorf("read control token (is agentjail-netproxy healthy?): %w", err)
+	}
+	return ctlToken, nil
 }
 
 // spawnNetproxy starts agentjail-netproxy as a child process. It logs per-CONNECT
