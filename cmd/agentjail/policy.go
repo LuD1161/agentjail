@@ -41,12 +41,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -57,9 +55,9 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/policyctl"
 	"github.com/LuD1161/agentjail/internal/ui"
-	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // runPolicy is the top-level dispatcher for `agentjail policy <sub>`.
@@ -648,14 +646,14 @@ var sighupDaemonFn = sighupDaemon
 const controlDialTimeout = 200 * time.Millisecond
 
 // sighupDaemon asks the running daemon to reload policy.yaml and the Rego
-// rule bundle. It first tries the daemon's control socket
-// (internal/wire.ControlOpReload) — a request/response round trip lets the
-// daemon report back whether the reload actually compiled, instead of the
-// old pgrep+SIGHUP path where a bad policy.yaml would silently keep the old
-// policy while this command still reported success. If the control socket
-// is unreachable (daemon not running, or an older daemon binary that
-// doesn't understand the control op yet), it falls back to
-// sighupDaemonViaSignal.
+// rule bundle. It first tries the daemon's privileged control socket
+// (grantctl.ReqDaemonReload) — a request/response round trip lets the daemon
+// report back whether the reload actually compiled, instead of the pgrep+SIGHUP
+// path where a bad policy.yaml would silently keep the old policy while this
+// command still reported success. If the control socket is unreachable (daemon
+// not running, the grant control server failed to bind, or an older daemon that
+// serves reload only on the agent socket), it falls back to sighupDaemonViaSignal
+// — which still reloads, just without a compile verdict.
 func sighupDaemon() {
 	if reloadViaControlSocket() {
 		return
@@ -663,51 +661,33 @@ func sighupDaemon() {
 	sighupDaemonViaSignal()
 }
 
-// reloadViaControlSocket dials the daemon's Unix socket and sends a
-// ControlOpReload request. It returns true if the round trip completed
-// (regardless of whether the daemon reported ok=true or ok=false) — in both
-// of those cases the caller learned something concrete and should NOT also
-// fall back to SIGHUP. It returns false only when the socket could not be
-// reached or spoke an unexpected protocol, meaning the caller learned
-// nothing and the pgrep+SIGHUP fallback should be tried instead.
+// reloadViaControlSocket sends grantctl.ReqDaemonReload to the daemon's
+// privileged control socket. It returns true if the round trip completed
+// (whether or not the daemon reported success) — in both cases the caller
+// learned something concrete and must NOT also fall back to SIGHUP, or a
+// rejected policy would be reported twice. It returns false only when the
+// socket could not be reached, meaning the caller learned nothing.
 //
-// On a reported failure (ok=false), a warning naming the daemon's error is
-// printed to stderr — this is the key win over SIGHUP: the operator learns
-// immediately that a bad policy.yaml (or rules directory) kept the old
-// policy in effect, rather than assuming their change took effect.
+// On a reported failure a warning naming the daemon's error is printed — the key
+// win over SIGHUP: the operator learns immediately that a bad policy.yaml kept
+// the old policy in effect, rather than assuming the change took effect.
+//
+// This targets daemon-ctl.sock, NOT the agent-facing daemon.sock. Reload is a
+// full Rego recompile, and the agent socket is reachable from inside the sandbox
+// by design, which made it a fail-open DoS lever (ADR 0066).
 func reloadViaControlSocket() bool {
-	conn, err := net.DialTimeout("unix", wire.DefaultSocketPath(), controlDialTimeout)
-	if err != nil {
-		return false
+	err := grantctl.DaemonReload(grantctl.ControlSocketPath(), controlDialTimeout)
+	if err == nil {
+		return true
 	}
-	defer conn.Close()
-
-	if err := conn.SetDeadline(time.Now().Add(controlDialTimeout)); err != nil {
-		return false
+	// Distinguish "daemon said no" from "could not reach the daemon". Only the
+	// former means the caller learned something; the latter must fall back.
+	var refused *grantctl.RefusedError
+	if errors.As(err, &refused) {
+		fmt.Fprintf(os.Stderr, "warning: daemon policy reload failed — old policy is still in effect: %s\n", refused.Reason)
+		return true
 	}
-
-	if err := json.NewEncoder(conn).Encode(wire.ControlRequest{
-		Type: wire.ControlType,
-		Op:   wire.ControlOpReload,
-	}); err != nil {
-		return false
-	}
-
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024)
-	if !scanner.Scan() {
-		return false
-	}
-
-	var resp wire.ControlResponse
-	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		return false
-	}
-
-	if !resp.OK {
-		fmt.Fprintf(os.Stderr, "warning: daemon policy reload failed — old policy is still in effect: %s\n", resp.Error)
-	}
-	return true
+	return false
 }
 
 // sighupDaemonViaSignal finds the agentjail-daemon process via pgrep and
