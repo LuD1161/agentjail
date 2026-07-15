@@ -100,3 +100,50 @@ Costs and residuals:
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
 which this makes a real boundary on Linux rather than a structural one).
+
+## Addendum: the `daemon.sock` write grant measured (AGE-216)
+
+The "Landlock does not mediate `AF_UNIX connect()`" premise above was previously supported
+only by the incidental `ctl_connect=ok` observation. It has now been measured directly, by
+A/B-ing the single-file write grant on `~/.agentjail/daemon.sock` in
+`AgentPaths.HomeFilesRW` (`internal/shieldapp/shield_agentpaths.go`) against
+`TestLandlockAgentjailStateEnforcement`.
+
+Host: kernel `6.1.0-44-amd64`, **Landlock ABI 2** (the ABI the "confirmed on 6.1" claim
+refers to; ABI 3 lands in 6.2, the network ABI 4 in 6.7).
+
+| arm | `sock_connect` |
+|---|---|
+| grant present (as-is) | `ok` |
+| grant removed | `ok` |
+
+**The grant is a no-op for `connect()`.** The premise holds on this kernel: withholding write
+on the socket inode withholds nothing, so granting it grants nothing.
+
+The result is not vacuous — three controls back it:
+
+- **The removal is observable.** `.claude.json` is granted through the *same* `HomeFilesRW`
+  loop (`shield_linux.go`, `allowPath(p, rwFileAccess)`). Removing it flips its write probe
+  `ok` → `EACCES`, so removing an entry from that list demonstrably changes enforcement.
+  In the decisive arm `.claude.json` stayed granted (`claudejson_write=ok`) while
+  `daemon.sock` was removed — the list was live and `connect()` still succeeded.
+- **The sandbox is live and denying on this exact subtree.** `policy_write=EACCES` and
+  `trust_write=EACCES` in every arm.
+- **The probe can report failure.** Pointed at a socket path with no listener it returns
+  `ERR:...no such file or directory`, not `ok`.
+
+Incidental finding, recorded but **not acted on**: a `HomeFilesRW` grant on a path that does
+not exist at launch is silently skipped by `allowPath`. This is why the socket grant is
+"skipped harmlessly if the daemon is not running" — but it also means such a grant binds only
+when the inode already exists.
+
+Consequently the grant's justifying comments in `shield_agentpaths.go` (the `HomeRO`
+`.agentjail` note and the `HomeFilesRW` `daemon.sock` note) state the opposite of this ADR:
+they claim "Landlock mediates AF_UNIX connect() through the filesystem hook (needs write on
+the socket inode)". That is measurably false here. The same stale premise is what
+`daemon-ctl.sock`'s "Linux Landlock denies connect() without write" comment asserts — and
+`ctl_connect=ok` contradicts it, which is precisely the gap this ADR's token exists to close.
+
+The grant is **left in place**; dropping it and correcting the comments is a human decision.
+Note the grant is not load-bearing on macOS either (sbpl permits the connect via
+allow-default network), so removal would be a Linux-and-macOS no-op — but that is untested.
