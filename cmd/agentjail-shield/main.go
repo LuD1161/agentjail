@@ -70,7 +70,7 @@ func main() {
 	// See ADR 0046.
 	netproxyEnable := flag.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
 	noNetproxy := flag.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
-	tunnelMode := flag.Bool("tunnel", false, "use WireGuard tunnel gateway for transparent traffic interception (Linux only, requires agentjail-daemon)")
+	tunnelMode := flag.Bool("tunnel", false, "route agent traffic through the unprivileged-userns transparent gVisor forwarder for interception (Linux only; no privileged daemon; TLS-terminating MITM when policy packs are present)")
 	auditJSON := flag.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := flag.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	flag.Usage = func() {
