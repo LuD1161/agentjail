@@ -494,28 +494,35 @@ agentjail policy list
 ## When the daemon is unreachable
 
 `agentjail-hook` is stdlib-only and dials the daemon with a 30 ms budget. If
-the daemon is down (crashed, OOM, not yet started), the default has always
-been to **fail open** — allow the call, so a dead daemon never blocks the
-agent. That default is now a configurable, tiered policy ([ADR 0050](./docs/adr/0050-daemon-unreachable-policy.md)):
+the daemon is down (crashed, OOM, not yet started), behavior is a configurable,
+tiered policy ([ADR 0050](./docs/adr/0050-daemon-unreachable-policy.md),
+default set by [ADR 0074](./docs/adr/0074-degraded-is-the-default-posture.md)):
 
 ```yaml
 # ~/.agentjail/policy.yaml
-daemon_unreachable: degraded   # allow (default) | degraded (recommended) | deny
+daemon_unreachable: degraded   # allow | degraded (default) | deny
 ```
 
 | Level | Behavior when the daemon can't be reached |
 |---|---|
-| `allow` (default) | Fail open — unchanged from prior releases. |
-| `degraded` (recommended) | Enforce a small offline denylist (self-protection: no writes under `~/.agentjail`, no reads of the secrets store, no `agentjail policy disable`-style mutation) via stdlib pattern-matching; allow everything else. |
+| `allow` | Fail open — allow every call. Opt in if you want a dead daemon to be fully transparent. |
+| `degraded` (**default**) | Enforce a small offline denylist (self-protection: no writes under `~/.agentjail`, no reads of the secrets store, no `agentjail policy disable`-style mutation) via stdlib pattern-matching; allow everything else. |
 | `deny` | Fail closed — deny with restart instructions. For regulated/high-assurance setups. |
+
+`degraded` is the default because everything it denies offline is already
+**permanently denied online** — it mirrors the locked rule set that no
+`policy.yaml` can switch off. So it cannot refuse a call that would have
+succeeded against a healthy daemon; it only keeps agentjail's self-protection
+standing while the daemon is away.
 
 Every fail-open occurrence now prints a loud, per-occurrence stderr banner
 naming the active level and the exact recovery command
 (`agentjail daemon restart`, diagnose with `agentjail doctor`) — replacing
 the old one-time warning. The daemon compiles the current level (and, for
 `degraded`, the offline rule set) into `~/.agentjail/hook-fallback.json` on
-startup and every config reload; a missing or unreadable sidecar always
-falls back to `allow`, so upgrading never changes behavior unless you opt in.
+startup and every config reload; a missing or unreadable sidecar falls back to
+`allow`, since a daemon that never started has published no rules to enforce —
+`degraded` protects you from a daemon that *died*, not one that never ran.
 
 ---
 
