@@ -285,13 +285,24 @@ func checkLaunchIntegration(home string) []doctorCheck {
 
 	// PATH shim.
 	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
-	if _, err := os.Stat(shimPath); err == nil {
+	switch _, err := os.Stat(shimPath); {
+	case err == nil:
 		checks = append(checks, doctorCheck{
 			label:  "PATH shim",
 			status: "ok",
 			detail: shimPath,
 		})
-	} else {
+	case shimConsentRecorded(home):
+		// Dangling: the shell profile still prepends ~/.agentjail/bin to PATH,
+		// but no shim sits there, so `claude` silently resolves to the real
+		// unshielded binary. Reported as a failure, not a neutral "opt-in"
+		// note — the user opted in and is not getting it (ADR 0062).
+		checks = append(checks, doctorCheck{
+			label:  "PATH shim",
+			status: "fail",
+			detail: "MISSING but your shell profile opts into it — `claude` is running UNSHIELDED. Repair: agentjail install --with-path-shim",
+		})
+	default:
 		checks = append(checks, doctorCheck{
 			label:  "PATH shim",
 			status: "skip",
