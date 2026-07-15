@@ -948,7 +948,9 @@ func Run(args []string) int {
 		if srv.eventStore != nil {
 			grantEmitter = srv.eventStore
 		}
-		gs, gerr := newGrantServer(ctlSockPath, grantctl.NewRegistry(), grantEmitter, durableAudit, srv.activeSessions, srv.reloadPolicy)
+		// Mint before binding. On failure the control socket is not served at
+		// all, which is the fail-closed outcome: no approvals, no reload (ADR 0069).
+		gs, gerr := startGrantServer(ctlSockPath, grantEmitter, durableAudit, srv.activeSessions, srv.reloadPolicy)
 		if gerr != nil {
 			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
 		} else {
