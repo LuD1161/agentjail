@@ -58,6 +58,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/policyctl"
+	"github.com/LuD1161/agentjail/internal/procutil"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -716,24 +717,34 @@ func sighupDaemonViaSignal() {
 	}
 }
 
-// findDaemonPID uses pgrep to find the agentjail-daemon PID.
-// Returns 0 if not found or on error.
+// daemonProcessName is the daemon binary's name, as reported by the kernel.
+const daemonProcessName = "agentjail-daemon"
+
+// findDaemonPID returns the PID of the running agentjail-daemon, or 0.
+//
+// Every candidate is verified against its comm before being returned:
+// `pgrep -f` matches any process whose command LINE merely contains the
+// pattern — a `go build -o .../agentjail-daemon`, a test binary, an editor
+// with the file open, another pgrep — and the caller sends SIGHUP, whose
+// default disposition is terminate. Returning the first unverified match
+// therefore let `agentjail policy ...` kill an unrelated process, and made
+// concurrent test runs flaky. Verify, and skip ourselves.
 func findDaemonPID() (int, error) {
-	out, err := exec.Command("pgrep", "-f", "agentjail-daemon").Output()
+	out, err := exec.Command("pgrep", "-f", daemonProcessName).Output()
 	if err != nil {
 		return 0, nil // not running
 	}
-	line := strings.TrimSpace(string(out))
-	if line == "" {
-		return 0, nil
+	self := os.Getpid()
+	for _, field := range strings.Fields(strings.TrimSpace(string(out))) {
+		pid, convErr := strconv.Atoi(field)
+		if convErr != nil || pid <= 1 || pid == self {
+			continue
+		}
+		if procutil.PIDHasComm(pid, daemonProcessName) {
+			return pid, nil
+		}
 	}
-	// pgrep may return multiple lines; take the first
-	parts := strings.Fields(line)
-	pid, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, fmt.Errorf("parse pgrep output: %w", err)
-	}
-	return pid, nil
+	return 0, nil
 }
 
 func printPolicyUsage(w io.Writer) {
