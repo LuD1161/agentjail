@@ -49,10 +49,34 @@ means every hook fails open.
 ## Decision
 
 **Reload moves to the privileged control socket.** It is now `grantctl.ReqDaemonReload`, served by
-`grantServer.handleCtlConn` on `daemon-ctl.sock` — which the shield denies to the sandbox on both
-platforms (outside the Landlock allowlist on Linux; explicit sbpl deny on macOS). Path/capability
-separation is the actual boundary; the peer-UID check remains only as defence-in-depth against a
-different-UID peer, which is all it can honestly do.
+`grantServer.handleCtlConn` on `daemon-ctl.sock`.
+
+**Correction — what this buys, per platform.** This ADR originally claimed the control socket is
+denied to the sandbox "on both platforms". That is false on Linux, and the repo already knew:
+
+> `// Landlock cannot prevent AF_UNIX connect() - FS-only LSM. Issue #10.`
+> — `shield_linux_enforce_test.go`, which observes `ctl_connect=ok` and logs it as
+> "Landlock limitation; grant-socket isolation needs Tier 2+".
+
+Landlock is a filesystem LSM; it does not mediate `AF_UNIX connect()`. Leaving the socket outside
+the allowlist withholds nothing. The claim came from the doc comment on
+`grantctl.ControlSocketPath`, which asserted the sandbox could not reach it — that comment was
+wrong and has been corrected. Verified on kernel 6.1: `ctl_connect=ok`.
+
+So, honestly:
+
+- **macOS**: a real boundary. The shield denies network-outbound to the path, so the agent cannot
+  connect.
+- **Linux**: **structural only, not a security boundary.** A prompt-injected agent can still reach
+  `daemon_reload` — and, pre-existing and independent of this ADR, `grant_list` / `grant_approve` /
+  `grant_deny` (Issue #10).
+
+What *does* hold on both platforms is `reloadMu`: it removes the amplification, which was the
+actual severity multiplier (one goroutine per connection × `maxAgentConns` = up to 256 concurrent
+Rego compiles). A serialized single compile is what SIGHUP already offered.
+
+The peer-UID check remains, and is only defence-in-depth against a different-UID peer — all it can
+honestly do, since the agent shares the daemon's UID.
 
 **Ping stays on `daemon.sock`.** It is side-effect-free, and the single-instance guard
 (`singleton.go`) probes exactly that socket to tell a live daemon from a squatter (ADR 0060).
@@ -72,9 +96,19 @@ policy gets silently reported as applied.
 
 ## Consequences
 
-The only agent-triggerable expensive operation is gone from the one socket the agent is required
+The only agent-triggerable expensive operation is gone from the one socket the agent is *required*
 to reach. What remains there is eval, grant requests, and a ping — all of which the agent is
-supposed to use.
+supposed to use. On macOS that closes the hole. On Linux it relocates a verb the agent can still
+reach, and the real mitigation is `reloadMu` removing the 256× amplification.
+
+**Follow-up (the actual Linux fix): a control-socket token.** Landlock *does* mediate file reads —
+`AgentjailSecretsProtectedNames` already withholds `secrets.key`/`secrets/` from the agent, and
+`TestLandlockAgentjailSecretsExcluded` proves it works. So a random token written 0600 under a
+read-denied child of `~/.agentjail`, required on every `daemon-ctl.sock` verb and compared in
+constant time, is unforgeable by a sandboxed agent that can connect but cannot read. That closes
+`daemon_reload` **and** Issue #10 (`grant_approve` self-approval) on Linux, using a mechanism the
+codebase already has and tests. Deferred to its own change: it touches the grant plane, which is
+fail-closed and audited, and deserves a focused review rather than a tail-end addition here.
 
 `agentjail policy` now needs `daemon-ctl.sock`. That socket is best-effort: if `newGrantServer`
 fails to bind, the daemon logs "grants unavailable" and runs on. The existing pgrep+SIGHUP
@@ -99,6 +133,8 @@ Exercised against a live daemon, not only unit tests:
   daemon logs the refusal with `peer_uid`.
 - Ping over `daemon.sock` → `{"ok":true}` (singleton guard intact).
 - Reload over `daemon-ctl.sock` → `{"ok":true}`, daemon logs "policy reloaded via grant control socket".
+- Landlock enforcement test on kernel 6.1 → `ctl_connect=ok`: the sandboxed agent CAN reach
+  `daemon-ctl.sock` on Linux. This is the finding that corrected the Decision above.
 - Real CLI (`agentjail policy add`) → reload served over the control socket.
 - Editing `policy.yaml` on disk then reloading moved the daemon's reported `mcp_blocked_count`
   5 → 6, proving the reload re-read and applied on-disk config rather than merely logging.
