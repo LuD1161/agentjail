@@ -33,7 +33,7 @@ func startGrantTestEnv(t *testing.T, durableAudit bool) (proxyAddr, sock string,
 	reg = newSessionRegistry()
 	dir := shortSocketDir(t)
 	sock = filepath.Join(dir, "netproxy-ctl.sock")
-	cs, err := newControlServer(sock, reg, audit.NopEmitter{}, durableAudit, "test", testLogger())
+	cs, err := newControlServer(sock, testCtlToken, reg, audit.NopEmitter{}, durableAudit, "test", testLogger())
 	if err != nil {
 		t.Fatalf("newControlServer: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestGrantSentinel_FilesPendingRequestVisibleOverControlSocket(t *testing.T)
 		t.Errorf("unexpected 202 body: %+v", body)
 	}
 
-	grants, err := proxyctl.GrantList(sock, time.Second)
+	grants, err := proxyctl.GrantList(sock, testCtlToken, time.Second)
 	if err != nil {
 		t.Fatalf("GrantList: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestGrantFlow_RequestApproveConnectSucceeds_ThenExpires(t *testing.T) {
 	assertConnect(t, proxyAddr, target, "tok-1", http.StatusForbidden)
 
 	// Approve over the control socket.
-	if err := proxyctl.GrantApprove(sock, body.GrantID, time.Second); err != nil {
+	if err := proxyctl.GrantApprove(sock, testCtlToken, body.GrantID, time.Second); err != nil {
 		t.Fatalf("GrantApprove: %v", err)
 	}
 
