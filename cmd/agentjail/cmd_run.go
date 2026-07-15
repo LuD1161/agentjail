@@ -63,6 +63,16 @@ func runClaudeCmd(args []string) int {
 }
 
 func runRunCmd(args []string) int {
+	// Consume the run-level --tunnel flag when it appears before the command
+	// (e.g. `agentjail run --tunnel -- grok`). It routes the agent through the
+	// transparent L7 tunnel (TLS-terminating MITM + network policy packs) instead
+	// of the host-level netproxy. Opt-in: the default remains netproxy.
+	tunnelMode := false
+	if len(args) > 0 && args[0] == "--tunnel" {
+		tunnelMode = true
+		args = args[1:]
+	}
+
 	// Strip leading "--" if present (cobra passes it through with DisableFlagParsing).
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
@@ -119,7 +129,11 @@ func runRunCmd(args []string) int {
 	}
 
 	// 5. Exec through shield. This replaces the current process.
-	shieldArgs := []string{shieldBin, "--", agentPath}
+	shieldArgs := []string{shieldBin}
+	if tunnelMode {
+		shieldArgs = append(shieldArgs, "--tunnel")
+	}
+	shieldArgs = append(shieldArgs, "--", agentPath)
 	shieldArgs = append(shieldArgs, args[1:]...)
 
 	fmt.Fprintf(os.Stderr, "agentjail: starting shielded session for %s\n", agentName)

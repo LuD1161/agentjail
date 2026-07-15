@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/LuD1161/agentjail/internal/dnsvip"
 	"github.com/LuD1161/agentjail/internal/mitm"
@@ -25,6 +26,24 @@ type tunnelSession struct {
 	store     *mitm.RequestStore // non-nil when TLS interception is enabled
 	caCleanup func()             // removes the temp CA cert dir; nil if no MITM
 	cancel    context.CancelFunc
+}
+
+// resolveNetpacksDir returns the directory of L7 policy templates to load into
+// the tunnel matcher, or "" (observe/log-only) when none is configured. It
+// prefers AGENTJAIL_NETPACKS_DIR, then ~/.agentjail/netpacks if that directory
+// exists. Returning "" keeps the fail-open default: no templates => no denials,
+// just logging.
+func resolveNetpacksDir() string {
+	if d := os.Getenv("AGENTJAIL_NETPACKS_DIR"); d != "" {
+		return d
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		def := filepath.Join(home, ".agentjail", "netpacks")
+		if fi, err := os.Stat(def); err == nil && fi.IsDir() {
+			return def
+		}
+	}
+	return ""
 }
 
 // startTunnel sets up the unprivileged-userns transparent tunnel (ADR 0049,
@@ -62,7 +81,14 @@ func startTunnel(ctx context.Context) (*tunnelSession, bool) {
 
 	// Forward gateway: a userspace gVisor stack that accepts a SYN to any
 	// destination the agent dials (the S-F1 transparent-forwarder fix).
-	gw, err := tunnel.NewForwardGateway(tunnel.Config{MTU: netns.TUNMTU}, registry, logger)
+	//
+	// PacksDir wires the L7 policy matcher into the MITM handler (via
+	// gw.Matcher() below): with it set, decrypted HTTPS is evaluated against the
+	// Nuclei-style templates in the dir and denied operations get a 403. Without
+	// it the matcher is nil and the MITM is observe/log-only. Sourced from
+	// AGENTJAIL_NETPACKS_DIR, falling back to ~/.agentjail/netpacks when that dir
+	// exists, so enforcement is opt-in per install and empty by default.
+	gw, err := tunnel.NewForwardGateway(tunnel.Config{MTU: netns.TUNMTU, PacksDir: resolveNetpacksDir()}, registry, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"agentjail-shield: could not create tunnel gateway (%v)\n"+
