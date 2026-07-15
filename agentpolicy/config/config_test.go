@@ -1791,10 +1791,33 @@ func TestExtendedDefaultIncludesCursorLoginHosts(t *testing.T) {
 // DaemonUnreachable (ADR 0050) tests
 // ---------------------------------------------------------------------------
 
-func TestDefaultDaemonUnreachableIsAllow(t *testing.T) {
+// TestDefaultDaemonUnreachableIsDegraded pins the ADR 0074 default. It is safe
+// precisely because degraded's offline denials are a subset of the locked rules
+// OPA already enforces online, so nothing that works against a live daemon is
+// newly refused when it dies.
+func TestDefaultDaemonUnreachableIsDegraded(t *testing.T) {
 	cfg := Default()
-	if cfg.DaemonUnreachable != DaemonUnreachableAllow {
-		t.Errorf("Default().DaemonUnreachable = %q, want %q", cfg.DaemonUnreachable, DaemonUnreachableAllow)
+	if cfg.DaemonUnreachable != DaemonUnreachableDegraded {
+		t.Errorf("Default().DaemonUnreachable = %q, want %q", cfg.DaemonUnreachable, DaemonUnreachableDegraded)
+	}
+}
+
+// TestMergeDaemonUnreachableUnsetIsDegraded covers the second of the three
+// places an unset level resolves (the third is the daemon's sidecar writer):
+// two configs that both omit the key must not silently fall back to fail-open.
+func TestMergeDaemonUnreachableUnsetIsDegraded(t *testing.T) {
+	got := Merge(&PolicyConfig{}, &PolicyConfig{}).DaemonUnreachable
+	if got != DaemonUnreachableDegraded {
+		t.Errorf("Merge with neither side set = %q, want %q", got, DaemonUnreachableDegraded)
+	}
+}
+
+// TestMergeDaemonUnreachableExplicitAllowSurvives: opting back into fail-open
+// must stay possible — the default moved, the choice did not disappear.
+func TestMergeDaemonUnreachableExplicitAllowSurvives(t *testing.T) {
+	got := Merge(&PolicyConfig{DaemonUnreachable: DaemonUnreachableAllow}, &PolicyConfig{}).DaemonUnreachable
+	if got != DaemonUnreachableAllow {
+		t.Errorf("explicit allow in base = %q, want %q", got, DaemonUnreachableAllow)
 	}
 }
 

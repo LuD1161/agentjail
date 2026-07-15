@@ -165,10 +165,15 @@ func TestWriteHookFallbackIsAtomicAndPrivate(t *testing.T) {
 	}
 }
 
-// TestWriteHookFallbackEmptyLevelDefaultsToAllow covers a zero-value
-// PolicyConfig (as if daemon_unreachable were never set): the sidecar must
-// still say "allow", never an empty/unknown string the hook can't parse.
-func TestWriteHookFallbackEmptyLevelDefaultsToAllow(t *testing.T) {
+// TestWriteHookFallbackEmptyLevelDefaultsToDegraded covers a zero-value
+// PolicyConfig (as if daemon_unreachable were never set): the sidecar must say
+// "degraded" (ADR 0074), never an empty/unknown string the hook can't parse.
+//
+// This is the last of the three places an unset level resolves, and the one
+// that reaches an existing install: a policy.yaml written before ADR 0074 has
+// no daemon_unreachable key, so this coercion — not config.Default() — is what
+// their daemon actually applies.
+func TestWriteHookFallbackEmptyLevelDefaultsToDegraded(t *testing.T) {
 	withTempHome(t)
 	cfg := &agentconfig.PolicyConfig{}
 
@@ -177,8 +182,13 @@ func TestWriteHookFallbackEmptyLevelDefaultsToAllow(t *testing.T) {
 	}
 
 	fb := readHookFallback(t)
-	if fb.Level != "allow" {
-		t.Errorf("Level = %q, want allow for zero-value config", fb.Level)
+	if fb.Level != "degraded" {
+		t.Errorf("Level = %q, want degraded for zero-value config", fb.Level)
+	}
+	// A degraded sidecar with no rules is indistinguishable from allow, so the
+	// level alone is not the assertion that matters.
+	if len(fb.OfflineRules) == 0 {
+		t.Error("degraded sidecar carries no offline rules; enforcement would be vacuous")
 	}
 }
 
