@@ -22,7 +22,7 @@ All line numbers verified against the worktree at review time.
 > | **S-D2** (first-1024-bytes-only) | **Fixed** — per-message re-inspection on managed-port relays (`relayManaged`, bounded to 64 chunks); mid-stream deny tears the connection down. `45eee99` |
 > | **S-F3** (upstream dial loop) | **Fixed** — VIP-pool loop guard (`Registry.IsVIP`) refuses dials that resolve back into the pool. `45eee99` |
 > | **E / S4** (macOS machine-wide utun-via-root-daemon) | **Removed** — dead daemon-RPC path deleted; macOS keeps its NEPacketTunnelProvider Network Extension. `c6687a3` |
-> | Mechanism A (host-veth + privileged daemon) | **Deleted** per ADR 0049; **AGE-103/AGE-140 obviated**. `c6687a3` |
+> | Mechanism A (host-veth + privileged daemon) | **Deleted** per ADR 0075; **AGE-103/AGE-140 obviated**. `c6687a3` |
 >
 > **End-to-end VALIDATED on a real host** (`582f024`): a `TestE2ETUNInterception`
 > drives a real `bash /dev/tcp` client inside a live userns/netns over a real
@@ -54,7 +54,7 @@ All line numbers verified against the worktree at review time.
 | **1. Session-scoped** | ✅ by construction (per-agent netns) — *but currently intercepts nothing; see W1* | ❌ **machine-wide** default-route + global DNS hijack (S4) — latent only because the RPC is unregistered |
 | **2. Fail-open (host)** | ✅ falls back to netproxy, host routing untouched | ❌ **fails closed machine-wide** — daemon crash blackholes all host network + DNS (S4) |
 
-The design *intent* is correct; the **Linux implementation is inert** and the **macOS implementation is the exact anti-pattern** the constraints forbid. Neither ships as-is. AGE-148 (unprivileged userns + TUN-fd handoff, per ADR 0049) is what makes Linux actually intercept per-session, and the macOS machine-wide path must be deleted in favor of the Network Extension path.
+The design *intent* is correct; the **Linux implementation is inert** and the **macOS implementation is the exact anti-pattern** the constraints forbid. Neither ships as-is. AGE-148 (unprivileged userns + TUN-fd handoff, per ADR 0075) is what makes Linux actually intercept per-session, and the macOS machine-wide path must be deleted in favor of the Network Extension path.
 
 ---
 
@@ -68,7 +68,7 @@ The design *intent* is correct; the **Linux implementation is inert** and the **
 
 **W4 — macOS `--tunnel` is a silent no-op.** `runShield` (`cmd/agentjail-shield/shield_darwin.go:490`) accepts `tunnelMode` but never uses it; `startTunnelDarwin`/`cleanupTunnelDarwin` have zero callers.
 
-**W5 — Deprecated Mechanism A is still the only path the shield calls.** `startTunnel` → `requestNamespace` → `NamespaceService.Create` over `daemon-ns.sock` (`tunnel_shield_linux.go:47`, `tunnel.go:18`). `NamespaceService` is **never `rpc.Register`ed** anywhere, so the dial always fails → silent netproxy fallback. ADR 0049 (Accepted) declares this whole surface dead; it must be **removed**, not fixed.
+**W5 — Deprecated Mechanism A is still the only path the shield calls.** `startTunnel` → `requestNamespace` → `NamespaceService.Create` over `daemon-ns.sock` (`tunnel_shield_linux.go:47`, `tunnel.go:18`). `NamespaceService` is **never `rpc.Register`ed** anywhere, so the dial always fails → silent netproxy fallback. ADR 0075 (Accepted) declares this whole surface dead; it must be **removed**, not fixed.
 
 > **Implication:** Constraints 1–3 are not violated *in effect today* (the feature is inert), but the code would violate all three the moment the RPC got registered, and W2 can already weaken the sandbox. This is scaffolding, not a shippable feature.
 
@@ -154,10 +154,10 @@ The Mechanism-B rebuild (unprivileged userns + in-namespace TUN + `SCM_RIGHTS` f
 7. **Delete Mechanism A + macOS machine-wide path** (W5, S-E1).
 8. **doctor probe + clear fallback** — detect unprivileged-userns availability (`kernel.unprivileged_userns_clone`, `apparmor_restrict_unprivileged_userns`) like ClawPatrol's `usernsBlockHint`, fall back to netproxy with a legible message.
 
-## Code to delete (per ADR 0049)
+## Code to delete (per ADR 0075)
 
 `internal/daemon/namespace*.go` (NamespaceService), `cmd/agentjail-shield/tunnel.go` + `tunnel_other.go` (RPC client), `internal/netns/veth_linux.go` (+ `SetupVeth` stub in `netns_other.go`), the machine-wide `internal/tunnel/utun_darwin.go` + `namespace_darwin.go` route/DNS code, and the uncalled `setupTunnelCA*` wrappers. **Keep** `internal/netns/netns_linux.go` + `mount_linux.go` (with the fixes above) and all of `internal/netpolicy` / `internal/dnsvip` / `internal/mitm` as the foundation.
 
 ## What's genuinely good
 
-Session-scoped isolation primitive is correct on Linux (`CLONE_NEWUSER|NEWNET|NEWNS`); CA injection is host-untouched by construction; host-side fail-open on Linux is clean; upstream TLS identity is verified; the protocol parsers are panic-hardened with a real chaos suite; ADR 0049 is a model deprecation record. The bones are right — the integration and the fail-*closed* posture are what's missing.
+Session-scoped isolation primitive is correct on Linux (`CLONE_NEWUSER|NEWNET|NEWNS`); CA injection is host-untouched by construction; host-side fail-open on Linux is clean; upstream TLS identity is verified; the protocol parsers are panic-hardened with a real chaos suite; ADR 0075 is a model deprecation record. The bones are right — the integration and the fail-*closed* posture are what's missing.

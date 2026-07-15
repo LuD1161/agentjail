@@ -19,7 +19,7 @@
 // tunsetup_linux.go (CreateWithTUN). The open TUN fd is handed to the userspace
 // gateway over SCM_RIGHTS, so no host CAP_NET_ADMIN and no privileged daemon are
 // needed. This replaced the earlier host-veth + privileged-daemon design; see
-// ADR 0049.
+// ADR 0075.
 package netns
 
 import (

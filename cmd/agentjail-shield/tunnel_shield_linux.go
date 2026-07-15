@@ -46,7 +46,7 @@ func resolveNetpacksDir() string {
 	return ""
 }
 
-// startTunnel sets up the unprivileged-userns transparent tunnel (ADR 0049,
+// startTunnel sets up the unprivileged-userns transparent tunnel (ADR 0075,
 // AGE-148): an isolated user+network namespace whose only route is a TUN
 // device, with the agent's traffic pumped into a userspace forwarder. No host
 // CAP_NET_ADMIN, no privileged daemon, no install password — the privileged

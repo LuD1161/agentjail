@@ -23,7 +23,7 @@
 // a net.Conn to the accept callback.
 //
 // This file is the standalone forwarder primitive only; wiring it into the
-// gateway happens in a later slice. See ADR 0049 for the surrounding
+// gateway happens in a later slice. See ADR 0075 for the surrounding
 // network-interception design.
 package tunnel
 

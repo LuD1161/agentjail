@@ -166,7 +166,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	}
 
 	// Tunnel mode: try to start the unprivileged-userns transparent tunnel
-	// (ADR 0049). On success the agent runs inside the namespace and its
+	// (ADR 0075). On success the agent runs inside the namespace and its
 	// traffic is intercepted by the userspace forwarder, so netproxy is
 	// skipped. On ANY failure we fall back to netproxy (fail-open).
 	var tunnelSess *tunnelSession
