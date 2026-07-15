@@ -565,6 +565,12 @@ type UninstallResult struct {
 	// DaemonErr is non-nil when daemon teardown was attempted but failed.
 	DaemonErr error
 
+	// DaemonStillRunning is true when the service manager reported success but
+	// a daemon is still answering on the socket — it was started outside the
+	// service manager, so the stop was a no-op. Its hookwatch will re-inject
+	// the hooks this teardown removes (ADR 0065).
+	DaemonStillRunning bool
+
 	// InstallDirErr is non-nil when ~/.agentjail removal failed.
 	InstallDirErr error
 
@@ -619,19 +625,26 @@ func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 		}()
 	}
 
-	// Step 1: unhook every agent; collect results, never abort early.
-	for _, ag := range agents.Registry() {
-		err := ag.Uninstall(env)
-		r.Agents = append(r.Agents, UninstallAgentResult{Name: ag.DisplayName(), Err: err})
-		if err != nil {
-			r.HardFailed = true
-		}
-	}
-
-	// Step 2: daemon teardown (macOS: launchd, Linux: systemd --user).
+	// Step 1: daemon teardown (macOS: launchd, Linux: systemd --user).
+	//
+	// This MUST precede the agent unhook. The daemon runs hookwatch, which
+	// re-injects the agentjail hook whenever it disappears from an agent's
+	// config (ADR 0026) — it cannot tell an uninstall from tampering. Unhooking
+	// while the daemon is alive means hookwatch simply undoes it, leaving the
+	// agent wired to a binary this function is about to delete. See ADR 0065.
 	if goos == "darwin" || goos == "linux" {
 		r.DaemonErr = uninstallDaemon(home, goos)
 		if r.DaemonErr != nil {
+			r.HardFailed = true
+		}
+		// Verify the daemon is actually gone rather than trusting the service
+		// manager: it only stops daemons it owns, and answers "is the unit
+		// active?", not "is a daemon reachable?" (ADR 0061). A daemon started by
+		// hand, by a test harness, or on a box with no D-Bus session survives
+		// the stop above — and its hookwatch then fights the rest of this
+		// teardown.
+		r.DaemonStillRunning = waitForDaemonStop(daemonStopDeadline)
+		if r.DaemonStillRunning {
 			r.HardFailed = true
 		}
 		// Secrets broker teardown (ADR 0058). Best-effort: a leftover
@@ -642,6 +655,16 @@ func performFullUninstall(home, goos string, keepSecrets bool) UninstallResult {
 		}
 	} else {
 		r.DaemonSkipped = true
+	}
+
+	// Step 2: unhook every agent; collect results, never abort early. Runs after
+	// the daemon is down so nothing can re-inject behind us.
+	for _, ag := range agents.Registry() {
+		err := ag.Uninstall(env)
+		r.Agents = append(r.Agents, UninstallAgentResult{Name: ag.DisplayName(), Err: err})
+		if err != nil {
+			r.HardFailed = true
+		}
 	}
 
 	// Step 2.5: remove IDE wrappers (best-effort).
@@ -1000,6 +1023,14 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 		lines = append(lines, u.KeyValue("daemon", "", u.Badge("dim", "skipped (unsupported OS)")))
 	} else if r.DaemonErr != nil {
 		lines = append(lines, u.KeyValue("daemon", "", u.Badge("fail", "FAILED: "+r.DaemonErr.Error())))
+	} else if r.DaemonStillRunning {
+		// The service manager reported success but a daemon is still answering
+		// on the socket — it was started outside the service manager, so the
+		// stop was a no-op (ADR 0065). Never claim "stopped" here: the daemon's
+		// hookwatch will re-inject the hooks this teardown just removed.
+		lines = append(lines, u.KeyValue("daemon", "", u.Badge("fail", "STILL RUNNING — not started by the service manager, so it was not stopped")))
+		lines = append(lines, u.KeyValue("", "", u.Badge("dim", "kill it, then re-run uninstall: pkill -u $(id -u) -f agentjail-daemon")))
+		lines = append(lines, u.KeyValue("", "", u.Badge("dim", "until then it re-injects the agentjail hook into your agent configs")))
 	} else if currentGOOS == "darwin" {
 		lines = append(lines, u.KeyValue("daemon", "", u.Badge("ok", "stopped and plist removed")))
 	} else {
@@ -1793,6 +1824,27 @@ func launchctlUnload(plistPath string) error {
 // daemonProbeTimeout caps the liveness dial so status can never hang; a
 // healthy local answer arrives in well under a millisecond.
 const daemonProbeTimeout = 200 * time.Millisecond
+
+// daemonStopDeadline bounds how long uninstall waits for the daemon to release
+// its socket after the service manager was asked to stop it. Generous enough to
+// absorb an in-flight request finishing; short enough not to stall a teardown.
+const daemonStopDeadline = 3 * time.Second
+
+// waitForDaemonStop polls until the daemon socket stops answering, or the
+// deadline expires. Returns true if the daemon is STILL running — i.e. the
+// teardown did not actually stop it (ADR 0065).
+func waitForDaemonStop(deadline time.Duration) bool {
+	const interval = 100 * time.Millisecond
+	for waited := time.Duration(0); ; waited += interval {
+		if !isDaemonRunning() {
+			return false
+		}
+		if waited >= deadline {
+			return true
+		}
+		time.Sleep(interval)
+	}
+}
 
 // isDaemonRunning reports whether a daemon is listening, by dialing the socket
 // every other client uses. Deliberately not a service-manager query and not a
