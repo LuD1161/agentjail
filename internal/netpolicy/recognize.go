@@ -13,6 +13,7 @@ var recognizers = []Recognizer{
 	&k8sRecognizer{},
 	&slackRecognizer{},
 	&llmRecognizer{},
+	&xaiRecognizer{},
 	&githubRecognizer{},
 	&genericRecognizer{},
 }

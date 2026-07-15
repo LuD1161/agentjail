@@ -40,6 +40,7 @@ func agentPaths() AgentPaths {
 			".cache",      // Claude CLI cache (node, updates)
 			".local",      // Claude binary, tool installs
 			".vscode",     // VS Code settings
+			".grok",       // Grok Build CLI: auth.json token, leader.sock, session state
 		},
 		HomeRO: []string{
 			".agentjail", // agentjail's OWN state: read/traverse only. The agent
