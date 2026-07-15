@@ -293,9 +293,10 @@ func TestChaos7_ContextCancelShutdown(t *testing.T) {
 	}
 }
 
-// ChaosTest8_AandAAAAReturnSameRegistry verifies that A and AAAA queries for
-// the same hostname are backed by the same registry entry (same allocation
-// slot) and that a reverse lookup on each VIP resolves to the same hostname.
+// ChaosTest8_AandAAAAReturnSameRegistry verifies that an A query allocates a
+// registry entry, that the paired AAAA query returns NODATA (the forward stack
+// is IPv4-only), and that the v6 VIP the registry allocated alongside the v4
+// one reverse-looks-up to the same hostname.
 func TestChaos8_AandAAAASameRegistry(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -331,22 +332,27 @@ func TestChaos8_AandAAAASameRegistry(t *testing.T) {
 	}
 	ipv4 := aRec.A.Addr.String()
 
-	// Query AAAA.
+	// Query AAAA: must be NODATA (NOERROR with no answers).
 	mAAAA := dns.NewMsg(host, dns.TypeAAAA)
 	rAAAA, _, err := c.Exchange(context.Background(), mAAAA, "udp", addr)
 	if err != nil {
 		t.Fatalf("AAAA query error: %v", err)
 	}
-	if len(rAAAA.Answer) != 1 {
-		t.Fatalf("AAAA: want 1 answer, got %d", len(rAAAA.Answer))
+	if rAAAA.Rcode != dns.RcodeSuccess {
+		t.Fatalf("AAAA: want rcode %d (NODATA is NOERROR), got %d", dns.RcodeSuccess, rAAAA.Rcode)
 	}
-	aaaaRec, ok := rAAAA.Answer[0].(*dns.AAAA)
-	if !ok {
-		t.Fatalf("AAAA answer is %T, want *dns.AAAA", rAAAA.Answer[0])
+	if len(rAAAA.Answer) != 0 {
+		t.Fatalf("AAAA: want 0 answers (NODATA), got %d", len(rAAAA.Answer))
 	}
-	ipv6 := aaaaRec.AAAA.Addr.String()
 
-	t.Logf("host=%s A=%s AAAA=%s", host, ipv4, ipv6)
+	// The registry allocated a v6 VIP alongside the v4 one during the A query.
+	v6VIP, err := reg.AllocateV6("shared.host.internal")
+	if err != nil {
+		t.Fatalf("AllocateV6: %v", err)
+	}
+	ipv6 := v6VIP.String()
+
+	t.Logf("host=%s A=%s registry-v6=%s (AAAA=NODATA)", host, ipv4, ipv6)
 
 	// Both VIPs must resolve back to the same hostname in the registry.
 	hostFromV4, okV4 := reg.Lookup(net.ParseIP(ipv4))

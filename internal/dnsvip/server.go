@@ -78,8 +78,8 @@ func (s *Server) Close() error {
 }
 
 // Resolve answers a DNS query in wire format using the VIP registry, without
-// touching any socket. It unmarshals query, runs the same A/AAAA → reg.Allocate
-// / reg.AllocateV6 logic as the socket server, and returns the marshalled
+// touching any socket. It unmarshals query, runs the same A → reg.Allocate
+// (and AAAA → NODATA) logic as the socket server, and returns the marshalled
 // response bytes. It is the entry point for the in-stack UDP:53 interceptor
 // (see internal/tunnel/forwarder.go), which cannot use the socket-backed
 // dns.Server. An error is returned only when the query cannot be unpacked or
@@ -157,24 +157,15 @@ func buildResponse(reg *Registry, r *dns.Msg) *dns.Msg {
 		}
 
 	case dns.TypeAAAA:
-		hostname := fqdnToHostname(qname)
-		vip, err := reg.AllocateV6(hostname)
-		if err != nil {
-			slog.Warn("dnsvip: allocate v6 failed", "host", hostname, "err", err)
-			resp.Rcode = dns.RcodeServerFailure
-		} else {
-			addr, ok := netip.AddrFromSlice(vip.To16())
-			if !ok {
-				slog.Warn("dnsvip: invalid v6 address", "host", hostname)
-				resp.Rcode = dns.RcodeServerFailure
-			} else {
-				aaaa := &dns.AAAA{
-					Hdr:  dns.Header{Name: qname, Class: dns.ClassINET, TTL: 0},
-					AAAA: rdata.AAAA{Addr: addr},
-				}
-				resp.Answer = []dns.RR{aaaa}
-			}
-		}
+		// The transparent forward stack only routes IPv4 VIPs. Advertising an
+		// AAAA record would hand a v6-preferring client an unroutable IPv6 VIP,
+		// which it would dial and hang on until timeout (observed: curl -> 000).
+		// So we never advertise AAAA VIPs: return NODATA (NOERROR with an empty
+		// answer section), the correct DNS response for "name exists, no AAAA
+		// record", which makes clients cleanly fall back to the A record. The
+		// registry still allocates a v6 VIP alongside every v4 one (via
+		// Allocate), so reverse lookups keep working if v6 routing is added.
+		break
 
 	default:
 		resp.Rcode = dns.RcodeRefused

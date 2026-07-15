@@ -233,9 +233,10 @@ func TestAcceptSessionCleanup(t *testing.T) {
 
 // TestAcceptDNSEndToEnd starts a real DNS server, sends an A query for
 // "postgres.internal." and an AAAA query for the same name, and verifies that:
-//   - the A record contains a VIP in 10.78.0.0/16
-//   - the AAAA record contains a VIP in fd78::/16
-//   - both reverse-lookup to "postgres.internal" in the registry
+//   - the A record contains a VIP in 10.78.0.0/16 that reverse-looks-up to the host
+//   - the AAAA query returns NODATA (the forward stack is IPv4-only)
+//   - the registry still allocated a v6 VIP alongside the v4 one, so it stays
+//     reverse-resolvable if v6 routing is ever wired up
 func TestAcceptDNSEndToEnd(t *testing.T) {
 	reg := NewRegistry()
 	addr, cancel := acceptStartServer(t, reg)
@@ -273,30 +274,31 @@ func TestAcceptDNSEndToEnd(t *testing.T) {
 		t.Fatalf("registry Lookup(%s) = %q, want postgres.internal", v4IP, h4)
 	}
 
-	// --- AAAA query ---
+	// --- AAAA query: NODATA (NOERROR, no answers). The forward stack is
+	// IPv4-only, so the server never advertises v6 VIPs. ---
 	mAAAA := dns.NewMsg(fqdn, dns.TypeAAAA)
 	rAAAA, _, err := c.Exchange(context.Background(), mAAAA, "udp", addr)
 	if err != nil {
 		t.Fatalf("AAAA query: %v", err)
 	}
 	if rAAAA.Rcode != dns.RcodeSuccess {
-		t.Fatalf("AAAA query rcode = %d, want %d (Success)", rAAAA.Rcode, dns.RcodeSuccess)
+		t.Fatalf("AAAA query rcode = %d, want %d (NODATA is NOERROR)", rAAAA.Rcode, dns.RcodeSuccess)
 	}
-	if len(rAAAA.Answer) != 1 {
-		t.Fatalf("AAAA query: got %d answers, want 1", len(rAAAA.Answer))
+	if len(rAAAA.Answer) != 0 {
+		t.Fatalf("AAAA query: got %d answers, want 0 (NODATA)", len(rAAAA.Answer))
 	}
-	aaaaRec, ok := rAAAA.Answer[0].(*dns.AAAA)
-	if !ok {
-		t.Fatalf("AAAA answer is %T, want *dns.AAAA", rAAAA.Answer[0])
-	}
-	v6IP := net.ParseIP(aaaaRec.AAAA.Addr.String())
-	mustBeVIP6(t, v6IP)
-	t.Logf("AAAA: postgres.internal -> %s", v6IP)
+	t.Logf("AAAA: postgres.internal -> NODATA")
 
-	// Gateway reverse-lookup via AAAA VIP.
+	// The registry still allocated a v6 VIP alongside the v4 one during the A
+	// query; AllocateV6 returns that cached address, and it reverse-resolves.
+	v6IP, err := reg.AllocateV6("postgres.internal")
+	if err != nil {
+		t.Fatalf("AllocateV6(postgres.internal): %v", err)
+	}
+	mustBeVIP6(t, v6IP)
 	h6, ok6 := reg.Lookup(v6IP)
 	if !ok6 {
-		t.Fatalf("registry Lookup(%s) ok=false after DNS AAAA query", v6IP)
+		t.Fatalf("registry Lookup(%s) ok=false for allocated v6 VIP", v6IP)
 	}
 	if h6 != "postgres.internal" {
 		t.Fatalf("registry Lookup(%s) = %q, want postgres.internal", v6IP, h6)

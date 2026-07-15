@@ -133,6 +133,57 @@ func ChaosTestConcurrentStorm(t *testing.T) {
 	}
 }
 
+// ChaosTestAllocLookupAtomicity is the AGE-168 regression: many goroutines
+// concurrently Allocate a small shared set of hostnames (the DNS answer path)
+// and, for the VIP they get back, immediately Lookup it (the forwarder's
+// reverse-resolution path). Every VIP returned by Allocate MUST be
+// reverse-resolvable in the same instant, because Allocate registers the
+// forward and reverse maps atomically under the registry's write lock — there
+// is no window where a VIP is handed out in an answer before it is
+// reverse-registered. Run under -race; any inconsistency or data race fails.
+func ChaosTestAllocLookupAtomicity(t *testing.T) {
+	const goroutines = 64
+	// Small shared set so many goroutines race on the same check-then-allocate
+	// path for identical hostnames (idempotent allocation under contention).
+	hosts := []string{"a.internal", "b.internal", "c.internal", "d.internal"}
+
+	r := NewRegistry()
+	var wg sync.WaitGroup
+	var mismatches atomic.Int64
+
+	for g := range goroutines {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			host := hosts[g%len(hosts)]
+			ip, err := r.Allocate(host)
+			if err != nil {
+				mismatches.Add(1)
+				t.Errorf("goroutine %d: Allocate(%s) failed: %v", g, host, err)
+				return
+			}
+			// The VIP just handed out must already reverse-resolve to host.
+			got, ok := r.Lookup(ip)
+			if !ok || got != host {
+				mismatches.Add(1)
+				t.Errorf("goroutine %d: Lookup(%s)=%q ok=%v immediately after Allocate(%s)",
+					g, ip, got, ok, host)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if n := mismatches.Load(); n > 0 {
+		t.Fatalf("alloc/lookup atomicity violations: %d", n)
+	}
+
+	// Every distinct hostname must have exactly one stable VIP regardless of how
+	// many goroutines raced to allocate it.
+	if alloc, _ := r.Stats(); alloc != len(hosts) {
+		t.Fatalf("expected %d allocations (one per shared host), got %d", len(hosts), alloc)
+	}
+}
+
 // ChaosTestVIPReuse allocates, frees, then reallocates the same hostname and
 // verifies VIP reuse plus correct reverse-lookup state.
 func ChaosTestVIPReuse(t *testing.T) {
@@ -420,6 +471,7 @@ func ChaosTestLookupAfterFree(t *testing.T) {
 func TestChaos(t *testing.T) {
 	t.Run("PoolExhaustion", ChaosTestPoolExhaustion)
 	t.Run("ConcurrentStorm", ChaosTestConcurrentStorm)
+	t.Run("AllocLookupAtomicity", ChaosTestAllocLookupAtomicity)
 	t.Run("VIPReuse", ChaosTestVIPReuse)
 	t.Run("MalformedHostname", ChaosTestMalformedHostname)
 	t.Run("IPv6PoolIndependence", ChaosTestIPv6PoolIndependence)

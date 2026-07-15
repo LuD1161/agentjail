@@ -223,6 +223,10 @@ func TestDNSRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDNSAAAA verifies AAAA queries return NODATA (NOERROR with no answer
+// records) rather than an IPv6 VIP. The transparent forward stack only routes
+// IPv4 VIPs, so advertising an AAAA VIP would make v6-preferring clients dial
+// an unroutable address and hang; NODATA makes them fall back to the A record.
 func TestDNSAAAA(t *testing.T) {
 	reg := NewRegistry()
 	addr, cancel := startTestServer(t, reg)
@@ -237,21 +241,10 @@ func TestDNSAAAA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(r.Answer) != 1 {
-		t.Fatalf("got %d answers, want 1", len(r.Answer))
+	if r.Rcode != dns.RcodeSuccess {
+		t.Fatalf("AAAA rcode = %d, want %d (NODATA is NOERROR)", r.Rcode, dns.RcodeSuccess)
 	}
-
-	aaaa, ok := r.Answer[0].(*dns.AAAA)
-	if !ok {
-		t.Fatalf("answer type = %T, want *dns.AAAA", r.Answer[0])
-	}
-	gotIP := aaaa.AAAA.Addr.String()
-	if gotIP != "fd78::1" {
-		t.Fatalf("DNS AAAA response = %s, want fd78::1", gotIP)
-	}
-
-	host, found := reg.Lookup(net.ParseIP(gotIP))
-	if !found || host != "mongo.internal" {
-		t.Fatalf("registry v6 lookup: host=%q found=%v", host, found)
+	if len(r.Answer) != 0 {
+		t.Fatalf("got %d answers, want 0 (NODATA)", len(r.Answer))
 	}
 }

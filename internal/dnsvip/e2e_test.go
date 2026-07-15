@@ -68,15 +68,19 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 		t.Logf("registry.npmjs.org -> %s ✓", a.A.Addr)
 	})
 
-	// Scenario 4: AAAA query
+	// Scenario 4: AAAA query returns NODATA (IPv4-only forward stack), so
+	// v6-preferring clients fall back to the A record instead of dialing an
+	// unroutable v6 VIP.
 	t.Run("aaaa_query", func(t *testing.T) {
 		m := dns.NewMsg("db.internal.", dns.TypeAAAA)
 		r, _, _ := c.Exchange(context.Background(), m, "udp", addr)
-		if len(r.Answer) != 1 {
-			t.Fatalf("expected 1 AAAA answer, got %d", len(r.Answer))
+		if r.Rcode != dns.RcodeSuccess {
+			t.Fatalf("AAAA rcode = %d, want %d (NODATA)", r.Rcode, dns.RcodeSuccess)
 		}
-		aaaa := r.Answer[0].(*dns.AAAA)
-		t.Logf("db.internal (AAAA) -> %s ✓", aaaa.AAAA.Addr)
+		if len(r.Answer) != 0 {
+			t.Fatalf("expected 0 AAAA answers (NODATA), got %d", len(r.Answer))
+		}
+		t.Logf("db.internal (AAAA) -> NODATA ✓")
 	})
 
 	// Scenario 5: Gateway reverse lookup — this is how the gateway maps VIP→hostname
@@ -103,11 +107,12 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 			}
 		}
 		alloc, avail := reg.Stats()
-		// 1 (github) + 1 (npm) + 1 (db.internal) + 5 new = 8
-		if alloc != 8 {
-			t.Fatalf("expected 8 allocations, got %d", alloc)
+		// 1 (github) + 1 (npm) + 5 new = 7. db.internal was only AAAA-queried,
+		// which now returns NODATA without allocating a VIP.
+		if alloc != 7 {
+			t.Fatalf("expected 7 allocations, got %d", alloc)
 		}
-		t.Logf("8 hosts allocated, %d available ✓", avail)
+		t.Logf("7 hosts allocated, %d available ✓", avail)
 	})
 
 	// Scenario 7: Rapid concurrent queries (simulates agent spawning many connections)
