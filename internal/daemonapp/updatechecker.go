@@ -272,10 +272,8 @@ func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 
 	slog.Info("auto-update: binaries swapped, exiting for restart", "version", latest, "swapped", swappedCount)
 
-	// 8. Exit — the supervisor restarts the new daemon: launchd KeepAlive=true
-	// on macOS, systemd Restart=always on Linux. Both must restart a clean
-	// exit(0); a supervisor configured to restart only on failure would strand
-	// the daemon here (see systemdUnitTemplate in cmd/agentjail/install.go).
+	// 8. Exit — the supervisor restarts the new daemon. Both platforms must
+	// restart a clean exit(0) or this strands the daemon (ADR 0070).
 	osExitFn(0)
 }
 
