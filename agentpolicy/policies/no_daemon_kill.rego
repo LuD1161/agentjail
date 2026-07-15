@@ -2,8 +2,15 @@
 #
 # NOTE: The rule_id "library/no-daemon-kill" retains its "library/" prefix for
 # historical reasons (it was originally an opt-in library rule). The prefix is
-# now purely cosmetic — this rule is always-on locked core, embedded in every
-# install, and cannot be disabled. See resolver.rego locked_rules.
+# now purely cosmetic — this rule is on by default in every install, with no
+# configuration required.
+#
+# It is NOT locked. resolver.rego's locked_rules constant does not list it, so
+# `disabled_rules: ["library/no-daemon-kill"]` in policy.yaml suppresses it.
+# resolver_test.rego's B3 asserts exactly that. Do not rely on this rule as a
+# hard guarantee; the locked set is file_policy/agentjail_self,
+# file_policy/agentjail_secrets, command_policy/no-policy-mutation, and
+# resolver/*.
 #
 # WHAT IT BLOCKS
 # --------------
@@ -31,10 +38,16 @@
 #   - writes to ~/.agentjail/ or the daemon plist          -> core file_policy
 #   - `kill <pid>` after manually resolving the PID        -> not matchable by name; partly mitigated by launchd respawn
 #
-# ALWAYS ON (promoted from opt-in library to always-on locked core)
-# -----------------------------------------------------------------
-# This rule is active in every agentjail install without any configuration.
-# It is locked in resolver.rego and cannot be disabled via policy.yaml or the CLI.
+# That last gap is wider than it reads: `kill -9 $(pgrep -f agentjail-daemon)`
+# and `kill -HUP $(pgrep -f agentjail-daemon)` both evaluate to ALLOW today
+# (verified against the real bundle). The reload-rate half of that is bounded by
+# the coalescer in ADR 0075; the daemon-down half is blunted by ADR 0074, which
+# makes an unreachable daemon degrade rather than fail open.
+#
+# ON BY DEFAULT (promoted from opt-in library to always-on core)
+# --------------------------------------------------------------
+# This rule is active in every agentjail install without any configuration —
+# but see the NOT-locked note at the top: policy.yaml can still disable it.
 #
 # EXAMPLE triggering input
 # -------------------------
