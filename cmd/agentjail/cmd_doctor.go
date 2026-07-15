@@ -74,6 +74,19 @@ func runDoctor() int {
 	}
 	fmt.Fprintln(os.Stdout)
 
+	// ── Protection ──────────────────────────────────────────────────────
+	// Everything above reports what is configured RIGHT NOW; this reports
+	// whether enforcement actually ran (ADR 0075).
+	fmt.Fprintln(os.Stdout, "Protection")
+	protectionChecks := checkProtection(home)
+	for _, c := range protectionChecks {
+		printCheck(c)
+		if c.status == "fail" {
+			hasFailure = true
+		}
+	}
+	fmt.Fprintln(os.Stdout)
+
 	// ── Hooks ───────────────────────────────────────────────────────────
 	fmt.Fprintln(os.Stdout, "Hooks")
 	hookChecks := checkHooks(home)
