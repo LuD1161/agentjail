@@ -12,7 +12,9 @@ import (
 )
 
 type secretsRPCRequest struct {
-	Action  string `json:"action"`
+	Action string `json:"action"`
+	// Token authenticates this shield as a caller outside the sandbox (ADR 0067).
+	Token   string `json:"token,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Scope   string `json:"scope,omitempty"`
 	TTL     string `json:"ttl,omitempty"`
@@ -75,7 +77,12 @@ func secretsRPC(socketPath string, req *secretsRPCRequest) (*secretsRPCResponse,
 	}
 }
 
-func requestSecretGrants(cfg *config.PolicyConfig) ([]string, []activeGrant) {
+// requestSecretGrants asks the broker for the grants policy allows this session
+// and returns them as env vars for the agent.
+//
+// ctlToken must be captured BEFORE applyLandlock on Linux -- by the time this
+// runs, this process can no longer read the token file (ADR 0067).
+func requestSecretGrants(cfg *config.PolicyConfig, ctlToken string) ([]string, []activeGrant) {
 	if cfg == nil || len(cfg.Secrets.Grants) == 0 {
 		return nil, nil
 	}
@@ -95,6 +102,7 @@ func requestSecretGrants(cfg *config.PolicyConfig) ([]string, []activeGrant) {
 	for _, g := range cfg.Secrets.Grants {
 		resp, err := secretsRPC(socketPath, &secretsRPCRequest{
 			Action: "grant",
+			Token:  ctlToken,
 			Name:   g.Name,
 			Scope:  g.Scope,
 			TTL:    g.TTL,
@@ -121,11 +129,15 @@ func requestSecretGrants(cfg *config.PolicyConfig) ([]string, []activeGrant) {
 	return envVars, grants
 }
 
-func revokeSecretGrants(grants []activeGrant) {
+// revokeSecretGrants hands the session's grants back at exit. ctlToken has the
+// same capture-before-Landlock requirement as requestSecretGrants (ADR 0067);
+// without it the grants live until their TTL.
+func revokeSecretGrants(grants []activeGrant, ctlToken string) {
 	socketPath := sandbox.SecretsSocketPath()
 	for _, g := range grants {
 		resp, err := secretsRPC(socketPath, &secretsRPCRequest{
 			Action:  "revoke",
+			Token:   ctlToken,
 			GrantID: g.GrantID,
 		})
 		if err != nil {

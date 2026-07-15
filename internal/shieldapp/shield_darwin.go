@@ -16,6 +16,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
@@ -749,7 +750,10 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-session enforcement via netproxy)\n", netproxyDefaultAddr)
 	}
-	grantEnvVars, _ := requestSecretGrants(cfg)
+	// Not yet sandboxed here (sbpl applies at syscall.Exec below), so the token
+	// is readable at this point -- unlike Linux (ADR 0067).
+	darwinCtlToken, _ := ctlauth.Load()
+	grantEnvVars, _ := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
 
 	// Emit activation before exec — syscall.Exec replaces this process, so
@@ -780,7 +784,10 @@ func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, w
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}
-	grantEnvVars, _ := requestSecretGrants(cfg)
+	// Unlike Linux, this process is not yet sandboxed -- the sbpl profile
+	// applies at syscall.Exec below -- so the token can be read here (AGE-214).
+	darwinCtlToken, _ := ctlauth.Load()
+	grantEnvVars, _ := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
 	argv := append([]string{agentPath}, agentArgs...)
 	if err := syscall.Exec(agentPath, argv, env); err != nil {

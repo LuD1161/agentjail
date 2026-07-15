@@ -19,7 +19,7 @@ func TestRequestSecretGrants_NoBroker(t *testing.T) {
 			},
 		},
 	}
-	envVars, grants := requestSecretGrants(cfg)
+	envVars, grants := requestSecretGrants(cfg, "test-token")
 	if envVars != nil {
 		t.Errorf("expected nil envVars when broker is not running, got %v", envVars)
 	}
@@ -30,7 +30,7 @@ func TestRequestSecretGrants_NoBroker(t *testing.T) {
 
 func TestRequestSecretGrants_NoGrantsConfigured(t *testing.T) {
 	cfg := &config.PolicyConfig{}
-	envVars, grants := requestSecretGrants(cfg)
+	envVars, grants := requestSecretGrants(cfg, "test-token")
 	if envVars != nil {
 		t.Errorf("expected nil envVars with no grants configured, got %v", envVars)
 	}
@@ -40,7 +40,7 @@ func TestRequestSecretGrants_NoGrantsConfigured(t *testing.T) {
 }
 
 func TestRequestSecretGrants_NilConfig(t *testing.T) {
-	envVars, grants := requestSecretGrants(nil)
+	envVars, grants := requestSecretGrants(nil, "test-token")
 	if envVars != nil {
 		t.Errorf("expected nil envVars with nil config, got %v", envVars)
 	}
@@ -112,8 +112,8 @@ func TestSecretsRPC_ConnectionFailure(t *testing.T) {
 }
 
 func TestRevokeSecretGrants_Empty(t *testing.T) {
-	revokeSecretGrants(nil)
-	revokeSecretGrants([]activeGrant{})
+	revokeSecretGrants(nil, "test-token")
+	revokeSecretGrants([]activeGrant{}, "test-token")
 }
 
 func TestSecretsBrokerRunning_NoSocket(t *testing.T) {
