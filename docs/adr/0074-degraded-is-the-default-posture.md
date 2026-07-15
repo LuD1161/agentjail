@@ -40,8 +40,10 @@ the secrets store, or run `agentjail policy disable` — the exact operations th
 policy layer exists to make impossible, available precisely when nothing is
 watching.
 
-This is not hypothetical. AGE-212 was a daemon dying and enforcement silently
-lapsing, and the whole class of concern behind ADR 0066 and ADR 0069 reduces to
+This is not hypothetical. It has already happened in the field: a daemon died
+and enforcement silently lapsed for days (see ADR 0073 for the root cause of
+why nobody noticed). The whole class of concern behind ADR 0066 and ADR 0069
+reduces to
 *if you can keep the daemon busy, the next tool call is unpoliced*. Gating the
 control sockets (ADR 0067–0069) raised the cost of reaching that lever. This
 addresses the lever.
