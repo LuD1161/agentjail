@@ -38,6 +38,7 @@ import (
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/envaudit"
+	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -66,6 +67,12 @@ func defaultPolicyPath() string {
 // task. Run() itself does not call os.Exit; every os.Exit remaining in this
 // package lives beneath runShield/abortOnNetproxyFailure.
 func Run(args []string) int {
+	// If this process was re-exec'd as a transparent-tunnel namespace holder or
+	// a hardened-exec shim, run that role and exit/exec before any flag parsing.
+	// No-op in the normal case. MUST stay first: the holder never returns, and
+	// the TUN-fd handoff EOFs without it (ADR 0079, AGE-148).
+	netns.MaybeRunReexec()
+
 	fs := flag.NewFlagSet("agentjail-shield", flag.ContinueOnError)
 	policyPath := fs.String("policy", defaultPolicyPath(), "path to ~/.agentjail/policy.yaml")
 	profilePrint := fs.Bool("profile-print", false, "print the sandbox profile to stderr and exit without running the agent")
