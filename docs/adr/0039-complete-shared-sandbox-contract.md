@@ -118,7 +118,13 @@ helper (`cmd/agentjail-shield/test/bindprobe`):
 - `(local ip "127.0.0.1:*")` is rejected outright by sandbox-exec's parser
   ("host must be `*` or `localhost` in network address").
 - `(local tcp "localhost:*")` parses, but was measured to allow a bind to
-  BOTH `127.0.0.1:0` and `0.0.0.0:0` -- it is not loopback-scoped.
+  `0.0.0.0:0` -- it is not loopback-scoped. Whether it additionally permits an
+  explicit `127.0.0.1:0` bind is host-dependent (it does on a typical dev Mac;
+  it returns EPERM on GitHub's macos-14 runners), because the sandbox resolves
+  the literal `localhost` against the host. That variance does not affect the
+  finding: a permitted `0.0.0.0` bind alone proves the form is not
+  loopback-scoped. The test therefore records the `127.0.0.1` result and
+  asserts only on `0.0.0.0` - asserting on the former just flaked CI.
 
 No sbpl form was found that restricts a bind/inbound rule to loopback only.
 Per the plan's decision rule, Approach A ships; the gap is named
