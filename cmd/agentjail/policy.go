@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/policyctl"
 	"github.com/LuD1161/agentjail/internal/ui"
@@ -676,7 +677,13 @@ func sighupDaemon() {
 // full Rego recompile, and the agent socket is reachable from inside the sandbox
 // by design, which made it a fail-open DoS lever (ADR 0066).
 func reloadViaControlSocket() bool {
-	err := grantctl.DaemonReload(grantctl.ControlSocketPath(), controlDialTimeout)
+	tok, terr := ctlauth.Load()
+	if terr != nil {
+		// No token: the caller cannot authenticate, so it learned nothing about
+		// the daemon. Fall back rather than report a reload that never happened.
+		return false
+	}
+	err := grantctl.DaemonReload(grantctl.ControlSocketPath(), tok, controlDialTimeout)
 	if err == nil {
 		return true
 	}

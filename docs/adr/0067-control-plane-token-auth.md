@@ -82,7 +82,7 @@ all it can honestly do.
 
 Rollout is per socket: `secrets.sock` here, `netproxy-ctl.sock` in
 [ADR 0068](./0068-netproxy-control-token.md) (which names `fingerprint` as the one deliberate
-exception), `daemon-ctl.sock` tracked in AGE-214.
+exception), `daemon-ctl.sock` in [ADR 0069](./0069-daemon-control-token.md).
 
 Costs and residuals:
 

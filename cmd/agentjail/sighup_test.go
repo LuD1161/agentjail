@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
@@ -45,6 +46,12 @@ func startFakeControlDaemonSocket(t *testing.T, home string, ok bool, errMsg str
 	sockPath := grantctl.ControlSocketPathForHome(home)
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
 		t.Fatalf("mkdir control socket dir: %v", err)
+	}
+
+	// Callers set HOME to this dir, so Ensure writes the token where the CLI
+	// under test will look for it -- the same handoff a real daemon performs.
+	if _, err := ctlauth.Ensure(); err != nil {
+		t.Fatalf("mint control token: %v", err)
 	}
 
 	f := &fakeControlDaemonSocket{ok: ok, errMsg: errMsg}

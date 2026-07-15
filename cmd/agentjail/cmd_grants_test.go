@@ -7,11 +7,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
 type fakeGrantCtlSocket struct {
 	pending map[string]grantctl.GrantInfo
+	// ctlToken mirrors the real daemon: it mints the token at startup and
+	// refuses any request that does not carry it (ADR 0069).
+	ctlToken string
 }
 
 func shortHomeDir(t *testing.T) string {
@@ -31,7 +35,13 @@ func startFakeGrantCtlSocket(t *testing.T, home string, grants []grantctl.GrantI
 		t.Fatalf("mkdir control socket dir: %v", err)
 	}
 	sockPath := grantctl.ControlSocketPathForHome(home)
-	f := &fakeGrantCtlSocket{pending: make(map[string]grantctl.GrantInfo)}
+	// Callers set HOME to this dir, so Ensure writes the token where the CLI
+	// under test will look for it -- the same handoff a real daemon performs.
+	tok, err := ctlauth.Ensure()
+	if err != nil {
+		t.Fatalf("mint control token: %v", err)
+	}
+	f := &fakeGrantCtlSocket{pending: make(map[string]grantctl.GrantInfo), ctlToken: tok}
 	for _, g := range grants {
 		f.pending[g.GrantID] = g
 	}
@@ -56,6 +66,10 @@ func (f *fakeGrantCtlSocket) serve(conn net.Conn) {
 	defer conn.Close()
 	var req grantctl.Request
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		return
+	}
+	if !ctlauth.Valid(req.CtlToken, f.ctlToken) {
+		_ = json.NewEncoder(conn).Encode(grantctl.Response{OK: false, Error: "unauthorized"})
 		return
 	}
 	var resp grantctl.Response
