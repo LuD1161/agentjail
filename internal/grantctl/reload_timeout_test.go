@@ -55,7 +55,7 @@ func TestDaemonReload_SlowRefusalIsNotMistakenForUnreachable(t *testing.T) {
 	// Reply takes far longer than the 200ms dial budget.
 	serveOnce(t, sock, 400*time.Millisecond, false, "compile rego: unexpected token")
 
-	err := DaemonReload(sock, 200*time.Millisecond)
+	err := DaemonReload(sock, "ctl-tok", 200*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected a refusal")
 	}
@@ -74,7 +74,7 @@ func TestDaemonReload_SlowSuccessSurvivesDialBudget(t *testing.T) {
 	sock := shortSock(t, "ctl.sock")
 	serveOnce(t, sock, 400*time.Millisecond, true, "")
 
-	if err := DaemonReload(sock, 200*time.Millisecond); err != nil {
+	if err := DaemonReload(sock, "ctl-tok", 200*time.Millisecond); err != nil {
 		t.Errorf("a slow but successful reload must not error: %v", err)
 	}
 }
@@ -86,7 +86,7 @@ func TestDaemonReload_AbsentDaemonStillFailsFast(t *testing.T) {
 	sock := shortSock(t, "nobody-home.sock") // never bound
 
 	start := time.Now()
-	err := DaemonReload(sock, 200*time.Millisecond)
+	err := DaemonReload(sock, "ctl-tok", 200*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {
