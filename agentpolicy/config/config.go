@@ -764,6 +764,14 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Network.AllowedHosts = append([]string(nil), base.Network.AllowedHosts...)
 	}
 
+	// Network.TunnelMITM -- tri-state pointer, so nil means "not stated" and
+	// keeps the base rather than clearing it. ADR 0077 (D3).
+	if overlay.Network.TunnelMITM != nil {
+		result.Network.TunnelMITM = overlay.Network.TunnelMITM
+	} else {
+		result.Network.TunnelMITM = base.Network.TunnelMITM
+	}
+
 	// Web.Blocked
 	if len(overlay.Web.Blocked) > 0 {
 		result.Web.Blocked = append([]string(nil), overlay.Web.Blocked...)
