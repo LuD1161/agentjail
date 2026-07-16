@@ -141,12 +141,13 @@ func runLandlockNetChild() {
 	os.Exit(0)
 }
 
-// runLandlockAgentjailChild proves invariant 0 of the netproxy control-plane
-// plan (docs/adr/00NN): after Landlock, the sandboxed agent must be UNABLE to
-// write agentjail's own enforcement state (~/.agentjail/policy.yaml, the DB,
-// trusted.yaml) yet must still be ABLE to connect() the daemon socket so the
-// hook layer keeps enforcing. See shield_agentpaths.go: ~/.agentjail is granted
-// read-only, with a single-file write grant on ~/.agentjail/daemon.sock only.
+// runLandlockAgentjailChild proves invariant 0: after Landlock, the sandboxed
+// agent must be UNABLE to write agentjail's own enforcement state
+// (~/.agentjail/policy.yaml, the DB, trusted.yaml) yet must still be ABLE to
+// connect() the daemon socket so the hook layer keeps enforcing. See
+// shield_agentpaths.go: ~/.agentjail is granted read-only. The connect() does
+// not depend on the daemon.sock write grant -- Landlock does not mediate
+// AF_UNIX connect(); see ADR 0067-control-plane-token-auth (addendum, AGE-216).
 //
 // The parent (TestLandlockAgentjailStateEnforcement) sets $HOME to a throwaway
 // directory and pre-creates a listening socket at $HOME/.agentjail/daemon.sock,
@@ -157,8 +158,8 @@ func runLandlockNetChild() {
 //   - policy_write=EACCES (denied, expected) | =ok (LEAK) | =ERR:<msg>
 //   - sock_connect=ok (allowed, expected)    | =EACCES (hook would fail-open) | =ERR:<msg>
 func runLandlockAgentjailChild() {
-	// FS-only Landlock (no TCP restriction). AF_UNIX connect is mediated by the
-	// filesystem hook, not the TCP net rules, so netproxyPort is irrelevant here.
+	// FS-only Landlock (no TCP restriction). Landlock's TCP net rules do not
+	// cover AF_UNIX, so netproxyPort is irrelevant here.
 	if err := applyLandlock(nil, 0); err != nil {
 		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
 		os.Exit(1)
@@ -199,9 +200,10 @@ func runLandlockAgentjailChild() {
 		fmt.Fprintf(os.Stdout, "trust_write=ERR:%v\n", terr)
 	}
 
-	// Probe 2: connect() ~/.agentjail/daemon.sock -- must be ALLOWED. The
-	// single-file write grant covers exactly the socket inode; on Linux the
-	// AF_UNIX connect() needs write access on it.
+	// Probe 2: connect() ~/.agentjail/daemon.sock -- must be ALLOWED. This
+	// holds with or without the single-file write grant (measured, AGE-216):
+	// Landlock does not mediate AF_UNIX connect(). The probe still guards the
+	// invariant that the hook can reach the daemon.
 	sockPath := filepath.Join(home, ".agentjail", "daemon.sock")
 	conn, cerr := net.Dial("unix", sockPath)
 	if cerr == nil {

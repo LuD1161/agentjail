@@ -549,8 +549,9 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// explicit deny the sandboxed agent could reach the control plane and
 	// register or widen a session's allowlist. The token in the agent's env is
 	// only a data-plane bearer; this deny is what keeps it from being a
-	// control-plane credential. (On Linux the equivalent is the read-only
-	// ~/.agentjail grant, which withholds the write AF_UNIX connect needs.)
+	// control-plane credential. (Linux has no equivalent -- Landlock does not
+	// mediate AF_UNIX connect(); there the boundary is the read-denied control
+	// token. See ADR 0067-control-plane-token-auth.)
 	// Emitted before the catch-all so the intent is explicit and auditable.
 	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", proxyctl.ControlSocketPathForHome(home))
 	sb.WriteString("\n")
@@ -567,8 +568,9 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// allow BEFORE the (deny network*) catch-all. The path is runtime-dynamic
 	// (macOS launchd agents live under /private/tmp/com.apple.launchd.*/Listeners);
 	// it is read from SSH_AUTH_SOCK, which is passed through via
-	// EnvAllowlistBaseline. See internal/sandbox/env.go and shield_linux.go for
-	// the Landlock equivalent (a filesystem WRITE grant on the socket inode).
+	// EnvAllowlistBaseline. See internal/sandbox/env.go. Linux needs no
+	// equivalent allow: Landlock does not mediate AF_UNIX connect()
+	// (ADR 0067-control-plane-token-auth).
 	//
 	// (path ...) is the canonical exact-match predicate for a unix-socket
 	// destination (verified with sandbox-exec). The base is (allow default), so socket(2) creation is already
