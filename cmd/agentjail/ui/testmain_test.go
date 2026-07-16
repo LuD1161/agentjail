@@ -32,5 +32,17 @@ func TestMain(m *testing.M) {
 	// tests; unit tests only need to verify that the handler calls through.
 	sighupDaemonFn = func() {}
 
-	os.Exit(m.Run())
+	// Server.keys() falls through to keyring.Open() whenever a test injects no
+	// keys, and the Linux ladder then mints a file KEK under XDG_CONFIG_HOME.
+	// Stage it or the suite writes to the user's real ~/.config/agentjail.
+	// See ADR 0097-linux-kek-fallback.
+	stage, err := os.MkdirTemp("", "ui-xdg-config")
+	if err != nil {
+		panic("ui: stage XDG_CONFIG_HOME: " + err.Error())
+	}
+	os.Setenv("XDG_CONFIG_HOME", stage)
+
+	code := m.Run()
+	os.RemoveAll(stage)
+	os.Exit(code)
 }
