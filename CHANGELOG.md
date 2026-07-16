@@ -2,6 +2,46 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## v0.9.0 - 2026-07-16
+
+#### TL;DR
+
+- **Monitor mode** (ADR 0091): the daemon evaluates every tool call and enforces nothing, recording the verdict that would have fired. `agentjail monitor` shows what policy would have stopped, so you can dial in rules against your real workflow before turning them on.
+- **The status padlock stops lying**: the badge now attests the policy daemon by pinging it, shows UNSECURED when not shielded, and policy defaults to a degraded posture instead of silent-allow when the daemon is unreachable.
+- **Control-plane token auth** (ADR 0067/0068/0069): every privileged control-socket verb now requires a token the shield withholds from the sandboxed agent, closing a path where the guarded agent could reach the guard's own control plane.
+
+### Added
+
+- **Monitor mode** (ADR 0091): a new enforcement mode where the daemon evaluates every call and enforces nothing, recording the would-have-fired verdict. `agentjail monitor` surfaces it.
+- **Control-plane token authentication** across the daemon, netproxy, and secrets broker (ADR 0067/0068/0069); the shield withholds the token from the sandboxed agent.
+- **`agentjail doctor --fix`** (ADR 0086): doctor repairs what it diagnoses (dangling PATH shim, stale supervisor, missing role symlinks), not just reports it.
+- **Status line always attests** (ADR 0064/0085): UNSECURED when not shielded, and it attests the policy daemon by pinging it, not just the shield.
+- The store redacts secrets by value, not only by key name (ADR 0084).
+- Rego input is type-checked against the HookInput schema; `policy add` fails closed on an unknown `input.*` reference (ADR 0080).
+- Dropped decisions are visible in the audit log (ADR 0072).
+
+### Changed
+
+- **Degraded is the default posture** when the daemon is unreachable, not silent allow (ADR 0074).
+- **Uninstall is total** (ADR 0063/0065): stops the daemon before unhooking, verifies it stopped, aborts rather than tearing down half-way, and restores any chained status line.
+- `AGENTJAIL_SHIELDED=1` now means actually sandboxed, not merely that the shield ran (ADR 0087).
+- Policy reload moved off the agent-reachable socket onto the privileged control socket (ADR 0066).
+- Daemon durability: WAL checkpoint instead of VACUUM-on-start, SIGHUP reloads coalesced and rate-bounded (ADR 0075), and buffered decisions survive shutdown.
+
+### Fixed
+
+- The status badge no longer reads "secured" while the daemon is down and enforcing nothing (the signature was shield activations climbing while recorded decisions stayed flat); a wedged daemon is no longer badged as secured.
+- The fail-open notice now surfaces where the user can see it (systemMessage); Codex users are warned during a daemon-down window too.
+- Shield: canonicalizes aliased paths in the control-socket guard, works from a git worktree, never launches silently unrecorded, and emits macOS control-socket denies last with SSH_AUTH_SOCK preserved.
+- Install repairs the deployed supervisor, not just the template; the Linux daemon restarts after the auto-updater's clean exit (ADR 0070).
+- Dropped two Landlock grants measured as connect() no-ops.
+
+### Security
+
+- Control-plane token auth closes a privilege-escalation path: a sandboxed agent could previously reach the daemon, netproxy, and secrets control sockets. Every verb but the fingerprint challenge now requires a token the shield withholds from the agent.
+- Secrets redacted by value, not just key name (ADR 0084), so a secret pasted into an unexpected field is still masked in the audit log.
+- Honest attestation (ADR 0074/0087): the guard reports UNSECURED or degraded instead of a green badge when enforcement is not actually running.
+
 ## v0.8.2 - 2026-07-14
 
 #### TL;DR
