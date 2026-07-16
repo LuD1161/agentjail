@@ -367,7 +367,7 @@ func writeAllowWithSystemMessage(reason, msg string) {
 // It names the rule and says the call was allowed anyway, because the whole
 // point of monitor mode is deciding what to enforce later: a notice that only
 // said "policy matched" would not tell the user what changes if they switch.
-// See ADR 0091-monitor-mode-tool-calls.
+// See ADR 0091-monitor-mode-tools.
 func monitorNotice(wouldAction, ruleID, reason string) string {
 	if wouldAction == "" {
 		return ""
@@ -746,7 +746,7 @@ func runCursor() {
 		// only, allow-path only - never on deny/ask).
 		maybeEmitSSHAgentWarning(req.ToolName, req.ToolInput)
 		// Monitor mode: surface the verdict the daemon declined to act on
-		// (ADR 0091-monitor-mode-tool-calls).
+		// (ADR 0091-monitor-mode-tools).
 		if notice := monitorNotice(resp.WouldAction, resp.RuleID, resp.Reason); notice != "" {
 			writeCursorAllowWithMessage(notice)
 			break

@@ -6,7 +6,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/policyeval"
 )
 
-// Guards the monitor-mode downgrade (AGE-242, ADR 0091-monitor-mode-tool-calls):
+// Guards the monitor-mode downgrade (AGE-242, ADR 0091-monitor-mode-tools):
 // the verdict is recorded, nothing is enforced, and Action never claims a block
 // that did not happen.
 

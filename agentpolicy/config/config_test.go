@@ -1878,7 +1878,7 @@ func TestMergeDaemonUnreachableKeepsBaseWhenOverlayEmpty(t *testing.T) {
 // ---- AGE-242: enforcement mode ----
 
 // TestDefaultEnforcementIsEnforce guards the opt-in invariant: monitor mode
-// must never be reached by omission. See ADR 0091-monitor-mode-tool-calls.
+// must never be reached by omission. See ADR 0091-monitor-mode-tools.
 func TestDefaultEnforcementIsEnforce(t *testing.T) {
 	if got := Default().Enforcement; got != EnforcementEnforce {
 		t.Errorf("Default().Enforcement = %q, want %q", got, EnforcementEnforce)

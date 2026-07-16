@@ -23,7 +23,7 @@ type monitorRow struct {
 }
 
 // runMonitor renders the would-have-blocked report: what policy matched on
-// calls that ran anyway. See ADR 0091-monitor-mode-tool-calls.
+// calls that ran anyway. See ADR 0091-monitor-mode-tools.
 func runMonitor(args []string) int {
 	fs := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)

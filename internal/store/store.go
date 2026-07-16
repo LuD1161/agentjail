@@ -45,7 +45,7 @@ type DecisionRecord struct {
 	// returned when monitor mode downgraded it, and is empty when the two
 	// matched. Action must never claim a block that did not happen -- a reader
 	// of this row has no other way to tell (AGE-212).
-	// See ADR 0091-monitor-mode-tool-calls.
+	// See ADR 0091-monitor-mode-tools.
 	WouldAction string
 }
 
@@ -184,7 +184,7 @@ type ReadOnlyStore interface {
 // the verdict it returned, and how often -- for calls that ran anyway.
 // Aggregated in SQL rather than over ListDecisions, whose limit is clamped and
 // would silently truncate the report.
-// See ADR 0091-monitor-mode-tool-calls.
+// See ADR 0091-monitor-mode-tools.
 type WouldBlockCount struct {
 	RuleID      string
 	WouldAction string

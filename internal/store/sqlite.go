@@ -245,7 +245,7 @@ func (s *sqliteStore) migrate() error {
 // CountWouldBlock returns the monitor-mode report rows since the given time:
 // the rules that fired on calls that ran anyway. Rows with an empty
 // would_action are enforce-mode decisions and are excluded by the query.
-// See ADR 0091-monitor-mode-tool-calls.
+// See ADR 0091-monitor-mode-tools.
 func (s *sqliteStore) CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error) {
 	rows, err := s.queries.CountWouldBlockByRule(ctx, since.UTC().Format(time.RFC3339Nano))
 	if err != nil {

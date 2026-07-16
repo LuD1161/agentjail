@@ -539,6 +539,48 @@ startup and every config reload; a missing or unreadable sidecar falls back to
 `allow`, since a daemon that never started has published no rules to enforce —
 `degraded` protects you from a daemon that *died*, not one that never ran.
 
+### Monitor mode — see what it would block, before it blocks anything
+
+Try agentjail against your real work without it stopping anything
+([ADR 0091](./docs/adr/0091-monitor-mode-tools.md)):
+
+```yaml
+# ~/.agentjail/policy.yaml
+enforcement: monitor   # enforce (default) | monitor
+```
+
+Every tool call is evaluated against the full policy set and the verdict is
+recorded — but nothing is blocked. Run it for a day, then read the report:
+
+```console
+$ agentjail monitor --since 24h
+Would have blocked 3 tool call(s) since 24h:
+
+COUNT  VERDICT  TOOL  RULE
+3      deny     Read  file_policy/sensitive_credential
+```
+
+When you like what you see, set `enforcement: enforce` and the same rules start
+acting. `agentjail monitor --json` gives the machine-readable form.
+
+**Monitor mode means the guardrail is off.** It is opt-in and never a default,
+the daemon warns at startup, and every affected tool call tells the agent what
+would have happened and why. The unenforced window is recorded as an
+`enforcement.mode_changed` audit event, because a log full of `allow` rows
+cannot explain itself. A project's `.agentjail/policy.yaml` **cannot** turn it
+on — only the global config can, which the shield grants read-only.
+
+Two things it is not:
+
+- It is **not** `daemon_unreachable`. That axis covers a daemon that is *gone*;
+  this one covers a healthy daemon choosing not to act.
+- It **only covers tool calls**. Network egress needs the tunnel
+  ([AGE-243](https://linear.app/agentjail/issue/AGE-243)); filesystem access is
+  kernel-enforced by Landlock/Seatbelt and cannot be shadowed at all
+  ([AGE-244](https://linear.app/agentjail/issue/AGE-244)). A quiet report means
+  *your tool calls* were clean — and a thin ruleset flags nothing, which looks
+  identical.
+
 ---
 
 ## Telemetry

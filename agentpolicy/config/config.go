@@ -69,7 +69,7 @@ type PolicyConfig struct {
 	// Enforcement selects whether a deny/ask verdict is acted on or merely
 	// recorded. Empty defaults to EnforcementEnforce — monitor mode is opt-in,
 	// because a default that silently stops enforcing would be the AGE-212 bug
-	// class as a feature. See ADR 0091-monitor-mode-tool-calls.
+	// class as a feature. See ADR 0091-monitor-mode-tools.
 	Enforcement EnforcementMode `yaml:"enforcement"`
 }
 
@@ -912,7 +912,7 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 	// MergeProjectOverlay: that path is additive-only and a project's
 	// .agentjail/policy.yaml lives in the repo the agent can write, so honouring
 	// it here would let the agent turn off its own enforcement.
-	// See ADR 0091-monitor-mode-tool-calls.
+	// See ADR 0091-monitor-mode-tools.
 	switch {
 	case overlay.Enforcement != "":
 		result.Enforcement = overlay.Enforcement

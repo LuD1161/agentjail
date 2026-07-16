@@ -5,7 +5,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 -- name: CountWouldBlockByRule :many
 -- Monitor-mode report: what policy would have stopped, grouped by rule. Rows
 -- where would_action is empty are enforce-mode decisions and are excluded.
--- See ADR 0091-monitor-mode-tool-calls.
+-- See ADR 0091-monitor-mode-tools.
 SELECT rule_id, would_action, tool_name, COUNT(*) AS count
 FROM decisions
 WHERE would_action != '' AND ts >= ?

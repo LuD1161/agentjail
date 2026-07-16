@@ -60,7 +60,7 @@ type CountWouldBlockByRuleRow struct {
 
 // Monitor-mode report: what policy would have stopped, grouped by rule. Rows
 // where would_action is empty are enforce-mode decisions and are excluded.
-// See ADR 0091-monitor-mode-tool-calls.
+// See ADR 0091-monitor-mode-tools.
 func (q *Queries) CountWouldBlockByRule(ctx context.Context, ts string) ([]CountWouldBlockByRuleRow, error) {
 	rows, err := q.db.QueryContext(ctx, countWouldBlockByRule, ts)
 	if err != nil {
