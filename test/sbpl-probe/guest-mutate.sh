@@ -8,7 +8,7 @@ KIT=/Users/admin/probe-kit
 PROBE="$KIT/probe-bin"; SHIELD="$KIT/agentjail-shield"
 PROBE_HOME=/Users/admin/ajprobe-run; RUN="$PROBE_HOME/.agentjail/run"
 WORK=/private/tmp/probe-work; mkdir -p "$RUN" "$WORK"; cd "$WORK" || exit 2
-NP="$RUN/netproxy-ctl.sock"; DM="$RUN/daemon-ctl.sock"; SE="$RUN/secrets.sock"
+NP="$RUN/netproxy-ctl.sock"; DM="$RUN/daemon-ctl.sock"; SE="$PROBE_HOME/.agentjail/secrets.sock"
 
 pids=(); for s in "$NP" "$DM" "$SE"; do "$PROBE" server "$s" >/dev/null 2>&1 & pids+=($!); done
 sleep 1; trap 'for p in "${pids[@]}"; do kill $p 2>/dev/null; done' EXIT

@@ -17,7 +17,7 @@ case "$PROBE_HOME" in /tmp/*|/private/tmp/*) echo "FATAL: HOME in /tmp"; exit 2;
 case "$PROBE_HOME" in "$PWD"*) echo "FATAL: cwd encloses HOME"; exit 2;; esac
 echo "hygiene: cwd=$PWD  probe_home=$PROBE_HOME  (cwd does not enclose home, home outside /tmp)"
 
-NP="$RUN/netproxy-ctl.sock"; DM="$RUN/daemon-ctl.sock"; SE="$RUN/secrets.sock"
+NP="$RUN/netproxy-ctl.sock"; DM="$RUN/daemon-ctl.sock"; SE="$PROBE_HOME/.agentjail/secrets.sock"   # NOT under run/ -- see sandbox.SecretsSocketPathForHome
 for p in "$NP" "$DM" "$SE"; do
   [ ${#p} -lt 104 ] || { echo "FATAL: sockaddr_un overflow: $p"; exit 2; }
 done
@@ -63,11 +63,13 @@ grep -n "ctl\.sock\|secrets\.sock" real.sbpl | sed 's/^/    /' || echo "    (NON
 echo
 for s in "$NP" "$DM" "$SE"; do printf '  %-20s %s\n' "$(basename $s)" "$(sbx real.sbpl "$s")"; done
 
-echo
-echo "=== E4  MUTATION TEST: strip the netproxy-ctl deny; connect MUST flip to CONNECT_OK"
-grep -v "netproxy-ctl.sock" real.sbpl > mut.sbpl
-echo "  mutated (deny removed) -> $(sbx mut.sbpl "$NP")"
-echo "  restored (real)        -> $(sbx real.sbpl "$NP")"
+# Mutation testing lives in guest-mutate.sh. It is NOT done here because the
+# obvious one-liner is a trap: `grep -v netproxy-ctl.sock` deletes only the
+# (literal ...) line of a two-line rule, leaving a dangling
+# "(deny network-outbound" -> sbpl syntax error. sandbox-exec then refuses the
+# profile, the connect fails, and the "mutation" looks like a passing gate while
+# testing nothing. guest-mutate.sh removes whole rules and asserts the mutated
+# profile still COMPILES before believing any result.
 
 echo
 echo "=== E5  SSH_AUTH_SOCK ordering: point it at daemon-ctl.sock"

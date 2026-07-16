@@ -9,17 +9,45 @@ The bug this guards against (AGE-214) survived precisely because a property that
 one platform was generalised to both in comments, with no test on either. Reading the
 generator is not evidence about Seatbelt. Only execution is.
 
-## Why this cannot run in CI (or in a shielded session)
+## Why this must run on an unshielded box
 
-macOS refuses to nest a Seatbelt sandbox: inside an agentjail shielded session,
-`sandbox_apply` returns `EPERM` and **every** `sandbox-exec` call fails - even
-`(version 1)(allow default)`. So the probe must run on an unshielded macOS box.
-`test/testbed` already boots one (`golden-macos` via tart); that is the venue.
+Inside an agentjail shielded session, `sandbox_apply` accepts only a profile that is
+**semantically identical to the one the shield already applied**. Measured on the host:
+
+| profile applied from inside a shielded session | result |
+|---|---|
+| the shield's own profile, byte-identical | ACCEPTED |
+| same profile + a trailing comment / newline | ACCEPTED (so it is semantic, not byte-identity) |
+| same profile + **one unrelated harmless deny** (`/tmp/zzz-unrelated.sock`) | `sandbox_apply: EPERM` |
+| same profile, control-socket denies merely **reordered** | `sandbox_apply: EPERM` |
+| `(version 1)(allow default)` - a *widening* profile | `sandbox_apply: EPERM` |
+
+Two consequences, both easy to get wrong:
+
+1. **You cannot probe alternative profiles from inside the shield.** Any experiment that
+   varies the profile is refused before it runs. Do not read that EPERM as "the sandbox
+   denied my connect" - the sandbox was never applied. And note the tempting
+   generalisation "macOS refuses to nest Seatbelt, so `sandbox-exec` never works in a
+   shielded session" is **false**: the identical profile applies fine. (That wrong
+   generalisation was drawn, and then corrected by measurement, while writing this.)
+2. **The in-repo `sandbox-exec` integration tests are environment-sensitive.**
+   `TestSandboxExec_DarwinTempDirCarveOuts` passes inside a shielded session only because
+   it regenerates the profile already applied to the test process. **Any** change to the
+   generator - correct or not - makes it fail in-shield with `exit status 71`. That is not
+   a regression signal. Verify such a change on an unshielded box (`guest-carveout.sh`
+   reproduces that test's assertions there) before believing either its pass or its fail.
+
+`test/testbed` already boots an unshielded macOS box (`golden-macos` via tart); that is the
+venue.
 
     # from an UNSHIELDED terminal on the Mac
     tart run --no-graphics tb-release-gate &
     scp guest-probe.sh guest-mutate.sh admin@$(tart ip tb-release-gate):/Users/admin/probe-kit/
     ssh admin@$(tart ip tb-release-gate) 'bash /Users/admin/probe-kit/guest-probe.sh'
+
+`guest-carveout.sh` reproduces `TestSandboxExec_DarwinTempDirCarveOuts`'s assertions
+against the generated profile on the guest - use it whenever a generator change makes that
+test fail in-shield, to tell a real regression from the nesting artifact above.
 
 `run-probe.sh` is the host-side variant (unshielded Mac, builds everything itself).
 Binaries copied into the guest need an ad-hoc re-sign (`codesign --force -s -`) or the
@@ -35,6 +63,9 @@ The scripts assert all of these at runtime and abort rather than emit a false pa
 - socket paths must stay **< 104 bytes** (`sockaddr_un`).
 
 ## Measured results (macOS 15.7.7, clean guest, real binary)
+
+These are the results **as first measured**, against the generator BEFORE the AGE-216 fix.
+They are kept as the evidence trail. For the state after the fix, see "After the fix" below.
 
 | id | experiment | result |
 |----|-----------|--------|
@@ -68,6 +99,25 @@ E5 is the live fragility: a later `(allow network-outbound (path ...))` naming a
 socket beats everything before it. Not reachable by the agent today (`SSH_AUTH_SOCK` is
 read from the *shield's* env at generation time, not the agent's), but the ordering is one
 edit away from mattering.
+
+## After the fix
+
+Re-measured on the same clean guest with the fixed binary:
+
+- **E5 → DENIED** (was CONNECT_OK). `SSH_AUTH_SOCK` pointed at `daemon-ctl.sock` no longer
+  yields a connect. The profile now emits no `(path ...)` allow for it at all - the
+  fail-closed guard suppresses it - and the deny is emitted last regardless.
+- **All three sockets now carry an explicit deny**, `secrets.sock` included, at its real
+  path (`~/.agentjail/secrets.sock`, *not* under `run/`).
+- The `$TMPDIR` / `/tmp` carve-outs still behave as before (`guest-carveout.sh`):
+  `bind_tmp=ok`, `bindconnect_tmpdir=ok`, `write_tmpdir=ok`, `write_vardb=denied`,
+  `connect_tmp=denied`.
+
+The explicit denies remain **not** what stops an agent today - the catch-all still does
+that (M1/M2 are unchanged). They are defence-in-depth, and they become load-bearing the
+moment an allow grows to cover a control-socket path, which is exactly what `SSH_AUTH_SOCK`
+did. `internal/shieldapp/shield_darwin_ctlsocket_test.go` guards the ordering in CI, where
+`sandbox-exec` cannot be trusted to run.
 
 ## Mutation testing is mandatory here
 

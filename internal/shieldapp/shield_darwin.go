@@ -544,22 +544,9 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 		}
 	}
 
-	// Deny the agent the netproxy control socket. Seatbelt models AF_UNIX
-	// connect() as a network op under the (allow default) base, so without an
-	// explicit deny the sandboxed agent could reach the control plane and
-	// register or widen a session's allowlist. The token in the agent's env is
-	// only a data-plane bearer; this deny is what keeps it from being a
-	// control-plane credential. (Linux has no equivalent -- Landlock does not
-	// mediate AF_UNIX connect(); there the boundary is the read-denied control
-	// token. See ADR 0067-control-plane-token-auth.)
-	// Emitted before the catch-all so the intent is explicit and auditable.
-	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", proxyctl.ControlSocketPathForHome(home))
-	sb.WriteString("\n")
-
-	// daemon-ctl.sock is the daemon's grant control socket,
-	// agent-unreachable by the same mechanism as netproxy-ctl.sock above.
-	fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", grantctl.ControlSocketPathForHome(home))
-	sb.WriteString("\n")
+	// Control-socket denies are emitted last, not here: sbpl is last-match-wins
+	// among same-specificity rules, so any later allow naming the same path would
+	// win. See ADR 0067-control-plane-token-auth.
 
 	// SSH agent socket: allow connect() to the ssh-agent listener so ssh can
 	// authenticate via the agent (signing-only) without ever reading a private
@@ -576,8 +563,17 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// destination (verified with sandbox-exec). The base is (allow default), so socket(2) creation is already
 	// permitted -- unlike a (deny default) profile we do not also need
 	// (allow system-socket (socket-domain AF_UNIX)).
+	//
+	// Fail closed on a control-socket path: such an allow would defeat both the
+	// deny below and the (deny network*) catch-all.
+	// See ADR 0067-control-plane-token-auth.
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		fmt.Fprintf(&sb, "(allow network-outbound\n    (path %q))\n\n", sock)
+		if isControlSocketPath(sock, home) {
+			fmt.Fprintf(os.Stderr,
+				"agentjail-shield WARNING: SSH_AUTH_SOCK (%s) names an agentjail control socket -- refusing to emit an allow rule for it.\n", sock)
+		} else {
+			fmt.Fprintf(&sb, "(allow network-outbound\n    (path %q))\n\n", sock)
+		}
 	}
 
 	// --- AF_UNIX sockets in temp dirs: bind broad, connect narrow ---
@@ -619,12 +615,62 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	}
 	sb.WriteString("\n")
 
+	// Control-plane socket denies. MUST stay last: sbpl is last-match-wins among
+	// same-specificity rules, and the unfiltered (deny network*) below does not
+	// override an earlier filtered allow, so it cannot backstop these.
+	// Defence-in-depth, not the boundary. See ADR 0067-control-plane-token-auth.
+	for _, p := range controlSocketPaths(home) {
+		fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", p)
+	}
+	sb.WriteString("\n")
+
 	// Default deny for all remaining network traffic.
 	// This blocks: C2 on non-standard ports (4444, 8888, etc.), raw IP/ICMP
 	// exfil, non-DNS UDP, arbitrary TCP on unlisted ports.
 	sb.WriteString("(deny network*)\n")
 
 	return sb.String()
+}
+
+// controlSocketPaths returns every agentjail control-plane socket that a
+// sandboxed agent must never reach, for the given home.
+//
+// One source of truth (ADR 0034): the sbpl backend translates this list into
+// deny rules; it never re-lists the paths itself. Note secrets.sock lives at
+// ~/.agentjail/secrets.sock while the other two live under ~/.agentjail/run/,
+// so this cannot be collapsed into a single subpath rule.
+func controlSocketPaths(home string) []string {
+	return []string{
+		proxyctl.ControlSocketPathForHome(home),
+		grantctl.ControlSocketPathForHome(home),
+		sandbox.SecretsSocketPathForHome(home),
+	}
+}
+
+// isControlSocketPath reports whether p names an agentjail control-plane
+// socket, or lives in the directory that holds them.
+//
+// Compares resolved paths so a symlink or an unclean path (/tmp vs /private/tmp,
+// trailing "..") cannot smuggle a control socket past the check. Errs toward
+// "yes, it is a control socket" -- a false positive costs one ssh-agent allow,
+// a false negative silently widens the control plane.
+func isControlSocketPath(p, home string) bool {
+	resolve := func(s string) string {
+		if r, err := filepath.EvalSymlinks(s); err == nil {
+			return r
+		}
+		return filepath.Clean(s)
+	}
+	rp := resolve(p)
+	for _, c := range controlSocketPaths(home) {
+		if rp == resolve(c) || filepath.Clean(p) == filepath.Clean(c) {
+			return true
+		}
+	}
+	// Anything inside the control-socket dir counts, even if not yet bound.
+	ctlDir := resolve(proxyctl.ControlSocketDirForHome(home))
+	rel, err := filepath.Rel(ctlDir, rp)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // runShield is the macOS implementation of the shield launcher.

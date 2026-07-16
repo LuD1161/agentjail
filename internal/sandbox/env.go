@@ -243,6 +243,19 @@ func SecretsSocketPath() string {
 	if err != nil {
 		return "/tmp/agentjail-secrets.sock"
 	}
+	return SecretsSocketPathForHome(home)
+}
+
+// SecretsSocketPathForHome returns the agentjail-secrets Unix socket path for
+// an explicit home, at ~/.agentjail/secrets.sock.
+//
+// Note this is NOT under ~/.agentjail/run/, where the netproxy and daemon
+// control sockets live (proxyctl/grantctl ControlSocketPathForHome).
+//
+// The ForHome variant exists so callers that generate a sandbox profile for a
+// known home -- rather than the current process's -- resolve the same path the
+// broker will actually bind. Mirrors proxyctl/grantctl.ControlSocketPathForHome.
+func SecretsSocketPathForHome(home string) string {
 	return filepath.Join(home, ".agentjail", "secrets.sock")
 }
 
