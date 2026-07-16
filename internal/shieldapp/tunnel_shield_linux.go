@@ -26,7 +26,11 @@ type tunnelSession struct {
 	store     *mitm.RequestStore // non-nil when TLS interception is enabled
 	caCleanup func()             // removes the temp CA cert dir; nil if no MITM
 	caEnv     map[string]string  // CA trust env for the agent; nil if no MITM
-	cancel    context.CancelFunc
+	// mitmActive is the posture actually ACHIEVED, not the one requested:
+	// interception can be asked for and still fail open to the relay. The
+	// launch notice must report this, never the request (ADR 0077 D4).
+	mitmActive bool
+	cancel     context.CancelFunc
 }
 
 // resolveNetpacksDir returns the directory of L7 policy templates to load into
@@ -121,31 +125,36 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 	// tunnel relays TLS byte-for-byte, agentjail holds no key the agent trusts,
 	// and visibility stays at destination IP / SNI / byte counts. See ADR 0077.
 	sess := &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}
+	// Injecting the CA is the last step that can fail, deliberately: it
+	// REPLACES the namespace trust store, so an injected CA without a live
+	// MITM leaves the agent trusting only us while talking to real upstreams —
+	// every TLS handshake then fails. Everything fallible therefore happens
+	// first, and injection is followed immediately by SetMITM with nothing in
+	// between that can bail out. ADR 0077 (D5): failing here must fail OPEN to
+	// a working relay, not close the agent's network.
 	if !mitmEnabled {
 		// No CA minted, no SetMITM: the gateway relays TLS byte-for-byte.
 		logger.Info("tunnel TLS interception OFF (transparent-only) — HTTP(S) policy templates will NOT match; visibility is destination IP, SNI and byte counts only")
+	} else if store, serr := mitm.NewRequestStore(mitm.DefaultDBPath()); serr != nil {
+		logger.Warn("tunnel TLS interception UNAVAILABLE (network.db open failed); relaying HTTPS opaque — HTTP(S) policy templates will NOT match", "err", serr)
 	} else if caDir, caCert, caKey, caCleanup, err := setupTunnelCA(ns); err != nil {
-		// Expected but unavailable: fail open to the relay, loudly. ADR 0077 (D5).
+		_ = store.Close() // not on sess yet; cleanup() would not reach it
 		logger.Warn("tunnel TLS interception UNAVAILABLE (CA setup failed); relaying HTTPS opaque — HTTP(S) policy templates will NOT match", "err", err)
 	} else {
+		sess.store = store
 		sess.caCleanup = caCleanup
-		// Bind-mounting the cert over the namespace trust store is not enough:
-		// Node and Python's requests ignore it and use bundled roots, so the
-		// agent's env must point them at the CA too (ADR 0034, AGE-113).
+		// The bind-mount alone is not enough: Node and Python's requests use
+		// bundled roots and ignore the namespace trust store (ADR 0034, AGE-113).
 		sess.caEnv = TunnelCAEnv(TunnelCACertPath(caDir))
-		if store, serr := mitm.NewRequestStore(mitm.DefaultDBPath()); serr != nil {
-			logger.Warn("tunnel TLS interception UNAVAILABLE despite --mitm (network.db open failed); relaying HTTPS opaque", "err", serr)
-		} else {
-			sess.store = store
-			h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
-				if lerr := store.Log(rl); lerr != nil {
-					logger.Debug("network.db log failed", "err", lerr)
-				}
-			})
-			h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
-			gw.SetMITM(h)
-			logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace", "db", mitm.DefaultDBPath())
-		}
+		h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
+			if lerr := store.Log(rl); lerr != nil {
+				logger.Debug("network.db log failed", "err", lerr)
+			}
+		})
+		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
+		gw.SetMITM(h)
+		sess.mitmActive = true
+		logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace", "db", mitm.DefaultDBPath())
 	}
 
 	go func() {
