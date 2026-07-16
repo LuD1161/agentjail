@@ -384,6 +384,27 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 		fmt.Fprintf(os.Stderr, "  warning: could not reconcile role symlinks: %v\n", err)
 	}
 
+	// Step 8c: the updater hands the daemon back to its supervisor with exit(0)
+	// (ADR 0070), so verify the DEPLOYED definition will catch it before relying
+	// on it — installs predating Restart=always have on-failure on disk and
+	// strand the daemon. See ADR 0088-deployed-supervisor-verified.
+	if home, herr := os.UserHomeDir(); herr == nil {
+		repaired, err := ensureDaemonRestartPolicy(home)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "  warning: could not refresh the daemon's supervisor definition: %v\n", err)
+		case repaired:
+			fmt.Println("🔧  supervisor definition repaired — it would not have restarted the daemon after a clean exit")
+			// On darwin the plist was unloaded at step 6; step 9's load reads the
+			// rewrite. Only systemd needs an explicit reload here.
+			if goos != "darwin" {
+				if err := reloadDaemonService(home); err != nil {
+					fmt.Fprintf(os.Stderr, "  warning: could not reload the supervisor definition: %v\n", err)
+				}
+			}
+		}
+	}
+
 	// Step 9: restart the daemon.
 	if goos == "darwin" && plistPath != "" {
 		if err := selfupdate.LaunchctlLoad(plistPath); err != nil {

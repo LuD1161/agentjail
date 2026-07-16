@@ -14,7 +14,7 @@ import (
 // new entry must be a deliberate edit here too. Shield, hooks, and the
 // Protection attestation are absent on purpose.
 func TestOnlyDiagnosedRepairsAreRegistered(t *testing.T) {
-	want := map[repairID]bool{repairDaemon: true, repairPathShim: true}
+	want := map[repairID]bool{repairDaemon: true, repairPathShim: true, repairServiceDef: true}
 	for id := range repairRegistry {
 		if !want[id] {
 			t.Errorf("unexpected repair %q registered — every repair needs an ADR entry naming why it is safe", id)
