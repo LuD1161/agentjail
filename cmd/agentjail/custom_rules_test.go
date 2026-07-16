@@ -215,6 +215,102 @@ candidate contains r if {
 	}
 }
 
+// ---- TestPolicyAdd_RejectsUnknownInputRef -----------------------------------
+
+// The AGE-218 regression test: a rule referencing a field that is not on the
+// hook input document must fail to install.
+//
+// This is the failure ADR 0080-rego-both-tiers accepted as a known cost. Before the input
+// schema was wired, this file installed successfully — it is valid Rego, the
+// authoring contract passes, and the bundle compiles. It just never fired.
+// A silent no-op is the worst outcome for a security rule: it looks installed
+// and reports healthy.
+func TestPolicyAdd_RejectsUnknownInputRef(t *testing.T) {
+	_, rulesPath := setupFakeHome(t)
+
+	// input.aws_accont — a typo for input.aws_account. This is the verbatim
+	// example ADR 0080-rego-both-tiers used to describe the gap.
+	typoRego := `# @rule_id: custom/typo_rule/no-prod-aws
+package agentjail
+
+import future.keywords.if
+import future.keywords.contains
+
+candidate contains r if {
+    input.aws_accont == "999999999999"
+    r := {
+        "action":  "deny",
+        "rule_id": "custom/typo_rule/no-prod-aws",
+        "reason":  "prod AWS account is off limits",
+        "impact":  "would touch the prod AWS account",
+    }
+}
+`
+	p := writeTempRego(t, "typo_rule", typoRego)
+
+	var code int
+	stderr := captureStderr(t, func() { code = runPolicyAdd(p) })
+
+	if code == 0 {
+		t.Fatal("runPolicyAdd() = 0 for a rule referencing input.aws_accont — " +
+			"the rule would install clean and silently never fire")
+	}
+
+	// The error must name the offending reference and its line so the author
+	// can act on it without guessing.
+	if !strings.Contains(stderr, "input.aws_accont") {
+		t.Errorf("stderr does not name the offending reference:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "typo_rule.rego:8") {
+		t.Errorf("stderr does not name the offending line:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "aws_account") {
+		t.Errorf("stderr does not list the valid fields:\n%s", stderr)
+	}
+	// ...and explain why a merely-undefined reference is worth failing on.
+	if !strings.Contains(stderr, "never fire") {
+		t.Errorf("stderr does not explain the silent-no-op stakes:\n%s", stderr)
+	}
+
+	// Fail closed: nothing may land in the rules dir.
+	if _, err := os.Stat(filepath.Join(rulesPath, "typo_rule.rego")); !os.IsNotExist(err) {
+		t.Error("rejected rule was installed anyway — policy add must fail closed")
+	}
+}
+
+// The counterweight: the corrected rule installs. Guards against "fixing" the
+// test above by rejecting aws_account access altogether. aws_account is
+// omitempty and undefined for non-AWS calls, and referencing it must stay
+// legal — a schema that rejected it would be worse than no schema.
+func TestPolicyAdd_AcceptsOptionalInputRef(t *testing.T) {
+	_, rulesPath := setupFakeHome(t)
+
+	okRego := strings.Replace(`# @rule_id: custom/optional_rule/no-prod-aws
+package agentjail
+
+import future.keywords.if
+import future.keywords.contains
+
+candidate contains r if {
+    input.aws_accont == "999999999999"
+    r := {
+        "action":  "deny",
+        "rule_id": "custom/optional_rule/no-prod-aws",
+        "reason":  "prod AWS account is off limits",
+        "impact":  "would touch the prod AWS account",
+    }
+}
+`, "aws_accont", "aws_account", 1)
+
+	p := writeTempRego(t, "optional_rule", okRego)
+	if code := runPolicyAdd(p); code != 0 {
+		t.Fatalf("runPolicyAdd() = %d for a valid input.aws_account reference, want 0", code)
+	}
+	if _, err := os.Stat(filepath.Join(rulesPath, "optional_rule.rego")); err != nil {
+		t.Errorf("valid rule not installed: %v", err)
+	}
+}
+
 // ---- TestPolicyAdd_RejectsCollisionWithReservedPrefix -----------------------
 
 func TestPolicyAdd_RejectsCollisionWithReservedPrefix(t *testing.T) {
