@@ -142,3 +142,23 @@ tart_guest_pull() {
 guest_exec() { "${DRIVER}_guest_exec" "$@"; }
 guest_push() { "${DRIVER}_guest_push" "$@"; }
 guest_pull() { "${DRIVER}_guest_pull" "$@"; }
+
+# ---- chaos scenario support ------------------------------------------------
+
+# chaos_expected_version -> stdout: the version this checkout's dist-tarball
+# would stamp. Must track the Makefile's DIST_VERSION expression exactly, or
+# chaos-lib.sh's freshness comparison is meaningless. Empty (not fatal) outside
+# a git checkout; chaos-lib.sh decides what to do about that.
+chaos_expected_version() {
+    git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || true
+}
+
+# chaos_env -> stdout: shell-quoted env assignment prefix for a guest scenario
+# run. A testbed guest has no checkout (no host mounts, by design), so the guard
+# cannot derive the expected version itself -- the host passes it in.
+# printf %q because a tag name is untrusted input that reaches a remote `bash -lc`.
+chaos_env() {
+    local v; v="$(chaos_expected_version)"
+    [ -n "$v" ] || return 0
+    printf 'CHAOS_EXPECTED_VERSION=%q' "$v"
+}

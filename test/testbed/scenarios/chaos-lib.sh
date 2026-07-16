@@ -28,9 +28,18 @@ _chaos_lib_repo_root() {
 }
 
 # _chaos_lib_expected_version -> stdout: the version DIST_VERSION would
-# compute for the current working tree. Must track the Makefile exactly
-# (dist-tarball target) or the comparison is meaningless.
+# compute for the working tree these scenarios came from. Must track the
+# Makefile exactly (dist-tarball target) or the comparison is meaningless.
+#
+# Two sources, in order:
+#   1. $CHAOS_EXPECTED_VERSION, set by testbed.sh (lib.sh chaos_env) on the
+#      host. A testbed guest has no checkout, so this is the ONLY source there.
+#   2. git describe, for a scenario run directly on a host checkout.
 _chaos_lib_expected_version() {
+    if [ -n "${CHAOS_EXPECTED_VERSION:-}" ]; then
+        echo "$CHAOS_EXPECTED_VERSION"
+        return 0
+    fi
     local root
     root=$(_chaos_lib_repo_root) || return 1
     [ -n "$root" ] || return 1
@@ -65,7 +74,7 @@ chaos_assert_fresh_binaries() {
     local expected
     expected=$(_chaos_lib_expected_version)
     if [ -z "$expected" ]; then
-        echo "ABORT chaos-lib: could not compute the expected version (not a git checkout, or no tags/commits reachable from $(dirname "${BASH_SOURCE[0]:-$0}")). Cannot verify the installed binary is fresh, so refusing to run rather than report fake results. Re-run from a git checkout, or set CHAOS_SKIP_VERSION_CHECK=1 to proceed knowingly." >&2
+        echo "ABORT chaos-lib: could not compute the expected version - \$CHAOS_EXPECTED_VERSION is unset and $(dirname "${BASH_SOURCE[0]:-$0}") is not a git checkout with reachable tags. In a testbed guest, testbed.sh passes this in; if it is missing, the scenario was launched outside 'testbed.sh test'. Cannot verify the installed binary is fresh, so refusing to run rather than report fake results. Re-run via testbed.sh, run from a git checkout, or set CHAOS_SKIP_VERSION_CHECK=1 to proceed knowingly." >&2
         exit 1
     fi
 
