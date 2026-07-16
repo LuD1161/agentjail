@@ -10,6 +10,8 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
+import { fetchBody, BODY_RENDER_CAP, type BodyResult } from '@/lib/api'
+import { formatBytes } from '@/lib/format'
 import type { RequestLog } from '@/types'
 
 function statusColor(code?: number) {
@@ -219,46 +221,108 @@ function JsonBody({
   )
 }
 
+/** What a body fetch is currently doing. Bodies arrive over the network, so
+ * the panel has states an inline string never had. */
+type BodyState =
+  | { kind: 'empty' }
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; result: BodyResult }
+
+/**
+ * Fetches one body from /api/network/body. Bodies are unbounded and may be
+ * binary, so they are never inlined into JSON. See ADR 0092 (D1).
+ */
+function useBody(path?: string): BodyState {
+  const [state, setState] = React.useState<BodyState>({ kind: 'empty' })
+  React.useEffect(() => {
+    if (!path) {
+      setState({ kind: 'empty' })
+      return
+    }
+    const ac = new AbortController()
+    setState({ kind: 'loading' })
+    fetchBody(path, ac.signal)
+      .then((result) => setState({ kind: 'ready', result }))
+      .catch((err: unknown) => {
+        if (ac.signal.aborted) return
+        setState({
+          kind: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        })
+      })
+    return () => ac.abort()
+  }, [path])
+  return state
+}
+
+// state is a prop, not this component's own: the shared match counter is only
+// consistent when a body arriving re-renders the whole panel.
 function BodyBlock({
-  body,
-  truncated,
+  state,
   pretty,
   search,
   counter,
   activeIndex,
 }: {
-  body?: string
-  truncated?: boolean
+  state: BodyState
   pretty: boolean
   search: string
   counter: { current: number }
   activeIndex: number
 }) {
-  if (!body) return <div className="text-[#6b7280]">(empty body)</div>
-  const { text, language } = formatBody(body, pretty)
+  if (state.kind === 'empty') {
+    return <div className="text-[#6b7280]">(empty body)</div>
+  }
+  if (state.kind === 'loading') {
+    return <div className="text-[#6b7280]">Loading body…</div>
+  }
+  // A body we cannot read says so. Never render bytes we could not decrypt.
+  // See ADR 0095-chunked-body-envelope.
+  if (state.kind === 'error') {
+    return (
+      <div className="text-[#e3b341]" data-testid="body-error">
+        Could not read body: {state.message}
+      </div>
+    )
+  }
+
+  const { text, bytes, binary, truncated } = state.result
+  if (bytes === 0) return <div className="text-[#6b7280]">(empty body)</div>
+  if (binary) {
+    return (
+      <div className="text-[#6b7280]" data-testid="body-binary">
+        (binary body, {formatBytes(bytes)} — not shown)
+      </div>
+    )
+  }
+
+  const { text: shown, language } = formatBody(text, pretty)
   return (
-    <div className="text-xs">
+    <div className="text-xs" data-testid="body-content">
       {language === 'json' ? (
         <JsonBody
-          text={text}
+          text={shown}
           search={search}
           counter={counter}
           activeIndex={activeIndex}
         />
       ) : language === 'sse' ? (
         <SseBody
-          text={text}
+          text={shown}
           search={search}
           counter={counter}
           activeIndex={activeIndex}
         />
       ) : (
         <pre className="whitespace-pre-wrap break-all text-[#c9d1d9]">
-          {highlightText(text, search, counter, activeIndex)}
+          {highlightText(shown, search, counter, activeIndex)}
         </pre>
       )}
       {truncated ? (
-        <div className="text-[#6b7280]">… (truncated)</div>
+        <div className="text-[#6b7280]" data-testid="body-truncated">
+          … showing the first {formatBytes(BODY_RENDER_CAP)} of this body
+        </div>
       ) : null}
     </div>
   )
@@ -271,6 +335,8 @@ export function RequestDetail({
   req: RequestLog
   onClose?: () => void
 }) {
+  const requestBodyState = useBody(req.request_body_path)
+  const responseBodyState = useBody(req.response_body_path)
   const [pretty, setPretty] = React.useState(true)
   const [search, setSearch] = React.useState('')
   const [activeIndex, setActiveIndex] = React.useState(0)
@@ -297,8 +363,7 @@ export function RequestDetail({
   )
   const requestBody = (
     <BodyBlock
-      body={req.request_body}
-      truncated={req.body_truncated}
+      state={requestBodyState}
       pretty={pretty}
       search={search}
       counter={counter}
@@ -315,8 +380,7 @@ export function RequestDetail({
   )
   const responseBody = (
     <BodyBlock
-      body={req.response_body}
-      truncated={req.body_truncated}
+      state={responseBodyState}
       pretty={pretty}
       search={search}
       counter={counter}

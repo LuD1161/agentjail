@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -46,6 +47,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/procutil"
@@ -79,9 +81,10 @@ type Server struct {
 	// bodyDir empty means mitm.DefaultBodyDir(). Injectable for the same reason
 	// as netPath. See ADR 0092-persist-request-bodies (D3).
 	bodyDir string
-	// bodyKeys nil reads bodies in the clear. The keyring-backed KeyWrapper is
-	// not built yet, so an encrypted body streams as ciphertext until it is.
-	// See ADR 0095-chunked-body-envelope.
+	// bodyKeys nil reads plaintext bodies only; a sealed body then fails with
+	// ErrBodyKeyUnavailable rather than streaming ciphertext. Injectable: a
+	// test must not reach the real keychain. See ADR 0095-chunked-body-envelope.
+	keysOnce sync.Once
 	bodyKeys mitm.KeyWrapper
 
 	// SSE broadcaster state.
@@ -1504,14 +1507,13 @@ func (s *Server) handleNetworkBody(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// BodyStore.resolve is the only validator of a stored path; reuse it rather
-	// than re-spell it here. See ADR 0092-persist-request-bodies (D1).
-	bs, err := mitm.NewBodyStore(dir, uiReadSession, s.bodyKeys)
-	if err != nil {
-		writeJSONError(w, "body store unavailable", http.StatusServiceUnavailable)
+	rc, err := mitm.OpenBodyStoreReadOnly(dir, s.keys()).Open(rel)
+	// A sealed body with no key is reported, never dribbled out as content.
+	// See ADR 0095-chunked-body-envelope.
+	if errors.Is(err, mitm.ErrBodyKeyUnavailable) {
+		writeJSONError(w, bodyLockedMsg, http.StatusConflict)
 		return
 	}
-	rc, err := bs.Open(rel)
 	if err != nil {
 		writeJSONError(w, "invalid body path", http.StatusBadRequest)
 		return
@@ -1531,9 +1533,29 @@ func (s *Server) handleNetworkBody(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, rc)
 }
 
-// uiReadSession names the group NewBodyStore mkdirs for this read-only caller.
-// Open ignores it -- the session comes from the requested path.
-const uiReadSession = "uiread"
+// bodyLockedMsg explains a sealed body this host cannot open, in the terms a
+// user can act on. See ADR 0095-chunked-body-envelope.
+const bodyLockedMsg = "this body is encrypted and no key for it is available on this machine"
+
+// keys resolves the keyring once. No keychain is not an error: bodies written
+// in the clear still stream, sealed ones report ErrBodyKeyUnavailable.
+// See ADR 0095-chunked-body-envelope.
+func (s *Server) keys() mitm.KeyWrapper {
+	s.keysOnce.Do(func() {
+		if s.bodyKeys != nil {
+			return
+		}
+		kr, err := keyring.Open()
+		if err != nil {
+			if !errors.Is(err, keyring.ErrNoKeychain) {
+				slog.Warn("ui: keyring unavailable, encrypted bodies will not open", "err", err)
+			}
+			return
+		}
+		s.bodyKeys = kr
+	})
+	return s.bodyKeys
+}
 
 func (s *Server) openSQLite() (localstore.ReadOnlyStore, error) {
 	s.dbMu.Lock()

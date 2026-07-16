@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -233,6 +234,75 @@ func (b *BodyStore) openStored(rel string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("mitm/bodystore: open %s: %w", rel, err)
 	}
 	return r, nil
+}
+
+// ErrBodyKeyUnavailable means a stored body is sealed but no key opens it.
+// Ciphertext must never reach a caller as though it were content.
+// See ADR 0095-chunked-body-envelope.
+var ErrBodyKeyUnavailable = errors.New("mitm/bodystore: encrypted body, no key available")
+
+// BodyReadStore reads captured bodies and never creates or writes anything:
+// the UI must not write the transcript store.
+// See ADR 0092-persist-request-bodies (D3).
+type BodyReadStore struct{ b BodyStore }
+
+// OpenBodyStoreReadOnly opens dir for reading only. It mkdirs nothing and does
+// not stat dir; a store that is not there reads as absent.
+// See ADR 0092-persist-request-bodies (D3).
+func OpenBodyStoreReadOnly(dir string, keys KeyWrapper) *BodyReadStore {
+	return &BodyReadStore{b: BodyStore{dir: dir, keys: keys}}
+}
+
+// Open returns a reader for a stored body, decrypting as it streams. A missing
+// file is absent, not an error: (nil, nil). It dispatches on the file's magic
+// rather than on whether keys exist -- one store holds both kinds side by side.
+func (r *BodyReadStore) Open(rel string) (io.ReadCloser, error) {
+	if r == nil || rel == "" {
+		return nil, nil
+	}
+	p, err := r.b.resolve(rel)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("mitm/bodystore: open %s: %w", rel, err)
+	}
+	sealed, err := peekBodyMagic(f)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("mitm/bodystore: read %s: %w", rel, err)
+	}
+	if !sealed {
+		return f, nil
+	}
+	if r.b.keys == nil {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrBodyKeyUnavailable, rel)
+	}
+	br, err := newBodyReader(f, r.b.keys)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s: %v", ErrBodyKeyUnavailable, rel, err)
+	}
+	return br, nil
+}
+
+// peekBodyMagic reports whether f opens with the sealed-body magic, rewinding
+// so the caller reads from byte zero either way.
+func peekBodyMagic(f *os.File) (bool, error) {
+	buf := make([]byte, len(bodyMagic))
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	return n == len(bodyMagic) && string(buf) == bodyMagic, nil
 }
 
 // captureSink is what a capture writes into: a buffered plaintext file, or a

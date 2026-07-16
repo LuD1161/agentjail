@@ -17,9 +17,15 @@ export interface RequestLog {
   elapsed_ms?: number
   request_headers?: Record<string, string> | null
   response_headers?: Record<string, string> | null
-  request_body?: string
-  response_body?: string
-  body_truncated?: boolean
+  /**
+   * Bodies are unbounded, so JSON carries only their store path -- the bytes
+   * come from GET /api/network/body?path=. Inlining them is what ADR 0092 (D1)
+   * chose files over BLOBs to avoid.
+   */
+  request_body_path?: string
+  response_body_path?: string
+  /** Sides whose stored bytes are still content-encoded (see ADR 0092 D1). */
+  encoding_raw?: '' | 'request' | 'response' | 'both'
   error?: string
   session_id?: string
   tool_name?: string
