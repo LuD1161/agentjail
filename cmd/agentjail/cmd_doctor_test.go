@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/sshagent"
 )
 
@@ -316,5 +318,98 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 				t.Errorf("sshAgentCheck must never return status=fail (user env state, not an install defect)")
 			}
 		})
+	}
+}
+
+// ── Body encryption posture (AGE-254, ADR 0092-persist-request-bodies) ──
+
+// ErrKeychainLocked wraps ErrNoKeychain, so a wrong-order branch gives locked
+// hosts the "nothing to unlock" advice. These are the two advices.
+func TestBodyEncryptionPostureAdvice(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		backend    string
+		err        error
+		wantStatus checkStatus
+		wantSubstr []string
+		notSubstr  []string
+	}{
+		{
+			name:       "kek available names the backend",
+			backend:    "secret-service",
+			err:        nil,
+			wantStatus: statusOK,
+			wantSubstr: []string{"secret-service"},
+			notSubstr:  []string{"IN THE CLEAR"},
+		},
+		{
+			name:       "locked advises unlocking",
+			err:        fmt.Errorf("%w: default collection is locked", keyring.ErrKeychainLocked),
+			wantStatus: statusWarn,
+			wantSubstr: []string{"LOCKED", "unlock", "auto-unlock", "IN THE CLEAR"},
+			notSubstr:  []string{"nothing to unlock"},
+		},
+		{
+			name:       "absent advises there is nothing to unlock",
+			err:        fmt.Errorf("%w: no session bus", keyring.ErrNoKeychain),
+			wantStatus: statusWarn,
+			wantSubstr: []string{"no OS keychain", "nothing to unlock", "IN THE CLEAR"},
+			notSubstr:  []string{"auto-unlock"},
+		},
+		{
+			name:       "unknown error still reports plaintext",
+			err:        errors.New("dbus exploded"),
+			wantStatus: statusWarn,
+			wantSubstr: []string{"IN THE CLEAR"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := bodyEncryptionCheck(tc.backend, tc.err)
+			if c.status != tc.wantStatus {
+				t.Errorf("status = %q, want %q (detail: %s)", c.status, tc.wantStatus, c.detail)
+			}
+			for _, s := range tc.wantSubstr {
+				if !strings.Contains(c.detail, s) {
+					t.Errorf("detail missing %q: %s", s, c.detail)
+				}
+			}
+			for _, s := range tc.notSubstr {
+				if strings.Contains(c.detail, s) {
+					t.Errorf("detail must not contain %q: %s", s, c.detail)
+				}
+			}
+		})
+	}
+}
+
+// A degraded posture is not a broken install: bodies still record, in the
+// clear, and doctor must not start exiting non-zero for it.
+func TestBodyEncryptionNeverGatesExitOrRepairs(t *testing.T) {
+	for _, err := range []error{nil, keyring.ErrKeychainLocked, keyring.ErrNoKeychain, errors.New("boom")} {
+		c := bodyEncryptionCheck("stub", err)
+		if c.status == statusFail {
+			t.Errorf("err=%v gave statusFail; degraded encryption must never fail doctor", err)
+		}
+		if c.repair != "" {
+			t.Errorf("err=%v carries repair %q; want advice-only", err, c.repair)
+		}
+	}
+	for _, s := range doctorSections() {
+		if s.name == "Network Interception" && s.gatesExit {
+			t.Fatal("Network Interception now gates exit; body encryption posture would fail the install")
+		}
+	}
+}
+
+// The keychain hands the same secret to a same-uid agent, so no detail may
+// claim otherwise (keyring package doc; ADR 0092 D3 is the agent control).
+func TestBodyEncryptionNeverClaimsAgentProtection(t *testing.T) {
+	for _, err := range []error{nil, keyring.ErrKeychainLocked, keyring.ErrNoKeychain} {
+		d := strings.ToLower(bodyEncryptionCheck("stub", err).detail)
+		for _, banned := range []string{"from the agent", "against the agent", "protects the agent", "agent cannot read"} {
+			if strings.Contains(d, banned) {
+				t.Errorf("err=%v detail implies protection against the agent (%q): %s", err, banned, d)
+			}
+		}
 	}
 }

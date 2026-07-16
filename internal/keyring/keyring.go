@@ -69,6 +69,11 @@ var (
 	// is plan 014 §9.2 and is NOT decided here -- the caller branches.
 	ErrNoKeychain = errors.New("keyring: no OS keychain available")
 
+	// ErrKeychainLocked means a keychain IS present and its collection is
+	// locked. It wraps ErrNoKeychain so existing callers keep working, but the
+	// advice differs: unlock it, versus there is none here. See AGE-254.
+	ErrKeychainLocked = fmt.Errorf("%w: locked", ErrNoKeychain)
+
 	// ErrUnknownKEK means the named KEK id is not in the keychain: a body
 	// wrapped under a KEK from another machine, or one deleted since.
 	ErrUnknownKEK = errors.New("keyring: unknown KEK id")

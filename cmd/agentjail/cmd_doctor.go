@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/sshagent"
 	"github.com/LuD1161/agentjail/internal/wire"
@@ -85,7 +87,7 @@ func doctorSections() []doctorSection {
 		{name: "Shield", run: checkShield, gatesExit: true},
 		// Does not gate exit: an absent tunnel is a posture, not a fault.
 		{name: "Network Interception", run: func(string) []doctorCheck {
-			return append(checkNetworkInterception(), checkTLSInterceptionPosture())
+			return append(checkNetworkInterception(), checkTLSInterceptionPosture(), checkBodyEncryption())
 		}},
 		{name: "Daemon", run: checkDaemon, gatesExit: true},
 		// Everything above reports what is configured RIGHT NOW; this reports
@@ -677,6 +679,58 @@ func checkTLSInterceptionPosture() doctorCheck {
 		label:  label,
 		status: "ok",
 		detail: "on — under --tunnel, agentjail decrypts the agent's HTTPS via a per-session CA scoped to that agent's namespace (never the host), so policy templates apply. Pass --no-mitm, or set network.tunnel_mitm: false, to relay TLS opaquely instead",
+	}
+}
+
+// openBodyKEK is the seam: it reports the backend holding the body KEK, or why
+// there is none. keyring.Open is itself deadline-bounded (~3s), so doctor adds
+// no timeout of its own. See ADR 0092-persist-request-bodies.
+var openBodyKEK = func() (string, error) {
+	k, err := keyring.Open()
+	if err != nil {
+		return "", err
+	}
+	return k.Backend(), nil
+}
+
+// checkBodyEncryption reports a property of the machine, so it runs whether or
+// not a tunnel ever captured a body. ADR 0092 (D1/D3).
+func checkBodyEncryption() doctorCheck {
+	return bodyEncryptionCheck(openBodyKEK())
+}
+
+// bodyEncryptionCheck maps a KEK probe to a check. ErrKeychainLocked WRAPS
+// ErrNoKeychain, so it must be tested first or locked reports the absent advice
+// (AGE-254 is exactly this distinction).
+func bodyEncryptionCheck(backend string, err error) doctorCheck {
+	const label = "Body encryption"
+	// Degraded, never a failure: recording keeps working in the clear and says
+	// so (ADR 0092-persist-request-bodies).
+	switch {
+	case err == nil:
+		return doctorCheck{
+			label:  label,
+			status: statusOK,
+			detail: fmt.Sprintf("on — captured bodies are encrypted under a KEK held by %s. This guards an accidental COPY of ~/.agentjail (backup, sync client, support bundle); it does not contain a sandboxed agent, which ADR 0092 D3 mediates by denying it the store", backend),
+		}
+	case errors.Is(err, keyring.ErrKeychainLocked):
+		return doctorCheck{
+			label:  label,
+			status: statusWarn,
+			detail: fmt.Sprintf("OFF — a keychain is present but LOCKED, so no KEK is available and captured bodies are written IN THE CLEAR. Fix: unlock the login keyring, or enable PAM auto-unlock at login so it opens without an interactive prompt (%v)", err),
+		}
+	case errors.Is(err, keyring.ErrNoKeychain):
+		return doctorCheck{
+			label:  label,
+			status: statusWarn,
+			detail: fmt.Sprintf("OFF — no OS keychain on this host, so there is nothing to unlock and captured bodies are written IN THE CLEAR. Fix: run agentjail where a keychain exists, or accept plaintext bodies and rely on the sandbox deny (ADR 0092 D3) (%v)", err),
+		}
+	default:
+		return doctorCheck{
+			label:  label,
+			status: statusWarn,
+			detail: fmt.Sprintf("OFF — cannot reach a KEK, so captured bodies are written IN THE CLEAR: %v", err),
+		}
 	}
 }
 

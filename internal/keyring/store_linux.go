@@ -158,7 +158,9 @@ func (s *secretService) unlock(ctx context.Context, collPath dbus.ObjectPath) er
 	}
 	if prompt != noObject {
 		s.dismiss(ctx, prompt)
-		return fmt.Errorf("%w: default collection is locked and unlocking needs an interactive prompt", ErrNoKeychain)
+		// Locked, not absent: a keychain is here and the advice differs.
+		// See AGE-254.
+		return fmt.Errorf("%w: default collection is locked and unlocking needs an interactive prompt", ErrKeychainLocked)
 	}
 	for _, p := range unlocked {
 		if p == collPath {
