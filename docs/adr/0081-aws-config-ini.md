@@ -1,4 +1,4 @@
-# ADR 0048: Use gopkg.in/ini.v1 to parse ~/.aws/config
+# ADR 0081-aws-config-ini: an INI parser for AWS config
 
 **Status:** Accepted
 

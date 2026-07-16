@@ -188,7 +188,16 @@ This goes in the same commit as the code change, not a follow-up.
 
 ## Decision log (ADRs)
 
-- Format: `docs/adr/NNNN-short-slug.md`
+- Format: `docs/adr/NNNN-short-slug.md` — number first, slug **at most three
+  words** for new ADRs (`0083-adr-numbering-scheme.md`). See
+  [ADR 0083](./docs/adr/0083-adr-numbering-scheme.md).
+- **Cite `ADR NNNN-slug`, not a bare `ADR NNNN`.** Numbers get contested by
+  parallel branches; a bare number then stops identifying one document and the
+  fix becomes archaeology. `// See ADR 0082-doctor-attests-enforcement.`
+- **Take the next free number from `main`, and run `make adr-check`** before you
+  commit — CI fails on duplicate numbers. On a long-lived branch, number the ADR
+  shortly before merge: main keeps allocating underneath you (one ADR moved
+  0049 → 0075 → 0079 for exactly this reason).
 - Sections: Context / Decision / Consequences (status: Proposed / Accepted / Superseded by NNNN)
 - Triggers for a new ADR:
   - Picking one library over another from a shortlist

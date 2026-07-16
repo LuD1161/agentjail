@@ -85,7 +85,7 @@ func runDoctor() int {
 
 	// ── Protection ──────────────────────────────────────────────────────
 	// Everything above reports what is configured RIGHT NOW; this reports
-	// whether enforcement actually ran (ADR 0075).
+	// whether enforcement actually ran (ADR 0082-doctor-attests-enforcement).
 	fmt.Fprintln(os.Stdout, "Protection")
 	protectionChecks := checkProtection(home)
 	for _, c := range protectionChecks {
