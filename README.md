@@ -479,6 +479,8 @@ agentjail policy list
 
 **Validation:** `agentjail policy add` enforces `package agentjail`, no `decision` declaration, correct namespace, and full-bundle OPA compile.
 
+**Input is type-checked:** rules are compiled against a schema of the fields the daemon actually sends, so a typo like `input.tool_nme` is rejected at install with the offending line and the list of valid fields — rather than compiling clean and silently never firing. Referencing a field that is *declared but absent* at eval (`aws_account` on a non-AWS call, `command_binaries` on a non-Bash tool) stays legal; that is normal Rego and still evaluates to undefined.
+
 **Bad rules are quarantined:** if a custom rule breaks the bundle at daemon startup, the daemon skips it with a WARN log. The baseline always loads.
 
 **[`samples/`](./samples/) ships with 5 example policies + 3 config templates:**

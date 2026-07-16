@@ -127,11 +127,24 @@ func NewHookOPAEngine(ctx context.Context, modules [][2]string) (Engine, error) 
 // Pass agentjailData=nil to omit data injection (equivalent to NewHookOPAEngine).
 // The engine is rebuilt on every SIGHUP with the updated data document.
 func NewHookOPAEngineWithData(ctx context.Context, modules [][2]string, agentjailData map[string]interface{}) (Engine, error) {
-	opts := make([]func(*rego.Rego), 0, len(modules)+2)
+	schemas, schErr := hookInputSchemaSet()
+	if schErr != nil {
+		return nil, schErr
+	}
+
+	opts := make([]func(*rego.Rego), 0, len(modules)+4)
 	for _, m := range modules {
 		opts = append(opts, rego.Module(m[0], m[1]))
 	}
-	opts = append(opts, rego.Query(hookDecisionQuery))
+	opts = append(opts,
+		rego.Query(hookDecisionQuery),
+		// Type-check every input.* reference against HookInput's shape, and
+		// reject unused vars / unsafe refs. A typo'd reference is now a
+		// compile error here instead of a rule that silently never fires
+		// (ADR 0080-rego-both-tiers addendum; AGE-218).
+		rego.Schemas(schemas),
+		rego.Strict(true),
+	)
 	if agentjailData != nil {
 		// Wrap under {"agentjail": ...} so policies read data.agentjail.<key>.
 		storeData := map[string]interface{}{
