@@ -194,6 +194,7 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 ```sh
 agentjail status                      # verify everything is wired
 agentjail doctor                      # diagnose a specific setup problem
+agentjail doctor --fix                # repair what it can (dead daemon, dangling shim), then re-check
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail sessions list               # active and past agent sessions
@@ -527,7 +528,9 @@ standing while the daemon is away.
 
 Every fail-open occurrence now prints a loud, per-occurrence stderr banner
 naming the active level and the exact recovery command
-(`agentjail daemon restart`, diagnose with `agentjail doctor`) — replacing
+(`agentjail daemon restart`, diagnose with `agentjail doctor`, or let
+`agentjail doctor --fix` restart it through its supervisor and verify the
+daemon answers before saying so — [ADR 0086](./docs/adr/0086-doctor-repairs-diagnosed.md)) — replacing
 the old one-time warning. The daemon compiles the current level (and, for
 `degraded`, the offline rule set) into `~/.agentjail/hook-fallback.json` on
 startup and every config reload; a missing or unreadable sidecar falls back to
