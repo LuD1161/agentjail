@@ -14,8 +14,35 @@
 
 ## Context
 
-Two things we have written down disagree, and nothing has forced the issue yet
-because no UI reads `network.db` at all (AGE-111 is unbuilt).
+Two things we have written down disagree, and nothing forces the issue *today*
+because `network.db` currently has one writer and **zero readers**.
+
+**That is a regression, not a starting point, and this ADR originally got it
+wrong.** An earlier draft said "no UI reads `network.db` at all (AGE-111 is
+unbuilt)", which framed the consumer as hypothetical. It was built, and it ran:
+
+- `6ceecc3 feat(ui): add Network tab for real-time network request monitoring`
+  — a third tab in the web UI over `/api/network/stats` and
+  `/api/network/recent`.
+- `ff66529 feat(network): MITM TLS inspection proxy with request logging and CLI`
+  — the store behind it.
+- `190e0dc feat(shield): activate NEPacketTunnelProvider tunnel extension on macOS`
+  — which is why it worked **on macOS**, where a user watched real requests and
+  responses in the local UI.
+
+All three are **orphaned**: none is an ancestor of `main` or of
+`feat/network-visibility`, surviving only on side branches. The "rewritten main"
+event stranded them and unwired `internal/mitm` on both platforms (AGE-149).
+Today there is no `tunnel_shield_darwin.go` at all, so macOS does not even write
+the store, let alone read it.
+
+This matters to every decision below. "Show the user every request and response"
+is not a greenfield feature whose cost we are choosing to take on for the first
+time; it is **recovering something that worked**, and the body persistence this
+ADR decides is the part that was *never* there — the old tab showed
+`network_requests` metadata, not bodies. Writing the ADR as though the consumer
+were unbuilt made the reversal of ADR 0076 S-C2 look more speculative than it
+is.
 
 **The product goal (AGE-79)** is complete visibility:
 
@@ -292,7 +319,10 @@ hand**, not treated as already decided.
 
 - **The product does what it claimed.** AGE-79's "complete visibility" and
   AGE-111's session replay become buildable. This is the feature the tunnel
-  exists for.
+  exists for. Note the split: restoring the orphaned Network tab (`6ceecc3`)
+  brings back request/response **metadata**, and needs nothing from this ADR.
+  Only **bodies** depend on D1 — so the two should not be sequenced as one
+  thing, and a body-less tab is worth shipping first.
 - **`~/.agentjail/bodies/` becomes the most sensitive thing agentjail writes** —
   source code and credentials, on disk, unencrypted, and now in **plain files
   rather than inside a database**. That is a real ergonomic downgrade for
