@@ -35,13 +35,19 @@ const (
 	// the kind of unstated behaviour ADR 0077 exists to prevent. See AGE-222.
 	TunnelALPNDowngraded = "tunnel.alpn_downgraded"
 	// TunnelBodiesUnencrypted reports that a session records bodies in the
-	// clear because no OS keychain is reachable. Detail carries fixed strings
-	// only. See ADR 0092-persist-request-bodies (D5).
+	// clear because no KEK could be sealed. Detail carries fixed strings only;
+	// Detail["reason"] is one of TunnelKeysLocked / TunnelKeysAbsent /
+	// TunnelKeysError -- a locked keychain and an absent one need opposite
+	// advice. See ADR 0092-persist-request-bodies (D5), AGE-254.
 	TunnelBodiesUnencrypted = "tunnel.bodies_unencrypted"
-	DaemonStarted           = "daemon.started"
-	DaemonStopped           = "daemon.stopped"
-	DaemonFailopen          = "daemon.failopen"
-	UpdateCompleted         = "update.completed"
+	// Fixed vocabulary for TunnelBodiesUnencrypted's Detail["reason"].
+	TunnelKeysLocked = "keychain_locked"
+	TunnelKeysAbsent = "no_keychain"
+	TunnelKeysError  = "keyring_error"
+	DaemonStarted    = "daemon.started"
+	DaemonStopped    = "daemon.stopped"
+	DaemonFailopen   = "daemon.failopen"
+	UpdateCompleted  = "update.completed"
 	// Session-aware netproxy control plane (per-session allowlists). A session
 	// lease is registered by the shield over the control socket and reaped on
 	// expiry regardless of traffic. Never put the session Token in Detail.

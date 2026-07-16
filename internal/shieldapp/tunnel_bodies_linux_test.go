@@ -225,8 +225,16 @@ func TestNoKeychainRecordsInClearLoudlyAndAudits(t *testing.T) {
 	if ev.SessionID != "eeeeffff00001111" {
 		t.Errorf("audit SessionID = %q, want the session that is recording in the clear", ev.SessionID)
 	}
-	if ev.Detail["reason"] != "no_keychain" {
-		t.Errorf("audit reason = %q, want no_keychain", ev.Detail["reason"])
+	if ev.Detail["reason"] != audit.TunnelKeysAbsent {
+		t.Errorf("audit reason = %q, want %s", ev.Detail["reason"], audit.TunnelKeysAbsent)
+	}
+
+	// The advice must not send a user with no keychain off to unlock one.
+	if !strings.Contains(stderr, "NO OS keychain") {
+		t.Errorf("stderr notice does not say the keychain is ABSENT; got:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "LOCKED") || strings.Contains(stderr, "unlock the login keyring") {
+		t.Errorf("stderr gives LOCKED advice for an ABSENT keychain; got:\n%s", stderr)
 	}
 
 	// 3. bodies really are captured, in the clear.
@@ -249,6 +257,94 @@ func TestNoKeychainRecordsInClearLoudlyAndAudits(t *testing.T) {
 	}
 }
 
+// ErrKeychainLocked WRAPS ErrNoKeychain, so a classifier that tests
+// ErrNoKeychain first tells every locked host "there is no keychain" — the
+// exact bug AGE-254 exists to fix. This test fails if that order regresses.
+func TestLockedKeychainAdvisesUnlockNotAbsence(t *testing.T) {
+	keyErr := errors.New("default collection is locked and unlocking needs an interactive prompt")
+	stubBodyKeys(t, nil, "", errors.Join(keyring.ErrKeychainLocked, keyErr))
+	emitter := &captureEmitter{}
+	var logbuf strings.Builder
+
+	var rec bodyRecording
+	stderr := captureStderr(t, func() {
+		rec = newBodyRecording(context.Background(), "1111222233334444", testLogger(&logbuf), emitter)
+	})
+
+	// 1. the posture is unchanged: a locked keychain degrades encryption, not capture.
+	if rec.store == nil {
+		t.Fatal("store is nil: a LOCKED keychain must NOT stop recording")
+	}
+	if rec.encrypted {
+		t.Fatal("rec.encrypted = true with a locked keychain: the posture is being overclaimed")
+	}
+
+	// 2. the notice names LOCKED and says how to unlock — not "no keychain".
+	if !strings.Contains(stderr, "IN THE CLEAR") || !strings.Contains(stderr, "UNENCRYPTED") {
+		t.Errorf("stderr notice is not loud about plaintext bodies; got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "LOCKED") {
+		t.Errorf("stderr notice does not say the keychain is LOCKED; got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "unlock the login keyring") || !strings.Contains(stderr, "PAM auto-unlock") {
+		t.Errorf("stderr notice does not say HOW to unlock; got:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "NO OS keychain") {
+		t.Errorf("stderr tells a LOCKED host it has no keychain (ErrNoKeychain checked first?); got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, mitm.DefaultBodyDir()) {
+		t.Errorf("stderr notice does not say WHERE the plaintext lands; got:\n%s", stderr)
+	}
+	if !strings.Contains(rec.notice(), "UNENCRYPTED") || !strings.Contains(rec.notice(), "LOCKED") {
+		t.Errorf("launch notice = %q, want it to disclose unencrypted recording AND the locked keychain", rec.notice())
+	}
+
+	// 3. the audit reason distinguishes locked from absent.
+	ev, ok := emitter.find(audit.TunnelBodiesUnencrypted)
+	if !ok {
+		t.Fatalf("no %s audit event emitted; got %v", audit.TunnelBodiesUnencrypted, emitter.events)
+	}
+	if ev.Detail["reason"] != audit.TunnelKeysLocked {
+		t.Errorf("audit reason = %q, want %s: a locked keychain is not an absent one",
+			ev.Detail["reason"], audit.TunnelKeysLocked)
+	}
+
+	// 4. bodies really are captured, in the clear.
+	const canary = "LOCKED-KEYCHAIN-CANARY-4712"
+	rl := sendThroughTunnel(t, rec.store, canary)
+	if rl.RequestBodyPath == "" {
+		t.Fatal("RequestBodyPath is empty: a locked keychain must degrade encryption, not capture")
+	}
+	raw, err := os.ReadFile(filepath.Join(rec.store.Dir(), rl.RequestBodyPath))
+	if err != nil {
+		t.Fatalf("read body at rest: %v", err)
+	}
+	if !strings.Contains(string(raw), canary) {
+		t.Errorf("body at rest does not hold the canary: expected a PLAINTEXT capture, got %d bytes", len(raw))
+	}
+}
+
+// classifyKeyErr's ordering is the whole ticket, asserted directly so a
+// regression names itself. See AGE-254.
+func TestClassifyKeyErrOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want keyState
+	}{
+		{"locked wraps ErrNoKeychain, must still classify as locked", keyring.ErrKeychainLocked, keysLocked},
+		{"locked wrapped again by a backend", errors.Join(keyring.ErrKeychainLocked, errors.New("dbus")), keysLocked},
+		{"absent", keyring.ErrNoKeychain, keysAbsent},
+		{"absent wrapped by a backend", errors.Join(keyring.ErrNoKeychain, errors.New("no session bus")), keysAbsent},
+		{"unrelated error", errors.New("dbus: connection refused"), keysError},
+		{"no error", nil, keysAvailable},
+	} {
+		if got := classifyKeyErr(tc.err); got != tc.want {
+			t.Errorf("%s: classifyKeyErr = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // The audit event is the only durable record of the degradation, so it must
 // carry no key material and no body bytes. ADR 0032.
 func TestUnencryptedAuditEventLeaksNothing(t *testing.T) {
@@ -267,13 +363,13 @@ func TestUnencryptedAuditEventLeaksNothing(t *testing.T) {
 	if !ok {
 		t.Fatalf("no %s audit event emitted", audit.TunnelBodiesUnencrypted)
 	}
-	if ev.Detail["reason"] != "keyring_error" {
+	if ev.Detail["reason"] != audit.TunnelKeysError {
 		t.Errorf("audit reason = %q, want keyring_error for a non-ErrNoKeychain failure", ev.Detail["reason"])
 	}
 	// Every value must come from the fixed vocabulary: no err text, no bytes.
 	allowed := map[string]bool{
-		"none": true, "no_keychain": true, "keyring_error": true,
-		"recording continues in the clear": true,
+		"none": true, audit.TunnelKeysAbsent: true, audit.TunnelKeysError: true,
+		audit.TunnelKeysLocked: true, "recording continues in the clear": true,
 	}
 	for k, v := range ev.Detail {
 		if !allowed[v] {
