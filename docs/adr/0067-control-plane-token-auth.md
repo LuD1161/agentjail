@@ -119,6 +119,16 @@ Costs and residuals:
   Redundancy is the point: the macOS gate turned out to rest on the catch-all, and a token
   that does not care which rule enforces is the cheaper thing to reason about.
 
+- **The code comments contradicted this ADR for as long as it has existed** (found in the
+  AGE-216 review; corrected on main in `644b384`). `shield_agentpaths.go`, `shield_linux.go`
+  and `shield_linux_enforce_test.go` all described `daemon-ctl.sock` as "agent-unreachable"
+  because "Landlock denies `connect()` without write" — the precise claim the Context above
+  refutes, sitting a few hundred lines from an assertion that logs `ctl_connect=ok` as the
+  expected result and a denial as a "bonus". The ADR was right and unread. Anything that
+  describes Linux as path-isolating the control plane is wrong by construction; the token is
+  the boundary. `ControlSocketPaths` (`shield_contract.go`) is the shared list, and it is
+  darwin-enforceable only — named there, not silently.
+
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
 which this makes a real boundary on Linux rather than a structural one).
