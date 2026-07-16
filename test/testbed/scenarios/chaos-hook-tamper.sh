@@ -16,8 +16,15 @@ SETTINGS="$HOME/.claude/settings.json"
 BACKUP="/tmp/chaos-hook-tamper.settings.bak"
 SOCK="$HOME/.agentjail/daemon.sock"
 
+# `set -u` cannot catch a failed source: without the `||` the scenario would run
+# on with chaos_assert_fresh_binaries undefined and still print a PASS tally.
+# That is how the guard shipped inert for its first three runs. See AGE-236.
+CHAOS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chaos-lib.sh"
 # shellcheck source=test/testbed/scenarios/chaos-lib.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chaos-lib.sh"
+. "$CHAOS_LIB" || {
+    echo "ABORT: cannot source $CHAOS_LIB - refusing to run unguarded rather than report results that nothing verified." >&2
+    exit 1
+}
 
 command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout  >/dev/null 2>&1 || timeout(){ shift; "$@"; }
