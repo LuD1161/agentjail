@@ -37,6 +37,10 @@ type MITMHandler struct {
 	// opposed to per-request logs (which go to OnRequest). Optional: nil means
 	// the notice is logged but not filed. AGE-222.
 	Audit audit.Emitter
+	// Bodies sinks captured request/response bodies to files. Nil means the
+	// hop is not recorded; it is never a reason to fail the request.
+	// See ADR 0092-persist-request-bodies (D1).
+	Bodies *BodyStore
 
 	UpstreamTLSConfig *tls.Config // optional: override for upstream TLS (tests only)
 	certCache         *hostCertCache
@@ -137,6 +141,16 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		}
 		start := time.Now()
 
+		// Captures are finished on every exit path, so a body already streamed
+		// to disk is recorded even when the hop failed.
+		// See ADR 0092-persist-request-bodies (D1).
+		var reqCapture, respCapture *bodyCapture
+		var reqEncoding, respEncoding string
+		emitLog := func() {
+			h.finishCaptures(reqLog, reqCapture, reqEncoding, respCapture, respEncoding)
+			h.emit(reqLog)
+		}
+
 		// Read request from client.
 		req, err := http.ReadRequest(clientBuf)
 		if err != nil {
@@ -179,18 +193,27 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 			if err != nil {
 				reqLog.Error = fmt.Sprintf("read request body: %v", err)
 				reqLog.ElapsedMs = time.Since(start).Milliseconds()
-				h.emit(reqLog)
+				emitLog()
 				return
 			}
+			reqCapture = h.startCapture()
+			reqEncoding = req.Header.Get("Content-Encoding")
 			// Exact only while the body fits the scan window; past that it is
 			// the bytes seen so far, corrected once the body streams upstream.
 			reqLog.RequestSize = int64(len(bodyBuf))
 			if len(bodyBuf) > maxBodyScan {
 				// Body exceeds scan cap: chain buffered portion with remaining stream.
-				bodyCount = &countingReader{r: io.MultiReader(bytes.NewReader(bodyBuf), req.Body)}
+				var src io.Reader = io.MultiReader(bytes.NewReader(bodyBuf), req.Body)
+				if reqCapture != nil {
+					src = io.TeeReader(src, reqCapture)
+				}
+				bodyCount = &countingReader{r: src}
 				fullBody = bodyCount
 				bodyBuf = bodyBuf[:maxBodyScan]
 			} else {
+				if reqCapture != nil {
+					_, _ = reqCapture.Write(bodyBuf)
+				}
 				fullBody = bytes.NewReader(bodyBuf)
 				req.Body.Close()
 			}
@@ -241,7 +264,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 					if writeErr := denyResp.Write(clientTLS); writeErr != nil {
 						reqLog.Error = fmt.Sprintf("write deny response: %v", writeErr)
 					}
-					h.emit(reqLog)
+					emitLog()
 					if req.Close {
 						return
 					}
@@ -270,7 +293,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		if writeReqErr != nil {
 			reqLog.Error = fmt.Sprintf("write request upstream: %v", writeReqErr)
 			reqLog.ElapsedMs = time.Since(start).Milliseconds()
-			h.emit(reqLog)
+			emitLog()
 			return
 		}
 
@@ -279,16 +302,24 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		if err != nil {
 			reqLog.Error = fmt.Sprintf("read upstream response: %v", err)
 			reqLog.ElapsedMs = time.Since(start).Milliseconds()
-			h.emit(reqLog)
+			emitLog()
 			return
 		}
 
 		reqLog.StatusCode = resp.StatusCode
 		reqLog.ResponseHeaders = flattenHeaders(resp.Header)
 
-		// Count response body bytes without buffering.
+		// Tee the response to disk as it passes. Buffering it before forwarding
+		// would make the agent wait for the whole stream -- SSE model turns run
+		// for seconds. See ADR 0092-persist-request-bodies (D1).
+		respCapture = h.startCapture()
+		respEncoding = resp.Header.Get("Content-Encoding")
 		counter := &countingWriter{}
-		resp.Body = io.NopCloser(io.TeeReader(resp.Body, counter))
+		var sink io.Writer = counter
+		if respCapture != nil {
+			sink = io.MultiWriter(counter, respCapture)
+		}
+		resp.Body = io.NopCloser(io.TeeReader(resp.Body, sink))
 
 		// Write response back to client.
 		writeErr := resp.Write(clientTLS)
@@ -299,11 +330,11 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 
 		if writeErr != nil {
 			reqLog.Error = fmt.Sprintf("write response to client: %v", writeErr)
-			h.emit(reqLog)
+			emitLog()
 			return
 		}
 
-		h.emit(reqLog)
+		emitLog()
 
 		// If either side signals close, stop.
 		if req.Close || resp.Close {
@@ -316,6 +347,43 @@ func (h *MITMHandler) emit(rl *RequestLog) {
 	if h.OnRequest != nil {
 		h.OnRequest(rl)
 	}
+}
+
+// startCapture opens a body file, or returns nil: recording is not allowed to
+// fail a request. See ADR 0092-persist-request-bodies (D1).
+func (h *MITMHandler) startCapture() *bodyCapture {
+	if h.Bodies == nil {
+		return nil
+	}
+	c, err := h.Bodies.Create()
+	if err != nil {
+		h.Logger.Warn("body capture unavailable", "err", err)
+		return nil
+	}
+	return c
+}
+
+// finishCaptures normalizes both captures and records their paths on rl. It is
+// idempotent: every exit path calls it, and only the first does the work.
+func (h *MITMHandler) finishCaptures(rl *RequestLog, reqC *bodyCapture, reqEnc string, respC *bodyCapture, respEnc string) {
+	if h.Bodies == nil || rl.bodiesFinished {
+		return
+	}
+	rl.bodiesFinished = true
+	reqPath, reqRaw := h.finishOne(reqC, reqEnc)
+	respPath, respRaw := h.finishOne(respC, respEnc)
+	rl.RequestBodyPath = reqPath
+	rl.ResponseBodyPath = respPath
+	rl.EncodingRaw = encodingRawSides(reqRaw, respRaw)
+}
+
+func (h *MITMHandler) finishOne(c *bodyCapture, enc string) (string, bool) {
+	rel, raw, err := h.Bodies.Finish(c, enc)
+	if err != nil {
+		// A short file is a partial capture, not a decode failure: keep the row.
+		h.Logger.Warn("body capture incomplete", "path", rel, "err", err)
+	}
+	return rel, raw
 }
 
 // countingWriter counts bytes written to it without storing them.

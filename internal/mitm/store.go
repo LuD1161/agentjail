@@ -36,15 +36,25 @@ type RequestLog struct {
 	ElapsedMs       int64             `json:"elapsed_ms,omitempty"`
 	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
 	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
-	Error           string            `json:"error,omitempty"`
-	SessionID       string            `json:"session_id,omitempty"`
-	ToolName        string            `json:"tool_name,omitempty"`
-	PolicyAction    string            `json:"policy_action,omitempty"`
-	PolicyTemplate  string            `json:"policy_template,omitempty"`
-	PolicyReason    string            `json:"policy_reason,omitempty"`
-	Service         string            `json:"service,omitempty"`
-	Verb            string            `json:"verb,omitempty"`
-	ResourceType    string            `json:"resource_type,omitempty"`
+	// Body paths are relative to the BodyStore directory. Empty means no body;
+	// a path whose file is gone means absent, not an error.
+	// See ADR 0092-persist-request-bodies (D1).
+	RequestBodyPath  string           `json:"request_body_path,omitempty"`
+	ResponseBodyPath string           `json:"response_body_path,omitempty"`
+	EncodingRaw      EncodingRawSides `json:"encoding_raw,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	SessionID        string           `json:"session_id,omitempty"`
+	ToolName         string           `json:"tool_name,omitempty"`
+	PolicyAction     string           `json:"policy_action,omitempty"`
+	PolicyTemplate   string           `json:"policy_template,omitempty"`
+	PolicyReason     string           `json:"policy_reason,omitempty"`
+	Service          string           `json:"service,omitempty"`
+	Verb             string           `json:"verb,omitempty"`
+	ResourceType     string           `json:"resource_type,omitempty"`
+
+	// bodiesFinished keeps the capture teardown idempotent across the handler's
+	// exit paths. Not persisted.
+	bodiesFinished bool
 }
 
 // RequestFilter selects requests for Query. Zero-value fields are not
@@ -178,6 +188,9 @@ func (s *RequestStore) migrate() error {
 			elapsed_ms INTEGER,
 			request_headers TEXT,
 			response_headers TEXT,
+			request_body_path TEXT,
+			response_body_path TEXT,
+			encoding_raw TEXT,
 			error TEXT,
 			session_id TEXT,
 			tool_name TEXT,
@@ -197,8 +210,9 @@ func (s *RequestStore) migrate() error {
 			return fmt.Errorf("mitm/store: migrate: %w", err)
 		}
 	}
-	// Idempotent column additions for policy decision tracking.
-	for _, col := range []string{"policy_action", "policy_template", "policy_reason", "service", "verb", "resource_type"} {
+	// Idempotent column additions for policy decision tracking and body paths.
+	for _, col := range []string{"policy_action", "policy_template", "policy_reason", "service", "verb", "resource_type",
+		"request_body_path", "response_body_path", "encoding_raw"} {
 		s.db.Exec(fmt.Sprintf("ALTER TABLE network_requests ADD COLUMN %s TEXT", col))
 	}
 	return nil
@@ -264,15 +278,22 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 	// secret value ever lands in network.db, which the agent can read back.
 	reqH := marshalHeaders(redactHeaders(entry.RequestHeaders))
 	respH := marshalHeaders(redactHeaders(entry.ResponseHeaders))
+	// Bodies are not redacted: a body is arbitrary JSON with no key names to
+	// match on. See ADR 0092-persist-request-bodies (D1).
 	_, err := s.db.Exec(`INSERT INTO network_requests
 		(ts, host, method, path, url, status_code, request_size, response_size,
-		 elapsed_ms, request_headers, response_headers, error, session_id, tool_name,
+		 elapsed_ms, request_headers, response_headers,
+		 request_body_path, response_body_path, encoding_raw,
+		 error, session_id, tool_name,
 		 policy_action, policy_template, policy_reason, service, verb, resource_type)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ts, entry.Host, entry.Method, entry.Path, entry.URL,
 		nullInt(entry.StatusCode), nullInt64(entry.RequestSize), nullInt64(entry.ResponseSize),
 		nullInt64(entry.ElapsedMs),
-		nullStr(reqH), nullStr(respH), nullStr(entry.Error),
+		nullStr(reqH), nullStr(respH),
+		nullStr(entry.RequestBodyPath), nullStr(entry.ResponseBodyPath),
+		nullStr(string(entry.EncodingRaw)),
+		nullStr(entry.Error),
 		nullStr(entry.SessionID), nullStr(entry.ToolName),
 		nullStr(entry.PolicyAction), nullStr(entry.PolicyTemplate),
 		nullStr(entry.PolicyReason), nullStr(entry.Service),
@@ -325,7 +346,9 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 	}
 
 	q := `SELECT id, ts, host, method, path, url, status_code, request_size, response_size,
-		elapsed_ms, request_headers, response_headers, error, session_id, tool_name,
+		elapsed_ms, request_headers, response_headers,
+		request_body_path, response_body_path, encoding_raw,
+		error, session_id, tool_name,
 		policy_action, policy_template, policy_reason, service, verb, resource_type
 		FROM network_requests`
 	if len(conds) > 0 {
@@ -355,6 +378,9 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			elapsedMs    sql.NullInt64
 			reqH         sql.NullString
 			respH        sql.NullString
+			reqBodyPath  sql.NullString
+			respBodyPath sql.NullString
+			encodingRaw  sql.NullString
 			errStr       sql.NullString
 			sessionID    sql.NullString
 			toolName     sql.NullString
@@ -367,34 +393,38 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 		)
 		if err := rows.Scan(&id, &tsStr, &host, &method, &path, &url,
 			&statusCode, &reqSize, &respSize, &elapsedMs,
-			&reqH, &respH, &errStr, &sessionID, &toolName,
+			&reqH, &respH, &reqBodyPath, &respBodyPath, &encodingRaw,
+			&errStr, &sessionID, &toolName,
 			&policyAction, &policyTmpl, &policyReason,
 			&service, &verb, &resourceType); err != nil {
 			return nil, fmt.Errorf("mitm/store: scan: %w", err)
 		}
 		ts, _ := time.Parse("2006-01-02T15:04:05.000", tsStr)
 		out = append(out, RequestLog{
-			ID:              id,
-			Ts:              ts,
-			Host:            host,
-			Method:          method,
-			Path:            path,
-			URL:             url,
-			StatusCode:      int(statusCode.Int64),
-			RequestSize:     reqSize.Int64,
-			ResponseSize:    respSize.Int64,
-			ElapsedMs:       elapsedMs.Int64,
-			RequestHeaders:  unmarshalHeaders(reqH.String),
-			ResponseHeaders: unmarshalHeaders(respH.String),
-			Error:           errStr.String,
-			SessionID:       sessionID.String,
-			ToolName:        toolName.String,
-			PolicyAction:    policyAction.String,
-			PolicyTemplate:  policyTmpl.String,
-			PolicyReason:    policyReason.String,
-			Service:         service.String,
-			Verb:            verb.String,
-			ResourceType:    resourceType.String,
+			ID:               id,
+			Ts:               ts,
+			Host:             host,
+			Method:           method,
+			Path:             path,
+			URL:              url,
+			StatusCode:       int(statusCode.Int64),
+			RequestSize:      reqSize.Int64,
+			ResponseSize:     respSize.Int64,
+			ElapsedMs:        elapsedMs.Int64,
+			RequestHeaders:   unmarshalHeaders(reqH.String),
+			ResponseHeaders:  unmarshalHeaders(respH.String),
+			RequestBodyPath:  reqBodyPath.String,
+			ResponseBodyPath: respBodyPath.String,
+			EncodingRaw:      EncodingRawSides(encodingRaw.String),
+			Error:            errStr.String,
+			SessionID:        sessionID.String,
+			ToolName:         toolName.String,
+			PolicyAction:     policyAction.String,
+			PolicyTemplate:   policyTmpl.String,
+			PolicyReason:     policyReason.String,
+			Service:          service.String,
+			Verb:             verb.String,
+			ResourceType:     resourceType.String,
 		})
 	}
 	return out, rows.Err()

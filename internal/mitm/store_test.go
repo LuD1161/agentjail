@@ -269,3 +269,61 @@ func TestRequestStoreNilHeaders(t *testing.T) {
 		t.Errorf("expected nil response headers, got %v", results[0].ResponseHeaders)
 	}
 }
+
+// Body paths and the encoding marker survive a round trip, and an old DB gains
+// the columns by migration. See ADR 0092-persist-request-bodies (D1).
+func TestRequestStoreBodyPathRoundTrip(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "network.db")
+	store, err := NewRequestStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewRequestStore: %v", err)
+	}
+	defer store.Close()
+
+	in := &RequestLog{
+		Ts:               time.Now(),
+		Host:             "api.anthropic.com",
+		Method:           "POST",
+		Path:             "/v1/messages",
+		URL:              "https://api.anthropic.com/v1/messages",
+		RequestBodyPath:  "aabbccdd.body",
+		ResponseBodyPath: "eeff0011.body",
+		EncodingRaw:      EncodingRawResponse,
+	}
+	if err := store.Log(in); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+
+	got, err := store.Query(context.Background(), RequestFilter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	if got[0].RequestBodyPath != in.RequestBodyPath {
+		t.Errorf("RequestBodyPath = %q, want %q", got[0].RequestBodyPath, in.RequestBodyPath)
+	}
+	if got[0].ResponseBodyPath != in.ResponseBodyPath {
+		t.Errorf("ResponseBodyPath = %q, want %q", got[0].ResponseBodyPath, in.ResponseBodyPath)
+	}
+	if got[0].EncodingRaw != EncodingRawResponse {
+		t.Errorf("EncodingRaw = %q, want %q", got[0].EncodingRaw, EncodingRawResponse)
+	}
+}
+
+// The migration is idempotent: reopening a store that already has the body
+// columns must not fail. See ADR 0092-persist-request-bodies (D1).
+func TestRequestStoreMigrationIdempotent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "network.db")
+	for i := 0; i < 3; i++ {
+		store, err := NewRequestStore(dbPath)
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		if err := store.Log(&RequestLog{Ts: time.Now(), Host: "h", Method: "GET", Path: "/", URL: "https://h/"}); err != nil {
+			t.Fatalf("log %d: %v", i, err)
+		}
+		store.Close()
+	}
+}
