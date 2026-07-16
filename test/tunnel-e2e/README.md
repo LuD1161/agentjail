@@ -11,9 +11,32 @@ hides (ADR 0034-platform-backend-shared-contract).
 ```sh
 bash test/tunnel-e2e/scenarios.sh          # everything
 bash test/tunnel-e2e/scenarios.sh --quick  # skip the real-agent scenarios
+bash test/tunnel-e2e/baseline-agent-task.sh  # a real agent doing a real task
 ```
 
 Exit 0 when no scenario FAILs.
+
+## The two are not interchangeable
+
+`scenarios.sh` drives the network path with curl and friends. `baseline-agent-task.sh`
+runs **Claude Code building and committing a web app** inside the tunnel, and
+reports what was captured.
+
+The second exists because the first cannot fail on the things that make an agent
+an agent. It immediately found two bugs the 44-scenario matrix had passed
+straight through:
+
+- **AGE-231** — `--tunnel` dropped the agent into `/`. No cwd, no repo, no
+  writes. curl does not care what directory it is in; a coding agent does
+  nothing but.
+- **AGE-232** — a vendor telemetry header (`Dd-Api-Key`) reached `network.db`
+  unredacted. curl never sends one.
+
+The baseline **fails the run** if any credential-shaped header reaches the DB in
+the clear, so a capture cannot be published with a secret in it.
+
+Add tasks to it as the surface grows — different tool calls exercise different
+paths.
 
 ## Groups
 

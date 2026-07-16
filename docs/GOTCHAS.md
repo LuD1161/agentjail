@@ -202,6 +202,48 @@ and report an h2 offer once per session.
   a notice at all.
 - AGE-222 (honest), AGE-223 (actually serve h2).
 
+## 13. curl is not an agent
+
+`--tunnel` started every agent in `/`, the filesystem root — `nsenter` with no
+working directory uses the *target's* cwd, and the target is the namespace
+holder. No project files, no repo, `getcwd()` failing outright. The feature was
+unusable for its actual purpose.
+
+A 44-scenario curl matrix passed throughout. **curl does not care what directory
+it is in.** Relative paths, git, project files — everything that makes an agent
+an agent — went untested until a real agent ran. Claude Code refused the task
+and its refusal *was* the bug report: *"The working directory is `/` ... not
+writable, not listable, and not a git repository."*
+
+- **Rule:** the e2e suite must include a real agent doing a real task
+  (`test/tunnel-e2e/baseline-agent-task.sh`). Synthetic traffic tests the
+  network path; it does not test the *product*.
+- **Diagnostic trap:** the first fix (`nsenter --wd`) *looked* like it worked —
+  bash's `pwd` builtin reads `$PWD` and printed the right answer while
+  `getcwd()` was returning EACCES and git was broken. Probe with the real
+  syscall (`/bin/pwd`, `git rev-parse`), not the shell builtin.
+- AGE-231.
+
+## 14. A comment claiming single-source-of-truth is not a mechanism
+
+`internal/store` said of its redaction list: *"This is the single source of
+truth."* It was not — `internal/mitm` kept a second, weaker one, and AGENTS.md
+repeated the claim. Each had a hole the other covered:
+
+| header | store (substring) | mitm (exact list) |
+|---|---|---|
+| `Dd-Api-Key` | ✓ contains "key" | ✗ **leaked to network.db** |
+| `Cookie` | ✗ no substring matches | ✓ |
+
+A real session persisted a vendor API key in the clear, against ADR 0032.
+
+- **Rule:** enumerating names loses to the next vendor's spelling. Match by
+  pattern, and name exceptions explicitly with the reason attached.
+- **Rule:** if two packages must agree, the agreement lives in a package they
+  both import — not in a comment. (Same shape as #2, which is the point.)
+- **Why it was only found now:** curl never sends a vendor telemetry header.
+  Claude Code does, on every session. AGE-232.
+
 ---
 
 ## Testing gotchas
