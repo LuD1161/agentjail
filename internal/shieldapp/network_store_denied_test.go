@@ -64,3 +64,16 @@ func TestReadDenyKeepsPriorEntries(t *testing.T) {
 		t.Error("read-deny set looks like it only has the store names now")
 	}
 }
+
+// bodies/ holds the transcripts; network.db only points at them. Denying the
+// index alone reads as complete and protects nothing.
+// See ADR 0092-persist-request-bodies (D3).
+func TestBodyDirIsReadDenied(t *testing.T) {
+	denied := AgentjailReadDeniedNames()
+
+	if !denied[mitm.BodyDirName] {
+		t.Errorf("SECURITY: %s/ is not read-denied — a shielded agent can read every "+
+			"request and response body, including source code and credentials, "+
+			"from every prior session", mitm.BodyDirName)
+	}
+}

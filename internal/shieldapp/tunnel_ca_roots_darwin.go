@@ -13,10 +13,10 @@ package shieldapp
 // so nothing depends on this today -- it must be checked on real hardware
 // before the macOS tunnel ships.
 var darwinRootPaths = []string{
-	"/etc/ssl/cert.pem",                  // LibreSSL/curl bundle, present on modern macOS
-	"/usr/local/etc/openssl@3/cert.pem",  // Homebrew OpenSSL 3 (Intel)
+	"/etc/ssl/cert.pem",                    // LibreSSL/curl bundle, present on modern macOS
+	"/usr/local/etc/openssl@3/cert.pem",    // Homebrew OpenSSL 3 (Intel)
 	"/opt/homebrew/etc/openssl@3/cert.pem", // Homebrew OpenSSL 3 (Apple silicon)
-	"/usr/local/etc/openssl/cert.pem",    // older Homebrew OpenSSL
+	"/usr/local/etc/openssl/cert.pem",      // older Homebrew OpenSSL
 }
 
 // systemRootsPEM returns the host's CA roots as PEM. See darwinRootPaths for

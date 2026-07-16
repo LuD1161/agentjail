@@ -196,6 +196,9 @@ func AgentjailReadDeniedNames() map[string]bool {
 	for _, name := range mitm.DBProtectedFileNames() {
 		m[name] = true
 	}
+	// bodies/ holds the transcripts themselves; denying only the index that
+	// points at them would read as complete and protect nothing.
+	m[mitm.BodyDirName] = true
 	return m
 }
 
