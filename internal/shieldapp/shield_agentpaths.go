@@ -42,23 +42,12 @@ func agentPaths() AgentPaths {
 			".vscode",     // VS Code settings
 		},
 		HomeRO: []string{
-			".agentjail", // agentjail's OWN state: read/traverse only. The agent
-			//                must NOT write policy.yaml, the SQLite DB, or
-			//                trusted.yaml -- those gate enforcement, so a writable
-			//                grant would let the agent disable its own guardrail
-			//                (invariant 0). The hook's connect() to daemon.sock is
-			//                unaffected: Landlock is an FS-only LSM and does not
-			//                mediate AF_UNIX connect() -- see ADR
-			//                0067-control-plane-token-auth (addendum, AGE-216).
-			//                READ is NOT blanket-recursive on Linux: read-denied
-			//                names are excluded per-child by shield_linux.go's
-			//                applyLandlock -- see AgentjailSecretsProtectedNames()
-			//                and AgentjailReadDeniedNames() in shield_contract.go.
-			//                That read exclusion is the control-plane boundary
-			//                (ADR 0067-control-plane-token-auth), not path
-			//                separation. macOS already denies read+write on the
-			//                whole ~/.agentjail subtree (sensitiveReadPaths/
-			//                sensitiveWritePaths in shield_darwin.go).
+			// Read-only: a writable grant would let the agent disable its own
+			// guardrail. READ is not blanket-recursive here -- read-denied names
+			// are excluded per-child by applyLandlock, and that exclusion (not
+			// path separation) is the control-plane boundary.
+			// See ADR 0067-control-plane-token-auth.
+			".agentjail",
 			".npm-global", // npm global modules (plugins may need this)
 			".config",     // XDG config (MCP server configs, etc.)
 			".codex",      // codex skills and config
@@ -78,18 +67,9 @@ func agentPaths() AgentPaths {
 			".gitconfig",        // git user config
 			".gitignore_global", // global gitignore
 			".ssh/known_hosts",  // SSH host key verification (not private keys)
-			// daemon.sock (source of truth: internal/wire.DefaultSocketPath).
-			// This grant is a measured NO-OP for connect(): Landlock does not
-			// mediate AF_UNIX connect(), so the hook reaches the daemon with or
-			// without it. Retained pending a human decision to drop it -- see
-			// ADR 0067-control-plane-token-auth (addendum, AGE-216).
-			".agentjail/daemon.sock",
-			// daemon-ctl.sock (~/.agentjail/run/daemon-ctl.sock) is deliberately
-			// ABSENT, but absence is NOT what makes it safe: on Linux the agent
-			// can connect() to it regardless (ctl_connect=ok). Its boundary is
-			// the read-denied control token (ADR 0067-control-plane-token-auth).
-			// macOS sbpl additionally denies network-outbound to it
-			// (shield_darwin.go).
+			// No socket grants here: absence is not a boundary on Linux -- the
+			// agent can connect() regardless. The read-denied control token is.
+			// See ADR 0067-control-plane-token-auth.
 		},
 		Runtimes: []string{"node", "bun", "npx", "python3", "python", "deno", "go", "cargo", "ruby"},
 	}

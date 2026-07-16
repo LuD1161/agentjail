@@ -352,9 +352,9 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// e.g. ~/.agentjail (daemon socket/DB/policy) stays in sensitiveWritePaths
 	// above, so it must NOT get an allow carve-out here.
 	//
-	// NOTE: ~/.agentjail is no longer in HomeRW (it moved to HomeRO, with a
-	// narrow HomeFilesRW grant on daemon.sock only -- see shield_agentpaths.go),
-	// so this loop never encounters it today. The override entry is kept as
+	// NOTE: ~/.agentjail is no longer in HomeRW (it moved to HomeRO, and its
+	// daemon.sock HomeFilesRW grant was dropped as a measured no-op -- see
+	// shield_agentpaths.go), so this loop never encounters it today. The override entry is kept as
 	// belt-and-suspenders: if ~/.agentjail is ever re-added to HomeRW, the
 	// sbpl allow carve-out (last-match-wins) would otherwise override the
 	// sensitiveWritePaths deny and silently re-grant the agent write access to

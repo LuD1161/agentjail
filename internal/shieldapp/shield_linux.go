@@ -719,21 +719,6 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 		}
 	}
 
-	// SSH agent socket: if SSH_AUTH_SOCK points outside /tmp (e.g.
-	// /run/user/<uid>/... via systemd/gnome-keyring), grant RW on the
-	// socket. Note connect(2) does not depend on this grant -- Landlock
-	// does not mediate AF_UNIX connect() (ADR 0067-control-plane-token-auth).
-	// The env var itself is passed through via EnvAllowlistBaseline.
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if resolved, err := filepath.EvalSymlinks(sock); err == nil {
-			if !strings.HasPrefix(resolved, "/tmp/") && !strings.HasPrefix(resolved, "/tmp") {
-				if err := allowPath(resolved, rwFileAccess); err != nil {
-					fmt.Fprintf(os.Stderr, "agentjail-shield: skip SSH_AUTH_SOCK %s: %v\n", resolved, err)
-				}
-			}
-		}
-	}
-
 	// Allow only specific home subdirectories that Claude Code needs.
 	// Default-deny: nothing in $HOME is accessible unless explicitly listed.
 	// This is the allowlist model — the agent sees only what we grant.

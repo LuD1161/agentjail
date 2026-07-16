@@ -145,9 +145,9 @@ func runLandlockNetChild() {
 // agent must be UNABLE to write agentjail's own enforcement state
 // (~/.agentjail/policy.yaml, the DB, trusted.yaml) yet must still be ABLE to
 // connect() the daemon socket so the hook layer keeps enforcing. See
-// shield_agentpaths.go: ~/.agentjail is granted read-only. The connect() does
-// not depend on the daemon.sock write grant -- Landlock does not mediate
-// AF_UNIX connect(); see ADR 0067-control-plane-token-auth (addendum, AGE-216).
+// shield_agentpaths.go: ~/.agentjail is granted read-only, and daemon.sock has
+// no write grant at all -- Landlock does not mediate AF_UNIX connect(), so the
+// connect succeeds regardless. See ADR 0067-control-plane-token-auth.
 //
 // The parent (TestLandlockAgentjailStateEnforcement) sets $HOME to a throwaway
 // directory and pre-creates a listening socket at $HOME/.agentjail/daemon.sock,
@@ -200,10 +200,10 @@ func runLandlockAgentjailChild() {
 		fmt.Fprintf(os.Stdout, "trust_write=ERR:%v\n", terr)
 	}
 
-	// Probe 2: connect() ~/.agentjail/daemon.sock -- must be ALLOWED. This
-	// holds with or without the single-file write grant (measured, AGE-216):
-	// Landlock does not mediate AF_UNIX connect(). The probe still guards the
-	// invariant that the hook can reach the daemon.
+	// Probe 2: connect() ~/.agentjail/daemon.sock -- must be ALLOWED. There is
+	// no write grant on it: Landlock does not mediate AF_UNIX connect(). This
+	// guards the invariant that the hook can reach the daemon.
+	// See ADR 0067-control-plane-token-auth.
 	sockPath := filepath.Join(home, ".agentjail", "daemon.sock")
 	conn, cerr := net.Dial("unix", sockPath)
 	if cerr == nil {
