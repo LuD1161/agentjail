@@ -9,10 +9,10 @@ rows for two days, and the status line kept rendering
 `🔒 [secured by agentjail]` the entire time, because the badge keyed on
 `AGENTJAIL_SHIELDED` alone and never probed the daemon.
 
-That last one is now fixed (ADR 0085-statusline-attests-daemon adds a
-`POLICY OFF` state). C2 below is the half that is **not** fixed: the badge
-still trusts `AGENTJAIL_SHIELDED`, which is set on paths that apply no
-sandbox at all.
+Both halves of that badge are now fixed: ADR 0085-statusline-attests-daemon
+adds a `POLICY OFF` state for a dead daemon, and ADR 0087-shielded-means-sandboxed
+makes `AGENTJAIL_SHIELDED` mean a sandbox was actually applied (C2, H7).
+The darwin sbpl-validation window (C7) remains open.
 
 Every one of the 16 testbed scenarios (`test/testbed/scenarios/`) passed
 throughout. All 16 are happy-path feature tests; **none kills or stops the
@@ -93,7 +93,7 @@ invisible **and** the property that makes it detectable after the fact
 | # | Trigger | Expected | Actual (cited) | Detectable? | Test | Pri |
 |---|---|---|---|---|---|---|
 | C1 | Shield launches while the daemon is **down** | Refuse, or at minimum warn | **No daemon liveness check exists in the shield launch path.** `internal/shieldapp/main.go` contains zero daemon probes; `daemon.sock` appears only as a Landlock path grant (`internal/shieldapp/shield_agentpaths.go:86`). The shield activates, writes `shield.activated`, and execs the agent. **This is exactly the 464-events-vs-0-decisions divergence.** | Only retroactively via `enforcementGapCheck` (`cmd/agentjail/doctor_protection.go:45`) | none | **P0** |
-| C2 | `AGENTJAIL_SHIELDED=1` set without kernel enforcement | Badge must attest real enforcement | Set unconditionally on Linux after the `applyLandlock` branch (`internal/shieldapp/shield_linux.go:295`) — **reached on the `errLandlockUnsupported` fail-open path** (`:250-258`) and the `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` override (`:269`). On darwin set at `shield_darwin.go:750` (profile unverified) **and at `:785`, inside the explicit no-sandbox fail-open path**. Meanwhile `cmd_statusline.go:118-123` documents it as recording "kernel-level enforcement". | **No — the badge lies here.** | `TestShieldBadge_Shielded` (`cmd/agentjail/cmd_statusline_badge_test.go:9`) tests the env→badge mapping, not the env→enforcement premise | **P0** |
+| C2 | `AGENTJAIL_SHIELDED=1` set without kernel enforcement | Badge must attest real enforcement | **FIXED** (ADR 0087-shielded-means-sandboxed). Was set unconditionally after the `applyLandlock` branch, incl. the `errLandlockUnsupported` fail-open path and the `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` override; on darwin also inside `execAgent`, the explicit no-sandbox path. Now written only by `AppendShieldedEnv(env, SandboxState)` in the tag-free contract (`shield_contract.go`) — the single site in the tree, so the backends cannot drift. `NotSandboxed` is the zero value. | Yes — badge reads `UNSECURED` | `TestAppendShieldedEnv`, `TestNotSandboxedIsZeroValue` (`internal/shieldapp/shield_contract_shielded_test.go`) assert the **premise** (state→env), not just env→badge | P2 |
 | C3 | Store open fails (locked / corrupt / no `$HOME`) | Warn at least | Silently swallowed: emitter stays `audit.NopEmitter{}`, `store.Open` wired only `if err == nil` (`internal/shieldapp/main.go:106-114`). No log, no warning. **A fully-sandboxed launch may record no `shield.activated` at all** — which also silently defeats doctor's C1 cross-check. | No | none | **P0** |
 | C4 | Old kernel, Landlock ABI absent | Fail loud; ideally refuse | Fails **open**: prints "Landlock unavailable — sandbox enforcement disabled", emits `ShieldFailed`, execs unsandboxed (`shield_linux.go:249-258`). Probe at `:456-462`. | stderr warning — which scrolls away under Claude Code's TUI, the exact problem ADR 0064 names | `internal/shieldapp/shield_linux_enforce_test.go` (enforcement, not the unsupported path) | P1 |
 | C5 | Landlock ABI present but `landlock_create_ruleset` rejected | Fail closed | Fails **closed**: `os.Exit(1)` (`shield_linux.go:271`), unless `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` (`:269`). Note the asymmetry with C4. | Yes — the agent does not start | none | P2 |
@@ -173,7 +173,7 @@ drifted. These rows track drift that exists **today**.
 | H4 | Agent kills the daemon | Speed bump only | `library/no-daemon-kill` is on by default but disableable with `--force`; the supervisor restarts (`cmd/agentjail/rule_registry.go:234`; `ARCHITECTURE.md`). | Yes, via restart | none | P2 |
 | H5 | Agent DoSes the daemon to force fail-open | Bounded | The known lever (B6). `maxAgentConns` semaphore (`internal/daemonapp/main.go:898`); reload rate bounded (ADR 0075); control sockets token-gated (ADR 0067-0069). | `fail_open` telemetry rate | UNVERIFIED — needs a live test | P1 |
 | H6 | Agent deletes its own hook entry from `~/.claude/settings.json` | Re-asserted next launch | `EnsureHookRegistered` re-asserts pre-exec (`shield_hook_reassert.go:91`) — **but only for the next launch**; the current session stays unhooked. Bash-based writes deny, Write/Edit ask (ADR 0025). | Doctor's hook check (`cmd_doctor.go:270-291`) — a `strings.Contains` on the file | `shield_hook_reassert_test.go` | P1 |
-| H7 | Agent sets `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` | Ignored inside a sandboxed session | UNVERIFIED — needs a live test. `shield_linux.go:269` honours it to downgrade a fail-closed Landlock error to fail-open. Whether it survives the shield's own env scrubbing into a nested launch is not determinable from source. Note it does **not** suppress `AGENTJAIL_SHIELDED=1` (C2). | No | none | **P0** |
+| H7 | Agent sets `AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1` | Ignored inside a sandboxed session | `shield_linux.go:269` honours it to downgrade a fail-closed Landlock error to fail-open. Whether it survives the shield's own env scrubbing into a nested launch is UNVERIFIED — needs a live test. It no longer produces a padlock: the override path resolves `NotSandboxed`, so no `AGENTJAIL_SHIELDED` is set (ADR 0087-shielded-means-sandboxed). | Yes — badge reads `UNSECURED` | `TestAppendShieldedEnv` | P1 |
 
 ---
 

@@ -344,3 +344,24 @@ func resolveOAuthCallbackPorts(credentialsJSON string) []int {
 	}
 	return ports
 }
+
+// SandboxState is whether the agent about to be exec'd is really sandboxed.
+// Both backends resolve one; a fail-open launch is NotSandboxed, never absent.
+type SandboxState int
+
+const (
+	// NotSandboxed is the zero value: an unresolved state can never claim a
+	// sandbox it did not apply.
+	NotSandboxed SandboxState = iota
+	Sandboxed
+)
+
+// AGENTJAIL_SHIELDED must mean "a sandbox is applied", not "the shield ran" —
+// the status line badges the session on it.
+// See ADR 0087-shielded-means-sandboxed.
+func AppendShieldedEnv(env []string, s SandboxState) []string {
+	if s != Sandboxed {
+		return env
+	}
+	return append(env, "AGENTJAIL_SHIELDED=1")
+}

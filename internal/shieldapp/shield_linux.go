@@ -246,7 +246,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 
 	// Apply Landlock to the current process.  The agent (run as a child
 	// below) inherits all Landlock restrictions.
+	sandboxState := Sandboxed
 	if err := applyLandlock(cfg, netproxyPort); err != nil {
+		sandboxState = NotSandboxed
 		if errors.Is(err, errLandlockUnsupported) {
 			stepFail(noColor, "Landlock unavailable — sandbox enforcement disabled")
 			fmt.Fprintf(os.Stderr, "  Requires Linux 5.13+ with CONFIG_SECURITY_LANDLOCK=y.\n"+
@@ -278,8 +280,6 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		})
 	}
 
-	// Landlock applied
-
 	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
 	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
 	env = sandbox.StripEnv(env, cfg)
@@ -292,7 +292,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	if netproxyReady {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}
-	env = append(env, "AGENTJAIL_SHIELDED=1")
+	env = AppendShieldedEnv(env, sandboxState)
 	if ctlTokenErr != nil && cfg != nil && len(cfg.Secrets.Grants) > 0 {
 		fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: no control token (%v); configured secret grants will be refused\n", ctlTokenErr)
 	}
