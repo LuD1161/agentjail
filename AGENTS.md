@@ -17,11 +17,12 @@ Three deployment tiers, in build order:
 
 1. **[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)** — mandatory first read. Architecture overview: hook → daemon → OPA flow, isolation tiers, policy model.
 2. **[`docs/ENGINEERING.md`](./docs/ENGINEERING.md)** — engineering principles that govern every change.
-3. **[`docs/adr/0001-os-sandbox-enforcement-layer.md`](./docs/adr/0001-os-sandbox-enforcement-layer.md)** — OS sandbox (agentjail-shield) decision.
-4. **[`docs/adr/0002-latency-as-engineering-metric.md`](./docs/adr/0002-latency-as-engineering-metric.md)** — latency targets.
-5. **[`docs/adr/0003-mcp-reverse-proxy.md`](./docs/adr/0003-mcp-reverse-proxy.md)** — MCP proxy strategy.
-6. **[`docs/adr/0004-credential-broker-tier1.md`](./docs/adr/0004-credential-broker-tier1.md)** — credential broker design (Tier 1.5 OSS path).
-7. **[`docs/adr/`](./docs/adr/)** — all ADRs. Each captures one decision with Context / Decision / Consequences.
+3. **[`docs/GOTCHAS.md`](./docs/GOTCHAS.md)** — bugs this codebase actually shipped, and the shape of each mistake. Every entry was invisible to a green test suite. Read it before touching the tunnel, the policy DSL, or any per-OS backend; add to it when you fix something a passing suite hid.
+4. **[`docs/adr/0001-os-sandbox-enforcement-layer.md`](./docs/adr/0001-os-sandbox-enforcement-layer.md)** — OS sandbox (agentjail-shield) decision.
+5. **[`docs/adr/0002-latency-as-engineering-metric.md`](./docs/adr/0002-latency-as-engineering-metric.md)** — latency targets.
+6. **[`docs/adr/0003-mcp-reverse-proxy.md`](./docs/adr/0003-mcp-reverse-proxy.md)** — MCP proxy strategy.
+7. **[`docs/adr/0004-credential-broker-tier1.md`](./docs/adr/0004-credential-broker-tier1.md)** — credential broker design (Tier 1.5 OSS path).
+8. **[`docs/adr/`](./docs/adr/)** — all ADRs. Each captures one decision with Context / Decision / Consequences.
 
 ## Standard libraries — no hacky patterns
 
@@ -183,6 +184,7 @@ any PR containing an unsigned commit, so this is not optional.
 Documentation drift is a bug. Every commit that changes user-visible behavior, adds a new package, or changes defaults must:
 1. Update [`README.md`](./README.md) if the change affects user-facing flows
 2. Write an ADR under [`docs/adr/NNNN-slug.md`](./docs/adr/) if the change resolves a previously-undecided design question — number first, three-word slug ([ADR 0083](./docs/adr/0083-adr-numbering-scheme.md))
+3. Add to [`docs/GOTCHAS.md`](./docs/GOTCHAS.md) if you fixed something a **passing test suite hid** — a silent no-op, a config that parsed but never applied, a test that asserted the bug. Say what looked fine, what was actually happening, and the general rule. That file is the one place we record what a green build cannot tell you.
 
 This goes in the same commit as the code change, not a follow-up.
 
