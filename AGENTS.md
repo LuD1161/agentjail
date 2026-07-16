@@ -182,7 +182,7 @@ any PR containing an unsigned commit, so this is not optional.
 
 Documentation drift is a bug. Every commit that changes user-visible behavior, adds a new package, or changes defaults must:
 1. Update [`README.md`](./README.md) if the change affects user-facing flows
-2. Write an ADR under [`docs/adr/NNNN-slug.md`](./docs/adr/) if the change resolves a previously-undecided design question
+2. Write an ADR under [`docs/adr/NNNN-slug.md`](./docs/adr/) if the change resolves a previously-undecided design question — number first, three-word slug ([ADR 0083](./docs/adr/0083-adr-numbering-scheme.md))
 
 This goes in the same commit as the code change, not a follow-up.
 
@@ -215,8 +215,10 @@ This goes in the same commit as the code change, not a follow-up.
 1. `go build ./... && go vet ./... && go test ./...` — all green
 2. `make smoke` — every fixture PASSes or SKIPs cleanly
 3. Updated `README.md` / `docs/adr/` per the cadence rule
-4. Conventional commit message with sign-off
-5. **Recording hygiene (see below)** — never commit a raw testbed recording; it
+4. `make adr-check` — green if you added an ADR (CI fails on a duplicate number;
+   see [ADR 0083](./docs/adr/0083-adr-numbering-scheme.md))
+5. Conventional commit message with sign-off
+6. **Recording hygiene (see below)** — never commit a raw testbed recording; it
    embeds host-identifying data.
 
 ### Recording hygiene — never commit a raw cast
