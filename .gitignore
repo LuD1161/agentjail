@@ -60,10 +60,7 @@ video-hyperframes/
 # Internal design specs / brainstorming notes — local only, never shipped public.
 docs/superpowers/
 
-# Generated code-review output — local only, never shipped public.
-# NOTE: drafts/ and plans/ are deliberately NOT ignored; both are tracked
-# directories. Untracked files there are work-in-progress, not local-only —
-# stage them by path rather than with `git add -A`.
+# Generated code-review output — local only. (drafts/ and plans/ stay tracked.)
 docs/reviews/
 
 # UI testing screenshots (local only)

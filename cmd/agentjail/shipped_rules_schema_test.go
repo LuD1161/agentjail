@@ -1,19 +1,7 @@
 // shipped_rules_schema_test.go — every rule we ship must survive the input
-// schema type-check (AGE-218, ADR 0080-rego-both-tiers addendum).
-//
-// This is the check that makes the schema worth having. `agentjail policy add`
-// protects rules a user writes from today on; it does nothing for the rules
-// already embedded in the binary. A shipped rule with a bad input.* reference
-// would be a rule that looks installed, reports healthy in `policy list`, and
-// silently never fires — so the shipped set is asserted here, at build time,
-// not left to be discovered in the field.
-//
-// Scope: the embedded core + library trees are the rules the daemon actually
-// evaluates (ADR 0009 — cmd/agentjail/policies is the runtime source of
-// truth). The agentpolicy/policies/* candidate tree is exercised by `opa test`
-// and shares this input shape; the legacy agentjail.default package does NOT
-// (it has its own input document, see agentpolicy/internal/policy/policy.go)
-// and is correctly out of scope here.
+// schema type-check. `policy add` only guards rules written from now on; these
+// are already in the binary. Scope is the embedded core + library trees, the
+// rules the daemon actually evaluates (ADR 0009-embedded-policy-rule-drift).
 package main
 
 import (
@@ -48,24 +36,17 @@ func TestShippedRulesPassSchemaCheck(t *testing.T) {
 }
 
 // TestEachShippedRuleNamesOnlyKnownInputFields compiles each library rule on
-// top of the core baseline individually, so a failure names the offending file
-// instead of one aggregate error for the whole bundle.
-//
-// Core rules are not isolated the same way: they are interdependent (resolver
-// reads the candidates), so the smallest unit that compiles is the whole core
-// set. Core attribution comes from the compiler, which reports file:line —
-// see TestShippedRulesPassSchemaCheck.
+// the core baseline individually, so a failure names the offending file. Core
+// rules are interdependent (resolver reads the candidates), so the smallest
+// unit that compiles is the whole core set; the compiler reports file:line.
 func TestEachShippedRuleNamesOnlyKnownInputFields(t *testing.T) {
 	baseline := make([][2]string, 0)
 	for name, content := range allCoreRuleBytes() {
 		baseline = append(baseline, [2]string{name + ".rego", string(content)})
 	}
 
-	// The baseline must be known-good before any subtest runs. A bad input.*
-	// ref in a CORE rule fails every subtest below, each one naming an innocent
-	// library rule that compiles fine — a false accusation, and the exact
-	// misattribution this per-file split exists to prevent. Fail once here
-	// instead; the compiler error names the real culprit.
+	// Baseline must be known-good first: a bad ref in a core rule would fail
+	// every subtest below, each naming an innocent library rule.
 	if _, err := policy.NewHookOPAEngine(context.Background(), baseline); err != nil {
 		t.Fatalf("core rule baseline (%d modules) does not compile, so the per-library "+
 			"subtests are skipped — they would blame an innocent rule.\n"+

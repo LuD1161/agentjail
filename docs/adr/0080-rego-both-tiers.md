@@ -110,6 +110,25 @@ Two constraints kept the schema honest:
 - **`tool_input` stays free-form.** Its key set belongs to the tool, so it is
   declared as an untyped object.
 
+### The schema binds at `SchemaRootRef`, not `InputRootRef`
+
+The first implementation filed the schema under `ast.InputRootRef` — the
+obvious reading of the API. It compiled, passed every existing test, and
+type-checked nothing; the first all-clear sweep of the rule tree was
+meaningless. Only a deliberate typo probe caught it.
+
+A schema at `ast.SchemaRootRef` (the bare `schema` root) is the compiler's
+*global* input type — what `opa check --schema` installs, and what types every
+module carrying no `# METADATA` annotation. A schema filed under `input` is
+only addressable by name from a `# METADATA / schemas:` block, so it applies
+to nothing by default.
+
+Recorded because the failure mode is invisible by construction: both spellings
+compile, and only one enforces. It is the same silent no-op this addendum
+exists to remove, reproduced inside the fix for it. Any future change here must
+be proved by a mutation probe (break a ref on purpose, watch the compile fail),
+never by a green suite.
+
 **All shipped rules passed on the first run** — the embedded core + library
 trees the daemon evaluates had no dead references. Asserted going forward by
 `cmd/agentjail/shipped_rules_schema_test.go`. The legacy `agentjail.default`

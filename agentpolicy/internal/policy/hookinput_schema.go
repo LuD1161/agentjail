@@ -41,22 +41,13 @@ var (
 	hookSchemaErr  error
 )
 
-// hookInputSchemaSet returns the ast.SchemaSet that types the `input`
-// document for every module on the hook path.
+// hookInputSchemaSet returns the ast.SchemaSet that types the `input` document
+// for every module on the hook path. Parsed once; read-only and shared across
+// engine rebuilds, so it stays off the SIGHUP path's cost (ADR
+// 0002-latency-as-engineering-metric).
 //
-// The schema is registered at ast.SchemaRootRef (the bare `schema` root), NOT
-// at ast.InputRootRef. This is the one non-obvious part of the OPA API: a
-// schema at the `schema` root is the compiler's *global* input type
-// (ast.Compiler.inputType — see v1/ast/compile.go checkTypes), which is what
-// `opa check --schema <file.json>` installs and what type-checks every module
-// with no per-rule METADATA annotation. A schema filed under `input` is
-// instead only addressable by name from a `# METADATA / schemas:` block, so
-// putting it there compiles clean and silently type-checks nothing — the same
-// class of silent no-op this whole change exists to eliminate.
-//
-// Parsed once and reused: the result is read-only and shared across every
-// engine build (SIGHUP rebuilds included), so it stays off the reload path's
-// cost (ADR 0002).
+// SchemaRootRef, not InputRootRef — filing it under `input` type-checks nothing
+// and compiles clean. See ADR 0080-rego-both-tiers.
 func hookInputSchemaSet() (*ast.SchemaSet, error) {
 	hookSchemaOnce.Do(func() {
 		var raw interface{}
