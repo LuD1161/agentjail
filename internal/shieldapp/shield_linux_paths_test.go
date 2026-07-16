@@ -235,94 +235,167 @@ func TestVisibleHomeChildren(t *testing.T) {
 
 // ---- AGE-241: worktree / submodule gitdir grants ----
 
-// gitRepoFixture builds a main repo dir and returns its path. The .git is a
-// real directory, as in an ordinary clone.
-func gitRepoFixture(t *testing.T, root, name string) string {
+// gitGrantPaths flattens grants to paths for comparison.
+func gitGrantPaths(gs []gitGrant) []string {
+	var out []string
+	for _, g := range gs {
+		out = append(out, g.path)
+	}
+	return out
+}
+
+// worktreeFixture builds a main repo with a linked worktree and returns both
+// checkout roots plus the main .git and the per-worktree gitdir.
+func worktreeFixture(t *testing.T, root string) (main, wt, mainGit, wtGitdir string) {
 	t.Helper()
-	repo := filepath.Join(root, name)
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
+	main = filepath.Join(root, "main")
+	mainGit = filepath.Join(main, ".git")
+	wtGitdir = filepath.Join(mainGit, "worktrees", "wt")
+	wt = filepath.Join(root, "wt")
+	for _, d := range []string{wtGitdir, filepath.Join(wt, "sub", "deeper")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return repo
-}
-
-// TestGitDirGrants_OrdinaryCloneNeedsNothing guards that the common case stays
-// free of extra grants: .git is a directory inside cwd, already covered.
-func TestGitDirGrants_OrdinaryCloneNeedsNothing(t *testing.T) {
-	root := t.TempDir()
-	repo := gitRepoFixture(t, root, "main")
-	if got := gitDirGrants(repo, "/home/user", ""); got != nil {
-		t.Errorf("gitDirGrants(ordinary clone) = %v, want nil", got)
-	}
-}
-
-// TestGitDirGrants_NotARepo guards that a cwd with no .git yields no grants.
-func TestGitDirGrants_NotARepo(t *testing.T) {
-	if got := gitDirGrants(t.TempDir(), "/home/user", ""); got != nil {
-		t.Errorf("gitDirGrants(no .git) = %v, want nil", got)
-	}
-}
-
-// TestGitDirGrants_WorktreeGrantsGitdirAndCommondir is the AGE-241 regression
-// guard: a worktree's real gitdir AND the main .git it points on to via
-// commondir must both be granted, or no git command works in a worktree.
-func TestGitDirGrants_WorktreeGrantsGitdirAndCommondir(t *testing.T) {
-	root := t.TempDir()
-	main := gitRepoFixture(t, root, "main")
-	mainGit := filepath.Join(main, ".git")
-	wtGitdir := filepath.Join(mainGit, "worktrees", "wt")
-	if err := os.MkdirAll(wtGitdir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// commondir points back at the main .git, relative to the worktree gitdir.
 	if err := os.WriteFile(filepath.Join(wtGitdir, "commondir"), []byte("../..\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wt := filepath.Join(root, "wt")
-	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGitdir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return main, wt, mainGit, wtGitdir
+}
 
-	got := gitDirGrants(wt, "/home/user", "")
-	want := []string{resolveSymlinks(wtGitdir), resolveSymlinks(mainGit)}
+// TestGitDirGrants_WorktreeRoot guards the base AGE-241 case: the real gitdir
+// and the main .git it points on to via commondir must both be granted.
+func TestGitDirGrants_WorktreeRoot(t *testing.T) {
+	_, wt, mainGit, wtGitdir := worktreeFixture(t, t.TempDir())
+	got := gitGrantPaths(gitDirGrants(wt, "/home/user", ""))
+	want := []string{filepath.Join(wt, ".git"), resolveSymlinks(wtGitdir), resolveSymlinks(mainGit)}
 	if len(got) != len(want) {
-		t.Fatalf("gitDirGrants(worktree) = %v, want %v", got, want)
+		t.Fatalf("gitDirGrants(worktree root) = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("grant[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
-	// The grant must stop at the git database — never the parent checkout.
-	for _, g := range got {
-		if g == main {
-			t.Errorf("SECURITY: grant widened to the parent checkout %q", main)
+}
+
+// TestGitDirGrants_WorktreeSubdir guards the discovery walk: git resolves its
+// repo by ascending from cwd, so a cwd BELOW the worktree root must still grant
+// the gitdir. Without the walk this returns nil and every git command fails.
+func TestGitDirGrants_WorktreeSubdir(t *testing.T) {
+	_, wt, mainGit, wtGitdir := worktreeFixture(t, t.TempDir())
+	for _, sub := range []string{"sub", "sub/deeper"} {
+		t.Run(sub, func(t *testing.T) {
+			cwd := filepath.Join(wt, filepath.FromSlash(sub))
+			got := gitGrantPaths(gitDirGrants(cwd, "/home/user", ""))
+			want := []string{filepath.Join(wt, ".git"), resolveSymlinks(wtGitdir), resolveSymlinks(mainGit)}
+			if len(got) != len(want) {
+				t.Fatalf("gitDirGrants(%s) = %v, want %v", sub, got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("grant[%d] = %q, want %q", i, got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestGitDirGrants_PointerFileIsFileScoped guards that the .git pointer is
+// granted file-scoped: a dir-scoped mask on a regular file makes
+// landlock_add_rule fail with EINVAL, silently dropping the grant.
+func TestGitDirGrants_PointerFileIsFileScoped(t *testing.T) {
+	_, wt, _, _ := worktreeFixture(t, t.TempDir())
+	got := gitDirGrants(filepath.Join(wt, "sub"), "/home/user", "")
+	if len(got) == 0 {
+		t.Fatal("no grants")
+	}
+	if got[0].path != filepath.Join(wt, ".git") || got[0].isDir {
+		t.Errorf("pointer grant = %+v, want the .git file with isDir=false", got[0])
+	}
+	for _, g := range got[1:] {
+		if !g.isDir {
+			t.Errorf("gitdir grant %q marked isDir=false, want dir-scoped", g.path)
 		}
 	}
 }
 
-// TestGitDirGrants_RelativeGitdirSubmodule covers the submodule shape, whose
-// .git file holds a path relative to cwd ("../.git/modules/x").
-func TestGitDirGrants_RelativeGitdirSubmodule(t *testing.T) {
+// TestGitDirGrants_OrdinaryCloneRootNeedsNothing guards that the common case
+// takes no extra grant: .git is a directory inside cwd, already covered.
+func TestGitDirGrants_OrdinaryCloneRootNeedsNothing(t *testing.T) {
 	root := t.TempDir()
-	super := gitRepoFixture(t, root, "super")
-	modGit := filepath.Join(super, ".git", "modules", "lib")
-	if err := os.MkdirAll(modGit, 0o755); err != nil {
+	repo := filepath.Join(root, "main")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sub := filepath.Join(super, "lib")
+	if got := gitDirGrants(repo, "/home/user", ""); got != nil {
+		t.Errorf("gitDirGrants(ordinary clone root) = %v, want nil", got)
+	}
+}
+
+// TestGitDirGrants_OrdinaryCloneSubdir guards that an ancestor's .git directory
+// is granted: the cwd grant covers only the subdir, not the repo root's .git.
+func TestGitDirGrants_OrdinaryCloneSubdir(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "main")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(repo, "sub", "deeper")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	got := gitDirGrants(sub, "/home/user", "")
+	if len(got) != 1 || got[0].path != filepath.Join(repo, ".git") || !got[0].isDir {
+		t.Errorf("gitDirGrants(clone subdir) = %+v, want the repo .git dir", got)
+	}
+}
+
+// TestGitDirGrants_WalkStopsAtHome guards that discovery never ascends into
+// $HOME or above: a ~/.git dotfiles repo is the home allowlist's business.
+func TestGitDirGrants_WalkStopsAtHome(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cwd := filepath.Join(home, "project", "sub")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitDirGrants(cwd, home, ""); len(got) != 0 {
+		t.Errorf("SECURITY: discovery ascended to $HOME and granted %v", gitGrantPaths(got))
+	}
+}
+
+// TestGitDirGrants_NotARepo guards that a cwd with no repo above it yields none.
+func TestGitDirGrants_NotARepo(t *testing.T) {
+	if got := gitDirGrants(t.TempDir(), "/home/user", ""); got != nil {
+		t.Errorf("gitDirGrants(no .git) = %v, want nil", got)
+	}
+}
+
+// TestGitDirGrants_RelativeGitdirSubmodule covers the submodule shape, whose
+// .git file holds a path relative to the submodule root.
+func TestGitDirGrants_RelativeGitdirSubmodule(t *testing.T) {
+	root := t.TempDir()
+	super := filepath.Join(root, "super")
+	modGit := filepath.Join(super, ".git", "modules", "lib")
+	sub := filepath.Join(super, "lib")
+	for _, d := range []string{modGit, sub} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(sub, ".git"), []byte("gitdir: ../.git/modules/lib\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := gitDirGrants(sub, "/home/user", "")
-	if len(got) != 1 || got[0] != resolveSymlinks(modGit) {
-		t.Errorf("gitDirGrants(submodule) = %v, want [%s]", got, resolveSymlinks(modGit))
+	got := gitGrantPaths(gitDirGrants(sub, "/home/user", ""))
+	want := []string{filepath.Join(sub, ".git"), resolveSymlinks(modGit)}
+	if len(got) != len(want) || got[1] != want[1] {
+		t.Errorf("gitDirGrants(submodule) = %v, want %v", got, want)
 	}
 }
 
@@ -334,7 +407,7 @@ func TestGitDirGrants_ExplicitGitDirEnv(t *testing.T) {
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := gitDirGrants(filepath.Join(root, "work"), "/home/user", elsewhere)
+	got := gitGrantPaths(gitDirGrants(filepath.Join(root, "work"), "/home/user", elsewhere))
 	if len(got) != 1 || got[0] != resolveSymlinks(elsewhere) {
 		t.Errorf("gitDirGrants(GIT_DIR) = %v, want [%s]", got, elsewhere)
 	}
@@ -354,8 +427,10 @@ func TestGitDirGrants_RefusesPoisonedPointer(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+target+"\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if got := gitDirGrants(wt, home, ""); len(got) != 0 {
-				t.Errorf("SECURITY: poisoned .git pointing at %q granted %v, want none", target, got)
+			for _, g := range gitDirGrants(wt, home, "") {
+				if g.path == target {
+					t.Errorf("SECURITY: poisoned .git pointing at %q was granted", target)
+				}
 			}
 		})
 	}

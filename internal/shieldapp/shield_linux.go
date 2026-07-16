@@ -520,83 +520,114 @@ func cwdEnclosesHome(cwd, home string) bool {
 	return strings.HasPrefix(h, c+string(filepath.Separator))
 }
 
-// gitDirGrants returns the paths Landlock must grant read-write for git to work
-// in cwd, or nil when the cwd grant already covers it (an ordinary clone, whose
-// .git is a directory inside cwd).
+// gitGrant is a path Landlock must allow for git, tagged so the caller picks
+// directory- vs file-scoped access (a worktree's .git is a regular file, and a
+// dir-scoped mask on it makes landlock_add_rule return EINVAL).
+type gitGrant struct {
+	path  string
+	isDir bool
+}
+
+// gitDirGrants returns the paths Landlock must allow for git to work in cwd, or
+// nil when the cwd grant already covers it. Git discovers its repo by walking UP
+// from cwd, so resolution starts at cwd and ascends. See ADR 0090-grant-worktree-gitdir.
 //
-// A worktree's, submodule's, or GIT_DIR-directed .git is a regular file holding
-// "gitdir: <path>" that points OUTSIDE cwd, and <gitdir>/commondir then points
-// on to the main .git where objects/refs/config live. Landlock grants cwd only,
-// so both are denied and every git command fails. Read-write, because git writes
-// HEAD, index, refs and logs. See ADR 0090-grant-worktree-gitdir.
-//
-// The grant stops at the resolved git directories: the main repo's working files
-// are never granted, and a target that is $HOME, an ancestor of it, or a
-// credential dir is refused outright.
-func gitDirGrants(cwd, home, gitDirEnv string) []string {
+// The walk stops below $HOME: at $HOME or above, a .git is granted only by the
+// home allowlist, never by discovery.
+func gitDirGrants(cwd, home, gitDirEnv string) []gitGrant {
+	if gitDirEnv != "" {
+		return vetGitGrants(gitDirWithCommondir(gitDirEnv, cwd), home)
+	}
 	if cwd == "" {
 		return nil
 	}
-	gitdir := gitDirEnv
-	if gitdir == "" {
-		dot := filepath.Join(cwd, ".git")
-		fi, err := os.Lstat(dot)
-		if err != nil {
-			return nil // no .git — not a repo
+	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		if dir == string(filepath.Separator) || cwdEnclosesHome(dir, home) {
+			return nil // reached the root or $HOME — stop, discovery grants nothing
 		}
-		if fi.IsDir() {
-			return nil // ordinary clone — the cwd grant already covers .git
+		grants, found := gitGrantsAt(dir, cwd)
+		if found {
+			return vetGitGrants(grants, home)
 		}
-		b, err := os.ReadFile(dot)
-		if err != nil {
+		if parent := filepath.Dir(dir); parent == dir {
 			return nil
 		}
-		line := strings.TrimSpace(string(b))
-		rest, ok := strings.CutPrefix(line, "gitdir:")
-		if !ok {
-			return nil // not a gitdir pointer — nothing to resolve
+	}
+}
+
+// gitGrantsAt resolves the .git entry in dir, if any. found reports whether dir
+// is the repo root, which stops the caller's upward walk even when the grant
+// list is empty (an ordinary clone at cwd needs no grant).
+func gitGrantsAt(dir, cwd string) (grants []gitGrant, found bool) {
+	dot := filepath.Join(dir, ".git")
+	fi, err := os.Lstat(dot)
+	if err != nil {
+		return nil, false
+	}
+	if fi.IsDir() {
+		if dir == filepath.Clean(cwd) {
+			return nil, true // ordinary clone at cwd — the cwd grant covers .git
 		}
-		gitdir = strings.TrimSpace(rest)
+		return []gitGrant{{path: dot, isDir: true}}, true
 	}
+	b, err := os.ReadFile(dot)
+	if err != nil {
+		return nil, true
+	}
+	rest, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	if !ok {
+		return nil, true
+	}
+	gitdir := strings.TrimSpace(rest)
 	if gitdir == "" {
-		return nil
+		return nil, true
 	}
+	// The pointer file itself needs a read grant whenever it sits outside cwd.
+	out := []gitGrant{{path: dot, isDir: false}}
+	return append(out, gitDirWithCommondir(gitdir, dir)...), true
+}
+
+// gitDirWithCommondir resolves gitdir (relative to base) and follows its
+// commondir, which points on to the main .git where objects, refs and config
+// live — the per-worktree gitdir alone runs no git command.
+func gitDirWithCommondir(gitdir, base string) []gitGrant {
 	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Join(cwd, gitdir)
+		gitdir = filepath.Join(base, gitdir)
 	}
 	gitdir = resolveSymlinks(filepath.Clean(gitdir))
-
-	grants := []string{gitdir}
-	// commondir points from the per-worktree gitdir back at the main .git —
-	// usually "../.." — and is where objects, refs and config actually live.
-	// The worktree gitdir alone is not enough to run a single git command.
-	if b, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
-		common := strings.TrimSpace(string(b))
-		if common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(gitdir, common)
-			}
-			grants = append(grants, resolveSymlinks(filepath.Clean(common)))
-		}
+	out := []gitGrant{{path: gitdir, isDir: true}}
+	b, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return out
 	}
+	common := strings.TrimSpace(string(b))
+	if common == "" {
+		return out
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitdir, common)
+	}
+	return append(out, gitGrant{path: resolveSymlinks(filepath.Clean(common)), isDir: true})
+}
 
-	var out []string
-	for _, p := range grants {
-		if !safeGitGrant(p, home) {
+// vetGitGrants drops targets that would widen access past the git database. A
+// .git file is writable by anything that can write the checkout, so its pointer
+// is untrusted input rather than something to follow blindly.
+func vetGitGrants(grants []gitGrant, home string) []gitGrant {
+	var out []gitGrant
+	for _, g := range grants {
+		if !safeGitGrant(g.path, home) {
 			fmt.Fprintf(os.Stderr, "agentjail-shield: refusing git dir grant %s "+
-				"(encloses $HOME or is a credential dir); git may not work here\n", p)
+				"(encloses $HOME or is a credential dir); git may not work here\n", g.path)
 			continue
 		}
-		out = append(out, p)
+		out = append(out, g)
 	}
 	return out
 }
 
 // safeGitGrant rejects a gitdir target that would widen access past the git
-// database itself — $HOME, an ancestor of it, the filesystem root, or a
-// credential directory (~/.ssh, ~/.aws, ~/.gnupg). A .git file's contents are
-// attacker-controllable by anything that can write the checkout, so the pointer
-// is treated as untrusted input rather than followed blindly.
+// database itself — $HOME, an ancestor of it, the root, or a credential dir.
 func safeGitGrant(p, home string) bool {
 	if p == "" || p == string(filepath.Separator) {
 		return false
@@ -793,14 +824,21 @@ func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, erro
 	default:
 		rwPaths = append(rwPaths, cwd)
 	}
-	// A worktree/submodule keeps its real git directory outside cwd, so the cwd
-	// grant misses it and every git command fails. Granted regardless of which
-	// cwd case applied above — the gitdir is reached through the .git pointer,
-	// not through the cwd subtree. See ADR 0090-grant-worktree-gitdir.
-	rwPaths = append(rwPaths, gitDirGrants(resolvedCwd, resolvedHome, os.Getenv("GIT_DIR"))...)
 	for _, p := range rwPaths {
 		if err := allowPath(p, rwAccess); err != nil {
 			return -1, fmt.Errorf("allow %s: %w", p, err)
+		}
+	}
+	// A worktree/submodule keeps its real git directory outside cwd, and git
+	// discovers the repo by walking up from cwd, so the cwd grant misses both.
+	// See ADR 0090-grant-worktree-gitdir.
+	for _, g := range gitDirGrants(resolvedCwd, resolvedHome, os.Getenv("GIT_DIR")) {
+		access := rwFileAccess
+		if g.isDir {
+			access = rwAccess
+		}
+		if err := allowPath(g.path, access); err != nil {
+			return -1, fmt.Errorf("allow %s: %w", g.path, err)
 		}
 	}
 
