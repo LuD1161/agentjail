@@ -176,6 +176,8 @@ func (s *secretService) dismiss(ctx context.Context, prompt dbus.ObjectPath) {
 
 func (s *secretService) Name() string { return "linux-secret-service" }
 
+func (s *secretService) Tier() Tier { return TierKeychain }
+
 // attrsFor names one item. It mirrors the darwin backend's -s/-a pair; the
 // account strings themselves come from the contract, never built here.
 func attrsFor(account string) map[string]string {

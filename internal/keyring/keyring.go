@@ -61,6 +61,25 @@ func CurrentAccount() string { return currentAccount }
 // gets a new id by construction and ids never collide across rotations.
 type KEKID string
 
+// Tier names how well the KEK is protected. Callers MUST report the live tier
+// rather than a flat "encrypted": that would be a lie for TierFileKEK, and a
+// silent downgrade is the failure this whole path exists to avoid.
+// See ADR 0097-linux-kek-fallback.
+type Tier string
+
+const (
+	// TierKeychain: the KEK lives in the OS keychain and never touches our
+	// disk. Survives a whole-$HOME backup.
+	TierKeychain Tier = "os-keychain"
+
+	// TierFileKEK: the KEK is a 0600 file outside ~/.agentjail. Survives a copy
+	// of ~/.agentjail; does NOT survive a whole-$HOME backup.
+	TierFileKEK Tier = "file-kek"
+
+	// TierMemory: process-lifetime key. Tests only; Open() never selects it.
+	TierMemory Tier = "memory"
+)
+
 // Sentinel errors. Callers branch on these with errors.Is -- never on strings.
 var (
 	// ErrNoKeychain means no OS keychain is reachable: headless Linux, CI, no
@@ -100,6 +119,9 @@ type Store interface {
 	Set(account string, secret []byte) error
 	// Name identifies the backend for logs and audit events.
 	Name() string
+	// Tier reports how well this backend protects the KEK, so callers can
+	// state the posture honestly.
+	Tier() Tier
 }
 
 // Keyring wraps and unwraps DEKs under a keychain-held KEK.
@@ -122,6 +144,9 @@ func Open() (*Keyring, error) {
 
 // Backend names the store in use, for logs and audit events.
 func (k *Keyring) Backend() string { return k.store.Name() }
+
+// Tier reports how well the live backend protects the KEK.
+func (k *Keyring) Tier() Tier { return k.store.Tier() }
 
 // Wrap encrypts dek under the current KEK, binding aad. The caller puts file
 // identity in aad so a wrapped DEK cannot be lifted to another file.

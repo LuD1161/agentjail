@@ -20,6 +20,8 @@ func NewMemoryStore() *MemoryStore {
 
 func (m *MemoryStore) Name() string { return "memory" }
 
+func (m *MemoryStore) Tier() Tier { return TierMemory }
+
 func (m *MemoryStore) Get(account string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

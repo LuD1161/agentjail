@@ -41,6 +41,8 @@ func openOSStore() (Store, error) {
 
 func (darwinKeychain) Name() string { return "darwin-keychain" }
 
+func (darwinKeychain) Tier() Tier { return TierKeychain }
+
 func (darwinKeychain) Get(account string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keychainDeadline)
 	defer cancel()
