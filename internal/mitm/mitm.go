@@ -172,6 +172,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		// Buffer request body for policy evaluation (up to maxBodyScan).
 		var bodyBuf []byte
 		var fullBody io.Reader
+		var bodyCount *countingReader
 		if req.Body != nil {
 			limited := io.LimitReader(req.Body, maxBodyScan+1)
 			bodyBuf, err = io.ReadAll(limited)
@@ -181,10 +182,13 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 				h.emit(reqLog)
 				return
 			}
+			// Exact only while the body fits the scan window; past that it is
+			// the bytes seen so far, corrected once the body streams upstream.
 			reqLog.RequestSize = int64(len(bodyBuf))
 			if len(bodyBuf) > maxBodyScan {
 				// Body exceeds scan cap: chain buffered portion with remaining stream.
-				fullBody = io.MultiReader(bytes.NewReader(bodyBuf), req.Body)
+				bodyCount = &countingReader{r: io.MultiReader(bytes.NewReader(bodyBuf), req.Body)}
+				fullBody = bodyCount
 				bodyBuf = bodyBuf[:maxBodyScan]
 			} else {
 				fullBody = bytes.NewReader(bodyBuf)
@@ -256,8 +260,15 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		}
 
 		// Write request to upstream.
-		if writeErr := req.Write(upstream); writeErr != nil {
-			reqLog.Error = fmt.Sprintf("write request upstream: %v", writeErr)
+		writeReqErr := req.Write(upstream)
+		// Only the streamed body knows its own length: RequestSize was capped at
+		// the scan window until now, so every upload over 1 MiB recorded the same
+		// wrong number and D2's byte budget undercounted. See AGE-243.
+		if bodyCount != nil {
+			reqLog.RequestSize = bodyCount.n
+		}
+		if writeReqErr != nil {
+			reqLog.Error = fmt.Sprintf("write request upstream: %v", writeReqErr)
 			reqLog.ElapsedMs = time.Since(start).Milliseconds()
 			h.emit(reqLog)
 			return
@@ -315,6 +326,19 @@ type countingWriter struct {
 func (w *countingWriter) Write(p []byte) (int, error) {
 	w.n += int64(len(p))
 	return len(p), nil
+}
+
+// countingReader counts bytes read through it without storing them, so a body
+// streamed upstream can be measured without being buffered.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }
 
 func flattenHeaders(h http.Header) map[string]string {
