@@ -15,7 +15,7 @@ is installed via npm, like a human would.
 | Side | Host | Driver | Status |
 |---|---|---|---|
 | **Linux** | a Linux host | Lima/QEMU, `LIMA_HOME=$HOME/.local/share/lima` | ✅ **DONE — set up and validated end-to-end on the Linux host. Do not redo.** |
-| **macOS** | your Apple-Silicon Mac | Tart | ⬜ TODO — **this is the only part the Mac-side agent needs to do** (see "Mac side" below) |
+| **macOS** | your Apple-Silicon Mac | Tart | ✅ **DONE - `golden-macos` baked, provision + all three chaos scenarios green (AGE-236).** |
 
 ## Quick reference (both OSes)
 
@@ -103,14 +103,47 @@ stays healthy precisely when enforcement is off.
 | `chaos-hook-tamper` | hook entry stripped / settings file deleted, daemon up **and** down | hookwatch re-injects with the daemon up (ADR 0026); does **not** with the daemon down — the watchdog is a goroutine inside the daemon, blind during the outage it should mitigate; a full file delete is a pinned gap (hookwatch only repairs an existing file) |
 
 ```sh
-test/testbed/testbed.sh test <name> chaos-daemon-outage
+make chaos TESTBED=<name>                          # all three, non-zero if any fail
+test/testbed/testbed.sh test <name> chaos-daemon-outage   # just one
 ```
+
+**Status:** green on both platforms - 45 pass / 2 skip on a Linux Lima guest and
+the same 45 / 2 on a macOS Tart guest (AGE-236). Both skips are the honest kind:
+`doctor`'s `Enforcement=fail` needs a >1h gap (unit-tested instead), and
+`Restart=always` is not-macOS.
+
+**Cadence:** run locally **before pushing to `main`**, and before a major
+release. Not every PR, not minor/patch, and not in CI - this is a gate you run
+on real hardware before the change escapes, same class as `make e2e-release`.
+Nothing enforces it, so a commit has only had a chaos pass if someone ran one.
+See [ADR 0092](../../docs/adr/0092-chaos-run-cadence.md).
 
 All three are safe to re-run and restore the daemon and any config they touch on
 every exit path (`trap`). They skip cleanly when a precondition is missing (no
 systemd/launchd, daemon already down, no `sqlite3`). They are deliberately **not**
 in `record-cli-report.sh`'s list: they take minutes, and a report of a
 deliberately broken box is not the CLI tour.
+
+### The freshness guard
+
+These scenarios assert behaviour that tracks HEAD, but they drive the *installed*
+binaries. `chaos-lib.sh` compares the two and **aborts** rather than report
+results nothing verified - a hook built before the feature it is asserted against
+once produced 5 confident FAILs for code it did not contain.
+
+A guest has no checkout, so it cannot compute the expected version itself:
+`testbed.sh` passes it in as `CHAOS_EXPECTED_VERSION` (`lib.sh` `chaos_env`),
+derived from the same `git describe` the Makefile's `DIST_VERSION` uses.
+
+Practical consequence: **edit the worktree, and every chaos run aborts until you
+re-provision**, because the tree describes as `-dirty` while the installed binary
+does not. That is working as intended - re-run `provision` and the tarball is
+rebuilt from the current tree. `CHAOS_SKIP_VERSION_CHECK=1` bypasses the check
+with a loud warning; reach for it knowingly, not reflexively.
+
+Note the guard's one blind spot: `git describe --dirty` yields the same string
+for *any* dirty tree, so it cannot tell dirty-tree-A from dirty-tree-B. It
+catches stale, not different. Commit before a run you intend to trust.
 
 Two important lessons baked into the scenario:
 
