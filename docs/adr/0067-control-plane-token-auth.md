@@ -189,3 +189,43 @@ the socket inode)". That is measurably false here. The same stale premise is wha
 The grant is **left in place**; dropping it and correcting the comments is a human decision.
 Note the grant is not load-bearing on macOS either (sbpl permits the connect via
 allow-default network), so removal would be a Linux-and-macOS no-op — but that is untested.
+
+## Addendum 2: the `SSH_AUTH_SOCK` write grant measured (AGE-216 item 3.3)
+
+The same false premise had a second instance, on a different socket: `applyLandlock`
+(`shield_linux.go`) grants `rwFileAccess` on the resolved `SSH_AUTH_SOCK` when it points
+outside `/tmp`. Addendum 1 falsified the premise for `daemon.sock` but measured only that
+socket. This one is now measured too — found by grepping the class, not the instance.
+
+Host: kernel `6.1.0-44-amd64`, **Landlock ABI 2** — the same box and ABI as Addendum 1.
+Method: the same A/B, via `runLandlockAgentjailChild`, with `SSH_AUTH_SOCK` pointed at a live
+listener in `$XDG_RUNTIME_DIR` (`/run/user/<uid>`), which is outside `/tmp`.
+
+| arm | `ssh_grant` (control) | `ssh_connect` |
+|---|---|---|
+| grant present (as-is) | `live(ENXIO)` | `ok` |
+| grant removed | `absent(EACCES)` | `ok` |
+
+**The grant is a no-op for `connect()`.** Same conclusion as `daemon.sock`: withholding write
+on the socket inode withholds nothing.
+
+The result is not vacuous — three controls:
+
+- **The control flips.** `applyLandlock` grants `/run` **read-only**, so a write-flavoured
+  `open(O_WRONLY)` on that inode is permitted *only* by the single-file grant under test.
+  With the grant it returns `ENXIO` (Landlock allowed; the kernel refuses to `open` a socket);
+  without it, `EACCES`. So the grant is provably applied, and its removal provably observable —
+  while `connect()` is unmoved in both arms.
+- **The sandbox is live.** `policy_write=EACCES` and `trust_write=EACCES` in both arms.
+- **The probe can report failure.** Pointed at a listener-less path it returns
+  `ssh_connect=ERR:...no such file or directory`, not `ok`.
+
+Placement matters and is easy to get wrong: `SSH_AUTH_SOCK` must resolve **outside** `/tmp`,
+or the grant code skips it *and* `/tmp`'s blanket RW grant masks the result — two independent
+routes to a vacuous pass.
+
+The grant is **left in place**. A false rationale is not by itself proof the grant is
+unnecessary, and dropping a grant is a human decision — the same call Addendum 1 made. What
+this closes is the "suspected by argument" / "measured" gap: it is now measured. On macOS the
+allow is genuinely load-bearing (Seatbelt does model `AF_UNIX connect()` as `network-outbound`),
+which is why the macOS fix was a guard on the allow rather than its deletion.
