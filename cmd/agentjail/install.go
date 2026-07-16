@@ -1811,9 +1811,9 @@ func mergeNewMCPServers(path string, mcpSeed []string) error {
 //
 // The split keeps structured slog JSON in daemon.log (rotated by the daemon)
 // separate from raw crash/panic output in crash.log (captured by launchd).
-// launchd opens StandardErrorPath/StandardOutPath with O_TRUNC on each restart,
-// which is acceptable for crash.log but would wipe structured logs if pointed at
-// daemon.log.
+// launchd opens these O_WRONLY|O_CREAT|O_APPEND (launchd src/core.c, job_start_child),
+// so crash.log accumulates across restarts — matching systemd's `append:`.
+// See ADR 0088-deployed-supervisor-verified.
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1838,16 +1838,22 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+// renderServiceTemplate patches the four install-time placeholders shared by
+// plistTemplate and systemdUnitTemplate.
+func renderServiceTemplate(tmpl, daemonBin, rulesDir, logPath, crashLogPath string) string {
+	content := strings.ReplaceAll(tmpl, "__DAEMON_PATH__", daemonBin)
+	content = strings.ReplaceAll(content, "__RULES_DIR__", rulesDir)
+	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
+	return strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
+}
+
 // installPlist writes the launchd plist to dst with the daemon binary path,
 // rules directory, log path, and crash log path patched in.
 func installPlist(daemonBin, rulesDir, logPath, crashLogPath, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
 	}
-	content := strings.ReplaceAll(plistTemplate, "__DAEMON_PATH__", daemonBin)
-	content = strings.ReplaceAll(content, "__RULES_DIR__", rulesDir)
-	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
-	content = strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
+	content := renderServiceTemplate(plistTemplate, daemonBin, rulesDir, logPath, crashLogPath)
 	return os.WriteFile(dst, []byte(content), 0o644)
 }
 
@@ -1947,11 +1953,123 @@ func installSystemdUnit(daemonBin, rulesDir, logPath, crashLogPath, dst string) 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
 	}
-	content := strings.ReplaceAll(systemdUnitTemplate, "__DAEMON_PATH__", daemonBin)
-	content = strings.ReplaceAll(content, "__RULES_DIR__", rulesDir)
-	content = strings.ReplaceAll(content, "__LOG_PATH__", logPath)
-	content = strings.ReplaceAll(content, "__CRASH_LOG_PATH__", crashLogPath)
+	content := renderServiceTemplate(systemdUnitTemplate, daemonBin, rulesDir, logPath, crashLogPath)
 	return os.WriteFile(dst, []byte(content), 0o644)
+}
+
+// ---- deployed supervisor definition ----------------------------------------
+
+// serviceSpec is the supervisor definition agentjail intends to have on disk:
+// its path and exact bytes. One contract, per-OS content (ADR 0034); the
+// installer writes it, doctor and update compare against it.
+// See ADR 0088-deployed-supervisor-verified.
+type serviceSpec struct {
+	label   string
+	path    string
+	content string
+}
+
+// daemonServiceSpec derives the intended definition from home alone. Every
+// path the installer patches in is fixed under ~/.agentjail, so a later run
+// reconstructs exactly what install would write, with no recorded state.
+func daemonServiceSpec(home string) serviceSpec {
+	daemonBin := filepath.Join(home, ".agentjail", "bin", daemonBinaryName)
+	rulesDir := filepath.Join(home, ".agentjail", "rules")
+	logPath := filepath.Join(home, ".agentjail", "daemon.log")
+	crashLogPath := filepath.Join(home, ".agentjail", "crash.log")
+
+	if currentGOOS == "darwin" {
+		return serviceSpec{
+			label:   "launchd plist",
+			path:    filepath.Join(home, "Library", "LaunchAgents", plistFilename),
+			content: renderServiceTemplate(plistTemplate, daemonBin, rulesDir, logPath, crashLogPath),
+		}
+	}
+	return serviceSpec{
+		label:   "systemd --user unit",
+		path:    filepath.Join(systemdUserUnitDir(home), systemdUnitFilename),
+		content: renderServiceTemplate(systemdUnitTemplate, daemonBin, rulesDir, logPath, crashLogPath),
+	}
+}
+
+// restartsOnCleanExit reports whether a deployed definition restarts the daemon
+// after exit(0) — the handoff the auto-updater relies on (ADR 0070). Pure over
+// the deployed bytes so the gate is tested without a supervisor.
+// See ADR 0088-deployed-supervisor-verified.
+func restartsOnCleanExit(goos, content string) bool {
+	if goos == "darwin" {
+		return launchdKeepsAlive(content)
+	}
+	return systemdRestartDirective(content) == "always"
+}
+
+// systemdRestartDirective returns the effective Restart= value: last-one-wins,
+// matching systemd's own override semantics.
+func systemdRestartDirective(content string) string {
+	value := ""
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "Restart="); ok {
+			value = strings.TrimSpace(rest)
+		}
+	}
+	return value
+}
+
+// launchdKeepsAlive reports whether KeepAlive is the unconditional <true/>. A
+// KeepAlive <dict> is conditional (SuccessfulExit=false suppresses exactly the
+// exit(0) restart we need), so only the bare true counts.
+func launchdKeepsAlive(content string) bool {
+	const key = "<key>KeepAlive</key>"
+	i := strings.Index(content, key)
+	if i < 0 {
+		return false
+	}
+	rest := strings.TrimSpace(content[i+len(key):])
+	return strings.HasPrefix(rest, "<true/>") || strings.HasPrefix(rest, "<true />")
+}
+
+// ensureDaemonRestartPolicy rewrites the deployed definition only when it fails
+// the restart invariant, so hand-edits that keep the invariant (the plist's
+// documented EnvironmentVariables block) survive untouched. Reports whether it
+// rewrote. See ADR 0088-deployed-supervisor-verified.
+func ensureDaemonRestartPolicy(home string) (bool, error) {
+	spec := daemonServiceSpec(home)
+	b, err := os.ReadFile(spec.path)
+	if err != nil {
+		// Absent is install's job, not a repair (ADR 0086-doctor-repairs-diagnosed).
+		return false, nil
+	}
+	if restartsOnCleanExit(currentGOOS, string(b)) {
+		return false, nil
+	}
+	if err := os.WriteFile(spec.path, []byte(spec.content), 0o644); err != nil {
+		return false, fmt.Errorf("rewrite %s at %s: %w", spec.label, spec.path, err)
+	}
+	return true, nil
+}
+
+// reloadDaemonService makes the supervisor re-read the definition on disk;
+// without it systemd keeps the stale unit in memory and the daemon still
+// strands on the next exit(0).
+//
+// Named per-OS difference (ADR 0034): launchd has no reload-in-place, so its
+// unload+load restarts the daemon where systemd's daemon-reload does not.
+func reloadDaemonService(home string) error {
+	if currentGOOS == "darwin" {
+		return launchctlLoad(daemonServiceSpec(home).path)
+	}
+	if !systemdUserAvailableFn() {
+		// No session to hold stale state; the corrected unit is read at next login.
+		return nil
+	}
+	if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl --user daemon-reload: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // defaultSystemdUserAvailable reports whether a systemd --user session is

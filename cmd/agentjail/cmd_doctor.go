@@ -351,7 +351,42 @@ func daemonSocketCheck(home string) doctorCheck {
 }
 
 func checkDaemon(home string) []doctorCheck {
-	return []doctorCheck{daemonSocketCheck(home)}
+	return []doctorCheck{daemonSocketCheck(home), serviceRestartPolicyCheck(home)}
+}
+
+// serviceRestartPolicyCheck reads the DEPLOYED definition, never the template:
+// only the bytes on disk decide whether the daemon returns after the updater's
+// exit(0), and an install predating the template fix still has the old ones.
+// See ADR 0088-deployed-supervisor-verified.
+func serviceRestartPolicyCheck(home string) doctorCheck {
+	const label = "Restart policy"
+	spec := daemonServiceSpec(home)
+
+	b, err := os.ReadFile(spec.path)
+	switch {
+	case os.IsNotExist(err):
+		// Absent means no supervisor at all — an install action, not a repair
+		// (ADR 0086-doctor-repairs-diagnosed).
+		return doctorCheck{
+			label:  label,
+			status: statusFail,
+			detail: fmt.Sprintf("no %s at %s — the daemon has no supervisor. Repair: agentjail install", spec.label, spec.path),
+		}
+	case err != nil:
+		return doctorCheck{
+			label:  label,
+			status: statusFail,
+			detail: fmt.Sprintf("cannot read %s at %s: %v", spec.label, spec.path, err),
+		}
+	case !restartsOnCleanExit(currentGOOS, string(b)):
+		return doctorCheck{
+			label:  label,
+			status: statusFail,
+			repair: repairServiceDef,
+			detail: fmt.Sprintf("deployed %s will NOT restart the daemon after a clean exit — the next auto-update strands it, leaving you UNPROTECTED (ADR 0070). Repair: agentjail doctor --fix", spec.label),
+		}
+	}
+	return doctorCheck{label: label, status: statusOK, detail: fmt.Sprintf("%s restarts the daemon after a clean exit", spec.label)}
 }
 
 func checkHooks(home string) []doctorCheck {
@@ -617,8 +652,9 @@ func detectLandlockABI() int {
 type repairID string
 
 const (
-	repairDaemon   repairID = "daemon"
-	repairPathShim repairID = "path-shim"
+	repairDaemon     repairID = "daemon"
+	repairPathShim   repairID = "path-shim"
+	repairServiceDef repairID = "service-definition"
 )
 
 // repairAction is one finding's fix plus its independent re-check. recheck must
@@ -644,6 +680,22 @@ var repairRegistry = map[repairID]repairAction{
 		apply:   restorePathShim,
 		recheck: pathShimCheck,
 	},
+	repairServiceDef: {
+		label:   "rewriting the daemon's supervisor definition so it restarts after a clean exit",
+		apply:   repairDaemonServiceDefinition,
+		recheck: serviceRestartPolicyCheck,
+	},
+}
+
+// repairDaemonServiceDefinition rewrites the deployed definition and makes the
+// supervisor re-read it. Gated on serviceRestartPolicyCheck failing, so it only
+// ever overwrites a definition that is already broken
+// (ADR 0088-deployed-supervisor-verified).
+func repairDaemonServiceDefinition(home string) error {
+	if _, err := ensureDaemonRestartPolicy(home); err != nil {
+		return err
+	}
+	return reloadDaemonService(home)
 }
 
 // daemonRepairWait bounds how long the post-restart re-check waits for the
