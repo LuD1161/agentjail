@@ -18,11 +18,9 @@ const TunnelCACertName = "root.crt"
 // bind-mounts leaves every Node agent -- Claude Code included -- unable to
 // verify the MITM cert (AGE-113).
 //
-// Two paths, because the variables have two different semantics (AGE-221):
-//   - bundlePath is system roots + our CA, for the vars that REPLACE the trust
-//     store. Handing those the bare CA leaves the agent trusting only
-//     agentjail, so any TLS we do not terminate has no roots to verify against.
-//   - certPath is the bare CA, for the vars that ADD to an existing store.
+// Two paths because the vars differ: bundlePath (system roots + our CA) for the
+// ones that REPLACE the store, certPath (bare CA) for the ones that ADD to it.
+// See AGE-221.
 func TunnelCAEnv(certPath, bundlePath string) map[string]string {
 	return map[string]string{
 		// Go, curl, OpenSSL-linked tools. REPLACES the store.

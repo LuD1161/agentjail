@@ -219,15 +219,39 @@ ADR; a human reading the code should not have to scroll past it.
 
 Not the same thing, spread over twelve lines of the file.
 
+- **Hard limit: 3 lines.** Not a guideline. If the comment is longer, the
+  argument belongs in an ADR (or a doc under `docs/`) and the comment becomes a
+  TL;DR plus the slug. No exceptions for "but this one is genuinely subtle" —
+  subtle is exactly what the decision log is for.
 - **Say the constraint, name the file.** A comment earns its place by stating
   something the code cannot show — an ordering constraint, an invariant, a
   platform quirk. Then it stops and cites the slug.
 - **No history, no narration.** Never explain where code came from, what the
   next line does, or why the change is correct. That is PR-review talk and it is
   noise the moment it merges.
-- **If it doesn't fit in ~3 lines, it's an ADR** (or a doc under `docs/`). Write
-  the file, cite the slug. Do not inline the argument.
+- **Cite a slug, not a number** — `ADR 0090-persist-request-bodies (D3)`, or a
+  ticket (`AGE-231`) when the decision has no ADR. The reader can open it; you
+  do not have to retell it.
 - Applies to test files too — name what the test guards and the slug, not why.
+
+**This rule gets broken by writing, not by disagreeing.** The failure mode is
+always the same: you have just worked something out, the reasoning feels
+load-bearing, and it goes in the comment because it is in your head right now.
+That is the moment to put it in the ADR instead. If you find yourself writing
+"because", "which is why", or a second paragraph — stop, move it, cite it.
+
+```go
+// BAD — the argument inlined (this shipped, and was reverted):
+// The store holds decrypted request/response bodies -- the user's source code
+// and credentials -- and the agent runs as the same uid, so a 0600 file is no
+// boundary at all. The shield derives the names from here rather than keeping
+// its own copy; two lists of the same thing is how a Datadog key ended up in
+// this database in the first place (AGE-232). ...twelve more lines...
+
+// GOOD — the constraint, then the slug:
+// The store holds decrypted bodies and the agent shares our uid, so 0600 is not
+// a boundary. See ADR 0090-persist-request-bodies (D3).
+```
 
 ## Common workflows
 

@@ -1,13 +1,6 @@
 // Package redact owns the rules for deciding whether a key names something
-// secret-bearing. It exists because two packages were deciding that separately
-// -- internal/store by substring, internal/mitm by an exact list of eight
-// header names -- and each list had a hole the other covered:
-//
-//	Dd-Api-Key   substring "key" catches it; the exact list does not  -> leaked to network.db
-//	Cookie       the exact list catches it; no substring matches      -> would leak from the other
-//
-// One owner, both callers derive. ADR 0032 (never log credential values),
-// ADR 0019, ADR 0034 (drift is a bug). AGE-232.
+// secret-bearing. One owner: store and mitm each kept their own list, and each
+// had a hole the other covered. See ADR 0032-phantom-credentials, AGE-232.
 package redact
 
 import "strings"
