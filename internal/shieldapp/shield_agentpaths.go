@@ -131,11 +131,16 @@ func SensitiveMCPCommandDirs() []string {
 //   - macOS (shield_darwin.go) is denylist-based ((allow default) plus
 //     explicit denies), so these are added as literal file-read* denies
 //     that take precedence over the broad allow.
+//
+// The "agentjail" entry is load-bearing, not hygiene: without it the agent
+// reads the file KEK while doctor reports "encrypted".
+// See ADR 0097-linux-kek-fallback.
 func ConfigCredentialSubdirs() []string {
 	return []string{
 		"gh",         // GitHub CLI: hosts.yml holds OAuth/PAT tokens
 		"gcloud",     // gcloud CLI: access tokens, application-default credentials
 		"containers", // podman/buildah/skopeo: auth.json holds registry credentials
 		"git",        // some git credential helpers store plaintext tokens here
+		"agentjail",  // body-encryption KEK when the Linux keyring is locked
 	}
 }

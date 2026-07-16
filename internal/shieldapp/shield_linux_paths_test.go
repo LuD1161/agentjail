@@ -135,6 +135,27 @@ func TestAllowConfigDirExcludingCredentials_SkipsCredentialSubdirs(t *testing.T)
 	}
 }
 
+// The sibling test above iterates the contract, so it would still pass if the
+// KEK entry were dropped. This names the dir literally and exercises the real
+// grant loop. See ADR 0097-linux-kek-fallback.
+func TestAllowConfigDirExcludingCredentials_SkipsKEKDir(t *testing.T) {
+	configDir := t.TempDir()
+	kek := filepath.Join(configDir, "agentjail")
+	if err := os.MkdirAll(kek, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeAllow := func(path string, access uint64) error {
+		if path == kek {
+			t.Errorf("SECURITY: %s was granted read access — a shielded agent can "+
+				"read the fallback KEK and decrypt every recorded body", path)
+		}
+		return nil
+	}
+
+	allowConfigDirExcludingCredentials(configDir, fakeAllow, 0)
+}
+
 // TestAllowConfigDirExcludingCredentials_MissingDirIsNoop verifies a
 // nonexistent ~/.config does not panic or error -- it should behave like
 // allowPath's own "path absent → skip" semantics.
