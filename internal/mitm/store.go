@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/LuD1161/agentjail/internal/redact"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/sqliteutil"
@@ -161,25 +163,18 @@ func (s *RequestStore) migrate() error {
 	return nil
 }
 
-// sensitiveHeaderKeys names request/response headers whose values may carry
-// credentials and must never be persisted verbatim (ADR 0032 — "never log
-// credential values"). Keys are compared case-insensitively.
-var sensitiveHeaderKeys = map[string]struct{}{
-	"authorization":       {},
-	"proxy-authorization": {},
-	"cookie":              {},
-	"set-cookie":          {},
-	"x-api-key":           {},
-	"api-key":             {},
-	"x-auth-token":        {},
-	"authentication":      {},
-}
+// The rules live in internal/redact. This used to be an exact-match list of
+// eight names, which missed every vendor variant: a real session persisted
+// "Dd-Api-Key":"pub..." verbatim to network.db, because "dd-api-key" is not
+// literally "api-key". Enumerating header names is the thing that failed --
+// substring matching is what catches the next vendor's spelling without anyone
+// noticing it exists. ADR 0032, AGE-232.
 
 // redactedHeaderValue replaces credential header values on the persistence path.
 const redactedHeaderValue = "[REDACTED]"
 
 // redactHeaders returns a copy of h with the values of sensitive header keys
-// (see sensitiveHeaderKeys, case-insensitive) replaced by redactedHeaderValue.
+// (see internal/redact) replaced by redactedHeaderValue.
 // The input map is never mutated so callers keep the live values in memory;
 // only what reaches disk is redacted. Returns nil for a nil/empty input.
 func redactHeaders(h map[string]string) map[string]string {
@@ -188,7 +183,7 @@ func redactHeaders(h map[string]string) map[string]string {
 	}
 	out := make(map[string]string, len(h))
 	for k, v := range h {
-		if _, ok := sensitiveHeaderKeys[strings.ToLower(k)]; ok {
+		if redact.ShouldRedactKey(k) {
 			out[k] = redactedHeaderValue
 		} else {
 			out[k] = v

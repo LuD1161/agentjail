@@ -15,8 +15,9 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/redact"
 
 	"github.com/LuD1161/agentjail/internal/audit"
 )
@@ -172,14 +173,11 @@ type ReadOnlyStore interface {
 	Close() error
 }
 
-// redactKeySubstrings are the case-insensitive substrings that mark a
-// tool_input key as secret-bearing (ADR 0019). Over-broad on purpose. This
-// is the single source of truth: it backs both RedactToolInput (tool_input
-// persistence) and the audit_log Detail redaction boundary (ADR 0032).
-var redactKeySubstrings = []string{
-	"secret", "key", "token", "password", "cred",
-	"dsn", "passwd", "pw", "auth", "signature", "passphrase",
-}
+// The key-matching rules live in internal/redact. They used to live here and
+// claim to be the single source of truth while internal/mitm kept its own,
+// weaker list -- so a Datadog API key reached network.db in the clear. The
+// claim is now true because there is only one list. ADR 0019, ADR 0032,
+// AGE-232.
 
 // maxRedactedLen is the byte cap on the persisted tool_input JSON.
 const maxRedactedLen = 4096
@@ -237,14 +235,7 @@ func redactValue(v interface{}) interface{} {
 	}
 }
 
-// shouldRedactKey reports whether k case-insensitively contains any redact
-// substring.
+// shouldRedactKey reports whether k names a secret-bearing value.
 func shouldRedactKey(k string) bool {
-	lk := strings.ToLower(k)
-	for _, sub := range redactKeySubstrings {
-		if strings.Contains(lk, sub) {
-			return true
-		}
-	}
-	return false
+	return redact.ShouldRedactKey(k)
 }
