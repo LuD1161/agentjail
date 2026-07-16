@@ -232,3 +232,155 @@ func TestVisibleHomeChildren(t *testing.T) {
 		}
 	}
 }
+
+// ---- AGE-241: worktree / submodule gitdir grants ----
+
+// gitRepoFixture builds a main repo dir and returns its path. The .git is a
+// real directory, as in an ordinary clone.
+func gitRepoFixture(t *testing.T, root, name string) string {
+	t.Helper()
+	repo := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// TestGitDirGrants_OrdinaryCloneNeedsNothing guards that the common case stays
+// free of extra grants: .git is a directory inside cwd, already covered.
+func TestGitDirGrants_OrdinaryCloneNeedsNothing(t *testing.T) {
+	root := t.TempDir()
+	repo := gitRepoFixture(t, root, "main")
+	if got := gitDirGrants(repo, "/home/user", ""); got != nil {
+		t.Errorf("gitDirGrants(ordinary clone) = %v, want nil", got)
+	}
+}
+
+// TestGitDirGrants_NotARepo guards that a cwd with no .git yields no grants.
+func TestGitDirGrants_NotARepo(t *testing.T) {
+	if got := gitDirGrants(t.TempDir(), "/home/user", ""); got != nil {
+		t.Errorf("gitDirGrants(no .git) = %v, want nil", got)
+	}
+}
+
+// TestGitDirGrants_WorktreeGrantsGitdirAndCommondir is the AGE-241 regression
+// guard: a worktree's real gitdir AND the main .git it points on to via
+// commondir must both be granted, or no git command works in a worktree.
+func TestGitDirGrants_WorktreeGrantsGitdirAndCommondir(t *testing.T) {
+	root := t.TempDir()
+	main := gitRepoFixture(t, root, "main")
+	mainGit := filepath.Join(main, ".git")
+	wtGitdir := filepath.Join(mainGit, "worktrees", "wt")
+	if err := os.MkdirAll(wtGitdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// commondir points back at the main .git, relative to the worktree gitdir.
+	if err := os.WriteFile(filepath.Join(wtGitdir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(root, "wt")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGitdir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := gitDirGrants(wt, "/home/user", "")
+	want := []string{resolveSymlinks(wtGitdir), resolveSymlinks(mainGit)}
+	if len(got) != len(want) {
+		t.Fatalf("gitDirGrants(worktree) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("grant[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// The grant must stop at the git database — never the parent checkout.
+	for _, g := range got {
+		if g == main {
+			t.Errorf("SECURITY: grant widened to the parent checkout %q", main)
+		}
+	}
+}
+
+// TestGitDirGrants_RelativeGitdirSubmodule covers the submodule shape, whose
+// .git file holds a path relative to cwd ("../.git/modules/x").
+func TestGitDirGrants_RelativeGitdirSubmodule(t *testing.T) {
+	root := t.TempDir()
+	super := gitRepoFixture(t, root, "super")
+	modGit := filepath.Join(super, ".git", "modules", "lib")
+	if err := os.MkdirAll(modGit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(super, "lib")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".git"), []byte("gitdir: ../.git/modules/lib\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := gitDirGrants(sub, "/home/user", "")
+	if len(got) != 1 || got[0] != resolveSymlinks(modGit) {
+		t.Errorf("gitDirGrants(submodule) = %v, want [%s]", got, resolveSymlinks(modGit))
+	}
+}
+
+// TestGitDirGrants_ExplicitGitDirEnv covers GIT_DIR taking precedence over the
+// .git file, per git's own resolution order.
+func TestGitDirGrants_ExplicitGitDirEnv(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := filepath.Join(root, "elsewhere.git")
+	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := gitDirGrants(filepath.Join(root, "work"), "/home/user", elsewhere)
+	if len(got) != 1 || got[0] != resolveSymlinks(elsewhere) {
+		t.Errorf("gitDirGrants(GIT_DIR) = %v, want [%s]", got, elsewhere)
+	}
+}
+
+// TestGitDirGrants_RefusesPoisonedPointer is the security guard: a .git file is
+// writable by anything that can write the checkout, so a pointer aimed at $HOME
+// or a credential dir must be refused rather than followed into a wide grant.
+func TestGitDirGrants_RefusesPoisonedPointer(t *testing.T) {
+	home := t.TempDir()
+	for _, target := range []string{home, filepath.Dir(home), "/", filepath.Join(home, ".ssh")} {
+		t.Run(target, func(t *testing.T) {
+			wt := filepath.Join(t.TempDir(), "wt")
+			if err := os.MkdirAll(wt, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+target+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := gitDirGrants(wt, home, ""); len(got) != 0 {
+				t.Errorf("SECURITY: poisoned .git pointing at %q granted %v, want none", target, got)
+			}
+		})
+	}
+}
+
+// TestSafeGitGrant verifies the pointer-target guard in isolation.
+func TestSafeGitGrant(t *testing.T) {
+	const home = "/home/user"
+	cases := []struct {
+		name, path string
+		want       bool
+	}{
+		{"normal gitdir", "/home/user/work/main/.git/worktrees/wt", true},
+		{"is home", home, false},
+		{"ancestor of home", "/home", false},
+		{"root", "/", false},
+		{"ssh dir", "/home/user/.ssh", false},
+		{"aws subdir", "/home/user/.aws/x", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := safeGitGrant(c.path, home); got != c.want {
+				t.Errorf("safeGitGrant(%q, %q) = %v, want %v", c.path, home, got, c.want)
+			}
+		})
+	}
+}
