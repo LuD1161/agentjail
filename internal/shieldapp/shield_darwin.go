@@ -17,7 +17,6 @@ import (
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
-	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
@@ -633,7 +632,7 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// same-specificity rules, and the unfiltered (deny network*) below does not
 	// override an earlier filtered allow, so it cannot backstop these.
 	// Defence-in-depth, not the boundary. See ADR 0067-control-plane-token-auth.
-	for _, p := range controlSocketPaths(home) {
+	for _, p := range ControlSocketPaths(home) {
 		fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", p)
 	}
 	sb.WriteString("\n")
@@ -646,43 +645,70 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	return sb.String()
 }
 
-// controlSocketPaths returns every agentjail control-plane socket that a
-// sandboxed agent must never reach, for the given home.
+// resolvePathBestEffort canonicalizes s as far as the filesystem allows.
 //
-// One source of truth (ADR 0034): the sbpl backend translates this list into
-// deny rules; it never re-lists the paths itself. Note secrets.sock lives at
-// ~/.agentjail/secrets.sock while the other two live under ~/.agentjail/run/,
-// so this cannot be collapsed into a single subpath rule.
-func controlSocketPaths(home string) []string {
-	return []string{
-		proxyctl.ControlSocketPathForHome(home),
-		grantctl.ControlSocketPathForHome(home),
-		sandbox.SecretsSocketPathForHome(home),
+// filepath.EvalSymlinks fails outright if the final path component does not
+// exist yet -- the common case here, since a control socket is often named
+// (e.g. via SSH_AUTH_SOCK, or a not-yet-bound listener path) before anything
+// has bound it. A naive fallback to filepath.Clean(s) on that failure leaves
+// two gaps this function closes: it does not resolve a symlinked ancestor
+// directory (e.g. /tmp -> /private/tmp on macOS) that appears earlier in the
+// path than the missing component, and it never canonicalizes at all once
+// EvalSymlinks fails once.
+//
+// Instead, this walks up from s to the deepest EXISTING ancestor directory,
+// resolves that ancestor's symlinks, and re-appends the (unresolved)
+// remainder -- so a symlinked ancestor is always canonicalized even when the
+// leaf does not exist. Falls back to filepath.Clean(s) only if no ancestor
+// (down to the filesystem root) can be resolved.
+//
+// This is a fail-closed security guard (isControlSocketPath below), so it
+// errs toward returning a MORE canonical -- not less -- form on any doubt.
+func resolvePathBestEffort(s string) string {
+	cur := filepath.Clean(s)
+	var suffix string
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			if suffix == "" {
+				return filepath.Clean(resolved)
+			}
+			return filepath.Clean(filepath.Join(resolved, suffix))
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			// Reached the filesystem root without resolving anything.
+			break
+		}
+		base := filepath.Base(cur)
+		if suffix == "" {
+			suffix = base
+		} else {
+			suffix = filepath.Join(base, suffix)
+		}
+		cur = parent
 	}
+	return filepath.Clean(s)
 }
 
 // isControlSocketPath reports whether p names an agentjail control-plane
 // socket, or lives in the directory that holds them.
 //
-// Compares resolved paths so a symlink or an unclean path (/tmp vs /private/tmp,
-// trailing "..") cannot smuggle a control socket past the check. Errs toward
-// "yes, it is a control socket" -- a false positive costs one ssh-agent allow,
-// a false negative silently widens the control plane.
+// Canonicalizes both p and each control-socket path via
+// resolvePathBestEffort before comparing, so neither a symlinked ancestor
+// (e.g. /tmp vs /private/tmp) nor an unclean path (trailing "..") nor a
+// not-yet-bound socket (EvalSymlinks fails on a missing final component) can
+// smuggle a control socket past the check. Errs toward "yes, it is a control
+// socket" -- a false positive costs one ssh-agent allow, a false negative
+// silently widens the control plane.
 func isControlSocketPath(p, home string) bool {
-	resolve := func(s string) string {
-		if r, err := filepath.EvalSymlinks(s); err == nil {
-			return r
-		}
-		return filepath.Clean(s)
-	}
-	rp := resolve(p)
-	for _, c := range controlSocketPaths(home) {
-		if rp == resolve(c) || filepath.Clean(p) == filepath.Clean(c) {
+	rp := resolvePathBestEffort(p)
+	for _, c := range ControlSocketPaths(home) {
+		if rp == resolvePathBestEffort(c) || filepath.Clean(p) == filepath.Clean(c) {
 			return true
 		}
 	}
 	// Anything inside the control-socket dir counts, even if not yet bound.
-	ctlDir := resolve(proxyctl.ControlSocketDirForHome(home))
+	ctlDir := resolvePathBestEffort(proxyctl.ControlSocketDirForHome(home))
 	rel, err := filepath.Rel(ctlDir, rp)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

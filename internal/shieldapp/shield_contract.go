@@ -21,6 +21,9 @@ import (
 	"strconv"
 
 	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/grantctl"
+	"github.com/LuD1161/agentjail/internal/proxyctl"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 // AccessMode is the access level granted for a PathGrant.
@@ -364,4 +367,22 @@ func AppendShieldedEnv(env []string, s SandboxState) []string {
 		return env
 	}
 	return append(env, "AGENTJAIL_SHIELDED=1")
+}
+
+// ControlSocketPaths is the OS-agnostic source of truth for every control-plane
+// AF_UNIX socket a sandboxed agent must never reach.
+//
+// darwin translates these into sbpl denies, emitted last. Linux does NOT enforce
+// this by path — Landlock does not mediate AF_UNIX connect(); the control token
+// is the boundary there. Named non-parity, not an omission.
+// See ADR 0067-control-plane-token-auth.
+//
+// Not collapsible to one subpath rule: secrets.sock is at ~/.agentjail/secrets.sock,
+// the other two under ~/.agentjail/run/.
+func ControlSocketPaths(home string) []string {
+	return []string{
+		proxyctl.ControlSocketPathForHome(home),
+		grantctl.ControlSocketPathForHome(home),
+		sandbox.SecretsSocketPathForHome(home),
+	}
 }

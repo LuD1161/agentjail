@@ -4,6 +4,8 @@ package shieldapp
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,7 +38,7 @@ func ctlProfile(t *testing.T) string {
 // profile denied "the control socket paths".
 func TestDarwinEveryControlSocketHasExplicitDeny(t *testing.T) {
 	profile := ctlProfile(t)
-	for _, p := range controlSocketPaths(testHome) {
+	for _, p := range ControlSocketPaths(testHome) {
 		want := fmt.Sprintf("(deny network-outbound\n    (literal %q))", p)
 		if !strings.Contains(profile, want) {
 			t.Errorf("profile missing explicit deny for control socket %s\nwant rule:\n%s", p, want)
@@ -54,7 +56,7 @@ func TestDarwinControlSocketDeniesEmittedAfterAllNetworkAllows(t *testing.T) {
 	if lastAllow == -1 {
 		t.Fatal("no (allow network-outbound ...) in profile; test would be vacuous")
 	}
-	for _, p := range controlSocketPaths(testHome) {
+	for _, p := range ControlSocketPaths(testHome) {
 		deny := fmt.Sprintf("(deny network-outbound\n    (literal %q))", p)
 		at := strings.Index(profile, deny)
 		if at == -1 {
@@ -74,7 +76,7 @@ func TestDarwinControlSocketDeniesEmittedAfterAllNetworkAllows(t *testing.T) {
 // shield's env at generation time). An allow naming a control socket must never
 // be emitted, independent of ordering.
 func TestDarwinSSHAuthSockGuardSuppressesControlSocketAllow(t *testing.T) {
-	for _, sock := range controlSocketPaths(testHome) {
+	for _, sock := range ControlSocketPaths(testHome) {
 		t.Setenv("SSH_AUTH_SOCK", sock)
 		profile := ctlProfile(t)
 		bad := fmt.Sprintf("(allow network-outbound\n    (path %q))", sock)
@@ -101,28 +103,93 @@ func TestDarwinSSHAuthSockLegitimatePathStillAllowed(t *testing.T) {
 	}
 }
 
-// controlSocketPaths is the single source of truth (ADR 0034). If a socket is
+// ControlSocketPaths is the single source of truth (ADR 0034). If a socket is
 // added to the control plane and not to this list, the deny is silently missing
 // -- exactly how secrets.sock ended up uncovered.
 func TestDarwinControlSocketPathsCoversKnownSockets(t *testing.T) {
-	got := controlSocketPaths(testHome)
+	got := ControlSocketPaths(testHome)
 	want := []string{
 		proxyctl.ControlSocketPathForHome(testHome),
 		grantctl.ControlSocketPathForHome(testHome),
 		sandbox.SecretsSocketPathForHome(testHome),
 	}
 	if len(got) != len(want) {
-		t.Fatalf("controlSocketPaths returned %d paths, want %d: %v", len(got), len(want), got)
+		t.Fatalf("ControlSocketPaths returned %d paths, want %d: %v", len(got), len(want), got)
 	}
 	for i, w := range want {
 		if got[i] != w {
-			t.Errorf("controlSocketPaths[%d] = %s, want %s", i, got[i], w)
+			t.Errorf("ControlSocketPaths[%d] = %s, want %s", i, got[i], w)
 		}
 	}
 	// secrets.sock is NOT under run/ -- guard the layout assumption that a
 	// single subpath rule would silently get wrong.
 	if strings.HasPrefix(sandbox.SecretsSocketPathForHome(testHome), proxyctl.ControlSocketDirForHome(testHome)) {
 		t.Error("secrets.sock is now under the run/ dir; the deny rules could be collapsed, but check the probe first")
+	}
+}
+
+// TestDarwinIsControlSocketPathTmpSymlinkCanonicalization proves the
+// resolvePathBestEffort fix by execution: an unbound control socket named
+// through an ALIASED PARENT must still be recognized.
+//
+// This test deliberately targets secrets.sock, and deliberately passes home in
+// its resolved (/private/tmp) form while naming the socket in its aliased
+// (/tmp) form. Both choices are load-bearing -- an earlier version of this test
+// used netproxy-ctl.sock with home in /tmp form and could not fail:
+//
+//   - secrets.sock lives at ~/.agentjail/secrets.sock, OUTSIDE the control-socket
+//     dir, so it is guarded ONLY by the exact-path comparison. The two run/ sockets
+//     are caught by the separate "inside ctlDir" check, which resolves an EXISTING
+//     directory and therefore succeeds even with a broken path resolver -- masking
+//     the bug entirely.
+//   - naming home and the probe path through the SAME alias makes both sides fall
+//     back to filepath.Clean identically, so they compare equal by accident.
+//
+// The socket file itself is never created: EvalSymlinks fails on a missing leaf,
+// which is exactly the case (profile generated before the socket is bound) the
+// old Clean-only fallback got wrong. Mutation-tested -- reverting
+// resolvePathBestEffort to the Clean-only fallback fails this test.
+func TestDarwinIsControlSocketPathTmpSymlinkCanonicalization(t *testing.T) {
+	fi, err := os.Lstat("/tmp")
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Skip("/tmp is not a symlink on this system; the aliasing this test targets does not apply")
+	}
+
+	// Home in RESOLVED form, so the control-socket path the guard compares
+	// against is /private/tmp/... while the probe below names /tmp/... .
+	aliasedHome, err := os.MkdirTemp("/tmp", "age216-ctlsock-home-")
+	if err != nil {
+		t.Fatalf("MkdirTemp under /tmp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(aliasedHome) })
+
+	resolvedHome, err := filepath.EvalSymlinks(aliasedHome)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", aliasedHome, err)
+	}
+	if resolvedHome == aliasedHome {
+		t.Skipf("%s did not resolve to a distinct path; nothing to canonicalize", aliasedHome)
+	}
+
+	// The parent must exist so a correct resolver has an ancestor to resolve;
+	// the socket leaf must NOT, so EvalSymlinks on the full path fails.
+	if err := os.MkdirAll(filepath.Join(resolvedHome, ".agentjail"), 0o700); err != nil {
+		t.Fatalf("MkdirAll ~/.agentjail: %v", err)
+	}
+	aliasedSecrets := sandbox.SecretsSocketPathForHome(aliasedHome)
+	if _, err := os.Lstat(aliasedSecrets); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s must not exist (err=%v)", aliasedSecrets, err)
+	}
+
+	// The guard resolves home to /private/tmp/...; we hand it the /tmp/... alias
+	// of the same socket. A Clean-only resolver leaves these unequal and, since
+	// secrets.sock is outside the ctlDir, returns false -- emitting an
+	// (allow network-outbound) for the credential broker's socket.
+	if !isControlSocketPath(aliasedSecrets, resolvedHome) {
+		t.Errorf("isControlSocketPath(%q, home=%q) = false, want true.\n"+
+			"An unbound secrets.sock named through the /tmp alias evaded the guard; "+
+			"SSH_AUTH_SOCK set to this path would emit an allow rule for the credential broker.",
+			aliasedSecrets, resolvedHome)
 	}
 }
 
@@ -139,6 +206,13 @@ func TestDarwinIsControlSocketPath(t *testing.T) {
 		{"unclean traversal into ctl dir", testHome + "/.agentjail/run/../run/daemon-ctl.sock", true},
 		{"legit launchd listener", "/private/tmp/com.apple.launchd.x/Listeners", false},
 		{"unrelated home path", testHome + "/.ssh/agent.sock", false},
+		// testHome ("/Users/testuser") does not exist, so these exercise the
+		// nonexistent-final-component path through resolvePathBestEffort:
+		// EvalSymlinks fails on the leaf (and on every ancestor here, since
+		// none of /Users/testuser/... exists either), so resolution falls
+		// back to filepath.Clean -- the guard must still catch these.
+		{"not-yet-bound socket inside ctl dir", proxyctl.ControlSocketDirForHome(testHome) + "/never-bound.sock", true},
+		{"unclean secrets socket path", testHome + "/.agentjail/./secrets.sock", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
