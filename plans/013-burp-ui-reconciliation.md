@@ -1,5 +1,14 @@
 # Plan 013 — reconciling three network UIs into one
 
+> **OVERRIDDEN IN PART (maintainer, 2026-07-15): the SPA is kept.** This plan
+> recommended rejecting the React/Shadcn/TanStack frontend. The maintainer's
+> call is to keep it — it exists, it works, and redoing it makes no sense. The
+> build-break and npm-attribution defects this plan found are real and become
+> the work of **AGE-251**, not a reason to walk away. Everything else here still
+> stands: `/api/network/*` wins as the API, port the Burp detail panel rather
+> than resurrecting `/network` as a second page, and the contract-test
+> requirement applies regardless of which UI renders it.
+
 **Status:** Proposed. Investigation only; no code changed.
 **Branch:** `feat/network-visibility`
 **Related:** [ADR 0092-persist-request-bodies](../docs/adr/0092-persist-request-bodies.md), AGE-79, AGE-111, AGE-149.
