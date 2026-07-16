@@ -2,12 +2,12 @@
 # AGE-216 item 3 - executed inside a clean, UNSHIELDED macOS guest.
 set -uo pipefail
 
-KIT=/Users/admin/probe-kit
+KIT="${KIT:-/Users/admin/probe-kit}"
 PROBE="$KIT/probe-bin"
 SHIELD="$KIT/agentjail-shield"
-PROBE_HOME=/Users/admin/ajprobe-run
+PROBE_HOME="${PROBE_HOME:-/Users/admin/ajprobe-run}"
 RUN="$PROBE_HOME/.agentjail/run"
-WORK=/private/tmp/probe-work
+WORK="${WORK:-/private/tmp/probe-work}"
 
 # Hygiene gates (AGE-216): fail loudly rather than silently produce a fake pass.
 [ -z "${AGENTJAIL_SHIELDED:-}" ] || { echo "FATAL: shielded"; exit 2; }

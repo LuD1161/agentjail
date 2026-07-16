@@ -49,7 +49,19 @@ venue.
 against the generated profile on the guest - use it whenever a generator change makes that
 test fail in-shield, to tell a real regression from the nesting artifact above.
 
-`run-probe.sh` is the host-side variant (unshielded Mac, builds everything itself).
+The `guest-*.sh` scripts are the only probe implementation - there is deliberately no
+second host-side copy. `KIT`, `PROBE_HOME` and `WORK` are overridable, so the same scripts
+run directly on an unshielded Mac without a VM:
+
+    KIT=/tmp/probe-kit PROBE_HOME="$HOME/ajprobe-run" bash guest-probe.sh
+
+A separate host-side runner (`run-probe.sh`) existed and was deleted in the AGE-216
+review: it had drifted from these scripts on both counts that matter - it looked for
+`secrets.sock` under `run/` (it is not there; see `sandbox.SecretsSocketPathForHome`), so
+it probed a path with no server and no rule, and its mutation step was the
+`grep -v <sock>` trap described above, which silently tests nothing. A probe that has
+drifted is worse than no probe: it produces confident, wrong evidence. One copy only.
+
 Binaries copied into the guest need an ad-hoc re-sign (`codesign --force -s -`) or the
 kernel SIGKILLs them; pure-Go binaries also need `-ldflags=-linkmode=external`, since
 internal linking omits `LC_UUID` and dyld then refuses to exec them.
@@ -113,11 +125,29 @@ Re-measured on the same clean guest with the fixed binary:
   `bind_tmp=ok`, `bindconnect_tmpdir=ok`, `write_tmpdir=ok`, `write_vardb=denied`,
   `connect_tmp=denied`.
 
-The explicit denies remain **not** what stops an agent today - the catch-all still does
-that (M1/M2 are unchanged). They are defence-in-depth, and they become load-bearing the
-moment an allow grows to cover a control-socket path, which is exactly what `SSH_AUTH_SOCK`
-did. `internal/shieldapp/shield_darwin_ctlsocket_test.go` guards the ordering in CI, where
-`sandbox-exec` cannot be trusted to run.
+For the two `run/` sockets the explicit denies remain **not** what stops an agent today -
+the catch-all still does that (M1/M2 are unchanged). They are defence-in-depth, and they
+become load-bearing the moment an allow grows to cover a control-socket path, which is
+exactly what `SSH_AUTH_SOCK` did. `internal/shieldapp/shield_darwin_ctlsocket_test.go`
+guards the ordering in CI, where `sandbox-exec` cannot be trusted to run.
+
+**`secrets.sock` is the exception, and it changed with the fix.** The M3 row above records
+the *pre-fix* state: with the catch-all removed, `secrets.sock` was `CONNECT_OK`, because
+it had no deny of its own. Re-running `guest-mutate.sh` against the fixed binary now gives
+**M3 → DENIED**: the explicit `secrets.sock` deny added here stands on its own, without the
+catch-all. So for that socket the defence-in-depth is no longer hypothetical - it is the
+one control-socket deny that is measurably load-bearing under mutation. `guest-mutate.sh`'s
+M3 step states the post-fix expectation (`DENIED`) and records the pre-fix answer as
+history, so the runnable script and this table cannot disagree.
+
+## Independent re-verification (AGE-216 review)
+
+Everything above was re-measured from scratch on a clean `tb-release-gate` guest by a
+second, unshielded session that did not trust the original numbers: E0 `CONNECT_OK`,
+E1 `DENIED`, E2 last-match-wins, E2c `CONNECT_OK` (catch-all does not beat a filtered
+allow), E3 all three `DENIED` with all three explicit denies present, E5 `DENIED`. M1/M2
+still `DENIED`; M3 `DENIED` per the paragraph above. `TestSandboxExec_DarwinTempDirCarveOuts`
+passes unshielded, where it is a valid signal.
 
 ## Mutation testing is mandatory here
 

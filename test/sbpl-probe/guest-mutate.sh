@@ -4,10 +4,10 @@
 # network-outbound" -> sbpl syntax error, so the gate was never exercised.
 # Here we remove the WHOLE rule and assert the profile still compiles.
 set -uo pipefail
-KIT=/Users/admin/probe-kit
+KIT="${KIT:-/Users/admin/probe-kit}"
 PROBE="$KIT/probe-bin"; SHIELD="$KIT/agentjail-shield"
-PROBE_HOME=/Users/admin/ajprobe-run; RUN="$PROBE_HOME/.agentjail/run"
-WORK=/private/tmp/probe-work; mkdir -p "$RUN" "$WORK"; cd "$WORK" || exit 2
+PROBE_HOME="${PROBE_HOME:-/Users/admin/ajprobe-run}"; RUN="$PROBE_HOME/.agentjail/run"
+WORK="${WORK:-/private/tmp/probe-work}"; mkdir -p "$RUN" "$WORK"; cd "$WORK" || exit 2
 NP="$RUN/netproxy-ctl.sock"; DM="$RUN/daemon-ctl.sock"; SE="$PROBE_HOME/.agentjail/secrets.sock"
 
 pids=(); for s in "$NP" "$DM" "$SE"; do "$PROBE" server "$s" >/dev/null 2>&1 & pids+=($!); done
@@ -47,12 +47,17 @@ echo "  profile compiles? -> $(/usr/bin/sandbox-exec -f mut2.sbpl /bin/echo COMP
 echo "  daemon-ctl.sock   -> $(sbx mut2.sbpl "$DM")"
 
 echo
-echo "=== M3  WHY is secrets.sock denied when it has NO deny rule?"
-echo "     Hypothesis: the (deny network*) catch-all covers it."
+echo "=== M3  MUTATION: remove ONLY the (deny network*) catch-all"
+echo "     Pre-AGE-216 this asked 'why is secrets.sock denied when it has NO deny"
+echo "     rule?', and the answer was: the catch-all alone covered it (CONNECT_OK"
+echo "     once removed). The fix gave secrets.sock its own explicit deny, so the"
+echo "     EXPECTED RESULT CHANGED. See README 'After the fix'."
 grep -v '^(deny network\*)$' real.sbpl > mut3.sbpl
 echo "  removed catch-all; compiles? -> $(/usr/bin/sandbox-exec -f mut3.sbpl /bin/echo COMPILES 2>&1 | head -1)"
 echo "  secrets.sock      -> $(sbx mut3.sbpl "$SE")"
-echo "     ^ CONNECT_OK => secrets.sock is gated ONLY by the catch-all, not an explicit deny"
+echo "     ^ EXPECT DENIED post-fix => the explicit secrets.sock deny stands on its"
+echo "       own without the catch-all (measurably load-bearing, not just DiD)."
+echo "       CONNECT_OK here => the explicit deny regressed or was never emitted."
 echo "  netproxy-ctl.sock -> $(sbx mut3.sbpl "$NP")"
 echo "     ^ still DENIED => its explicit deny stands on its own"
 echo

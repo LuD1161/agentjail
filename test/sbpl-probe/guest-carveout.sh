@@ -3,8 +3,8 @@
 # FIXED shield profile, on a clean unshielded guest where sandbox_apply is not
 # constrained by an already-applied profile.
 set -uo pipefail
-KIT=/Users/admin/probe-kit
-WORK=/private/tmp/carveout; mkdir -p "$WORK"; cd "$WORK" || exit 2
+KIT="${KIT:-/Users/admin/probe-kit}"
+WORK="${WORK:-/private/tmp/carveout}"; mkdir -p "$WORK"; cd "$WORK" || exit 2
 
 HOME_REAL=/Users/admin
 AGENTJAIL_NETPROXY="$KIT/agentjail-netproxy" "$KIT/agentjail-shield" --profile-print -- /bin/echo hi 2>raw
