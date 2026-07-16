@@ -328,19 +328,41 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 func TestBodyEncryptionPostureAdvice(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		backend    string
+		posture    bodyKEKPosture
 		err        error
 		wantStatus checkStatus
 		wantSubstr []string
 		notSubstr  []string
 	}{
 		{
-			name:       "kek available names the backend",
-			backend:    "secret-service",
+			name:       "keychain tier names the backend and the tier",
+			posture:    bodyKEKPosture{tier: keyring.TierKeychain, backend: "secret-service"},
 			err:        nil,
 			wantStatus: statusOK,
-			wantSubstr: []string{"secret-service"},
+			wantSubstr: []string{"secret-service", "os-keychain", "whole-$HOME backup"},
+			notSubstr:  []string{"IN THE CLEAR", "REDUCED"},
+		},
+		{
+			name:       "file-kek tier is ok but qualified",
+			posture:    bodyKEKPosture{tier: keyring.TierFileKEK, backend: "file-kek"},
+			err:        nil,
+			wantStatus: statusOK,
+			wantSubstr: []string{"REDUCED", "file-kek", "~/.config/agentjail/kek", "0600", "does NOT survive a whole-$HOME backup"},
 			notSubstr:  []string{"IN THE CLEAR"},
+		},
+		{
+			name:       "memory tier warns it is not durable",
+			posture:    bodyKEKPosture{tier: keyring.TierMemory, backend: "memory"},
+			err:        nil,
+			wantStatus: statusWarn,
+			wantSubstr: []string{"memory", "unreadable"},
+		},
+		{
+			name:       "unknown tier refuses to state a posture",
+			posture:    bodyKEKPosture{tier: keyring.Tier("wat"), backend: "stub"},
+			err:        nil,
+			wantStatus: statusWarn,
+			wantSubstr: []string{"unknown tier"},
 		},
 		{
 			name:       "locked advises unlocking",
@@ -364,7 +386,7 @@ func TestBodyEncryptionPostureAdvice(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := bodyEncryptionCheck(tc.backend, tc.err)
+			c := bodyEncryptionCheck(tc.posture, tc.err)
 			if c.status != tc.wantStatus {
 				t.Errorf("status = %q, want %q (detail: %s)", c.status, tc.wantStatus, c.detail)
 			}
@@ -386,7 +408,7 @@ func TestBodyEncryptionPostureAdvice(t *testing.T) {
 // clear, and doctor must not start exiting non-zero for it.
 func TestBodyEncryptionNeverGatesExitOrRepairs(t *testing.T) {
 	for _, err := range []error{nil, keyring.ErrKeychainLocked, keyring.ErrNoKeychain, errors.New("boom")} {
-		c := bodyEncryptionCheck("stub", err)
+		c := bodyEncryptionCheck(bodyKEKPosture{tier: keyring.TierKeychain, backend: "stub"}, err)
 		if c.status == statusFail {
 			t.Errorf("err=%v gave statusFail; degraded encryption must never fail doctor", err)
 		}
@@ -404,12 +426,34 @@ func TestBodyEncryptionNeverGatesExitOrRepairs(t *testing.T) {
 // The keychain hands the same secret to a same-uid agent, so no detail may
 // claim otherwise (keyring package doc; ADR 0092 D3 is the agent control).
 func TestBodyEncryptionNeverClaimsAgentProtection(t *testing.T) {
-	for _, err := range []error{nil, keyring.ErrKeychainLocked, keyring.ErrNoKeychain} {
-		d := strings.ToLower(bodyEncryptionCheck("stub", err).detail)
-		for _, banned := range []string{"from the agent", "against the agent", "protects the agent", "agent cannot read"} {
-			if strings.Contains(d, banned) {
-				t.Errorf("err=%v detail implies protection against the agent (%q): %s", err, banned, d)
+	for _, tier := range []keyring.Tier{keyring.TierKeychain, keyring.TierFileKEK, keyring.TierMemory} {
+		for _, err := range []error{nil, keyring.ErrKeychainLocked, keyring.ErrNoKeychain} {
+			d := strings.ToLower(bodyEncryptionCheck(bodyKEKPosture{tier: tier, backend: "stub"}, err).detail)
+			for _, banned := range []string{"from the agent", "against the agent", "protects the agent", "agent cannot read"} {
+				if strings.Contains(d, banned) {
+					t.Errorf("tier=%s err=%v detail implies protection against the agent (%q): %s", tier, err, banned, d)
+				}
 			}
 		}
+	}
+}
+
+// The anti-silent-downgrade guard (ADR 0097-linux-kek-fallback): a file KEK
+// falls to a whole-$HOME backup, so its message may never read as a flat
+// "encrypted". Deleting the caveat must break this test, not pass quietly.
+func TestBodyEncryptionFileKEKStatesBackupLimitation(t *testing.T) {
+	c := bodyEncryptionCheck(bodyKEKPosture{tier: keyring.TierFileKEK, backend: "file-kek"}, nil)
+
+	if !strings.Contains(c.detail, "does NOT survive a whole-$HOME backup") {
+		t.Fatalf("file-kek detail omits the whole-$HOME-backup limitation, which flattens it to an\n"+
+			"equivalent of the keychain tier — the exact silent downgrade AGE-254 exists to prevent.\ndetail: %s", c.detail)
+	}
+	// The qualification is worthless if the key's location is not named.
+	if !strings.Contains(c.detail, "~/.config/agentjail/kek") {
+		t.Errorf("file-kek detail does not name the key file: %s", c.detail)
+	}
+	// Naming os-keychain as the stronger tier is honest; claiming to BE it is not.
+	if !strings.HasPrefix(c.detail, "on, REDUCED (file-kek)") {
+		t.Errorf("file-kek detail does not announce its reduced tier up front: %s", c.detail)
 	}
 }
