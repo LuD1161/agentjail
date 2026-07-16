@@ -141,7 +141,7 @@ func NewHookOPAEngineWithData(ctx context.Context, modules [][2]string, agentjai
 		// Type-check every input.* reference against HookInput's shape, and
 		// reject unused vars / unsafe refs. A typo'd reference is now a
 		// compile error here instead of a rule that silently never fires
-		// (ADR 0016 addendum; AGE-218).
+		// (ADR 0080-rego-both-tiers addendum; AGE-218).
 		rego.Schemas(schemas),
 		rego.Strict(true),
 	)

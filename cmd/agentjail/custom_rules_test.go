@@ -220,7 +220,7 @@ candidate contains r if {
 // The AGE-218 regression test: a rule referencing a field that is not on the
 // hook input document must fail to install.
 //
-// This is the failure ADR 0016 accepted as a known cost. Before the input
+// This is the failure ADR 0080-rego-both-tiers accepted as a known cost. Before the input
 // schema was wired, this file installed successfully — it is valid Rego, the
 // authoring contract passes, and the bundle compiles. It just never fired.
 // A silent no-op is the worst outcome for a security rule: it looks installed
@@ -229,7 +229,7 @@ func TestPolicyAdd_RejectsUnknownInputRef(t *testing.T) {
 	_, rulesPath := setupFakeHome(t)
 
 	// input.aws_accont — a typo for input.aws_account. This is the verbatim
-	// example ADR 0016 used to describe the gap.
+	// example ADR 0080-rego-both-tiers used to describe the gap.
 	typoRego := `# @rule_id: custom/typo_rule/no-prod-aws
 package agentjail
 

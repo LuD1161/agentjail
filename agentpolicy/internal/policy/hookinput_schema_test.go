@@ -61,7 +61,7 @@ func TestHookInputSchemaMatchesStruct(t *testing.T) {
 }
 
 // TestSchemaRejectsUnknownInputRef is the regression test for AGE-218: the
-// exact failure ADR 0016 accepted as a known cost. Before the schema was
+// exact failure ADR 0080-rego-both-tiers accepted as a known cost. Before the schema was
 // wired, this module compiled clean, evaluated to undefined, and the rule
 // silently never fired.
 func TestSchemaRejectsUnknownInputRef(t *testing.T) {

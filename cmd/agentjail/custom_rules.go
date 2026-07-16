@@ -343,7 +343,7 @@ func isUnknownInputRefError(err error) bool {
 // unknownInputRefHint explains the stakes behind the OPA type error above.
 // The compile error names the bad reference and its line; what it does not say
 // is why this is worth blocking an install over — which is the whole point of
-// the check (ADR 0016 addendum).
+// the check (ADR 0080-rego-both-tiers addendum).
 const unknownInputRefHint = `
   This rule references a field that is not part of the hook input document.
   Rego does not fail on an unknown reference — it evaluates to undefined, so

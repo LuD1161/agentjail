@@ -1,5 +1,5 @@
 // shipped_rules_schema_test.go — every rule we ship must survive the input
-// schema type-check (AGE-218, ADR 0016 addendum).
+// schema type-check (AGE-218, ADR 0080-rego-both-tiers addendum).
 //
 // This is the check that makes the schema worth having. `agentjail policy add`
 // protects rules a user writes from today on; it does nothing for the rules
