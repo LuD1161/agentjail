@@ -71,8 +71,123 @@ dependency.
 - A typo in a fact field (`aws.acount` vs `aws.account`) is not a compile
   error in Rego the way it would be in a typed CEL environment. Mitigated by
   parser-side schema validation and `opa compile` at rule-install time.
+  → **Implemented 2026-07-15; see the addendum below.**
 - Tier 2 wire rules are not shippable until the microVM gateway (ADR 0016 in
   the research notes) is Accepted and built. This ADR settles the DSL
   question so that when the gateway ships, it uses Rego — no migration.
 
 This decision supersedes any earlier implicit "CEL for Tier 2" assumption.
+
+## Addendum — 2026-07-15 (AGE-218)
+
+Two updates: the type-checking mitigation above is now built, and the DSL
+question was re-litigated against primary sources and re-affirmed.
+
+### The mitigation is implemented
+
+It had not been. Between this ADR being accepted and 2026-07-15,
+`NewHookOPAEngineWithData` called `PrepareForEval` with modules + query +
+store and nothing else — no schema, no strict mode. OPA does not type-check
+`input` references unless given a schema, so the mitigation this ADR banked on
+existed only in the prose. `input.aws_accont` compiled clean and the rule
+silently never fired.
+
+Now: a JSON schema derived from `HookInput` is wired via `rego.Schemas()`
+alongside `rego.Strict(true)` on the single compile path shared by the daemon
+and `agentjail policy add`. An unknown `input.*` reference is a compile error
+naming the reference, the line, and the valid field set; `policy add` fails
+closed on it.
+
+Two constraints kept the schema honest:
+
+- **Optional fields stay legal.** `repo_root` / `aws_account` /
+  `command_binaries` are `omitempty` and legitimately undefined for non-git /
+  non-AWS / non-Bash calls. Referencing an absent field so the rule simply
+  does not match is an intentional Rego pattern. OPA builds its object type
+  from `properties` and ignores `required`, which gives exactly this: declared
+  fields are referenceable, absent ones are undefined at eval. A schema that
+  rejected them would be worse than no schema.
+- **`tool_input` stays free-form.** Its key set belongs to the tool, so it is
+  declared as an untyped object.
+
+### The schema binds at `SchemaRootRef`, not `InputRootRef`
+
+The first implementation filed the schema under `ast.InputRootRef` — the
+obvious reading of the API. It compiled, passed every existing test, and
+type-checked nothing; the first all-clear sweep of the rule tree was
+meaningless. Only a deliberate typo probe caught it.
+
+A schema at `ast.SchemaRootRef` (the bare `schema` root) is the compiler's
+*global* input type — what `opa check --schema` installs, and what types every
+module carrying no `# METADATA` annotation. A schema filed under `input` is
+only addressable by name from a `# METADATA / schemas:` block, so it applies
+to nothing by default.
+
+Recorded because the failure mode is invisible by construction: both spellings
+compile, and only one enforces. It is the same silent no-op this addendum
+exists to remove, reproduced inside the fix for it. Any future change here must
+be proved by a mutation probe (break a ref on purpose, watch the compile fail),
+never by a green suite.
+
+**All shipped rules passed on the first run** — the embedded core + library
+trees the daemon evaluates had no dead references. Asserted going forward by
+`cmd/agentjail/shipped_rules_schema_test.go`. The legacy `agentjail.default`
+package (and `lib/exec`, `experimental`) do not share `HookInput`'s shape and
+are evaluated by a different engine and query; they are out of scope, not
+exceptions.
+
+Consequence #4 above (Tier 2 fact schema) is unchanged and still owed: when
+the wire gateway lands, `input.aws.*` / `input.sql.*` get the same treatment.
+That is the exact case this ADR's typo example was drawn from.
+
+### The CEL question, re-litigated
+
+Prompted by a public argument for a Turing-incomplete DSL ("Don't mess it up
+like Rego/OPA") citing Kubernetes' choice of CEL as precedent. Checked against
+the primary sources rather than recollection. **Decision unchanged: do not
+migrate.**
+
+The CEL-vs-Rego decision lives in **KEP-2876** (CRD Validation Expression
+Language). KEP-3488 (CEL for Admission Control) inherits CEL and contains no
+language comparison. KEP-2876's *entire* Rego section, verbatim:
+
+> ### Rego
+>
+> See Open Policy Agent (https://github.com/open-policy-agent/opa/tree/main/rego).
+> The syntax is more extensive than CEL and is designed specifically to work well
+> with kubernetes objects. It allows larger, multi-line programs and
+> includes a package and module system. It does not offer the same sandbox constraints
+> as CEL, nor does it type check code.
+
+Three findings:
+
+1. **Turing-completeness is never raised** — not in the Rego section, not as a
+   selection criterion anywhere in the KEP. Rego is in fact already
+   Turing-incomplete (recursion is a compile error). The premise of the
+   argument is not supported by the source it cites.
+2. **The KEP concedes Rego is the more capable and more domain-fit language**
+   — "more extensive", "designed specifically to work well with kubernetes
+   objects", "package and module system", all stated neutrally. K8s passed on
+   Rego *despite* better domain fit.
+3. The KEP raises exactly **two** objections to Rego: sandbox constraints and
+   type checking.
+
+Of those two, only one transfers:
+
+- **Type checking** — applied to us. This addendum closes it.
+- **Sandbox constraints** — does not transfer. K8s runs expressions authored
+  by untrusted tenants against shared infrastructure, where an expensive
+  expression is a DoS on everyone. Whoever runs `agentjail policy add` already
+  owns the machine. Different threat model. (Latency is still governed by
+  ADR 0002, but a per-tool-call hook's budget is orders of magnitude looser
+  than a per-API-request apiserver path.)
+
+Also note our user-facing DSL is `policy.yaml`, not Rego — the `.rego` tree is
+the maintainer-authored pack. The "let users declare intent, the framework
+does the heavy lifting" argument already lands on YAML; Rego is the engine
+underneath it.
+
+**Net: the one half of the Kubernetes case against Rego that applies to us is
+now closed. The other half is inapplicable by threat model.** A greenfield
+tool shipping type-checked CEL is not evidence either way — migration cost is
+zero before you have rules.
