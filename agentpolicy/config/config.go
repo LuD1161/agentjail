@@ -65,6 +65,46 @@ type PolicyConfig struct {
 	// Load/decode rejects any non-empty value that is not one of the three
 	// named levels.
 	DaemonUnreachable DaemonUnreachableLevel `yaml:"daemon_unreachable"`
+
+	// Enforcement selects whether a deny/ask verdict is acted on or merely
+	// recorded. Empty defaults to EnforcementEnforce — monitor mode is opt-in,
+	// because a default that silently stops enforcing would be the AGE-212 bug
+	// class as a feature. See ADR 0091-monitor-mode-tool-calls.
+	Enforcement EnforcementMode `yaml:"enforcement"`
+}
+
+// EnforcementMode selects whether the daemon acts on a policy verdict or only
+// records what it would have done. It governs the daemon-reachable path only;
+// DaemonUnreachableLevel is the independent axis for when the daemon is gone.
+type EnforcementMode string
+
+const (
+	// EnforcementEnforce acts on the verdict: deny blocks, ask prompts.
+	// Default when unset.
+	EnforcementEnforce EnforcementMode = "enforce"
+
+	// EnforcementMonitor evaluates the full policy set and records the verdict,
+	// but downgrades deny/ask to allow so nothing is blocked — the land-and-expand
+	// on-ramp ("run it log-only for a day, then choose what to enforce").
+	// The agent still sees a notice; the decision row records what was actually
+	// allowed plus the verdict that did not fire.
+	EnforcementMonitor EnforcementMode = "monitor"
+)
+
+// validateEnforcement rejects any non-empty EnforcementMode that is not one of
+// the named modes. Empty is valid (defaults to enforce).
+func validateEnforcement(mode EnforcementMode) error {
+	switch mode {
+	case "", EnforcementEnforce, EnforcementMonitor:
+		return nil
+	default:
+		return fmt.Errorf("enforcement: invalid value %q (must be one of: enforce, monitor)", mode)
+	}
+}
+
+// Monitoring reports whether verdicts are recorded but not acted on.
+func (c *PolicyConfig) Monitoring() bool {
+	return c != nil && c.Enforcement == EnforcementMonitor
 }
 
 // DaemonUnreachableLevel is the tiered policy for hook behavior when the
@@ -543,6 +583,9 @@ func decode(r io.Reader) (*PolicyConfig, error) {
 	if err := validateDaemonUnreachable(cfg.DaemonUnreachable); err != nil {
 		return cfg, err
 	}
+	if err := validateEnforcement(cfg.Enforcement); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -622,6 +665,7 @@ func Default() *PolicyConfig {
 		// subset of the permanently-locked online rules, so no working call is
 		// newly refused (ADR 0074, superseding 0050's allow default).
 		DaemonUnreachable: DaemonUnreachableDegraded,
+		Enforcement:       EnforcementEnforce,
 	}
 }
 
@@ -862,6 +906,20 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.DaemonUnreachable = base.DaemonUnreachable
 	default:
 		result.DaemonUnreachable = DaemonUnreachableDegraded
+	}
+
+	// Enforcement — same three-way fallback. Deliberately NOT in
+	// MergeProjectOverlay: that path is additive-only and a project's
+	// .agentjail/policy.yaml lives in the repo the agent can write, so honouring
+	// it here would let the agent turn off its own enforcement.
+	// See ADR 0091-monitor-mode-tool-calls.
+	switch {
+	case overlay.Enforcement != "":
+		result.Enforcement = overlay.Enforcement
+	case base.Enforcement != "":
+		result.Enforcement = base.Enforcement
+	default:
+		result.Enforcement = EnforcementEnforce
 	}
 
 	return result
