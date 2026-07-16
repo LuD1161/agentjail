@@ -260,10 +260,27 @@ else
   ok "A9g an HTTP/1.1-only client triggers no downgrade notice"
 fi
 
-GITOUT="$(run_tunnel --tunnel -- 'git ls-remote https://github.com/git/git HEAD >/dev/null 2>&1 && echo GIT:OK || echo GIT:FAIL')"
+# git is worth testing because it uses GnuTLS, not OpenSSL: it ignores
+# SSL_CERT_FILE entirely and can only trust our CA via the bind-mounted store.
+# It is the one client here that proves the Linux bind-mount still matters.
+#
+# Run from a neutral directory, not wherever the suite was invoked: from a git
+# worktree, git fails for a reason that has nothing to do with TLS (AGE-241),
+# and this scenario would report a network failure for a filesystem bug.
+GITOUT="$(cd "$WORK" && run_tunnel --tunnel -- 'git ls-remote https://github.com/git/git HEAD >/dev/null 2>&1 && echo GIT:OK || echo GIT:FAIL')"
 grep -q "GIT:OK" <<<"$GITOUT" \
-  && ok "A10 git over HTTPS under interception" \
-  || bad "A10 git over HTTPS under interception" "$(grep GIT: <<<"$GITOUT" | head -1)"
+  && ok "A10 git over HTTPS under interception, via GnuTLS + the bind-mounted store" \
+  || bad "A10 git over HTTPS under interception" "$(grep GIT: <<<"$GITOUT" | head -1) — GnuTLS ignores SSL_CERT_FILE, so this exercises the bind-mount, not the env"
+
+# --- The shield must not break git itself. Pinned here because AGE-231 (cwd)
+# and AGE-241 (worktree gitdir) both surfaced as "git is broken" and are not
+# the same bug: one is where the agent stands, the other is what it may read.
+GITREPO="$WORK/gitprobe"; mkdir -p "$GITREPO"
+( cd "$GITREPO" && git init -q 2>/dev/null )
+GITLOCAL="$(cd "$GITREPO" && run_tunnel --tunnel -- 'git rev-parse --is-inside-work-tree 2>&1 | head -1')"
+grep -q "^true" <<<"$GITLOCAL" \
+  && ok "A10b the agent can use git in its own repo through the tunnel (cwd + gitdir reachable)" \
+  || bad "A10b the agent can use git in its own repo" "got: $(head -1 <<<"$GITLOCAL") — the agent cannot use git where it was launched"
 
 # --- request logging
 DBOUT="$(run_tunnel --tunnel -- 'curl -s -o /dev/null --max-time 15 https://api.github.com/; echo done')"

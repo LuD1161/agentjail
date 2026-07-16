@@ -244,6 +244,22 @@ A real session persisted a vendor API key in the clear, against ADR 0032.
 - **Why it was only found now:** curl never sends a vendor telemetry header.
   Claude Code does, on every session. AGE-232.
 
+## 15. A fixed bug can uncover an older one
+
+Restoring the agent's cwd (#13) made the e2e git scenario start failing. It was
+not a regression: the shield has **always** broken git inside a *git worktree*,
+where `.git` is a file pointing at `<main>/.git/worktrees/<name>` and Landlock
+grants the cwd but not that path. Before the cwd fix the agent ran in `/`, had
+no repo context, and the scenario passed by having nothing to do.
+
+- **Rule:** when a fix makes an unrelated test fail, find out which of the two
+  is wrong before touching either. Here the test was right, the fix was right,
+  and a third thing was broken all along.
+- **Rule:** a scenario should fail for its own reason. A10 tests TLS trust for
+  GnuTLS clients; it must not fail because of a filesystem bug, so it now runs
+  from a neutral directory, and the worktree case has its own scenario.
+- AGE-241 (open — it affects `main`, not just the tunnel).
+
 ---
 
 ## Testing gotchas
