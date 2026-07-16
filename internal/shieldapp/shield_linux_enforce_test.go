@@ -23,6 +23,9 @@ import (
 // then continue running other tests.  Instead, we re-exec a child process
 // that applies Landlock, performs the enforcement probes, and exits.
 func TestMain(m *testing.M) {
+	// A killed run leaves fake HOMEs behind; reclaim before adding more.
+	captureRealGoEnv() // before any t.Setenv("HOME") lies about it
+	sweepShieldTestRoot()
 	// Ignore SIGHUP so a concurrent pgrep-based daemon-reload helper in
 	// another test package cannot terminate this test runner.
 	signal.Ignore(syscall.SIGHUP)

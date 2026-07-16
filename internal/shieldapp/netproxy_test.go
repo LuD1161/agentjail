@@ -19,15 +19,59 @@ import (
 // control socket (~/.agentjail/run/netproxy-ctl.sock) is isolated from any real
 // running netproxy AND stays under the ~104-byte AF_UNIX sun_path limit (macOS
 // t.TempDir() lives under /var/folders/... which is too long).
+// shieldTestRoot is the single parent every fake HOME lives under. One
+// instance, swept on entry: t.Cleanup does not run when a test process is
+// killed, and each fake HOME can hold a 358 MB Go build cache.
+const shieldTestRoot = "/tmp/ajsh"
+
+// sweepShieldTestRoot reclaims what a killed run left behind. Called from
+// TestMain, so the next run cleans up rather than accumulating 24 GB.
+func sweepShieldTestRoot() {
+	_ = os.RemoveAll(shieldTestRoot)
+	_ = os.MkdirAll(shieldTestRoot, 0o700)
+}
+
 func isolatedShortHome(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "ajsh")
+	if err := os.MkdirAll(shieldTestRoot, 0o700); err != nil {
+		t.Fatalf("mkdir test root: %v", err)
+	}
+	dir, err := os.MkdirTemp(shieldTestRoot, "h")
 	if err != nil {
 		t.Fatalf("mkdir temp home: %v", err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Setenv("HOME", dir)
 	return dir
+}
+
+// goBuildEnv keeps `go build` on the real caches. With HOME faked, go would
+// rebuild the world into an empty $HOME/go per test -- 358 MB each.
+func goBuildEnv(t *testing.T) []string {
+	t.Helper()
+	env := os.Environ()
+	for k, v := range realGoEnv {
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
+// realGoEnv holds the ambient Go cache paths, captured by TestMain BEFORE any
+// test fakes HOME. Reading them later returns the FAKE home's paths, which is
+// how each test came to build its own 358 MB module cache.
+var realGoEnv = map[string]string{}
+
+// captureRealGoEnv must run before the first t.Setenv("HOME", ...).
+func captureRealGoEnv() {
+	for _, k := range []string{"GOCACHE", "GOMODCACHE", "GOPATH"} {
+		out, err := exec.Command("go", "env", k).Output()
+		if err != nil {
+			continue
+		}
+		if v := strings.TrimSpace(string(out)); v != "" {
+			realGoEnv[k] = v
+		}
+	}
 }
 
 // freeAddr returns a currently-free 127.0.0.1 address.
@@ -105,6 +149,7 @@ func TestEnsureSessionProxy_StartRegisterEnforce(t *testing.T) {
 	netproxyBin := filepath.Join(tmpDir, "agentjail-netproxy")
 	build := exec.Command("go", "build", "-o", netproxyBin, "./cmd/agentjail-netproxy")
 	build.Dir = projectRoot(t)
+	build.Env = goBuildEnv(t)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build netproxy: %v\n%s", err, out)
 	}

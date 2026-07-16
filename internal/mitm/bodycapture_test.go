@@ -206,6 +206,9 @@ func TestCapturePeakMemoryDoesNotScaleWithBodySize(t *testing.T) {
 	}
 
 	rl := tn.waitLog(t)
+	// GC before the second reading too, or the delta counts garbage the
+	// collector has not run for yet -- which made this flake under load.
+	runtime.GC()
 	runtime.ReadMemStats(&after)
 
 	if rl.ResponseSize != bodyLen {

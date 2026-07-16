@@ -20,6 +20,9 @@ import (
 // On Linux, the existing TestMain in shield_linux_enforce_test.go handles
 // this package; this file covers all other platforms.
 func TestMain(m *testing.M) {
+	// A killed run leaves fake HOMEs behind; reclaim before adding more.
+	captureRealGoEnv() // before any t.Setenv("HOME") lies about it
+	sweepShieldTestRoot()
 	signal.Ignore(syscall.SIGHUP)
 	os.Exit(m.Run())
 }
