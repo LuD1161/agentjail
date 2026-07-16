@@ -682,15 +682,22 @@ func checkTLSInterceptionPosture() doctorCheck {
 	}
 }
 
-// openBodyKEK is the seam: it reports the backend holding the body KEK, or why
-// there is none. keyring.Open is itself deadline-bounded (~3s), so doctor adds
-// no timeout of its own. See ADR 0092-persist-request-bodies.
-var openBodyKEK = func() (string, error) {
+// bodyKEKPosture is what doctor learned about the live KEK: which tier holds
+// it and which backend implements that tier.
+type bodyKEKPosture struct {
+	tier    keyring.Tier
+	backend string
+}
+
+// openBodyKEK is the seam: it reports the live KEK posture, or why there is
+// none. keyring.Open is itself deadline-bounded (~3s), so doctor adds no
+// timeout of its own. See ADR 0092-persist-request-bodies.
+var openBodyKEK = func() (bodyKEKPosture, error) {
 	k, err := keyring.Open()
 	if err != nil {
-		return "", err
+		return bodyKEKPosture{}, err
 	}
-	return k.Backend(), nil
+	return bodyKEKPosture{tier: k.Tier(), backend: k.Backend()}, nil
 }
 
 // checkBodyEncryption reports a property of the machine, so it runs whether or
@@ -702,17 +709,13 @@ func checkBodyEncryption() doctorCheck {
 // bodyEncryptionCheck maps a KEK probe to a check. ErrKeychainLocked WRAPS
 // ErrNoKeychain, so it must be tested first or locked reports the absent advice
 // (AGE-254 is exactly this distinction).
-func bodyEncryptionCheck(backend string, err error) doctorCheck {
+func bodyEncryptionCheck(p bodyKEKPosture, err error) doctorCheck {
 	const label = "Body encryption"
 	// Degraded, never a failure: recording keeps working in the clear and says
 	// so (ADR 0092-persist-request-bodies).
 	switch {
 	case err == nil:
-		return doctorCheck{
-			label:  label,
-			status: statusOK,
-			detail: fmt.Sprintf("on — captured bodies are encrypted under a KEK held by %s. This guards an accidental COPY of ~/.agentjail (backup, sync client, support bundle); it does not contain a sandboxed agent, which ADR 0092 D3 mediates by denying it the store", backend),
-		}
+		return bodyEncryptionTierCheck(label, p)
 	case errors.Is(err, keyring.ErrKeychainLocked):
 		return doctorCheck{
 			label:  label,
@@ -730,6 +733,38 @@ func bodyEncryptionCheck(backend string, err error) doctorCheck {
 			label:  label,
 			status: statusWarn,
 			detail: fmt.Sprintf("OFF — cannot reach a KEK, so captured bodies are written IN THE CLEAR: %v", err),
+		}
+	}
+}
+
+// bodyEncryptionTierCheck names the live tier and what it buys. A flat
+// "encrypted" would be a lie for TierFileKEK, whose key sits under $HOME beside
+// nothing but still falls to a whole-$HOME backup. See ADR 0097-linux-kek-fallback.
+func bodyEncryptionTierCheck(label string, p bodyKEKPosture) doctorCheck {
+	switch p.tier {
+	case keyring.TierKeychain:
+		return doctorCheck{
+			label:  label,
+			status: statusOK,
+			detail: fmt.Sprintf("on (os-keychain) — captured bodies are encrypted under a KEK held by %s, which never writes the key to agentjail's disk. Survives a COPY of ~/.agentjail AND a whole-$HOME backup. It does not contain a sandboxed agent, which ADR 0092 D3 mediates by denying it the store", p.backend),
+		}
+	case keyring.TierFileKEK:
+		return doctorCheck{
+			label:  label,
+			status: statusOK,
+			detail: fmt.Sprintf("on, REDUCED (file-kek) — no keychain was reachable, so %s holds the KEK as a 0600 file at ~/.config/agentjail/kek. This survives a COPY of ~/.agentjail (support bundle, issue attachment, a synced agentjail dir), but it does NOT survive a whole-$HOME backup — that takes the key and the bodies together, so it is weaker than the os-keychain tier. Fix, if you want that: unlock a login keyring so the keychain tier is selected. It does not contain a sandboxed agent, which ADR 0092 D3 mediates by denying it the store", p.backend),
+		}
+	case keyring.TierMemory:
+		return doctorCheck{
+			label:  label,
+			status: statusWarn,
+			detail: fmt.Sprintf("on, PROCESS-ONLY (memory) — %s holds the KEK in memory for this process only, so every body written under it becomes unreadable when the daemon exits. This tier is for tests; seeing it on a real host is a bug", p.backend),
+		}
+	default:
+		return doctorCheck{
+			label:  label,
+			status: statusWarn,
+			detail: fmt.Sprintf("a KEK is available from %s but it reports an unknown tier %q, so its posture cannot be stated honestly. Treat captured bodies as unprotected until this is identified", p.backend, p.tier),
 		}
 	}
 }
