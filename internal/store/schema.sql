@@ -11,7 +11,12 @@ CREATE TABLE IF NOT EXISTS decisions (
     impact          TEXT,
     elapsed_us      INTEGER,
     cwd             TEXT,
-    tool_input_redacted TEXT
+    tool_input_redacted TEXT,
+    -- would_action: the verdict policy returned when it differs from `action`
+    -- (monitor mode downgraded it). Empty means they matched. `action` is always
+    -- what was ACTUALLY enforced -- it must never overstate enforcement.
+    -- See ADR 0091-monitor-mode-tool-calls.
+    would_action    TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_session_ts ON decisions(session_id, ts);

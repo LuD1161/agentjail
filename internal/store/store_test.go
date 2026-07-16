@@ -1240,3 +1240,113 @@ func TestMigrateFlatFileAuditLog(t *testing.T) {
 		t.Errorf("after reopen: got %d entries, want 2 (idempotent)", len(got2))
 	}
 }
+
+// ─── AGE-242: would_action (monitor mode) ───────────────────────────────────
+
+// TestMigrateAddsWouldActionToPreExistingDB is the upgrade guard: CREATE TABLE
+// IF NOT EXISTS is a no-op on a database that predates the column, so without
+// an explicit ALTER every existing install would keep the old shape and every
+// INSERT would fail. Builds the pre-AGE-242 table by hand, then opens the store
+// over it.
+func TestMigrateAddsWouldActionToPreExistingDB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.db")
+
+	// The decisions table exactly as it shipped before would_action existed.
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE decisions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, session_id TEXT NOT NULL,
+		agent TEXT, tool_name TEXT NOT NULL, summary TEXT, action TEXT NOT NULL,
+		rule_id TEXT, reason TEXT, impact TEXT, elapsed_us INTEGER, cwd TEXT,
+		tool_input_redacted TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	// A row from before the upgrade — must survive and read back as "matched".
+	if _, err := raw.Exec(`INSERT INTO decisions (ts, session_id, tool_name, action)
+		VALUES ('2026-01-01T00:00:00Z', 'old-session', 'Write', 'deny')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open over a pre-existing db: %v", err)
+	}
+	defer s.Close()
+
+	if !columnExists(s.(*sqliteStore).db, "decisions", "would_action") {
+		t.Fatal("migrate did not add decisions.would_action to a pre-existing db")
+	}
+
+	// The legacy row keeps its meaning: no would_action == verdict was enforced.
+	got, err := s.ListDecisions(context.Background(), Filter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDecisions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d decisions, want 1", len(got))
+	}
+	if got[0].WouldAction != "" {
+		t.Errorf("legacy row WouldAction = %q, want empty", got[0].WouldAction)
+	}
+	if got[0].Action != "deny" {
+		t.Errorf("legacy row Action = %q, want deny", got[0].Action)
+	}
+
+	// And a new row round-trips the new column.
+	if err := s.RecordDecision(context.Background(), DecisionRecord{
+		Ts: time.Now(), SessionID: "new", ToolName: "Bash",
+		Action: "allow", WouldAction: "deny", RuleID: "command_policy/x",
+	}); err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+	got, err = s.ListDecisions(context.Background(), Filter{SessionID: "new", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDecisions: %v", err)
+	}
+	if len(got) != 1 || got[0].WouldAction != "deny" || got[0].Action != "allow" {
+		t.Fatalf("round-trip: got %+v, want Action=allow WouldAction=deny", got)
+	}
+}
+
+// TestMigrateWouldActionIsIdempotent guards the re-open path: the ALTER must not
+// fire twice (SQLite errors on a duplicate column).
+func TestMigrateWouldActionIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.db")
+	for i := range 3 {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open #%d: %v", i+1, err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close #%d: %v", i+1, err)
+		}
+	}
+}
+
+// TestRecordDecisionDefaultsWouldActionEmpty pins the enforce-mode shape: an
+// unset WouldAction persists as empty, never NULL (the column is NOT NULL).
+func TestRecordDecisionDefaultsWouldActionEmpty(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.RecordDecision(context.Background(), DecisionRecord{
+		Ts: time.Now(), SessionID: "s", ToolName: "Write", Action: "deny",
+	}); err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+	got, err := s.ListDecisions(context.Background(), Filter{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].WouldAction != "" {
+		t.Errorf("WouldAction = %q, want empty", got[0].WouldAction)
+	}
+}

@@ -126,7 +126,8 @@ func (s *sqliteStore) migrate() error {
 			impact          TEXT,
 			elapsed_us      INTEGER,
 			cwd             TEXT,
-			tool_input_redacted TEXT
+			tool_input_redacted TEXT,
+			would_action    TEXT    NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_session_ts ON decisions(session_id, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_ts ON decisions(ts)`,
@@ -189,6 +190,16 @@ func (s *sqliteStore) migrate() error {
 		}
 	}
 
+	// CREATE TABLE IF NOT EXISTS above is a no-op on a database that predates a
+	// column, so additive columns must be ALTERed in separately or every
+	// existing install keeps the old shape. Idempotent: guarded on the column
+	// not already being there.
+	if tableExists(s.db, "decisions") && !columnExists(s.db, "decisions", "would_action") {
+		if _, err := s.db.Exec(`ALTER TABLE decisions ADD COLUMN would_action TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("store: migrate: add decisions.would_action: %w", err)
+		}
+	}
+
 	// Migrate legacy audit_events into audit_log (idempotent).
 	if tableExists(s.db, "audit_events") {
 		_, _ = s.db.Exec(`INSERT INTO audit_log (ts, event_type, entity, actor)
@@ -238,6 +249,15 @@ func tableExists(db *sql.DB, name string) bool {
 	return err == nil && n > 0
 }
 
+// columnExists reports whether table has the named column. pragma_table_info is
+// used as a table-valued function so the name can be bound rather than
+// interpolated.
+func columnExists(db *sql.DB, table, column string) bool {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n)
+	return err == nil && n > 0
+}
+
 // RecordDecision inserts a decision and upserts its session. The tool_input
 // is redacted before persisting (ADR 0019). On the first decision for a
 // session (INSERT, not UPDATE), a session.started audit event is emitted
@@ -251,9 +271,9 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.ExecContext(ctx, `INSERT INTO decisions
-		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted,
+		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction,
 	); err != nil {
 		return fmt.Errorf("store: insert decision: %w", err)
 	}
@@ -349,7 +369,7 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		}
 		args = append(args, f.AfterID)
 	}
-	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted FROM decisions"
+	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action FROM decisions"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -376,8 +396,9 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			elapsed   sql.NullInt64
 			cwd       sql.NullString
 			toolInput sql.NullString
+			wouldAct  sql.NullString
 		)
-		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput); err != nil {
+		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput, &wouldAct); err != nil {
 			return nil, fmt.Errorf("store: scan decision: %w", err)
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, tsStr)
@@ -395,6 +416,7 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			ElapsedUs:         elapsed.Int64,
 			CWD:               cwd.String,
 			ToolInputRedacted: toolInput.String,
+			WouldAction:       wouldAct.String,
 		})
 	}
 	return out, rows.Err()

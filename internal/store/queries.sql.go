@@ -43,6 +43,52 @@ func (q *Queries) CountActionsBySession(ctx context.Context) ([]CountActionsBySe
 	return items, nil
 }
 
+const countWouldBlockByRule = `-- name: CountWouldBlockByRule :many
+SELECT rule_id, would_action, tool_name, COUNT(*) AS count
+FROM decisions
+WHERE would_action != '' AND ts >= ?
+GROUP BY rule_id, would_action, tool_name
+ORDER BY count DESC
+`
+
+type CountWouldBlockByRuleRow struct {
+	RuleID      sql.NullString `json:"rule_id"`
+	WouldAction string         `json:"would_action"`
+	ToolName    string         `json:"tool_name"`
+	Count       int64          `json:"count"`
+}
+
+// Monitor-mode report: what policy would have stopped, grouped by rule. Rows
+// where would_action is empty are enforce-mode decisions and are excluded.
+// See ADR 0091-monitor-mode-tool-calls.
+func (q *Queries) CountWouldBlockByRule(ctx context.Context, ts string) ([]CountWouldBlockByRuleRow, error) {
+	rows, err := q.db.QueryContext(ctx, countWouldBlockByRule, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountWouldBlockByRuleRow{}
+	for rows.Next() {
+		var i CountWouldBlockByRuleRow
+		if err := rows.Scan(
+			&i.RuleID,
+			&i.WouldAction,
+			&i.ToolName,
+			&i.Count,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteOldAuditLog = `-- name: DeleteOldAuditLog :exec
 DELETE FROM audit_log WHERE ts < ?
 `
@@ -110,8 +156,8 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 }
 
 const insertDecision = `-- name: InsertDecision :exec
-INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertDecisionParams struct {
@@ -127,6 +173,7 @@ type InsertDecisionParams struct {
 	ElapsedUs         sql.NullInt64  `json:"elapsed_us"`
 	Cwd               sql.NullString `json:"cwd"`
 	ToolInputRedacted sql.NullString `json:"tool_input_redacted"`
+	WouldAction       string         `json:"would_action"`
 }
 
 func (q *Queries) InsertDecision(ctx context.Context, arg InsertDecisionParams) error {
@@ -143,6 +190,7 @@ func (q *Queries) InsertDecision(ctx context.Context, arg InsertDecisionParams) 
 		arg.ElapsedUs,
 		arg.Cwd,
 		arg.ToolInputRedacted,
+		arg.WouldAction,
 	)
 	return err
 }
