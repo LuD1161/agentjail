@@ -15,6 +15,11 @@
 set -u
 AJ="$HOME/.agentjail/bin/agentjail"
 SOCK="$HOME/.agentjail/daemon.sock"
+HOOK="$HOME/.agentjail/bin/agentjail-hook"
+PROJECT="$HOME/work/demo"
+
+# shellcheck source=test/testbed/scenarios/chaos-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chaos-lib.sh"
 
 command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout  >/dev/null 2>&1 || timeout(){ shift; "$@"; }
@@ -66,6 +71,23 @@ wait_respawn() {
     return 1
 }
 
+# daemon_ready — a socket/exit-0 alone can't distinguish serving from
+# fail-open (fail-open also exits 0). Poll a benign write until the hook's
+# reply carries neither the systemMessage nor stderr banner fail-open emits
+# (ADR 0073). Bounded, not skipped: never-ready is a real bad().
+daemon_ready() {
+    [ -x "$HOOK" ] || return 1
+    mkdir -p "$PROJECT" 2>/dev/null || true
+    local i out
+    for i in $(seq 1 30); do
+        out=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"%s/chaos-ready.txt","content":"x"},"session_id":"chaos-ready","cwd":"%s"}' "$PROJECT" "$PROJECT" \
+            | timeout 3 "$HOOK" 2>&1)
+        echo "$out" | grep -qiE 'systemmessage|daemon unreachable|daemon not running' || return 0
+        sleep 1
+    done
+    return 1
+}
+
 restore() { daemon_active || daemon_start; }
 trap restore EXIT INT TERM
 
@@ -81,6 +103,9 @@ case "$OS" in
         skip "unsupported OS '$OS' — no systemd/launchd supervisor to exercise"
         echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="; exit 0 ;;
 esac
+# These assertions track HEAD; the binaries under test may not. A stale binary
+# reports fake FAILs against features it predates. See AGE-236, chaos-lib.sh.
+chaos_assert_fresh_binaries "$AJ"
 
 # ===========================================================================
 echo "=== supervisor config pins ADR 0070 (static) ==="
@@ -155,10 +180,12 @@ fi
 echo "=== enforcement is real again, not just 'active' ==="
 # `is-active` was green throughout the 3-day outage. Prove the restarted daemon
 # actually decides, rather than trusting the supervisor's own status word.
-HOOK="$HOME/.agentjail/bin/agentjail-hook"
-PROJECT="$HOME/work/demo"
 if [ -x "$HOOK" ]; then
-    sleep 2
+    if daemon_ready; then
+        ok "daemon serving genuine decisions again before enforcement checks"
+    else
+        bad "daemon never resumed genuine decisions within 30s after restart (still fail-open)"
+    fi
     OUT=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"%s/.ssh/authorized_keys","content":"x"},"session_id":"chaos","cwd":"%s"}' "$HOME" "$PROJECT" \
         | timeout 20 "$HOOK" 2>&1); RC=$?
     if [ "$RC" = 2 ]; then
