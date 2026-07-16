@@ -229,7 +229,7 @@ Not the same thing, spread over twelve lines of the file.
 - **No history, no narration.** Never explain where code came from, what the
   next line does, or why the change is correct. That is PR-review talk and it is
   noise the moment it merges.
-- **Cite a slug, not a number** — `ADR 0090-persist-request-bodies (D3)`, or a
+- **Cite a slug, not a number** — `ADR 0092-persist-request-bodies (D3)`, or a
   ticket (`AGE-231`) when the decision has no ADR. The reader can open it; you
   do not have to retell it.
 - Applies to test files too — name what the test guards and the slug, not why.
@@ -250,7 +250,7 @@ That is the moment to put it in the ADR instead. If you find yourself writing
 
 // GOOD — the constraint, then the slug:
 // The store holds decrypted bodies and the agent shares our uid, so 0600 is not
-// a boundary. See ADR 0090-persist-request-bodies (D3).
+// a boundary. See ADR 0092-persist-request-bodies (D3).
 ```
 
 ## Common workflows

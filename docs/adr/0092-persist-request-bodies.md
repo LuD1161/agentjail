@@ -1,4 +1,4 @@
-# ADR 0090: the network store persists full request/response bodies, and the agent may not read it
+# ADR 0092: the network store persists full request/response bodies, and the agent may not read it
 
 **Status:** Proposed — supersedes the S-C2 clause of [ADR 0076](./0076-tunnel-mitm-vs-passthrough-default-posture.md), retained by [ADR 0077](./0077-tunnel-mitm-default-and-consent.md)
 

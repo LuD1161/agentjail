@@ -189,7 +189,7 @@ func AgentjailSecretsProtectedNames() map[string]bool {
 // AgentjailSecretsProtectedNames per ADR 0048.
 //
 // The network store holds decrypted bodies and the agent shares our uid, so
-// 0600 is not a boundary. See ADR 0090-persist-request-bodies (D3).
+// 0600 is not a boundary. See ADR 0092-persist-request-bodies (D3).
 func AgentjailReadDeniedNames() map[string]bool {
 	m := AgentjailSecretsProtectedNames()
 	m[ctlauth.TokenFileName] = true

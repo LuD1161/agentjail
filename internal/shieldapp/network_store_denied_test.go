@@ -7,7 +7,7 @@ import (
 )
 
 // The store holds decrypted bodies and the agent shares our uid, so 0600 is not
-// a boundary. See ADR 0090-persist-request-bodies (D3).
+// a boundary. See ADR 0092-persist-request-bodies (D3).
 func TestNetworkStoreIsReadDenied(t *testing.T) {
 	denied := AgentjailReadDeniedNames()
 
@@ -20,7 +20,7 @@ func TestNetworkStoreIsReadDenied(t *testing.T) {
 }
 
 // The WAL holds uncheckpointed bodies; denying only the .db leaves the freshest
-// traffic readable. See ADR 0090-persist-request-bodies (D3).
+// traffic readable. See ADR 0092-persist-request-bodies (D3).
 func TestNetworkStoreSidecarsAreCovered(t *testing.T) {
 	denied := AgentjailReadDeniedNames()
 

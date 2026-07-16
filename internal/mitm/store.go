@@ -80,12 +80,12 @@ type RequestStore struct {
 
 // DBFileName is the network store's filename inside ~/.agentjail. Exported so
 // the shield derives its deny rule from here rather than keeping a second copy.
-// See ADR 0090-persist-request-bodies (D3).
+// See ADR 0092-persist-request-bodies (D3).
 const DBFileName = "network.db"
 
 // DBProtectedFileNames returns the DB and every sidecar SQLite may write beside
 // it. The WAL holds uncheckpointed bodies, so denying the .db alone leaves the
-// freshest traffic readable. See ADR 0090-persist-request-bodies (D3).
+// freshest traffic readable. See ADR 0092-persist-request-bodies (D3).
 func DBProtectedFileNames() []string {
 	return []string{
 		DBFileName,

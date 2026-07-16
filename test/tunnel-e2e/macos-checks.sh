@@ -59,7 +59,7 @@ go test ./internal/redact/ ./internal/netpolicy/ ./agentpolicy/config/ >/dev/nul
   || bad "1c  OS-agnostic unit suites" "go test ./internal/redact/ ./internal/netpolicy/ ./agentpolicy/config/"
 
 # ============================================================ 2
-group "2 — the sbpl profile (ADR 0090 D3 invariant)"
+group "2 — the sbpl profile (ADR 0092 D3 invariant)"
 
 "$SHIELD" --profile-print -- /bin/echo hi > "$WORK/profile.sbpl" 2>&1
 if [ -s "$WORK/profile.sbpl" ]; then
@@ -86,14 +86,14 @@ fi
 group "3 — the two claims I made about macOS from Linux, which need a Mac"
 
 # CLAIM A: the agent CANNOT read network.db on macOS (sensitiveReadPaths denies
-# the whole ~/.agentjail subtree). On Linux it CAN — that is AGE-232/ADR 0090 D3.
+# the whole ~/.agentjail subtree). On Linux it CAN — that is AGE-232/ADR 0092 D3.
 if [ -e "$HOME/.agentjail/network.db" ]; then
   OUT="$("$SHIELD" -- /bin/bash -c 'head -c 4 ~/.agentjail/network.db >/dev/null 2>&1 && echo READABLE || echo denied' 2>&1 | tail -1)"
   if grep -q "denied" <<<"$OUT"; then
-    ok "3a  CLAIM CONFIRMED: the shielded agent cannot read network.db on macOS (Linux can — that is the gap ADR 0090 D3 closes)"
+    ok "3a  CLAIM CONFIRMED: the shielded agent cannot read network.db on macOS (Linux can — that is the gap ADR 0092 D3 closes)"
   else
     bad "3a  the shielded agent cannot read network.db on macOS" \
-        "it CAN ($OUT). My reading of sensitiveReadPaths was wrong, and ADR 0090's 'Linux-only exposure' claim needs correcting."
+        "it CAN ($OUT). My reading of sensitiveReadPaths was wrong, and ADR 0092's 'Linux-only exposure' claim needs correcting."
   fi
 else
   skip "3a  network.db read denial" "no ~/.agentjail/network.db yet — run any agentjail session first"
