@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -268,19 +269,28 @@ func SignHostCert(ca *x509.Certificate, caKey crypto.PrivateKey, host string) (*
 		return nil, err
 	}
 
+	// An IP literal must go in IPAddresses: no verifier accepts a DNS SAN for a
+	// connection to an IP (RFC 6125, x509.Certificate.VerifyHostname). Putting
+	// it in DNSNames failed every https://<ip> request. AGE-220.
+	target := ParseHostTarget(host)
+
 	now := time.Now()
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName: host,
+			CommonName: target.Host,
 		},
-		DNSNames:  []string{host},
 		NotBefore: now.Add(-5 * time.Minute), // small clock skew allowance
 		NotAfter:  now.Add(24 * time.Hour),
 		KeyUsage:  x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{
 			x509.ExtKeyUsageServerAuth,
 		},
+	}
+	if target.IsIP() {
+		template.IPAddresses = []net.IP{target.IP}
+	} else {
+		template.DNSNames = []string{target.Host}
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &hostKey.PublicKey, caKey)

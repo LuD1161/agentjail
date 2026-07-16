@@ -51,6 +51,11 @@ func NewMITMHandler(caCert *x509.Certificate, caKey crypto.PrivateKey, logger *s
 // clientConn is the raw TCP connection from the agent (after the 200 response
 // has already been sent). host and port identify the upstream target.
 func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
+	// Normalize once: the cert, the SNI, the dial address, the cache key and
+	// the policy host must all mean the same thing by "host". AGE-220.
+	target := ParseHostTarget(host)
+	host = target.Host
+
 	// Step 1: get or generate a host cert signed by the CA.
 	hostCert := h.certCache.get(host)
 	if hostCert == nil {
@@ -76,6 +81,10 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	defer clientTLS.Close()
 
 	// Step 3: dial upstream with real TLS (verify against system roots).
+	//
+	// ServerName is set even for an IP: Go omits an IP from the SNI extension
+	// itself, and uses ServerName to verify the cert's IP SAN. Clearing it
+	// would skip verification, not fix it.
 	upstreamTLS := &tls.Config{
 		ServerName: host,
 		MinVersion: tls.VersionTLS12,
@@ -84,7 +93,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		upstreamTLS = h.UpstreamTLSConfig.Clone()
 		upstreamTLS.ServerName = host
 	}
-	upstream, err := tls.Dial("tcp", net.JoinHostPort(host, port), upstreamTLS)
+	upstream, err := tls.Dial("tcp", target.DialAddr(port), upstreamTLS)
 	if err != nil {
 		h.Logger.Error("upstream TLS dial failed", "host", host, "port", port, "err", err)
 		return
