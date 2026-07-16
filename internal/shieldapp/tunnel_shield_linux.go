@@ -116,12 +116,9 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 		return nil, false
 	}
 
-	// TLS interception (AGE-149) is OPT-IN and off unless the caller asked for
-	// it (--mitm, or network.tunnel_mitm for an install with standing consent).
-	// Routing the agent's traffic and decrypting it are separate trust
-	// decisions, so --tunnel alone never implies interception: without mitm the
-	// tunnel relays TLS byte-for-byte, agentjail holds no key the agent trusts,
-	// and visibility stays at destination IP / SNI / byte counts. See ADR 0077.
+	// TLS interception (AGE-149) is ON by default here and declinable via
+	// --no-mitm / network.tunnel_mitm: false, which relay TLS opaquely and
+	// forfeit HTTP(S) policy. ADR 0077 (D1, D2).
 	sess := &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}
 	// CA injection replaces the namespace trust store, so it is the LAST
 	// fallible step before SetMITM. ADR 0077 (D6).
