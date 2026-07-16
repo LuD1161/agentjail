@@ -178,7 +178,12 @@ No new dependency, so no `make licenses` change.
 - Over-redaction is possible (`--password=…` inside a documented example
   command gets replaced). Consistent with ADR 0019: over-redaction is safe,
   under-redaction is not.
-- **Existing DB rows are not retroactively scrubbed.** Any secret already
-  written by a prior version stays until retention (ADR 0071) ages it out.
-  Retroactive scrubbing is deliberately out of scope — rewriting history in
-  place is its own risk — and is tracked separately.
+- **Existing DB rows are not retroactively scrubbed, and will not be.** Any
+  secret written by a prior version stays until retention
+  (ADR 0071-retention-vacuum-and-wal-checkpoint) ages it out. Accepted
+  deliberately, not deferred: the DB is 0600, user-owned, and agent-unreadable,
+  so an already-written secret is exposed only to the person whose secret it
+  is. Rewriting history in place to fix that trades a bounded, known exposure
+  for the risk of a migration that corrupts the store. Anyone who wants a clean
+  DB today can delete it. No follow-up ticket exists — do not open one without
+  a new reason.
