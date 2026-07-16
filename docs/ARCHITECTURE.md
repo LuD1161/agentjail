@@ -310,7 +310,10 @@ agentjail logs / replay / ui  (readers via OpenReadOnly)
 - `audit_events` table: policy enable/disable/reload mutations
 - Indexes on `(session_id, ts)`, `ts`, `action`, `tool_name`, `rule_id`
 - Automatic retention cleanup via `Cleanup(maxAge)`
-- Tool input redaction at write time (secrets, keys, tokens stripped before storage)
+- Tool input redaction at write time: secret-bearing **keys** are stripped, and
+  recognised secret **values** (bearer tokens, provider keys, PEM blocks, URL
+  passwords) are stripped wherever they appear — including inside a positional
+  value such as a Bash `command` string (ADR 0019, ADR 0084-redact-secret-values)
 
 **Filter support:** `store.Filter` supports `SessionID` (substring), `Actions`
 (case-insensitive OR), `Tool` (exact), `Rule` (case-insensitive substring),
@@ -341,9 +344,9 @@ Decisions are NOT duplicated into `audit_log` — they remain in the `decisions`
 table, which is optimized for the per-decision hot path. A unified query layer
 provides combined chronological views when needed.
 
-The `Detail` column is redacted at the store boundary using the same
-key-pattern matcher as `RedactToolInput`, with a 4096-byte cap. Credential
-values are never stored — only fingerprints (ADR 0032). The shield opens the
+The `Detail` column is redacted at the store boundary using the same key-pattern
+matcher and value-pattern sweep as `RedactToolInput`, with a 4096-byte cap.
+Credential values are never stored — only fingerprints (ADR 0032). The shield opens the
 database before sandbox activation so pre-opened file descriptors survive
 Landlock/Seatbelt restrictions.
 
