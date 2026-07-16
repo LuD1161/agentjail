@@ -45,7 +45,7 @@ type Response struct {
 	// WouldAction is set by the daemon, not by Eval: monitor mode downgrades
 	// Action to allow and parks the real verdict here. Must mirror
 	// wire.Response's tag -- the hook decodes into that shape.
-	// See ADR 0091-monitor-mode-tool-calls.
+	// See ADR 0091-monitor-mode-tools.
 	WouldAction string `json:"would_action,omitempty"`
 }
 

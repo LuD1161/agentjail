@@ -95,7 +95,7 @@ type server struct {
 
 	// monitoring mirrors PolicyConfig.Enforcement == monitor. Read on the hot
 	// path and rewritten by reload(), so it is atomic rather than living behind
-	// the config pointer. See ADR 0091-monitor-mode-tool-calls.
+	// the config pointer. See ADR 0091-monitor-mode-tools.
 	monitoring atomic.Bool
 
 	// activeSessions tracks which session IDs have open connections.
@@ -496,7 +496,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		if err == nil {
 			// Monitor mode downgrades here, before telemetry and persistence, so
 			// every downstream consumer records what actually happened rather
-			// than what policy wanted. See ADR 0091-monitor-mode-tool-calls.
+			// than what policy wanted. See ADR 0091-monitor-mode-tools.
 			resp = applyMonitorMode(resp, s.monitoring.Load())
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
@@ -605,7 +605,7 @@ func isClientGone(err error) bool {
 // emits an audit event. Monitor mode means nothing is enforced; the decisions
 // table alone cannot explain a run of allows, so the window must be
 // reconstructable from the audit log. Called on startup and after every
-// successful reload. See ADR 0091-monitor-mode-tool-calls.
+// successful reload. See ADR 0091-monitor-mode-tools.
 func (s *server) setMonitoring(monitoring bool) {
 	if s.monitoring.Swap(monitoring) == monitoring {
 		return // unchanged -- a reload that did not touch the mode stays quiet
@@ -640,7 +640,7 @@ const actionAllow = "allow"
 //
 // Deliberately not inside policyeval.Eval: its decision cache is keyed on input
 // only, so flipping the mode there would poison cached entries across a reload.
-// See ADR 0091-monitor-mode-tool-calls.
+// See ADR 0091-monitor-mode-tools.
 func applyMonitorMode(resp policyeval.Response, monitoring bool) policyeval.Response {
 	if !monitoring || resp.Action == "" || resp.Action == actionAllow {
 		return resp

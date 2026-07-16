@@ -74,7 +74,7 @@ const (
 	// must be reconstructable from the audit log alone -- the decisions table
 	// shows allow rows and cannot, by itself, say the mode was the reason.
 	// Detail carries {"mode": "enforce"|"monitor"}. See ADR
-	// 0091-monitor-mode-tool-calls.
+	// 0091-monitor-mode-tools.
 	EnforcementModeChanged = "enforcement.mode_changed"
 )
 

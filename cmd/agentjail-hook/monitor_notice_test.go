@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Guards the monitor-mode notice (AGE-242, ADR 0091-monitor-mode-tool-calls).
+// Guards the monitor-mode notice (AGE-242, ADR 0091-monitor-mode-tools).
 // The channel matters as much as the text: Claude Code discards hook stderr on
 // exit 0, so a notice that is not on systemMessage is invisible (ADR 0073) --
 // that is what hid the fail-open banner for three days.

@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     -- would_action: the verdict policy returned when it differs from `action`
     -- (monitor mode downgraded it). Empty means they matched. `action` is always
     -- what was ACTUALLY enforced -- it must never overstate enforcement.
-    -- See ADR 0091-monitor-mode-tool-calls.
+    -- See ADR 0091-monitor-mode-tools.
     would_action    TEXT    NOT NULL DEFAULT ''
 );
 
