@@ -285,9 +285,12 @@ func failOpenCursor(category, detail, toolName string, toolInput map[string]inte
 
 	decision := resolveFailOpenDecision(fb, toolName, toolInput, cwd)
 	if decision.Deny {
+		// decision.Reason already carries restartInstructions on every deny path.
 		writeCursorDeny(decision.Reason)
 	} else {
-		writeCursorAllowWithMessage(decision.Reason)
+		// Not decision.Reason: it omits restartInstructions at levelAllow, and
+		// Cursor has no status line to carry the notice instead (ADR 0073).
+		writeCursorAllowWithMessage(failOpenSystemMessage(fb.Level))
 	}
 	os.Exit(0)
 }
@@ -378,9 +381,9 @@ func writeCursorAllow() {
 }
 
 // writeCursorAllowWithMessage writes a Cursor "allow" response to stdout with
-// an optional user_message. Used by failOpenCursor so the friendly fail-open
-// message is shown only on the first fail-open in a session; an empty
-// userMessage omits the field entirely.
+// an optional user_message (empty omits the field). user_message, not
+// agent_message: the fail-open notice is for the human, and an allowed call
+// gives the agent nothing to act on.
 func writeCursorAllowWithMessage(userMessage string) {
 	out := cursorHookOutput{Permission: "allow", UserMessage: userMessage}
 	enc := json.NewEncoder(os.Stdout)
