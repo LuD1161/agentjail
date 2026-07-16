@@ -176,7 +176,20 @@ type ReadOnlyStore interface {
 	ListDistinctCWDs(ctx context.Context) ([]string, error)
 	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	ListDistinctSkillInputs(ctx context.Context) ([]string, error)
+	CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error)
 	Close() error
+}
+
+// WouldBlockCount is one row of the monitor-mode report: a rule that fired,
+// the verdict it returned, and how often -- for calls that ran anyway.
+// Aggregated in SQL rather than over ListDecisions, whose limit is clamped and
+// would silently truncate the report.
+// See ADR 0091-monitor-mode-tool-calls.
+type WouldBlockCount struct {
+	RuleID      string
+	WouldAction string
+	ToolName    string
+	Count       int64
 }
 
 // redactKeySubstrings are the case-insensitive substrings that mark a

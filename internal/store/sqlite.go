@@ -242,6 +242,27 @@ func (s *sqliteStore) migrate() error {
 	return nil
 }
 
+// CountWouldBlock returns the monitor-mode report rows since the given time:
+// the rules that fired on calls that ran anyway. Rows with an empty
+// would_action are enforce-mode decisions and are excluded by the query.
+// See ADR 0091-monitor-mode-tool-calls.
+func (s *sqliteStore) CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error) {
+	rows, err := s.queries.CountWouldBlockByRule(ctx, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("store: count would-block: %w", err)
+	}
+	out := make([]WouldBlockCount, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, WouldBlockCount{
+			RuleID:      r.RuleID.String,
+			WouldAction: r.WouldAction,
+			ToolName:    r.ToolName,
+			Count:       r.Count,
+		})
+	}
+	return out, nil
+}
+
 // tableExists reports whether a table with the given name exists in the DB.
 func tableExists(db *sql.DB, name string) bool {
 	var n int
@@ -1009,6 +1030,9 @@ func (r *sqliteROStore) ListDistinctMCPToolNames(ctx context.Context) ([]string,
 }
 func (r *sqliteROStore) ListDistinctSkillInputs(ctx context.Context) ([]string, error) {
 	return r.inner.ListDistinctSkillInputs(ctx)
+}
+func (r *sqliteROStore) CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error) {
+	return r.inner.CountWouldBlock(ctx, since)
 }
 func (r *sqliteROStore) Close() error { return r.inner.Close() }
 
