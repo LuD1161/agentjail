@@ -451,6 +451,93 @@ func cwdEnclosesHome(cwd, home string) bool {
 	return strings.HasPrefix(h, c+string(filepath.Separator))
 }
 
+// gitDirGrants returns the paths Landlock must grant read-write for git to work
+// in cwd, or nil when the cwd grant already covers it (an ordinary clone, whose
+// .git is a directory inside cwd).
+//
+// A worktree's, submodule's, or GIT_DIR-directed .git is a regular file holding
+// "gitdir: <path>" that points OUTSIDE cwd, and <gitdir>/commondir then points
+// on to the main .git where objects/refs/config live. Landlock grants cwd only,
+// so both are denied and every git command fails. Read-write, because git writes
+// HEAD, index, refs and logs. See ADR 0090-grant-worktree-gitdir.
+//
+// The grant stops at the resolved git directories: the main repo's working files
+// are never granted, and a target that is $HOME, an ancestor of it, or a
+// credential dir is refused outright.
+func gitDirGrants(cwd, home, gitDirEnv string) []string {
+	if cwd == "" {
+		return nil
+	}
+	gitdir := gitDirEnv
+	if gitdir == "" {
+		dot := filepath.Join(cwd, ".git")
+		fi, err := os.Lstat(dot)
+		if err != nil {
+			return nil // no .git — not a repo
+		}
+		if fi.IsDir() {
+			return nil // ordinary clone — the cwd grant already covers .git
+		}
+		b, err := os.ReadFile(dot)
+		if err != nil {
+			return nil
+		}
+		line := strings.TrimSpace(string(b))
+		rest, ok := strings.CutPrefix(line, "gitdir:")
+		if !ok {
+			return nil // not a gitdir pointer — nothing to resolve
+		}
+		gitdir = strings.TrimSpace(rest)
+	}
+	if gitdir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(cwd, gitdir)
+	}
+	gitdir = resolveSymlinks(filepath.Clean(gitdir))
+
+	grants := []string{gitdir}
+	// commondir points from the per-worktree gitdir back at the main .git —
+	// usually "../.." — and is where objects, refs and config actually live.
+	// The worktree gitdir alone is not enough to run a single git command.
+	if b, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
+		common := strings.TrimSpace(string(b))
+		if common != "" {
+			if !filepath.IsAbs(common) {
+				common = filepath.Join(gitdir, common)
+			}
+			grants = append(grants, resolveSymlinks(filepath.Clean(common)))
+		}
+	}
+
+	var out []string
+	for _, p := range grants {
+		if !safeGitGrant(p, home) {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: refusing git dir grant %s "+
+				"(encloses $HOME or is a credential dir); git may not work here\n", p)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// safeGitGrant rejects a gitdir target that would widen access past the git
+// database itself — $HOME, an ancestor of it, the filesystem root, or a
+// credential directory (~/.ssh, ~/.aws, ~/.gnupg). A .git file's contents are
+// attacker-controllable by anything that can write the checkout, so the pointer
+// is treated as untrusted input rather than followed blindly.
+func safeGitGrant(p, home string) bool {
+	if p == "" || p == string(filepath.Separator) {
+		return false
+	}
+	if home != "" && cwdEnclosesHome(p, home) {
+		return false
+	}
+	return !isSensitiveMCPTarget(p, home)
+}
+
 func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	// Probe supported Landlock ABI version (ruleset_attr=NULL, size=0, flags=VERSION).
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
@@ -600,6 +687,11 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 	default:
 		rwPaths = append(rwPaths, cwd)
 	}
+	// A worktree/submodule keeps its real git directory outside cwd, so the cwd
+	// grant misses it and every git command fails. Granted regardless of which
+	// cwd case applied above — the gitdir is reached through the .git pointer,
+	// not through the cwd subtree. See ADR 0090-grant-worktree-gitdir.
+	rwPaths = append(rwPaths, gitDirGrants(resolvedCwd, resolvedHome, os.Getenv("GIT_DIR"))...)
 	for _, p := range rwPaths {
 		if err := allowPath(p, rwAccess); err != nil {
 			return fmt.Errorf("allow %s: %w", p, err)
