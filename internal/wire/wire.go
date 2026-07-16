@@ -46,6 +46,12 @@ type Response struct {
 	Reason string `json:"reason,omitempty"`
 	RuleID string `json:"rule_id,omitempty"`
 	Impact string `json:"impact,omitempty"`
+
+	// WouldAction carries the verdict monitor mode declined to act on, so the
+	// hook can say "would have blocked" instead of allowing in silence. Empty
+	// in enforce mode; Action is always what is actually being enforced.
+	// See ADR 0091-monitor-mode-tool-calls.
+	WouldAction string `json:"would_action,omitempty"`
 }
 
 // DefaultSocketPath returns the default path for the daemon Unix socket.
