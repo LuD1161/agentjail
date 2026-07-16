@@ -100,9 +100,16 @@ hook_present && ok "baseline: agentjail-hook is wired in the Claude settings fil
 
 # ===========================================================================
 echo "=== 5a. hook entry stripped, daemon UP -> hookwatch must re-inject ==="
+# The redirect always lands, but observing the stripped state races hookwatch's
+# fsnotify path, which repairs in ~5ms — the shell cannot win. Seeing the hook
+# back here is not a failed tamper: we wrote '{}', so its return IS re-injection.
+# 5c proves the strip lands (with the daemon down it sticks).
 echo '{}' > "$SETTINGS"
-hook_present && bad "tamper did not take effect (hook still present after stripping)" \
-             || ok "hook entry stripped from the settings file"
+if hook_present; then
+    ok "hook re-injected before the strip was observable — fsnotify beat the check (we wrote '{}'; its return is the repair)"
+else
+    ok "hook entry stripped from the settings file"
+fi
 if wait_hook_present "$REINJECT_WAIT"; then
     ok "hookwatch re-injected the hook with the daemon UP (ADR 0026)"
 else
