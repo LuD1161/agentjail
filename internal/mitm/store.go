@@ -78,6 +78,23 @@ type RequestStore struct {
 	db *sql.DB
 }
 
+// DBFileName is the network store's filename inside ~/.agentjail. Exported so
+// the shield derives its deny rule from here rather than keeping a second copy.
+// See ADR 0090-persist-request-bodies (D3).
+const DBFileName = "network.db"
+
+// DBProtectedFileNames returns the DB and every sidecar SQLite may write beside
+// it. The WAL holds uncheckpointed bodies, so denying the .db alone leaves the
+// freshest traffic readable. See ADR 0090-persist-request-bodies (D3).
+func DBProtectedFileNames() []string {
+	return []string{
+		DBFileName,
+		DBFileName + "-wal",     // write-ahead log: recent, uncheckpointed bodies
+		DBFileName + "-shm",     // shared-memory index for the WAL
+		DBFileName + "-journal", // rollback journal, if WAL is ever disabled
+	}
+}
+
 // DefaultDBPath returns the default network request database path:
 // ~/.agentjail/network.db.
 func DefaultDBPath() string {
@@ -85,7 +102,7 @@ func DefaultDBPath() string {
 	if err != nil {
 		return "/tmp/agentjail-network.db"
 	}
-	return filepath.Join(home, ".agentjail", "network.db")
+	return filepath.Join(home, ".agentjail", DBFileName)
 }
 
 // NewRequestStore opens (or creates) the network_requests table in the

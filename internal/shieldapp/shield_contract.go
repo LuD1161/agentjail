@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/mitm"
 )
 
 // AccessMode is the access level granted for a PathGrant.
@@ -180,16 +181,21 @@ func AgentjailSecretsProtectedNames() map[string]bool {
 }
 
 // AgentjailReadDeniedNames returns every ~/.agentjail child the sandboxed agent
-// must not be able to READ: the secrets set above plus the control-plane token.
-// shield_linux.go enumerates against this.
+// must not be able to READ. shield_linux.go enumerates against this; macOS
+// denies the whole subtree instead (sensitiveReadPaths).
 //
-// Dropping the token from this set silently disarms control-plane auth — the
-// read denial IS the boundary (ADR 0067). Kept separate from
-// AgentjailSecretsProtectedNames because that set mirrors uninstall's
-// --keep-secrets preserve list (ADR 0048) and the token must not be preserved.
+// Dropping the token silently disarms control-plane auth — the read denial IS
+// the boundary. See ADR 0067-control-plane-token-auth; separate from
+// AgentjailSecretsProtectedNames per ADR 0048.
+//
+// The network store holds decrypted bodies and the agent shares our uid, so
+// 0600 is not a boundary. See ADR 0090-persist-request-bodies (D3).
 func AgentjailReadDeniedNames() map[string]bool {
 	m := AgentjailSecretsProtectedNames()
 	m[ctlauth.TokenFileName] = true
+	for _, name := range mitm.DBProtectedFileNames() {
+		m[name] = true
+	}
 	return m
 }
 
