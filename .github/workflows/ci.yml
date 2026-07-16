@@ -49,6 +49,37 @@ jobs:
       - name: opa test
         run: opa test agentpolicy/policies/
 
+  # The Go jobs above deliberately set up Go only: a clean clone must build with
+  # no Node toolchain, embedding the tracked static/dist/.gitkeep placeholder.
+  # This job is the only one that needs bun — it proves the SPA still builds and
+  # that THIRD_PARTY_LICENSES covers the npm packages shipped inside the binary.
+  frontend:
+    name: frontend (build + licenses)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: cmd/agentjail/ui/frontend/.bun-version
+
+      - name: build web UI
+        run: make ui
+
+      - name: go build with the real SPA embedded
+        run: go build ./...
+
+      # Fails if a dependency changed without regenerating attributions. The npm
+      # half is not skippable: the script errors when node_modules is absent.
+      - name: licenses check
+        run: make licenses-check
+
   smoke:
     name: smoke (hook e2e)
     runs-on: macos-14

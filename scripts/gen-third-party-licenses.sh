@@ -1,15 +1,27 @@
 #!/bin/sh
 # gen-third-party-licenses.sh — regenerate THIRD_PARTY_LICENSES.
 #
-# Concatenates the verbatim license (and NOTICE) text of every third-party Go
-# module compiled into the shipped binaries (./cmd/...), unioned across all
-# release target platforms so the file is complete regardless of build-tag
-# differences. This satisfies the attribution requirements of the permissive
-# licenses we depend on (Apache-2.0 §4(d) NOTICE reproduction; MIT/BSD/ISC
-# copyright-notice preservation in binary distributions).
+# Concatenates the verbatim license (and NOTICE) text of every third-party
+# dependency shipped inside the binaries, from BOTH trees:
 #
-# Dependency-free: uses only `go list` + the local module cache. No go-licenses,
-# no network. Run from anywhere; it operates on the repo root.
+#   Go  — every module compiled into ./cmd/..., unioned across all release
+#         target platforms so the file is complete regardless of build-tag
+#         differences.
+#   npm — the production dependency closure of the Vite/React frontend, which
+#         is bundled into static/dist/ and embedded in the binary (see
+#         scripts/npm-licenses.mjs). `go list` cannot see these.
+#
+# This satisfies the attribution requirements of the permissive licenses we
+# depend on (Apache-2.0 §4(d) NOTICE reproduction; MIT/BSD/ISC copyright-notice
+# preservation in binary distributions).
+#
+# Dependency-free: `go list` + the local module cache, and `node` + the local
+# node_modules tree. No go-licenses, no license-checker, no network. Run from
+# anywhere; it operates on the repo root.
+#
+# The npm tree is NOT optional: if the frontend exists but its node_modules is
+# absent, this fails loudly. Skipping it silently would emit a Go-only file that
+# passes --check while hundreds of shipped npm packages go unattributed.
 #
 # Usage:
 #   scripts/gen-third-party-licenses.sh [output-file]   # default: THIRD_PARTY_LICENSES
@@ -31,6 +43,22 @@ esac
 MAIN_MODULE=$(go list -m)
 CMDS="./cmd/..."
 PLATFORMS="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64"
+FRONTEND="cmd/agentjail/ui/frontend"
+
+# Fail loudly rather than emit a Go-only file that would pass --check.
+if [ -f "$FRONTEND/package.json" ]; then
+    if ! command -v node >/dev/null 2>&1; then
+        echo "node is required to attribute the frontend's npm dependencies" >&2
+        echo "(they ship inside the binary via static/dist). Install node, or" >&2
+        echo "remove $FRONTEND if the frontend is gone." >&2
+        exit 1
+    fi
+    if [ ! -d "$FRONTEND/node_modules" ]; then
+        echo "$FRONTEND/node_modules is missing — run 'bun install' in $FRONTEND" >&2
+        echo "(or 'make ui-deps') so npm licenses can be enumerated." >&2
+        exit 1
+    fi
+fi
 
 mods=$(mktemp)
 trap 'rm -f "$mods" "$mods.out"' EXIT
@@ -48,11 +76,12 @@ done | sort -u | grep -v "^${MAIN_MODULE}	" | grep -v '^	' > "$mods"
     echo
     echo "The agentjail binaries (agentjail, agentjail-hook, agentjail-daemon,"
     echo "agentjail-shield, agentjail-netproxy) statically link the third-party Go"
-    echo "modules listed below. Their license texts are reproduced verbatim to"
+    echo "modules listed below, and embed the web UI bundle built from the npm"
+    echo "packages listed below. Their license texts are reproduced verbatim to"
     echo "satisfy attribution requirements. agentjail itself is Apache-2.0 (see"
     echo "LICENSE). Regenerate with scripts/gen-third-party-licenses.sh."
     echo
-    echo "Modules:"
+    echo "Go modules:"
     while IFS='	' read -r path version dir; do
         [ -n "$path" ] && echo "  - ${path} ${version}"
     done < "$mods"
@@ -79,6 +108,16 @@ done | sort -u | grep -v "^${MAIN_MODULE}	" | grep -v '^	' > "$mods"
         done
         [ "$found" -eq 0 ] && echo "(no license file found in module cache — review manually)"
     done < "$mods"
+
+    if [ -f "$FRONTEND/package.json" ]; then
+        echo
+        echo
+        echo "################################################################################"
+        echo "# npm packages — bundled into the embedded web UI (static/dist)"
+        echo "################################################################################"
+        echo
+        node scripts/npm-licenses.mjs "$FRONTEND"
+    fi
 } > "$mods.out"
 
 if [ "$CHECK" -eq 1 ]; then
@@ -89,5 +128,6 @@ if [ "$CHECK" -eq 1 ]; then
     echo "THIRD_PARTY_LICENSES is up to date."
 else
     mv "$mods.out" "$OUT"
-    echo "wrote $OUT ($(grep -c '^  - ' "$OUT") modules)"
+    echo "wrote $OUT ($(wc -l < "$mods" | tr -d ' ') Go modules, \
+$(sed -n '/^npm packages:/,/^$/p' "$OUT" | grep -c '^  - ' || true) npm packages)"
 fi

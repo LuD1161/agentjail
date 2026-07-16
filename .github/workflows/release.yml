@@ -38,8 +38,24 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: cmd/agentjail/ui/frontend/.bun-version
+
+      # Must precede the go build: without it the binary embeds only the
+      # static/dist/.gitkeep placeholder and silently ships the legacy HTML UI.
+      # `make ui` hard-fails if dist/index.html is not produced.
+      - name: build web UI
+        run: make ui
+
+      # Runs after `make ui` so node_modules exists — the npm half of the
+      # attribution cannot be enumerated without it, and refuses to be skipped.
       - name: regenerate THIRD_PARTY_LICENSES
         run: ./scripts/gen-third-party-licenses.sh
+
+      # A tag must not ship attributions that differ from the committed file.
+      - name: fail if THIRD_PARTY_LICENSES was stale
+        run: git diff --exit-code -- THIRD_PARTY_LICENSES
 
       - name: build binaries
         env:

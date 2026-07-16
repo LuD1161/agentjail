@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball e2e-release
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release
 
 BIN ?= bin/agentjail
 
@@ -134,8 +134,26 @@ dist-tarball:  ## build a release-layout tarball for testbed installs (DIST_GOOS
 clean:  ## remove built binaries
 	rm -rf bin/ dist/
 
-licenses:  ## regenerate THIRD_PARTY_LICENSES from compiled-in deps
+FRONTEND := cmd/agentjail/ui/frontend
+SPA_DIST := cmd/agentjail/ui/static/dist
+
+ui-deps:  ## install the web UI's npm dependencies (needs bun)
+	cd $(FRONTEND) && bun install --frozen-lockfile
+
+# Scrubs stale assets by hand because vite's emptyOutDir is off: it would delete
+# the tracked $(SPA_DIST)/.gitkeep that keeps `go:embed all:static/dist` matching
+# on a clean clone. Never re-enable emptyOutDir.
+ui: ui-deps  ## build the React web UI into static/dist (embedded by go:embed)
+	@mkdir -p $(SPA_DIST) && touch $(SPA_DIST)/.gitkeep
+	@find $(SPA_DIST) -mindepth 1 ! -name .gitkeep -delete
+	cd $(FRONTEND) && bun run build
+	@test -f $(SPA_DIST)/index.html \
+		|| { echo "ui: $(SPA_DIST)/index.html not produced — SPA would ship unbuilt"; exit 1; }
+	@test -f $(SPA_DIST)/.gitkeep \
+		|| { echo "ui: $(SPA_DIST)/.gitkeep was deleted — clean clones will not build"; exit 1; }
+
+licenses: ui-deps  ## regenerate THIRD_PARTY_LICENSES from compiled-in Go + npm deps
 	./scripts/gen-third-party-licenses.sh
 
-licenses-check:  ## fail if THIRD_PARTY_LICENSES is out of date (run after dep changes)
+licenses-check: ui-deps  ## fail if THIRD_PARTY_LICENSES is out of date (run after dep changes)
 	./scripts/gen-third-party-licenses.sh --check
