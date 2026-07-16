@@ -46,6 +46,35 @@ _chaos_lib_expected_version() {
     git -C "$root" describe --tags --always --dirty 2>/dev/null
 }
 
+# chaos_daemon_ready <hook> <project> - poll until the daemon is really SERVING,
+# not merely up. Returns 0 when ready, non-zero after ~30s.
+#
+# Readiness is two conditions, and both are load-bearing: the hook must exit 0
+# AND show no fail-open marker. Checking only the markers reports READY when the
+# hook times out or dies, because a dead hook prints nothing for grep to find -
+# i.e. it is most confident exactly when the daemon is least healthy. See AGE-236.
+#
+# Takes hook/project as args rather than reading the caller's globals: this is a
+# contract, not a closure over one scenario's variables.
+chaos_daemon_ready() {
+    local hook="${1:?chaos_daemon_ready: hook path required}"
+    local project="${2:?chaos_daemon_ready: project dir required}"
+
+    [ -x "$hook" ] || return 1
+    mkdir -p "$project" 2>/dev/null || true
+
+    local i out rc
+    for i in $(seq 1 30); do
+        out=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"%s/chaos-ready.txt","content":"x"},"session_id":"chaos-ready","cwd":"%s"}' "$project" "$project" \
+            | chaos_lib_timeout 3 "$hook" 2>&1); rc=$?
+        if [ "$rc" = 0 ] && ! echo "$out" | grep -qiE 'systemmessage|daemon unreachable|daemon not running'; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 # chaos_assert_fresh_binaries [binary-path] - abort the scenario (exit 1) if
 # the installed binary's reported version doesn't match the working tree's
 # expected version. No --version flag exists on agentjail-hook (verified:

@@ -132,6 +132,17 @@ extract_system_message() {
 echo "=== baseline: daemon UP, hook is quiet ==="
 # The control for every "fail-open is visible" assertion below: with the daemon
 # up the SAME call must carry no warning. Without this the checks are vacuous.
+#
+# Serving, not merely up: a freshly provisioned box leaves the daemon up but not
+# yet answering for a beat, and the control would catch that warm-up fail-open
+# and fail. Readiness is a PRECONDITION here, not a finding - if the daemon never
+# serves, every assertion below is meaningless, so abort rather than report. The
+# baseline assertions that follow stay as the control they were written to be.
+if ! chaos_daemon_ready "$HOOK" "$PROJECT"; then
+    bad "daemon never started serving within 30s - cannot establish a baseline, so every assertion below would be meaningless"
+    echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="
+    exit 1
+fi
 drive_hook
 [ "$HRC" = 0 ] && ok "baseline: in-project write allowed (exit 0)" || bad "baseline: in-project write exit $HRC (expected 0)"
 if echo "$HOUT" | grep -q 'systemMessage'; then
@@ -306,16 +317,23 @@ daemon_start
 if wait_up; then
     ok "daemon restarted and re-created a real socket"
     [ -S "$SOCK" ] && ok "daemon socket is a socket again (stale file replaced)" || bad "daemon socket path is not a socket after restart"
-    # The daemon clears the sentinel on startup so the warning re-arms for the
-    # NEXT outage. Without this the banner would fire at most once, ever.
-    sleep 2
-    [ -f "$SENTINEL" ] && bad "daemon did not clear the fail-open sentinel on startup (warning would not re-arm)" \
-                       || ok "daemon cleared the fail-open sentinel on startup (warning re-armed)"
-    drive_hook
-    if echo "$HOUT" | grep -q 'systemMessage'; then
-        bad "hook still warns after the daemon is back (stuck in fail-open)"
+    # wait_up only proves the process is up and the socket exists; a socket file
+    # is not a serving daemon. Poll until the hook actually stops failing open,
+    # or the next two assertions race the daemon's startup and flake. A fixed
+    # sleep here failed ~1 run in 4 on Darwin. See AGE-236.
+    if chaos_daemon_ready "$HOOK" "$PROJECT"; then
+        # The daemon clears the sentinel on startup so the warning re-arms for
+        # the NEXT outage. Without this the banner would fire at most once, ever.
+        [ -f "$SENTINEL" ] && bad "daemon did not clear the fail-open sentinel on startup (warning would not re-arm)" \
+                           || ok "daemon cleared the fail-open sentinel on startup (warning re-armed)"
+        drive_hook
+        if echo "$HOUT" | grep -q 'systemMessage'; then
+            bad "hook still warns after the daemon is back (stuck in fail-open)"
+        else
+            ok "hook is quiet again after the daemon is back"
+        fi
     else
-        ok "hook is quiet again after the daemon is back"
+        bad "daemon came up but never started serving within 30s (hook still failing open) - box left degraded"
     fi
 else
     bad "daemon did NOT come back within 30s — box left degraded"

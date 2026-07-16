@@ -78,22 +78,11 @@ wait_respawn() {
     return 1
 }
 
-# daemon_ready — a socket/exit-0 alone can't distinguish serving from
-# fail-open (fail-open also exits 0). Poll a benign write until the hook's
-# reply carries neither the systemMessage nor stderr banner fail-open emits
-# (ADR 0073). Bounded, not skipped: never-ready is a real bad().
-daemon_ready() {
-    [ -x "$HOOK" ] || return 1
-    mkdir -p "$PROJECT" 2>/dev/null || true
-    local i out
-    for i in $(seq 1 30); do
-        out=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"%s/chaos-ready.txt","content":"x"},"session_id":"chaos-ready","cwd":"%s"}' "$PROJECT" "$PROJECT" \
-            | timeout 3 "$HOOK" 2>&1)
-        echo "$out" | grep -qiE 'systemmessage|daemon unreachable|daemon not running' || return 0
-        sleep 1
-    done
-    return 1
-}
+# A socket/exit-0 alone can't distinguish serving from fail-open (fail-open also
+# exits 0), so readiness polls a benign write for the absence of the fail-open
+# markers (ADR 0073) AND a clean exit. Bounded, not skipped: never-ready is a
+# real bad(). Lives in chaos-lib.sh so daemon-outage cannot drift from it.
+daemon_ready() { chaos_daemon_ready "$HOOK" "$PROJECT"; }
 
 restore() { daemon_active || daemon_start; }
 trap restore EXIT INT TERM
