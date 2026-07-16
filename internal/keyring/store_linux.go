@@ -4,6 +4,7 @@ package keyring
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -54,7 +55,22 @@ type dbusSecret struct {
 	ContentType string
 }
 
+// openOSStore is the ladder: Secret Service if unlocked, file KEK otherwise.
+// Any ErrNoKeychain (which ErrKeychainLocked wraps) falls back, so a locked
+// collection encrypts bodies rather than recording them in the clear.
+// See ADR 0097-linux-kek-fallback.
 func openOSStore() (Store, error) {
+	s, err := openSecretService()
+	if err == nil {
+		return s, nil
+	}
+	if !errors.Is(err, ErrNoKeychain) {
+		return nil, err
+	}
+	return OpenFileStore()
+}
+
+func openSecretService() (Store, error) {
 	// Auth and Hello do bus I/O with no context, so bound the whole dial rather
 	// than only the calls that take one. A hang here is a stalled recorder.
 	type result struct {

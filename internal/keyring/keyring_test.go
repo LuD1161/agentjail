@@ -156,9 +156,10 @@ func TestUnwrapCorruptKEKIsTyped(t *testing.T) {
 // The §9.2 seam: "no keychain" is one typed error the caller branches on, so
 // fail-closed vs loud-plaintext is a decision at ONE call site, not here.
 func TestOpenWithoutKeychainIsTyped(t *testing.T) {
+	stageKEKHome(t)
 	k, err := Open()
 	if err == nil {
-		t.Skipf("this host has a %s keychain; the no-keychain seam is exercised by the error path", k.Backend())
+		t.Skipf("this host reached the %s backend; the no-keychain seam is exercised by the error path", k.Backend())
 	}
 	if !errors.Is(err, ErrNoKeychain) {
 		t.Fatalf("want ErrNoKeychain, got %v", err)
@@ -234,6 +235,7 @@ func TestNilAndEmptyAADAreEquivalent(t *testing.T) {
 func TestMemoryStoreIsNotSelectedImplicitly(t *testing.T) {
 	// Open() must never hand back the test backend, or a keychain-less host
 	// would silently get a process-lifetime key.
+	stageKEKHome(t)
 	k, err := Open()
 	if err == nil && k.Backend() == (&MemoryStore{}).Name() {
 		t.Fatal("Open() selected the in-memory store")
