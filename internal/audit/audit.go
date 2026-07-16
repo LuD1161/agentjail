@@ -29,6 +29,11 @@ const (
 	// (buffer full or write error). Under-recording is otherwise invisible;
 	// see ADR 0072.
 	DecisionsDropped = "decisions.dropped"
+	// TunnelALPNDowngraded reports that a client offered HTTP/2 and the
+	// tunnel's interception served HTTP/1.1 instead. Emitted once per session:
+	// a client that cannot fall back (gRPC) fails, and silently downgrading is
+	// the kind of unstated behaviour ADR 0077 exists to prevent. See AGE-222.
+	TunnelALPNDowngraded = "tunnel.alpn_downgraded"
 	DaemonStarted         = "daemon.started"
 	DaemonStopped         = "daemon.stopped"
 	DaemonFailopen        = "daemon.failopen"

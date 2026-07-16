@@ -172,7 +172,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// skipped. On ANY failure we fall back to netproxy (fail-open).
 	var tunnelSess *tunnelSession
 	if tunnelMode {
-		if s, ready := startTunnel(ctx, mitmMode); ready {
+		if s, ready := startTunnel(ctx, mitmMode, emitter); ready {
 			tunnelSess = s
 			noNetproxy = true
 			defer tunnelSess.cleanup()

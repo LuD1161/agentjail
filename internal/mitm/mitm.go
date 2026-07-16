@@ -13,8 +13,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/netpolicy"
 )
 
@@ -31,9 +33,16 @@ type MITMHandler struct {
 	Logger    *slog.Logger
 	OnRequest func(req *RequestLog) // called for each intercepted request
 	Matcher   *netpolicy.Matcher    // optional: if set, operations are evaluated against templates
+	// Audit records session-level facts about the interception itself, as
+	// opposed to per-request logs (which go to OnRequest). Optional: nil means
+	// the notice is logged but not filed. AGE-222.
+	Audit audit.Emitter
 
 	UpstreamTLSConfig *tls.Config // optional: override for upstream TLS (tests only)
 	certCache         *hostCertCache
+	// h2Noted keeps the ALPN downgrade notice to once per session. Atomic
+	// because ClientHellos arrive on many connections concurrently.
+	h2Noted atomic.Bool
 }
 
 // NewMITMHandler creates a handler with an initialized cert cache.
@@ -69,9 +78,26 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	}
 
 	// Step 2: wrap client conn with TLS server using the host cert.
+	//
+	// NextProtos states what we actually serve. It was unset, so the handshake
+	// settled on HTTP/1.1 by omission: curl quietly downgraded, and clients
+	// that cannot (gRPC, anything pinning h2) just failed. Saying "http/1.1"
+	// out loud is the honest version of the same limitation. ADR 0077 (D4),
+	// AGE-222; serving h2 for real is AGE-223.
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{*hostCert},
 		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"http/1.1"},
+		// GetConfigForClient is the only place the offer is visible. Once we
+		// advertise http/1.1 only, ConnectionState().NegotiatedProtocol can
+		// never report that the client wanted h2 -- it reports what was agreed,
+		// which is always ours.
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			if offersH2(hello.SupportedProtos) {
+				h.noteH2Downgrade(host, hello.SupportedProtos)
+			}
+			return nil, nil // nil => keep the base config
+		},
 	}
 	clientTLS := tls.Server(clientConn, tlsConfig)
 	if err := clientTLS.Handshake(); err != nil {

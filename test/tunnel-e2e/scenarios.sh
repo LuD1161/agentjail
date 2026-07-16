@@ -234,6 +234,32 @@ else
   skip "A9d a non-intercepted TLS endpoint still verifies" "openssl s_client unavailable or port 465 unreachable"
 fi
 
+# --- ALPN: we serve HTTP/1.1 and must say so rather than let the handshake
+# settle there by omission. curl downgrades cleanly; gRPC cannot. AGE-222.
+ALPN="$(run_tunnel --tunnel -- '
+  curl -s -o /dev/null -w "H2A:%{http_code} ver:%{http_version}\n" --max-time 15 https://www.cloudflare.com/
+  curl -s -o /dev/null -w "H2B:%{http_code} ver:%{http_version}\n" --max-time 15 https://www.google.com/
+')"
+NOTICES="$(grep -c "client offered HTTP/2" <<<"$ALPN" || true)"
+if [ "${NOTICES:-0}" -eq 1 ]; then
+  ok "A9e an h2 offer is reported once per session, not once per connection (AGE-222)"
+elif [ "${NOTICES:-0}" -eq 0 ]; then
+  bad "A9e an h2 offer is reported" "two h2-offering requests produced no notice — the downgrade is silent again"
+else
+  bad "A9e an h2 offer is reported once per session" "$NOTICES notices for 2 connections — per-connection noise gets ignored"
+fi
+
+grep -q "H2A:200" <<<"$ALPN" \
+  && ok "A9f an h2-offering client still succeeds over HTTP/1.1 (curl downgrades)" \
+  || bad "A9f an h2-offering client still succeeds" "$(grep -o 'H2A:[0-9]*' <<<"$ALPN")"
+
+ALPN11="$(run_tunnel --tunnel -- 'curl -s --http1.1 -o /dev/null -w "ONE1:%{http_code}\n" --max-time 15 https://www.cloudflare.com/')"
+if grep -q "client offered HTTP/2" <<<"$ALPN11"; then
+  bad "A9g an HTTP/1.1-only client triggers no downgrade notice" "notice fired for a client that never asked for h2 — false alarm"
+else
+  ok "A9g an HTTP/1.1-only client triggers no downgrade notice"
+fi
+
 GITOUT="$(run_tunnel --tunnel -- 'git ls-remote https://github.com/git/git HEAD >/dev/null 2>&1 && echo GIT:OK || echo GIT:FAIL')"
 grep -q "GIT:OK" <<<"$GITOUT" \
   && ok "A10 git over HTTPS under interception" \

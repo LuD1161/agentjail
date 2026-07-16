@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/dnsvip"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/netns"
@@ -49,7 +50,7 @@ type tunnelSession struct {
 // is wired. See docs/reviews/2026-07-08-network-visibility-review.md (W1).
 // mitmEnabled selects the posture: false relays TLS opaquely, true terminates
 // it via a per-session namespace-scoped CA. ADR 0077.
-func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
+func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (*tunnelSession, bool) {
 	logger := slog.Default()
 
 	// Create the owned user+net+mount namespaces and the in-namespace TUN,
@@ -122,6 +123,7 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 			}
 		})
 		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
+		h.Audit = emitter        // session-level notices, e.g. the ALPN downgrade (AGE-222)
 		gw.SetMITM(h)
 		sess.mitmActive = true
 		logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace", "db", mitm.DefaultDBPath())
