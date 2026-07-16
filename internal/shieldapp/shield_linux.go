@@ -186,11 +186,11 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not locate agentjail-netproxy binary: %v", findErr))
 		}
 		// Register THIS session's resolved allowlist with the (possibly shared)
-		// netproxy and get back the token to inject. This runs BEFORE Landlock,
-		// so the shield can still reach the control socket; the agent (post-
-		// Landlock) cannot (the socket lives under the read-only ~/.agentjail
-		// grant, and AF_UNIX connect needs write). Incompatible/unverifiable
-		// proxy -> fail closed inside ensureSessionProxy.
+		// netproxy and get back the token to inject. The agent is kept off this
+		// control socket by the read-denied control token, NOT by Landlock --
+		// which does not mediate AF_UNIX connect(). See ADR
+		// 0067-control-plane-token-auth. Incompatible/unverifiable proxy ->
+		// fail closed inside ensureSessionProxy.
 		shieldCwd, _ := os.Getwd()
 		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, fmt.Sprintf("shield-%d", os.Getpid()), shieldCwd, resolveSessionPolicy(ctx, cfg, emitter))
 		if startErr != nil {
@@ -629,8 +629,9 @@ func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
 
 	// SSH agent socket: if SSH_AUTH_SOCK points outside /tmp (e.g.
 	// /run/user/<uid>/... via systemd/gnome-keyring), grant RW on the
-	// socket so ssh can connect(2) to the agent. The env var itself is
-	// passed through via EnvAllowlistBaseline.
+	// socket. Note connect(2) does not depend on this grant -- Landlock
+	// does not mediate AF_UNIX connect() (ADR 0067-control-plane-token-auth).
+	// The env var itself is passed through via EnvAllowlistBaseline.
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		if resolved, err := filepath.EvalSymlinks(sock); err == nil {
 			if !strings.HasPrefix(resolved, "/tmp/") && !strings.HasPrefix(resolved, "/tmp") {
