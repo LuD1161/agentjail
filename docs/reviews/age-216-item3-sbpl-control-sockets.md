@@ -145,6 +145,11 @@ failure. Corrected, and re-measured on a clean guest.
 
 ## Deliberately not done
 
+> **Superseded.** Both grants named below were measured (ADR
+> 0067-control-plane-token-auth, addenda 1 and 2) and subsequently **removed**.
+> The reasoning below is kept as the record of why they were left in place at
+> the time.
+
 The `~/.agentjail/daemon.sock` single-file write grant stays. Its stated
 rationale is false, which *suggests* it is a no-op that could be dropped - but
 "the reason is wrong" is not "the grant is unnecessary", and the enforcement

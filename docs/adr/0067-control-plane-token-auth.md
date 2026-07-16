@@ -128,13 +128,13 @@ Costs and residuals:
   describes Linux as path-isolating the control plane is wrong by construction; the token is
   the boundary. `ControlSocketPaths` (`shield_contract.go`) is the shared list, and it is
   darwin-enforceable only — named there, not silently.
-- **Measured; the grant stays, pending a human call.** The `~/.agentjail/daemon.sock`
-  single-file write grant (`AgentPaths.HomeFilesRW`) was added believing `AF_UNIX connect()`
-  needs write on the socket inode. It does not — the grant has since been A/B-measured as a
-  `connect()` no-op on Landlock ABI 2 (see the addendum below), so it could be dropped. It is
-  left in place deliberately: a false rationale is not by itself proof the grant is
-  unnecessary, and dropping a grant is a human decision. The comments no longer assert the
-  mechanism.
+- **Measured, then dropped.** The `~/.agentjail/daemon.sock` single-file write grant
+  (`AgentPaths.HomeFilesRW`) was added believing `AF_UNIX connect()` needs write on the socket
+  inode. It does not — A/B-measured as a `connect()` no-op on Landlock ABI 2 (addendum 1). The
+  same false premise had a second instance, the `SSH_AUTH_SOCK` `rwFileAccess` grant, measured
+  the same way (addendum 2). Both were left in place pending a human call; that call was made
+  and **both are now removed**. `TestLandlockAgentjailStateEnforcement`'s `sock_connect=ok`
+  assertion guards the invariant that the hook still reaches the daemon without a grant.
 
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
@@ -186,9 +186,10 @@ the socket inode)". That is measurably false here. The same stale premise is wha
 `daemon-ctl.sock`'s "Linux Landlock denies connect() without write" comment asserts — and
 `ctl_connect=ok` contradicts it, which is precisely the gap this ADR's token exists to close.
 
-The grant is **left in place**; dropping it and correcting the comments is a human decision.
-Note the grant is not load-bearing on macOS either (sbpl permits the connect via
-allow-default network), so removal would be a Linux-and-macOS no-op — but that is untested.
+**The grant has since been removed** (the human decision this addendum left open). Verified on
+the same kernel after removal: `sock_connect=ok` still holds, so the hook reaches the daemon
+with no grant at all. `HomeFilesRW` is consumed only by `shield_linux.go`, so the removal is
+Linux-only by construction; macOS never had this grant.
 
 ## Addendum 2: the `SSH_AUTH_SOCK` write grant measured (AGE-216 item 3.3)
 
@@ -224,8 +225,12 @@ Placement matters and is easy to get wrong: `SSH_AUTH_SOCK` must resolve **outsi
 or the grant code skips it *and* `/tmp`'s blanket RW grant masks the result — two independent
 routes to a vacuous pass.
 
-The grant is **left in place**. A false rationale is not by itself proof the grant is
-unnecessary, and dropping a grant is a human decision — the same call Addendum 1 made. What
-this closes is the "suspected by argument" / "measured" gap: it is now measured. On macOS the
-allow is genuinely load-bearing (Seatbelt does model `AF_UNIX connect()` as `network-outbound`),
-which is why the macOS fix was a guard on the allow rather than its deletion.
+**The grant has since been removed**, together with `daemon.sock`'s — the human decision both
+addenda left open. Verified on the same kernel after removal: the full `shieldapp` suite passes
+and `sock_connect=ok` still holds.
+
+**The removal is Linux-only, and the asymmetry is the whole point.** On macOS the sbpl
+`(allow network-outbound (path $SSH_AUTH_SOCK))` is genuinely load-bearing — Seatbelt *does*
+model `AF_UNIX connect()` as `network-outbound`, so without it `ssh` cannot reach its agent.
+That allow stays, guarded against control-socket paths (AGE-216 item 3.2). Deleting it to
+"match Linux" would break `ssh` under the shield on macOS.
