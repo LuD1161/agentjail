@@ -197,7 +197,10 @@ Or refuse and fail early:  TESTBED_RECLAIM=never $0 gate"
 # takes one slot, not a clean sweep.
 gate_reclaim_slot() {
     local keep="${1:?gate_reclaim_slot: gate instance required}"
-    "${DRIVER}_exists" "$keep" && return 0   # reusing the gate box needs no new slot
+    # keep is the full instance name (tb-*); driver _exists re-applies the
+    # prefix, so hand it the short name or it looks for tb-tb-* and never
+    # matches, forcing a needless reclaim of the gate's own reused box.
+    "${DRIVER}_exists" "${keep#"$TB_PREFIX"}" && return 0   # reusing the gate box needs no new slot
     [ "$(testbed_count)" -lt "$MAX_TESTBEDS" ] && return 0
 
     log "the gate needs a slot: $(testbed_count) testbed(s) exist, cap is $MAX_TESTBEDS"
