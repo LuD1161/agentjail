@@ -28,6 +28,8 @@ package shieldapp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -103,11 +105,20 @@ func Run(args []string) int {
 	// Open the audit emitter BEFORE sandbox activation. After Landlock/
 	// Seatbelt is applied, new file opens may be restricted. Pre-opened
 	// file descriptors survive Landlock.
+	//
+	// A failure here never blocks the launch, and never passes silently:
+	// stderr is still the user's terminal at this point, and the marker is
+	// what doctor can read later. See ADR 0089-record-shield-launches.
 	var emitter audit.Emitter = audit.NopEmitter{}
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
-		if st, err := store.Open(dbPath); err == nil {
+	stateDir, err := shieldStateDir()
+	if err != nil {
+		fmt.Fprint(os.Stderr, unrecordableWarning("~/.agentjail/agentjail.db", err))
+	} else {
+		st, openErr := openShieldAudit(stateDir)
+		if openErr != nil {
+			fmt.Fprint(os.Stderr, unrecordableWarning(shieldDBPath(stateDir), openErr))
+			markShieldUnrecorded(stateDir, openErr)
+		} else {
 			emitter = st
 			defer st.Close()
 		}
@@ -217,6 +228,75 @@ func Run(args []string) int {
 	// unreachable in practice but keeps this function's signature honest.
 	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *policyPath, startTime, emitter)
 	return 0
+}
+
+// unrecordedMarkerName is the file dropped beside the store when a launch could
+// not open it. Without it, an absent shield.activated cannot be told apart from
+// a shield that never ran. See ADR 0089-record-shield-launches.
+const unrecordedMarkerName = "shield-unrecorded"
+
+// shieldStateDir returns ~/.agentjail. Unlike defaultPolicyPath there is no
+// /tmp fallback: a store written outside $HOME is one no reader looks in.
+func shieldStateDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		return "", errors.New("home directory is empty")
+	}
+	return filepath.Join(home, ".agentjail"), nil
+}
+
+// shieldDBPath returns the audit store path inside stateDir.
+func shieldDBPath(stateDir string) string {
+	return filepath.Join(stateDir, "agentjail.db")
+}
+
+// openShieldAudit opens the shield's audit store. The error is returned rather
+// than swallowed: the caller must warn and mark, not launch quietly.
+func openShieldAudit(stateDir string) (store.EventStore, error) {
+	st, err := store.Open(shieldDBPath(stateDir))
+	if err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+// unrecordableWarning is the pre-sandbox stderr banner. Landlock/Seatbelt is
+// not applied yet, so this is the last moment the shield can speak plainly.
+func unrecordableWarning(dbPath string, err error) string {
+	return fmt.Sprintf(
+		"agentjail-shield: WARNING: audit store %s could not be opened: %v\n"+
+			"agentjail-shield: the sandbox still applies, but this session will NOT be recorded --\n"+
+			"agentjail-shield: it will be missing from `agentjail logs` and invisible to `agentjail doctor`.\n"+
+			"agentjail-shield: fix the store to restore the audit trail; the agent is launching anyway.\n",
+		dbPath, err)
+}
+
+// unrecordedMarker is the marker's on-disk shape.
+type unrecordedMarker struct {
+	TS     string `json:"ts"`
+	PID    int    `json:"pid"`
+	Reason string `json:"reason"`
+}
+
+// markShieldUnrecorded records that a launch proceeded without a store.
+// Best-effort by necessity: the causes that break the store (unwritable dir,
+// full disk) break this write too. See ADR 0089-record-shield-launches.
+func markShieldUnrecorded(stateDir string, reason error) {
+	b, err := json.Marshal(unrecordedMarker{
+		TS:     time.Now().UTC().Format(time.RFC3339),
+		PID:    os.Getpid(),
+		Reason: reason.Error(),
+	})
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(stateDir, unrecordedMarkerName), append(b, '\n'), 0o600)
 }
 
 // resolveNoNetproxy computes the effective "netproxy disabled" value from the
