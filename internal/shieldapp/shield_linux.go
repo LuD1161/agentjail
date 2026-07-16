@@ -176,10 +176,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			tunnelSess = s
 			noNetproxy = true
 			defer tunnelSess.cleanup()
-			// Announce the posture ACHIEVED, not the one asked for: interception
-			// can be requested and still fail open to the relay, and claiming we
-			// decrypt when we don't is the misrepresentation D4 forbids.
-			// ADR 0077 (D4, D5).
+			// Announce the posture achieved, not the one asked for. ADR 0077 (D6).
 			posture := "TLS interception off — transparent-only, HTTP(S) policy will not match"
 			if tunnelSess.mitmActive {
 				posture = "TLS interception ON — decrypting this agent's HTTPS"
@@ -380,8 +377,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	var agentCmd *exec.Cmd
 	if tunnelSess != nil {
 		agentCmd = tunnelSess.ns.AgentCommand(agentPath, agentArgs, landlockRulesetFD)
-		// Runtimes that ignore the namespace trust store need the CA named in
-		// the env (ADR 0034, AGE-113).
+		// Runtimes with bundled roots need the CA in env. ADR 0034, AGE-113.
 		for k, v := range tunnelSess.caEnv {
 			env = append(env, k+"="+v)
 		}

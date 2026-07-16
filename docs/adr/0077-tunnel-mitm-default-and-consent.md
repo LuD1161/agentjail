@@ -90,6 +90,23 @@ If interception cannot be set up (CA failure, `network.db` failure), the tunnel
 falls back to the plain relay — fail-open is the floor (ADR 0079) — but says so
 plainly, because policy silently stops covering HTTP(S) at that moment.
 
+### D6 — CA injection is the last fallible step, and the notice reports what happened
+
+Injecting the CA **replaces** the agent's namespace trust store. An injected CA
+with no live MITM therefore leaves the agent trusting only agentjail while it
+talks to real upstreams, and every TLS handshake fails — D5's fail-*open* becomes
+a fail-*closed* network. So `startTunnel` orders the work: everything fallible
+first (open `network.db`), then inject, then `SetMITM` immediately, with nothing
+in between that can bail out.
+
+For the same reason the launch notice reports the posture **achieved**, never the
+one requested. Interception can be asked for and still fall back; printing
+"interception ON" while relaying opaque is the misrepresentation D4 forbids,
+pointed the other way.
+
+Both regressed in exactly these ways before being caught, so both are pinned by
+tests (`tunnel_ca_order_test.go`).
+
 ### Retained from ADR 0076
 
 Conditions 2 and 3 are unchanged and not reopened: the CA is injected **only**

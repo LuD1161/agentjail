@@ -10,17 +10,10 @@ import (
 	"testing"
 )
 
-// setupTunnelCA must be the LAST fallible step before gw.SetMITM.
-//
-// Injecting the CA REPLACES the namespace trust store, so an injected CA with
-// no live MITM leaves the agent trusting only us while it talks to real
-// upstreams -- every TLS handshake then fails. That turns ADR 0077 (D5)'s
-// fail-OPEN promise into a fail-CLOSED network.
-//
-// It regressed exactly that way: setupTunnelCA ran first and network.db was
-// opened after it, so a DB failure poisoned the trust store and then relayed.
-// Asserted structurally because the failure needs an unopenable network.db to
-// reproduce, which a unit test cannot arrange portably.
+// CA injection must be the last fallible step before SetMITM: an injected CA
+// with no live MITM breaks every TLS handshake (fail-closed, not fail-open).
+// Regressed once; structural because reproducing needs an unopenable
+// network.db. ADR 0077 (D6).
 func TestCAInjectionIsLastFallibleStep(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "tunnel_shield_linux.go", nil, 0)

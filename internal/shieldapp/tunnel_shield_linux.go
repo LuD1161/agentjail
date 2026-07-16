@@ -26,9 +26,7 @@ type tunnelSession struct {
 	store     *mitm.RequestStore // non-nil when TLS interception is enabled
 	caCleanup func()             // removes the temp CA cert dir; nil if no MITM
 	caEnv     map[string]string  // CA trust env for the agent; nil if no MITM
-	// mitmActive is the posture actually ACHIEVED, not the one requested:
-	// interception can be asked for and still fail open to the relay. The
-	// launch notice must report this, never the request (ADR 0077 D4).
+	// mitmActive is the posture ACHIEVED, not the one requested. ADR 0077 (D6).
 	mitmActive bool
 	cancel     context.CancelFunc
 }
@@ -125,13 +123,8 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 	// tunnel relays TLS byte-for-byte, agentjail holds no key the agent trusts,
 	// and visibility stays at destination IP / SNI / byte counts. See ADR 0077.
 	sess := &tunnelSession{ns: ns, gw: gw, tun: tun, cancel: cancel}
-	// Injecting the CA is the last step that can fail, deliberately: it
-	// REPLACES the namespace trust store, so an injected CA without a live
-	// MITM leaves the agent trusting only us while talking to real upstreams —
-	// every TLS handshake then fails. Everything fallible therefore happens
-	// first, and injection is followed immediately by SetMITM with nothing in
-	// between that can bail out. ADR 0077 (D5): failing here must fail OPEN to
-	// a working relay, not close the agent's network.
+	// CA injection replaces the namespace trust store, so it is the LAST
+	// fallible step before SetMITM. ADR 0077 (D6).
 	if !mitmEnabled {
 		// No CA minted, no SetMITM: the gateway relays TLS byte-for-byte.
 		logger.Info("tunnel TLS interception OFF (transparent-only) — HTTP(S) policy templates will NOT match; visibility is destination IP, SNI and byte counts only")
@@ -143,8 +136,7 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 	} else {
 		sess.store = store
 		sess.caCleanup = caCleanup
-		// The bind-mount alone is not enough: Node and Python's requests use
-		// bundled roots and ignore the namespace trust store (ADR 0034, AGE-113).
+		// Node/Python ignore the namespace trust store. ADR 0034, AGE-113.
 		sess.caEnv = TunnelCAEnv(TunnelCACertPath(caDir))
 		h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
 			if lerr := store.Log(rl); lerr != nil {

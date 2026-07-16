@@ -10,9 +10,9 @@ import (
 
 func TestResolveOAuthCallbackPorts(t *testing.T) {
 	tests := []struct {
-		name    string
-		json    string
-		want    []int
+		name string
+		json string
+		want []int
 	}{
 		{
 			name: "extracts ports from redirect URIs",
