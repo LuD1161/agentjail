@@ -30,6 +30,15 @@ func setupTunnelCA(ns *netns.Namespace) (caDir string, caCert *x509.Certificate,
 		return "", nil, nil, func() {}, err
 	}
 
+	// The combined bundle (system roots + our CA) backs SSL_CERT_FILE and
+	// REQUESTS_CA_BUNDLE, which replace rather than extend a trust store.
+	// Built before InjectCA so a failure here does not leave the namespace
+	// trust store already swapped. AGE-221, ADR 0077 (D6).
+	if _, err := WriteCABundle(caDir); err != nil {
+		cleanup()
+		return "", nil, nil, func() {}, fmt.Errorf("write CA bundle: %w", err)
+	}
+
 	if err := ns.InjectCA(certPath); err != nil {
 		cleanup()
 		return "", nil, nil, func() {}, fmt.Errorf("inject CA into namespace: %w", err)

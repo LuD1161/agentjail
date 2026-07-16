@@ -37,7 +37,16 @@ func setupTunnelCADarwin(caDir string) (envVars map[string]string, cleanup func(
 		return nil, func() {}, fmt.Errorf("tunnel CA cert not found at %s: %w", certPath, statErr)
 	}
 
-	vars := TunnelCAEnv(certPath)
+	// Same contract as Linux: the replacing vars get system roots + our CA,
+	// the additive one gets the bare cert. macOS has no bind-mount, so the
+	// bundle is the only thing making non-intercepted TLS verifiable here.
+	// AGE-221.
+	bundlePath, err := WriteCABundle(caDir)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("write CA bundle: %w", err)
+	}
+
+	vars := TunnelCAEnv(certPath, bundlePath)
 
 	// cleanup is a no-op: caDir is owned by the caller who must keep it alive
 	// until the agent exits. The caller removes caDir on the error path only.

@@ -8,22 +8,22 @@ import "testing"
 // which ignore the system store and use bundled roots -- could not verify the
 // MITM cert (AGE-113). macOS had the vars all along. ADR 0034.
 func TestTunnelCAEnvCoversBundledRootRuntimes(t *testing.T) {
-	const cert = "/tmp/agentjail-tunnel-ca-x/root.crt"
-	env := TunnelCAEnv(cert)
+	const (
+		cert   = "/tmp/agentjail-tunnel-ca-x/root.crt"
+		bundle = "/tmp/agentjail-tunnel-ca-x/bundle.crt"
+	)
+	env := TunnelCAEnv(cert, bundle)
 
-	// Each entry is a runtime that would otherwise not trust the MITM CA.
+	// Each entry is a runtime that would otherwise not trust the MITM CA. The
+	// value differs by whether the variable replaces the trust store or adds
+	// to it -- see TestTunnelCAEnvSplitsReplacingFromAdditive (AGE-221).
 	for _, key := range []string{
 		"SSL_CERT_FILE",       // Go, curl, OpenSSL
 		"NODE_EXTRA_CA_CERTS", // Node: bundled roots, ignores the system store
 		"REQUESTS_CA_BUNDLE",  // Python requests/certifi: same
 	} {
-		got, ok := env[key]
-		if !ok {
+		if _, ok := env[key]; !ok {
 			t.Errorf("%s missing: that runtime cannot verify the tunnel CA", key)
-			continue
-		}
-		if got != cert {
-			t.Errorf("%s = %q, want the CA cert path %q", key, got, cert)
 		}
 	}
 }

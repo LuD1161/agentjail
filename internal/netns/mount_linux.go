@@ -16,6 +16,15 @@ var caTrustPaths = []string{
 	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // RHEL (p11-kit)
 }
 
+// CATrustPaths returns the system trust store paths this package bind-mounts
+// over, in preference order. Exported so the env-var side of the CA contract
+// reads the same list rather than keeping its own copy: the bind-mounted store
+// and the bundle named by SSL_CERT_FILE must contain the same roots, and two
+// lists would drift. ADR 0034-platform-backend-shared-contract, AGE-221.
+func CATrustPaths() []string {
+	return append([]string(nil), caTrustPaths...)
+}
+
 // InjectCA bind-mounts a CA certificate file over the system trust store
 // inside the mount namespace.  The host trust store is untouched because
 // the namespace has its own mount table (CLONE_NEWNS).

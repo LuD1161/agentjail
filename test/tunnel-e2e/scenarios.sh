@@ -208,6 +208,32 @@ else
   skip "A9b the session CA is namespace-scoped" "no system CA bundle found at a known path"
 fi
 
+# --- SSL_CERT_FILE/REQUESTS_CA_BUNDLE REPLACE the trust store, so they must
+# name system roots + our CA. With the bare CA, TLS we do not terminate (a
+# non-443 port) has no roots to verify against. AGE-221.
+BUNDLE="$(run_tunnel --tunnel -- '
+  echo "ROOTS:$(grep -c "BEGIN CERTIFICATE" "$SSL_CERT_FILE" 2>/dev/null || echo 0)"
+  echo "SAMEFILE:$([ "$SSL_CERT_FILE" = "$REQUESTS_CA_BUNDLE" ] && echo yes || echo no)"
+  echo "NODEBARE:$([ "$NODE_EXTRA_CA_CERTS" != "$SSL_CERT_FILE" ] && echo yes || echo no)"
+  # A relayed (non-intercepted) endpoint presents its REAL chain.
+  timeout 20 openssl s_client -connect smtp.gmail.com:465 -CAfile "$SSL_CERT_FILE" </dev/null 2>&1 |
+    grep -q "Verify return code: 0" && echo "RELAYED:VERIFIED" || echo "RELAYED:FAILED"
+')"
+R="$(grep -o 'ROOTS:[0-9]*' <<<"$BUNDLE" | cut -d: -f2)"
+if [ "${R:-0}" -gt 10 ] && grep -q "SAMEFILE:yes" <<<"$BUNDLE" && grep -q "NODEBARE:yes" <<<"$BUNDLE"; then
+  ok "A9c the replacing CA vars name a bundle of system roots + our CA (${R} roots); Node keeps the bare cert (AGE-221)"
+else
+  bad "A9c the replacing CA vars name a combined bundle" "roots=${R:-0}; $(grep -o 'SAMEFILE:[a-z]*\|NODEBARE:[a-z]*' <<<"$BUNDLE" | tr '\n' ' ')"
+fi
+
+if grep -q "RELAYED:VERIFIED" <<<"$BUNDLE"; then
+  ok "A9d a NON-intercepted TLS endpoint still verifies against a public root (AGE-221)"
+elif grep -q "RELAYED:FAILED" <<<"$BUNDLE"; then
+  bad "A9d a non-intercepted TLS endpoint still verifies" "the trust store has no public roots — TLS we do not terminate cannot be verified"
+else
+  skip "A9d a non-intercepted TLS endpoint still verifies" "openssl s_client unavailable or port 465 unreachable"
+fi
+
 GITOUT="$(run_tunnel --tunnel -- 'git ls-remote https://github.com/git/git HEAD >/dev/null 2>&1 && echo GIT:OK || echo GIT:FAIL')"
 grep -q "GIT:OK" <<<"$GITOUT" \
   && ok "A10 git over HTTPS under interception" \

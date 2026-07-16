@@ -115,7 +115,7 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 		sess.store = store
 		sess.caCleanup = caCleanup
 		// Node/Python ignore the namespace trust store. ADR 0034, AGE-113.
-		sess.caEnv = TunnelCAEnv(TunnelCACertPath(caDir))
+		sess.caEnv = TunnelCAEnv(TunnelCACertPath(caDir), TunnelCABundlePath(caDir))
 		h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
 			if lerr := store.Log(rl); lerr != nil {
 				logger.Debug("network.db log failed", "err", lerr)
