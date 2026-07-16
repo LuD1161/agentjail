@@ -128,10 +128,20 @@ Costs and residuals:
   describes Linux as path-isolating the control plane is wrong by construction; the token is
   the boundary. `ControlSocketPaths` (`shield_contract.go`) is the shared list, and it is
   darwin-enforceable only — named there, not silently.
+- **Measured; the grant stays, pending a human call.** The `~/.agentjail/daemon.sock`
+  single-file write grant (`AgentPaths.HomeFilesRW`) was added believing `AF_UNIX connect()`
+  needs write on the socket inode. It does not — the grant has since been A/B-measured as a
+  `connect()` no-op on Landlock ABI 2 (see the addendum below), so it could be dropped. It is
+  left in place deliberately: a false rationale is not by itself proof the grant is
+  unnecessary, and dropping a grant is a human decision. The comments no longer assert the
+  mechanism.
 
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
 which this makes a real boundary on Linux rather than a structural one).
+
+Review record for the macOS verification and the comment corrections above:
+[`docs/reviews/age-216-item3-sbpl-control-sockets.md`](../reviews/age-216-item3-sbpl-control-sockets.md).
 
 ## Addendum: the `daemon.sock` write grant measured (AGE-216)
 
