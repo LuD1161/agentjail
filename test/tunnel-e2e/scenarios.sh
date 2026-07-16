@@ -136,10 +136,12 @@ else
   bad "A5  several distinct hosts all reachable (AGE-168 regression)" "got $(grep -o 'MULTI[12]:[0-9]*' <<<"$OUT" | tr '\n' ' ')"
 fi
 
-if [ "$(grep -o 'IPLIT:[0-9]*' <<<"$OUT")" = "IPLIT:200" ]; then
-  xpass "A6  IP-literal https://1.1.1.1" "AGE-220 no IP SANs on leaf certs"
+# An IP literal needs an IP SAN on the leaf; any HTTP status proves the chain
+# verified (1.1.1.1 answers with a redirect). AGE-220.
+if grep -qE "IPLIT:[23][0-9][0-9]" <<<"$OUT"; then
+  ok "A6  IP-literal https://1.1.1.1 verifies (AGE-220) — $(grep -o 'IPLIT:[0-9]*' <<<"$OUT")"
 else
-  xfail "A6  IP-literal https://1.1.1.1" "AGE-220 — no IP SANs on leaf certs"
+  bad "A6  IP-literal https://1.1.1.1 verifies" "got $(grep -o 'IPLIT:[0-9]*' <<<"$OUT") — leaf is missing an IP SAN"
 fi
 
 # --- interception actually decrypts: our CA must be the issuer
@@ -365,10 +367,10 @@ EOF
 G1="$(AGENTJAIL_NETPACKS_DIR="$BADPACKS" timeout 60 "$SHIELD" --tunnel -- \
       bash -c 'curl -s -o /dev/null -w "MALFORMED:%{http_code}\n" --max-time 15 https://example.com/' 2>&1)"
 
-if grep -qiE "invalid template|refusing|malformed template|template error" <<<"$G1"; then
-  ok "G1  a malformed template is rejected loudly"
+if grep -qiE "refusing to launch|invalid network policy template" <<<"$G1" && ! grep -q "MALFORMED:" <<<"$G1"; then
+  ok "G1  a malformed template is rejected loudly and the agent does not launch (AGE-227)"
 else
-  xfail "G1  a malformed template is rejected loudly" "AGE-227 — loads silently, matches everything with an empty action, enforces nothing"
+  bad "G1  a malformed template is rejected loudly" "it loaded silently and the agent ran: $(grep -o 'MALFORMED:[0-9]*' <<<"$G1")"
 fi
 
 BADACT="$WORK/packs-badaction"; mkdir -p "$BADACT"
@@ -384,16 +386,27 @@ action: DENY_ALL
 EOF
 G2="$(AGENTJAIL_NETPACKS_DIR="$BADACT" timeout 60 "$SHIELD" --tunnel -- \
       bash -c 'curl -s -o /dev/null -w "BADACTION:%{http_code}\n" --max-time 15 https://example.com/' 2>&1)"
-if grep -qiE "invalid action|unknown action|refusing" <<<"$G2"; then
-  ok "G2  an unknown action value is rejected loudly"
+if grep -qiE "refusing to launch|expected one of allow, ask, deny" <<<"$G2" && ! grep -q "BADACTION:" <<<"$G2"; then
+  ok "G2  an unknown action value is rejected loudly and the agent does not launch (AGE-227)"
 else
-  xfail "G2  an unknown action value is rejected loudly" "AGE-227 — 'DENY_ALL' silently scores as no-op, request allowed"
+  bad "G2  an unknown action value is rejected loudly" "it loaded silently and the agent ran: $(grep -o 'BADACTION:[0-9]*' <<<"$G2")"
 fi
 
-# --- G3: the good property that limits G1/G2's blast radius — most-restrictive
-# wins, so a broken template cannot shadow a working deny. Guard it.
+# --- G3: most-restrictive wins, so a weaker rule earlier in the load order
+# cannot shadow a deny. This is the property that bounded AGE-227's blast
+# radius; it must hold on its own, so it is guarded with two VALID templates
+# (a malformed one is now rejected outright — G1).
 SHADOW="$WORK/packs-shadow"; mkdir -p "$SHADOW"
-cp "$BADPACKS/wrong-shape.yaml" "$SHADOW/aa-wrong-shape.yaml"
+cat > "$SHADOW/aa-allow.yaml" <<'EOF'
+id: chaos-allow-first
+info:
+  name: a permissive rule loaded before the deny
+  severity: info
+match:
+  host:
+    - example.com
+action: allow
+EOF
 cat > "$SHADOW/zz-valid-deny.yaml" <<'EOF'
 id: chaos-valid-deny
 info:
@@ -403,13 +416,13 @@ match:
   host:
     - example.com
 action: deny
-reason: "must still win next to a broken template"
+reason: "must still win next to a permissive rule"
 EOF
 G3="$(AGENTJAIL_NETPACKS_DIR="$SHADOW" timeout 60 "$SHIELD" --tunnel -- \
       bash -c 'curl -s -o /dev/null -w "SHADOW:%{http_code}\n" --max-time 15 https://example.com/' 2>&1)"
 [ "$(grep -o 'SHADOW:[0-9]*' <<<"$G3")" = "SHADOW:403" ] \
-  && ok "G3  a broken template does not shadow a valid deny (most-restrictive wins)" \
-  || bad "G3  a broken template must not shadow a valid deny" "got $(grep -o 'SHADOW:[0-9]*' <<<"$G3") — a broken file next to a good one disabled enforcement"
+  && ok "G3  a permissive rule does not shadow a valid deny (most-restrictive wins)" \
+  || bad "G3  a permissive rule must not shadow a valid deny" "got $(grep -o 'SHADOW:[0-9]*' <<<"$G3") — an allow rule loaded first disabled the deny"
 
 # --- G4: a malformed policy.yaml must fail CLOSED (never launch unprotected)
 BADPOL="$WORK/policy-broken.yaml"
@@ -423,12 +436,26 @@ else
     || bad "G4  malformed policy.yaml refuses to launch" "agent did not run, but no clear reason given: $(head -1 <<<"$G4")"
 fi
 
-# --- G5/G6: no templates at all — observe-only, traffic must still flow
+# --- G5: a configured packs dir that is not there. Refusing is deliberate:
+# templates were asked for and none can load, so the session would run with no
+# HTTP(S) policy while the user believed otherwise. (Before AGE-227 this failed
+# deeper in and dropped the whole tunnel to netproxy without saying so.)
 G5="$(AGENTJAIL_NETPACKS_DIR="$WORK/does-not-exist" timeout 60 "$SHIELD" --tunnel -- \
       bash -c 'curl -s -o /dev/null -w "NOPACKS:%{http_code}\n" --max-time 15 https://www.cloudflare.com/' 2>&1)"
-[ "$(grep -o 'NOPACKS:[0-9]*' <<<"$G5")" = "NOPACKS:200" ] \
-  && ok "G5  a missing netpacks dir degrades to observe-only, traffic flows" \
-  || bad "G5  missing netpacks dir degrades to observe-only" "got $(grep -o 'NOPACKS:[0-9]*' <<<"$G5")"
+if grep -q "cannot be read" <<<"$G5" && ! grep -q "NOPACKS:" <<<"$G5"; then
+  ok "G5  a configured-but-absent netpacks dir refuses to launch, and says which dir"
+else
+  bad "G5  a configured-but-absent netpacks dir refuses to launch" "the agent ran with no policy: $(grep -o 'NOPACKS:[0-9]*' <<<"$G5")"
+fi
+
+# --- G5b: nothing configured at all is the genuine observe-only case: no
+# templates asked for, so no policy expected, and traffic must flow.
+NOHOME="$WORK/nohome"; mkdir -p "$NOHOME"
+G5b="$(env -u AGENTJAIL_NETPACKS_DIR HOME="$NOHOME" timeout 60 "$SHIELD" --tunnel -- \
+      bash -c 'curl -s -o /dev/null -w "NOCONF:%{http_code}\n" --max-time 15 https://www.cloudflare.com/' 2>&1)"
+[ "$(grep -o 'NOCONF:[0-9]*' <<<"$G5b")" = "NOCONF:200" ] \
+  && ok "G5b no netpacks configured at all degrades to observe-only, traffic flows" \
+  || bad "G5b no netpacks configured degrades to observe-only" "got $(grep -o 'NOCONF:[0-9]*' <<<"$G5b")"
 
 EMPTY="$WORK/packs-empty"; mkdir -p "$EMPTY"
 G6="$(AGENTJAIL_NETPACKS_DIR="$EMPTY" timeout 60 "$SHIELD" --tunnel -- \
@@ -508,9 +535,9 @@ fi
 
 EE="$(grep -o 'CONT_ELAPSED:[0-9]*' <<<"$G12" | cut -d: -f2)"
 if grep -qE "EXPECT:[1-9][0-9][0-9]" <<<"$G12" && [ "${EE:-99}" -lt 25 ]; then
-  xpass "G13 POST with Expect: 100-continue" "AGE-226 — hangs; may be fixed"
+  ok "G13 POST with Expect: 100-continue completes (${EE}s) — AGE-226"
 else
-  xfail "G13 POST with Expect: 100-continue completes" "AGE-226 — no 100-continue handling; client waits forever (S3/Docker uploads, large curl POSTs)"
+  bad "G13 POST with Expect: 100-continue completes" "got $(grep -o 'EXPECT:[0-9]*' <<<"$G12"), elapsed=${EE}s — the client is waiting for an interim 100 that never comes"
 fi
 
 # ================================================================ summary

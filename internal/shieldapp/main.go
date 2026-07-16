@@ -163,6 +163,16 @@ func Run(args []string) int {
 	// ADR 0040, ADR 0041, AGE-227.
 	if *tunnelMode {
 		if dir := resolveNetpacksDir(); dir != "" {
+			// A configured-but-absent directory is its own mistake, and gets
+			// its own message: it is not a malformed template. It used to fail
+			// deeper in, where the gateway error dropped the whole tunnel to
+			// netproxy -- so pointing at a typo'd path silently removed all L7
+			// policy rather than saying so.
+			if fi, serr := os.Stat(dir); serr != nil || !fi.IsDir() {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: network policy templates directory %s cannot be read: %v\n", dir, serr)
+				fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch -- templates were configured but none can be loaded, so no HTTP(S) policy would apply")
+				return 1
+			}
 			if err := netpolicy.ValidateDir(dir); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: invalid network policy template: %v\n", err)
 				fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch the agent with a malformed template -- a template that cannot be parsed enforces nothing")
