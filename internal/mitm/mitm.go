@@ -125,6 +125,24 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		reqLog.URL = fmt.Sprintf("https://%s%s", host, req.URL.RequestURI())
 		reqLog.RequestHeaders = flattenHeaders(req.Header)
 
+		// Expect: 100-continue -- the client sends no body until it is told to.
+		// http.Server answers this for you; http.ReadRequest does not, so the
+		// drain below would block on a body that never comes. Every large
+		// upload (curl adds the header itself, as do S3 and Docker) hung.
+		// AGE-226.
+		//
+		// The body is uploaded to us, not upstream: we still hold it, scan it,
+		// and can deny before anything leaves the machine.
+		if hasExpectContinue(req) {
+			if _, werr := clientTLS.Write([]byte("HTTP/1.1 100 Continue\r\n\r\n")); werr != nil {
+				h.Logger.Debug("write 100-continue failed", "host", host, "err", werr)
+				return
+			}
+			// Answered here, so it must not travel upstream: an upstream
+			// interim 100 would be read back as this request's response.
+			req.Header.Del("Expect")
+		}
+
 		// Buffer request body for policy evaluation (up to maxBodyScan).
 		var bodyBuf []byte
 		var fullBody io.Reader

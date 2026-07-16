@@ -2,8 +2,28 @@ package mitm
 
 import (
 	"net"
+	"net/http"
 	"strings"
 )
+
+// hasExpectContinue reports whether the client is waiting for an interim
+// "100 Continue" before it will send the request body. HTTP/1.0 has no such
+// mechanism, so the header is only meaningful from 1.1 up (RFC 9110 10.1.1).
+func hasExpectContinue(req *http.Request) bool {
+	if !req.ProtoAtLeast(1, 1) {
+		return false
+	}
+	// The header is a comma-separated list in principle; 100-continue is the
+	// only expectation defined, and Go's client sends it alone.
+	for _, v := range req.Header.Values("Expect") {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), "100-continue") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // HostTarget is a connection target parsed once, so the cert, the SNI, the dial
 // address, the cache key and the policy host cannot disagree about what "host"
