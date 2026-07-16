@@ -4,16 +4,105 @@ package shieldapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/dnsvip"
+	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
+
+// openBodyKeys is the KEK seam. Linux has no keychain backend yet, so it
+// reports ErrNoKeychain today; tests substitute a wrapper.
+// See ADR 0095-chunked-body-envelope.
+var openBodyKeys = func() (mitm.KeyWrapper, string, error) {
+	kr, err := keyring.Open()
+	if err != nil {
+		return nil, "", err
+	}
+	return kr, kr.Backend(), nil
+}
+
+// bodyRecording is the recording posture ACHIEVED for one session, not the one
+// requested, so the launch notice cannot overclaim.
+// See ADR 0092-persist-request-bodies (D5).
+type bodyRecording struct {
+	store     *mitm.BodyStore
+	encrypted bool
+	backend   string // KEK backend; "" when bodies are in the clear
+}
+
+// notice is the launch banner's recording clause. No sweep runs yet, so the
+// window is stated as the target it is. See ADR 0092-persist-request-bodies (D2, D5).
+func (r bodyRecording) notice() string {
+	switch {
+	case r.store == nil:
+		return "bodies NOT recorded (capture unavailable; interception and policy unaffected)"
+	case r.encrypted:
+		return fmt.Sprintf("RECORDING request/response bodies, encrypted at rest under the %s keychain "+
+			"(retention target 90 days or 1 GB; no sweep runs yet, so bodies persist until removed)", r.backend)
+	default:
+		return "RECORDING request/response bodies UNENCRYPTED (no OS keychain; retention target 90 days " +
+			"or 1 GB, but no sweep runs yet, so bodies persist until removed)"
+	}
+}
+
+// newBodyRecording builds the session's body store. It never fails the tunnel:
+// policy evaluates from the in-memory body, not the recorder.
+// See ADR 0092-persist-request-bodies (D1, D5).
+func newBodyRecording(ctx context.Context, sessionID string, logger *slog.Logger, emitter audit.Emitter) bodyRecording {
+	keys, backend, keyErr := openBodyKeys()
+
+	store, err := mitm.NewBodyStore(mitm.DefaultBodyDir(), sessionID, keys)
+	if err != nil {
+		logger.Warn("tunnel body recording UNAVAILABLE; interception stays ON and HTTP(S) policy still evaluates — this session's bodies are simply not kept",
+			"dir", mitm.DefaultBodyDir(), "err", err)
+		return bodyRecording{}
+	}
+	if keyErr != nil {
+		reportUnencryptedBodies(ctx, sessionID, keyErr, logger, emitter)
+		return bodyRecording{store: store}
+	}
+	return bodyRecording{store: store, encrypted: true, backend: backend}
+}
+
+// reportUnencryptedBodies makes the degraded posture loud on stderr and durable
+// in agentjail.db: network.db cannot hold its own failure.
+// See ADR 0092-persist-request-bodies (D5).
+func reportUnencryptedBodies(ctx context.Context, sessionID string, keyErr error, logger *slog.Logger, emitter audit.Emitter) {
+	fmt.Fprintf(os.Stderr,
+		"agentjail-shield: WARNING — recording this agent's HTTPS bodies IN THE CLEAR\n"+
+			"  No OS keychain is available (%v), so captured request/response bodies —\n"+
+			"  including any secrets this agent sends — are written UNENCRYPTED to %s\n"+
+			"  Recording continues by design: policy enforcement must not depend on the recorder.\n",
+		keyErr, mitm.DefaultBodyDir())
+	logger.Warn("tunnel body recording is UNENCRYPTED — no OS keychain available",
+		"dir", mitm.DefaultBodyDir(), "session", sessionID, "err", keyErr)
+
+	if emitter == nil {
+		return
+	}
+	reason := "keyring_error"
+	if errors.Is(keyErr, keyring.ErrNoKeychain) {
+		reason = "no_keychain"
+	}
+	// Fixed strings only: never key material, never body bytes. ADR 0032.
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.TunnelBodiesUnencrypted,
+		Entity:    mitm.BodyDirName,
+		SessionID: sessionID,
+		Detail: map[string]string{
+			"kek_backend": "none",
+			"reason":      reason,
+			"posture":     "recording continues in the clear",
+		},
+	})
+}
 
 // tunnelSession bundles one shield's live transparent-tunnel objects so the
 // exec path can run the agent inside the namespace and cleanup can tear it all
@@ -131,10 +220,12 @@ func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (
 		h.SessionID = sessionID
 		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter        // session-level notices, e.g. the ALPN downgrade (AGE-222)
+		rec := newBodyRecording(ctx, sessionID, logger, emitter)
+		h.Bodies = rec.store // nil => decrypt without keeping a transcript
 		gw.SetMITM(h)
 		sess.mitmActive = true
-		logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace",
-			"db", mitm.DefaultDBPath(), "session", sessionID)
+		logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace; "+rec.notice(),
+			"db", mitm.DefaultDBPath(), "bodies", mitm.DefaultBodyDir(), "session", sessionID)
 	}
 
 	go func() {
