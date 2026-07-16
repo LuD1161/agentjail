@@ -70,21 +70,26 @@ the shield genuinely is holding, and 0064 is right that overstating that would b
 inaccuracy. This is the one addition to 0064's glanceable-fact rule, and it is confined to
 the state that reads as its own opposite.
 
-**Liveness is a 50ms `net.DialTimeout` on `wire.DefaultSocketPath()`**, and only when the
-shield is on — an unshielded session renders `UNSECURED` regardless, so the dial would buy
+**Liveness is a 50ms `wire.ControlOpPing` to `wire.DefaultSocketPath()`**, sharing doctor's
+`probeDaemon` (ADR 0086-doctor-repairs-diagnosed) with a tighter budget. Only when the
+shield is on — an unshielded session renders `UNSECURED` regardless, so the probe would buy
 nothing but latency.
 
-50ms, against doctor's 500ms and `install.go`'s 200ms, because those are one-shot commands
-and this runs on **every prompt render**. The dial is kernel-local: `AF_UNIX` connect never
-touches a network. Benchmarked on this host, both outcomes resolve in ~10µs — a live
-listener accepts in ~9.7µs, a missing socket fails `ENOENT` in ~8.5µs. A stale socket file
-left by a crashed daemon fails `ECONNREFUSED` just as fast; the kernel answers from the
-inode, it does not wait. The timeout is therefore ~5000x the measured cost and is not a
-latency budget at all — it is a hang guard. It bites in exactly one case: the daemon
-process is alive and holding the socket but wedged or with a full accept backlog. That
-state cannot enforce policy either, so timing out into `POLICY OFF` is the correct reading,
-not a false negative. The probe is unauthenticated connect-and-close: it never writes a
-frame, so it cannot perturb daemon state or consume a request slot.
+**A bare `connect()` is not liveness.** An earlier revision of this ADR dialed and closed,
+and argued that a wedged daemon would time out into `POLICY OFF`. That was wrong, and
+measured to be wrong: against a listener that never calls `accept()`, `net.DialTimeout`
+returns **success in 55µs**, because the kernel completes the `AF_UNIX` handshake into the
+accept backlog with no involvement from the process. A dial therefore badges a daemon that
+evaluates nothing as `secured` — reintroducing, one layer down, the exact lie this ADR
+exists to remove. Requiring a ping reply is what makes the claim true.
+
+50ms, against doctor's 500ms, because doctor is a one-shot command and this runs on **every
+prompt render**. The probe is kernel-local; `AF_UNIX` never touches a network. Benchmarked
+on this host: a live accept resolves in ~9.6µs, a missing socket fails `ENOENT` in ~6.6µs,
+a stale socket file fails `ECONNREFUSED` in ~7.0µs. The timeout is therefore ~5000x the
+healthy cost and is not a latency budget — it is a hang guard. It bites in exactly one
+case: a daemon holding the socket but not answering. That state cannot enforce policy, so
+`POLICY OFF` is the correct reading, not a false negative.
 
 The badge remains a **notification**, not an attestation, exactly as 0064 established:
 `statusLine` lives in agent-writable `~/.claude/settings.json`, so anything that can forge
@@ -96,9 +101,9 @@ is not claimed to.
 The AGE-212 window would now have rendered amber `POLICY OFF · shield only` for three
 days instead of a green padlock. That is the whole point of the change.
 
-Every prompt render now dials a Unix socket. At ~10µs against a render already costing
-milliseconds this is unmeasurable, but it is new work on a hot path and a wedged daemon can
-cost 50ms per render — visible if it persists, which is the intended signal.
+Every prompt render now pings the daemon. At ~10µs against a render already costing
+milliseconds this is unmeasurable, but it is new work on a hot path, and a wedged daemon
+costs the full 50ms per render — visible if it persists, which is the intended signal.
 
 The badge is no longer a pure function of the environment: it depends on live daemon state,
 so it can now flap. A daemon restart flips the badge to `POLICY OFF` and back within a
