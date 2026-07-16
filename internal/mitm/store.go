@@ -58,10 +58,11 @@ type RequestFilter struct {
 
 // HostStats contains per-host aggregated traffic statistics.
 type HostStats struct {
-	Host         string `json:"host"`
-	RequestCount int64  `json:"request_count"`
-	BytesOut     int64  `json:"bytes_out"`
-	BytesIn      int64  `json:"bytes_in"`
+	Host         string  `json:"host"`
+	RequestCount int64   `json:"request_count"`
+	BytesOut     int64   `json:"bytes_out"`
+	BytesIn      int64   `json:"bytes_in"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
 }
 
 const (
@@ -137,6 +138,29 @@ func NewRequestStore(dbPath string) (*RequestStore, error) {
 		return nil, fmt.Errorf("mitm/store: chmod: %w", err)
 	}
 	return s, nil
+}
+
+// OpenReadOnly opens an existing network store for reading. Readers must not
+// create, migrate or write the store that holds the transcripts.
+// See ADR 0092-persist-request-bodies (D3).
+func OpenReadOnly(dbPath string) (*RequestStore, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("mitm/store: read-only open %s: %w", dbPath, err)
+	}
+	dsn := fmt.Sprintf(
+		"file:%s?mode=ro&_pragma=busy_timeout(3000)",
+		sqliteutil.EscapeDSNPath(dbPath),
+	)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("mitm/store: read-only open: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("mitm/store: read-only ping: %w", err)
+	}
+	return &RequestStore{db: db}, nil
 }
 
 func (s *RequestStore) migrate() error {
@@ -391,7 +415,8 @@ func (s *RequestStore) Stats(ctx context.Context, since time.Duration) ([]HostSt
 	q := `SELECT host,
 		COUNT(*) as request_count,
 		COALESCE(SUM(request_size), 0) as bytes_out,
-		COALESCE(SUM(response_size), 0) as bytes_in
+		COALESCE(SUM(response_size), 0) as bytes_in,
+		COALESCE(AVG(elapsed_ms), 0) as avg_latency_ms
 		FROM network_requests`
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
@@ -407,7 +432,7 @@ func (s *RequestStore) Stats(ctx context.Context, since time.Duration) ([]HostSt
 	var out []HostStats
 	for rows.Next() {
 		var hs HostStats
-		if err := rows.Scan(&hs.Host, &hs.RequestCount, &hs.BytesOut, &hs.BytesIn); err != nil {
+		if err := rows.Scan(&hs.Host, &hs.RequestCount, &hs.BytesOut, &hs.BytesIn, &hs.AvgLatencyMs); err != nil {
 			return nil, fmt.Errorf("mitm/store: scan stats: %w", err)
 		}
 		out = append(out, hs)

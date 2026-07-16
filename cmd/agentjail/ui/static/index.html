@@ -167,6 +167,38 @@
       display: flex; align-items: center; gap: 10px; font-size: 12px; color: #c9d1d9; }
     .inherited-overlay { opacity: 0.45; pointer-events: none; }
     .inherited-label { font-size: 10px; color: #8b949e; font-style: italic; }
+      .toggle-switch { position: relative; display: inline-block; width: 32px; height: 18px; cursor: pointer; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: #30363d; border-radius: 9px; transition: 0.2s; }
+    .toggle-slider::before { content: ''; position: absolute; height: 12px; width: 12px; left: 3px; bottom: 3px;
+      background: #8b949e; border-radius: 50%; transition: 0.2s; }
+    .toggle-switch input:checked + .toggle-slider { background: #be5b3a44; }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(14px); background: #be5b3a; }
+
+    /* Network tab */
+    .net-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+    .net-card-value { font-size: 22px; font-weight: 700; color: #f0f3f6; font-family: 'JetBrains Mono', monospace; }
+    .net-card-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+    .method-badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace; min-width: 40px; text-align: center; }
+    .method-get    { background: #122d1f; color: #56d364; border: 1px solid #1f4d2e; }
+    .method-post   { background: #0f1f3d; color: #58a6ff; border: 1px solid #1e3f6e; }
+    .method-put    { background: #332200; color: #e3b341; border: 1px solid #4d3800; }
+    .method-delete { background: #351413; color: #ff7b72; border: 1px solid #6b2725; }
+    .method-patch  { background: #1f1530; color: #bc8cff; border: 1px solid #352555; }
+    .status-2xx { color: #56d364; }
+    .status-3xx { color: #58a6ff; }
+    .status-4xx { color: #e3b341; }
+    .status-5xx { color: #ff7b72; }
+    .latency-green  { color: #56d364; }
+    .latency-yellow { color: #e3b341; }
+    .latency-red    { color: #ff7b72; }
+    .net-table { width: 100%; border-collapse: collapse; }
+    .net-table th { text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600; color: #8b949e; text-transform: uppercase;
+      letter-spacing: 0.05em; border-bottom: 1px solid #30363d; background: #1a2030; position: sticky; top: 0; z-index: 1; }
+    .net-table td { padding: 6px 12px; font-size: 12px; border-bottom: 1px solid #1e2535; }
+    .net-table tr:hover td { background: #1c2333; }
+    .net-table .num { font-family: 'JetBrains Mono', monospace; text-align: right; }
+
   </style>
 </head>
 <body class="font-mono text-sm h-screen flex flex-col overflow-hidden">
@@ -195,6 +227,7 @@
       <!-- Tab navigation -->
       <div class="flex items-center gap-0 mr-4" style="margin-bottom:-1px">
         <button class="tab-btn active" id="tab-btn-monitor" onclick="switchTab('monitor')">Monitor</button>
+        <button class="tab-btn" id="tab-btn-network" onclick="switchTab('network')">Network</button>
         <button class="tab-btn" id="tab-btn-policies" onclick="switchTab('policies')">Policies</button>
       </div>
       <a href="https://github.com/LuD1161/agentjail" target="_blank" title="Star on GitHub" class="flex items-center gap-1 px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500" style="text-decoration:none;font-size:11px">
@@ -283,6 +316,92 @@
 </div>
 
 <!-- ===== TAB: Policies ===== -->
+<div id="tab-network" class="flex-1 overflow-y-auto hidden" style="padding:24px 32px">
+
+  <!-- Controls bar -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h2 class="text-lg font-bold text-gray-200" style="letter-spacing:0.05em">Network Requests</h2>
+      <p class="text-xs text-gray-500 mt-1">Real-time monitoring of outbound network traffic from agent sessions.</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <button class="policy-add-btn" onclick="loadNetworkData()" title="Refresh now">Refresh</button>
+      <label class="flex items-center gap-2 text-xs text-gray-400">
+        <span>Auto-refresh</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="net-auto-refresh" onchange="toggleNetAutoRefresh()">
+          <span class="toggle-slider"></span>
+        </label>
+      </label>
+    </div>
+  </div>
+
+  <!-- Stats summary cards -->
+  <div class="grid grid-cols-3 gap-4 mb-6" id="net-stats-cards">
+    <div class="net-card">
+      <div class="net-card-value" id="net-total-requests">--</div>
+      <div class="net-card-label">Total Requests</div>
+    </div>
+    <div class="net-card">
+      <div class="net-card-value" id="net-total-data">--</div>
+      <div class="net-card-label">Total Data Transferred</div>
+    </div>
+    <div class="net-card">
+      <div class="net-card-value" id="net-unique-hosts">--</div>
+      <div class="net-card-label">Unique Hosts</div>
+    </div>
+  </div>
+
+  <!-- Per-host stats table -->
+  <div class="mb-6">
+    <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider mb-3">Per-Host Statistics</h3>
+    <div class="rounded-lg overflow-hidden" style="border:1px solid #30363d;max-height:300px;overflow-y:auto">
+      <table class="net-table" id="net-hosts-table">
+        <thead><tr>
+          <th>Host</th>
+          <th class="num">Requests</th>
+          <th class="num">Data Volume</th>
+          <th class="num">Avg Latency</th>
+        </tr></thead>
+        <tbody id="net-hosts-tbody">
+          <tr><td colspan="4" class="text-gray-600 text-center" style="padding:24px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Recent requests table -->
+  <div>
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider">Recent Requests</h3>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500">Show:</span>
+        <select id="net-limit-select" class="filter-input" onchange="loadNetworkRecent()" style="width:70px">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+      </div>
+    </div>
+    <div class="rounded-lg overflow-hidden" style="border:1px solid #30363d;max-height:500px;overflow-y:auto">
+      <table class="net-table" id="net-recent-table">
+        <thead><tr>
+          <th>Time</th>
+          <th>Method</th>
+          <th>Host / Path</th>
+          <th class="num">Status</th>
+          <th class="num">Size</th>
+          <th class="num">Latency</th>
+        </tr></thead>
+        <tbody id="net-recent-tbody">
+          <tr><td colspan="6" class="text-gray-600 text-center" style="padding:24px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
 <div id="tab-policies" class="flex-1 overflow-y-auto hidden" style="padding:24px 32px">
 
   <!-- Project Scope Selector -->
@@ -525,6 +644,7 @@ let mcpToolsSeen = {};         // server -> [tool1, tool2, ...] from audit histo
 let mcpServerMeta = {};        // server -> {status, source, scope, trust, pkg}
 let policyConfigDirty = false; // true if user has made unsaved changes
 let activeTab = 'monitor';
+let netAutoRefreshTimer = null;
 
 // Project scope state
 let currentPolicyScope = 'global'; // 'global' or an absolute dir path
@@ -547,9 +667,15 @@ function buildFilterQuery() {
 function switchTab(tab) {
   activeTab = tab;
   document.getElementById('tab-monitor').classList.toggle('hidden', tab !== 'monitor');
+  document.getElementById('tab-network').classList.toggle('hidden', tab !== 'network');
   document.getElementById('tab-policies').classList.toggle('hidden', tab !== 'policies');
   document.getElementById('tab-btn-monitor').classList.toggle('active', tab === 'monitor');
+  document.getElementById('tab-btn-network').classList.toggle('active', tab === 'network');
   document.getElementById('tab-btn-policies').classList.toggle('active', tab === 'policies');
+
+  if (tab === 'network') {
+    loadNetworkData();
+  }
 
   if (tab === 'policies' && !policyConfig) {
     loadPolicyConfig();
@@ -1915,6 +2041,154 @@ setInterval(() => {
   if (ago < 2) el.textContent = 'last event: just now';
   else el.textContent = `last event: ${ago}s ago`;
 }, 1000);
+function formatBytes(bytes) {
+  if (bytes == null || isNaN(bytes)) return '--';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return val.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function netRelativeTime(isoStr) {
+  if (!isoStr) return '--';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  if (diff < 0) return 'just now';
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+function latencyClass(ms) {
+  if (ms < 200) return 'latency-green';
+  if (ms < 500) return 'latency-yellow';
+  return 'latency-red';
+}
+
+function statusClass(code) {
+  if (code >= 200 && code < 300) return 'status-2xx';
+  if (code >= 300 && code < 400) return 'status-3xx';
+  if (code >= 400 && code < 500) return 'status-4xx';
+  if (code >= 500) return 'status-5xx';
+  return '';
+}
+
+function methodBadge(method) {
+  const m = (method || 'GET').toUpperCase();
+  const cls = m === 'GET' ? 'method-get' : m === 'POST' ? 'method-post' : m === 'PUT' ? 'method-put'
+    : m === 'DELETE' ? 'method-delete' : m === 'PATCH' ? 'method-patch' : 'method-get';
+  return `<span class="method-badge ${cls}">${escHtml(m)}</span>`;
+}
+
+async function loadNetworkData() {
+  await Promise.all([loadNetworkStats(), loadNetworkRecent()]);
+}
+
+async function loadNetworkStats() {
+  try {
+    const r = await fetch('/api/network/stats');
+    if (!r.ok) { renderNetStatsError(); return; }
+    const data = await r.json();
+    renderNetStats(data);
+  } catch(e) { console.error('loadNetworkStats', e); renderNetStatsError(); }
+}
+
+async function loadNetworkRecent() {
+  try {
+    const limit = document.getElementById('net-limit-select').value;
+    const r = await fetch('/api/network/recent?limit=' + limit);
+    if (!r.ok) { renderNetRecentError(); return; }
+    const data = await r.json();
+    renderNetRecent(data);
+  } catch(e) { console.error('loadNetworkRecent', e); renderNetRecentError(); }
+}
+
+function renderNetStats(data) {
+  const hosts = data.hosts || [];
+  document.getElementById('net-total-requests').textContent = (data.total_requests || 0).toLocaleString();
+  document.getElementById('net-total-data').textContent = formatBytes(data.total_bytes || 0);
+  document.getElementById('net-unique-hosts').textContent = hosts.length.toString();
+
+  const tbody = document.getElementById('net-hosts-tbody');
+  if (hosts.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-gray-600 text-center" style="padding:24px">No network data yet.</td></tr>';
+    return;
+  }
+
+  // Field names are mitm.HostStats' JSON tags. The original tab read count /
+  // total_request_bytes / total_response_bytes, which the store never emitted,
+  // so this table always rendered empty. See ADR 0092-persist-request-bodies.
+  const sorted = hosts.slice().sort((a, b) => (b.request_count || 0) - (a.request_count || 0));
+  tbody.innerHTML = sorted.map(h => {
+    const totalBytes = (h.bytes_out || 0) + (h.bytes_in || 0);
+    const avgMs = h.avg_latency_ms || 0;
+    return `<tr>
+      <td class="text-gray-300">${escHtml(h.host)}</td>
+      <td class="num text-gray-300">${(h.request_count || 0).toLocaleString()}</td>
+      <td class="num text-gray-400">${formatBytes(totalBytes)}</td>
+      <td class="num ${latencyClass(avgMs)}">${avgMs.toFixed(0)}ms</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderNetRecent(data) {
+  const reqs = data.requests || [];
+  const tbody = document.getElementById('net-recent-tbody');
+  if (reqs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-gray-600 text-center" style="padding:24px">No recent requests.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = reqs.map(req => {
+    const totalSize = (req.request_size || 0) + (req.response_size || 0);
+    const elapsed = req.elapsed_ms || 0;
+    // mitm.RequestLog's tag is status_code; reading req.status rendered '--'
+    // for every row ever shown.
+    const status = req.status_code || 0;
+    const hostPath = escHtml(req.host || '') + escHtml(req.path || '');
+    // A blocked call is the point of the product; without this a deny is
+    // indistinguishable from the origin returning 403 on its own.
+    const deny = (req.policy_action || '').toLowerCase() === 'deny'
+      ? ` <span class="method-badge method-delete" title="${escHtml(req.policy_reason || '')}">DENIED ${escHtml(req.policy_template || '')}</span>`
+      : '';
+    return `<tr>
+      <td class="text-gray-500" style="white-space:nowrap" title="${escHtml(req.ts || '')}">${netRelativeTime(req.ts)}</td>
+      <td>${methodBadge(req.method)}</td>
+      <td class="text-gray-300 truncate" style="max-width:400px" title="${hostPath}">${hostPath}${deny}</td>
+      <td class="num ${statusClass(status)}" style="font-weight:600">${status || '--'}</td>
+      <td class="num text-gray-400">${formatBytes(totalSize)}</td>
+      <td class="num ${latencyClass(elapsed)}">${elapsed.toFixed(0)}ms</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderNetStatsError() {
+  document.getElementById('net-total-requests').textContent = '--';
+  document.getElementById('net-total-data').textContent = '--';
+  document.getElementById('net-unique-hosts').textContent = '--';
+  document.getElementById('net-hosts-tbody').innerHTML = '<tr><td colspan="4" class="text-gray-600 text-center" style="padding:24px">Failed to load stats.</td></tr>';
+}
+
+function renderNetRecentError() {
+  document.getElementById('net-recent-tbody').innerHTML = '<tr><td colspan="6" class="text-gray-600 text-center" style="padding:24px">Failed to load recent requests.</td></tr>';
+}
+
+function toggleNetAutoRefresh() {
+  const checked = document.getElementById('net-auto-refresh').checked;
+  if (checked) {
+    netAutoRefreshTimer = setInterval(() => {
+      if (activeTab === 'network') loadNetworkData();
+    }, 5000);
+  } else {
+    clearInterval(netAutoRefreshTimer);
+    netAutoRefreshTimer = null;
+  }
+}
+
 </script>
 
 </body>

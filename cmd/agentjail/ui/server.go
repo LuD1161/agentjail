@@ -19,6 +19,8 @@
 //	GET  /api/policy/mcp-scan   full MCP server scan (read-only)
 //	GET  /api/policy/projects     list known projects with policy status
 //	GET  /api/policy/project-config  read/write project-level policy.yaml
+//	GET  /api/network/recent     recent intercepted requests (tunnel + MITM only)
+//	GET  /api/network/stats      per-host traffic totals (tunnel + MITM only)
 package ui
 
 import (
@@ -41,6 +43,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
+	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/procutil"
 	localstore "github.com/LuD1161/agentjail/internal/store"
 	_ "modernc.org/sqlite"
@@ -59,6 +62,15 @@ type Server struct {
 	// Cached read-only SQLite connection (lazily opened, shared across requests).
 	dbMu   sync.Mutex
 	dbConn localstore.ReadOnlyStore
+
+	// network.db is a separate database from agentjail.db, so it needs its own
+	// handle. Read-only: the UI must never write the transcript store.
+	// See ADR 0092-persist-request-bodies (D3).
+	netMu sync.Mutex
+	// netPath empty means mitm.DefaultDBPath(). Injectable so a test cannot
+	// reach the real ~/.agentjail/network.db.
+	netPath  string
+	netStore *mitm.RequestStore
 
 	// SSE broadcaster state.
 	subsMu sync.Mutex
@@ -111,6 +123,8 @@ func (s *Server) Start(
 	mux.HandleFunc("/api/policy/disable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePolicyDisable(w, r, libraryRuleNames)
 	})
+	mux.HandleFunc("/api/network/recent", s.handleNetworkRecent)
+	mux.HandleFunc("/api/network/stats", s.handleNetworkStats)
 	mux.HandleFunc("/api/policy/reload", s.handlePolicyReload)
 	mux.HandleFunc("/api/policy/mcp-scan", s.handlePolicyMCPScan)
 	mux.HandleFunc("/api/policy/mcp-where", s.handlePolicyMCPWhere)
@@ -1040,6 +1054,106 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 	}
 
 	return snap, nil
+}
+
+// openNetworkStore lazily opens network.db read-only. An absent store is the
+// normal case (no tunnel has ever run), so callers report 503, not an error.
+func (s *Server) openNetworkStore() (*mitm.RequestStore, error) {
+	s.netMu.Lock()
+	defer s.netMu.Unlock()
+	if s.netStore != nil {
+		return s.netStore, nil
+	}
+	path := s.netPath
+	if path == "" {
+		path = mitm.DefaultDBPath()
+	}
+	st, err := mitm.OpenReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	s.netStore = st
+	return st, nil
+}
+
+// handleNetworkRecent lists recent intercepted requests, newest first.
+func (s *Server) handleNetworkRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	st, err := s.openNetworkStore()
+	if err != nil {
+		writeJSONError(w, "no network history yet — requests are recorded only under `agentjail-shield --tunnel` with interception on", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+	limit := 50
+	if l := q.Get("limit"); l != "" {
+		if n, perr := strconv.Atoi(l); perr == nil && n > 0 {
+			limit = n
+		}
+	}
+	results, err := st.Query(r.Context(), mitm.RequestFilter{
+		Host:   q.Get("host"),
+		Method: q.Get("method"),
+		Limit:  limit,
+	})
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if results == nil {
+		results = []mitm.RequestLog{}
+	}
+	writeJSON(w, map[string]any{"requests": results, "count": len(results)})
+}
+
+// handleNetworkStats returns per-host traffic totals.
+func (s *Server) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	st, err := s.openNetworkStore()
+	if err != nil {
+		writeJSONError(w, "no network history yet — requests are recorded only under `agentjail-shield --tunnel` with interception on", http.StatusServiceUnavailable)
+		return
+	}
+
+	var since time.Duration
+	if v := r.URL.Query().Get("since"); v != "" {
+		if d, perr := time.ParseDuration(v); perr == nil {
+			since = d
+		}
+	}
+	stats, err := st.Stats(r.Context(), since)
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("stats error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if stats == nil {
+		stats = []mitm.HostStats{}
+	}
+	total, err := st.Count(r.Context())
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("count error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	var totalBytes int64
+	for _, h := range stats {
+		totalBytes += h.BytesOut + h.BytesIn
+	}
+	writeJSON(w, map[string]any{
+		"hosts":          stats,
+		"total_requests": total,
+		"total_bytes":    totalBytes,
+	})
 }
 
 func (s *Server) openSQLite() (localstore.ReadOnlyStore, error) {

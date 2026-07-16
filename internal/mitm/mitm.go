@@ -230,7 +230,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 						ProtoMajor: 1,
 						ProtoMinor: 1,
 						Header: http.Header{
-							"Content-Type":    {"application/json"},
+							"Content-Type":     {"application/json"},
 							"X-Agentjail-Deny": {result.Template.ID},
 						},
 						Body:          io.NopCloser(bytes.NewReader(denyBody)),
