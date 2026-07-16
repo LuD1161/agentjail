@@ -41,6 +41,9 @@ type MITMHandler struct {
 	// hop is not recorded; it is never a reason to fail the request.
 	// See ADR 0092-persist-request-bodies (D1).
 	Bodies *BodyStore
+	// SessionID groups every row of one shield launch. It must match Bodies'
+	// session, which is the directory the bodies land in.
+	SessionID string
 
 	UpstreamTLSConfig *tls.Config // optional: override for upstream TLS (tests only)
 	certCache         *hostCertCache
@@ -136,8 +139,9 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	// Step 4-9: loop for HTTP/1.1 keep-alive.
 	for {
 		reqLog := &RequestLog{
-			Ts:   time.Now(),
-			Host: host,
+			Ts:        time.Now(),
+			Host:      host,
+			SessionID: h.SessionID,
 		}
 		start := time.Now()
 

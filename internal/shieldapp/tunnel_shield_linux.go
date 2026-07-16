@@ -113,6 +113,12 @@ func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (
 		_ = store.Close() // not on sess yet; cleanup() would not reach it
 		logger.Warn("tunnel TLS interception UNAVAILABLE (CA setup failed); relaying HTTPS opaque — HTTP(S) policy templates will NOT match", "err", err)
 	} else {
+		// Fail-open: an id-less session logs ungrouped rows, which must not cost
+		// the agent its network. See ADR 0092-persist-request-bodies (D1).
+		sessionID, sidErr := mitm.NewSessionID()
+		if sidErr != nil {
+			logger.Warn("tunnel session id unavailable; request logs will not be grouped per session", "err", sidErr)
+		}
 		sess.store = store
 		sess.caCleanup = caCleanup
 		// Node/Python ignore the namespace trust store. ADR 0034, AGE-113.
@@ -122,11 +128,13 @@ func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (
 				logger.Debug("network.db log failed", "err", lerr)
 			}
 		})
+		h.SessionID = sessionID
 		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter        // session-level notices, e.g. the ALPN downgrade (AGE-222)
 		gw.SetMITM(h)
 		sess.mitmActive = true
-		logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace", "db", mitm.DefaultDBPath())
+		logger.Info("tunnel TLS interception ON — agentjail is decrypting this agent's HTTPS via a per-session CA scoped to its namespace",
+			"db", mitm.DefaultDBPath(), "session", sessionID)
 	}
 
 	go func() {

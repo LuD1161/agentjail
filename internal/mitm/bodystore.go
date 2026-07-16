@@ -56,7 +56,12 @@ func encodingRawSides(reqRaw, respRaw bool) EncodingRawSides {
 	}
 }
 
+// bodyFileExt is the suffix every stored body path carries.
+const bodyFileExt = ".body"
+
 // DefaultBodyDir returns the default body directory: ~/.agentjail/bodies.
+// The session dir goes UNDER it: ~/.agentjail/bodies/<session>, because the
+// shield's deny covers this name only. See ADR 0092-persist-request-bodies (D3).
 func DefaultBodyDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -65,25 +70,93 @@ func DefaultBodyDir() string {
 	return filepath.Join(home, ".agentjail", BodyDirName)
 }
 
-// BodyStore holds captured request/response bodies as files. Paths recorded on
-// a row are relative to this directory.
+// NewSessionID mints an opaque id for one shield launch. The shield runs before
+// any hook fires and has no agent session id of its own (see netproxy.go).
+func NewSessionID() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("mitm/bodystore: session id: %w", err)
+	}
+	return hex.EncodeToString(buf[:]), nil
+}
+
+// validIDComponent reports whether s is an opaque id (hex or ULID) safe as one
+// path component: no dot, no separator, so "..", "." and absolute paths cannot
+// spell one. See ADR 0092-persist-request-bodies (D1).
+func validIDComponent(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// BodyStore holds captured request/response bodies as files, grouped per
+// session: paths recorded on a row are "<session_id>/<body_id>.body", relative
+// to the store's root directory.
 type BodyStore struct {
-	dir string
+	dir     string // root, e.g. ~/.agentjail/bodies
+	session string // this launch's group; captures land in dir/session
 }
 
-// NewBodyStore creates (or opens) the body directory with 0700 permissions.
-func NewBodyStore(dir string) (*BodyStore, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("mitm/bodystore: mkdir %s: %w", dir, err)
+// NewBodyStore creates (or opens) the root and this session's directory, both
+// 0700.
+func NewBodyStore(dir, sessionID string) (*BodyStore, error) {
+	if !validIDComponent(sessionID) {
+		return nil, fmt.Errorf("mitm/bodystore: bad session id %q", sessionID)
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("mitm/bodystore: chmod %s: %w", dir, err)
+	for _, d := range []string{dir, filepath.Join(dir, sessionID)} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, fmt.Errorf("mitm/bodystore: mkdir %s: %w", d, err)
+		}
+		if err := os.Chmod(d, 0o700); err != nil {
+			return nil, fmt.Errorf("mitm/bodystore: chmod %s: %w", d, err)
+		}
 	}
-	return &BodyStore{dir: dir}, nil
+	return &BodyStore{dir: dir, session: sessionID}, nil
 }
 
-// Dir returns the body directory.
+// Dir returns the store's root directory, not this session's subdirectory.
 func (b *BodyStore) Dir() string { return b.dir }
+
+// SessionID returns the session every capture of this store groups under.
+func (b *BodyStore) SessionID() string { return b.session }
+
+// resolve turns a stored relative path into an absolute one, or rejects it.
+// network.db is writable by any same-uid process, so a stored path is untrusted
+// input. See ADR 0092-persist-request-bodies (D1).
+func (b *BodyStore) resolve(rel string) (string, error) {
+	comps := strings.Split(rel, "/")
+	if len(comps) != 2 || !validIDComponent(comps[0]) {
+		return "", fmt.Errorf("mitm/bodystore: bad body path %q", rel)
+	}
+	base, ok := strings.CutSuffix(comps[1], bodyFileExt)
+	if !ok || !validIDComponent(base) {
+		return "", fmt.Errorf("mitm/bodystore: bad body path %q", rel)
+	}
+	// A symlink at any component would re-point a read outside the store.
+	p := b.dir
+	for _, c := range comps {
+		p = filepath.Join(p, c)
+		fi, err := os.Lstat(p)
+		if os.IsNotExist(err) {
+			break // absent, not an escape: the caller's open reports it
+		}
+		if err != nil {
+			return "", fmt.Errorf("mitm/bodystore: stat %s: %w", rel, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("mitm/bodystore: symlinked body path %q", rel)
+		}
+	}
+	return filepath.Join(b.dir, comps[0], comps[1]), nil
+}
 
 // Open returns a reader for a stored body. A missing file is absent, not an
 // error: (nil, nil). See ADR 0092-persist-request-bodies (D1).
@@ -91,11 +164,11 @@ func (b *BodyStore) Open(rel string) (io.ReadCloser, error) {
 	if b == nil || rel == "" {
 		return nil, nil
 	}
-	// A path recorded by a corrupted row must not reach outside the directory.
-	if rel != filepath.Base(rel) || strings.HasPrefix(rel, ".") {
-		return nil, fmt.Errorf("mitm/bodystore: bad body path %q", rel)
+	full, err := b.resolve(rel)
+	if err != nil {
+		return nil, err
 	}
-	f, err := os.Open(filepath.Join(b.dir, rel))
+	f, err := os.Open(full)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -131,13 +204,19 @@ func (b *BodyStore) Create() (*bodyCapture, error) {
 	return &bodyCapture{rel: rel, f: f, w: bufio.NewWriterSize(f, captureBufSize)}, nil
 }
 
+// path maps a stored relative path to this store's filesystem path. Stored
+// paths always use "/", whatever the OS separator is.
+func (b *BodyStore) path(rel string) string {
+	return filepath.Join(b.dir, filepath.FromSlash(rel))
+}
+
 func (b *BodyStore) createFile() (string, *os.File, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", nil, fmt.Errorf("mitm/bodystore: name: %w", err)
 	}
-	rel := hex.EncodeToString(buf[:]) + ".body"
-	f, err := os.OpenFile(filepath.Join(b.dir, rel), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	rel := b.session + "/" + hex.EncodeToString(buf[:]) + bodyFileExt
+	f, err := os.OpenFile(b.path(rel), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", nil, fmt.Errorf("mitm/bodystore: create %s: %w", rel, err)
 	}
@@ -186,7 +265,7 @@ func (b *BodyStore) Finish(c *bodyCapture, contentEncoding string) (rel string, 
 	}
 	closeErr := c.close()
 	if c.total == 0 {
-		_ = os.Remove(filepath.Join(b.dir, c.rel))
+		_ = os.Remove(b.path(c.rel))
 		return "", false, closeErr
 	}
 	switch strings.ToLower(strings.TrimSpace(contentEncoding)) {
@@ -197,7 +276,7 @@ func (b *BodyStore) Finish(c *bodyCapture, contentEncoding string) (rel string, 
 		if derr != nil {
 			return c.rel, true, closeErr
 		}
-		_ = os.Remove(filepath.Join(b.dir, c.rel))
+		_ = os.Remove(b.path(c.rel))
 		return decoded, false, closeErr
 	default:
 		return c.rel, true, closeErr
@@ -207,7 +286,7 @@ func (b *BodyStore) Finish(c *bodyCapture, contentEncoding string) (rel string, 
 // decodeGzip streams rel through gzip into a new file, so peak memory stays at
 // the copy buffer. Any failure leaves rel untouched for the raw fallback.
 func (b *BodyStore) decodeGzip(rel string) (string, error) {
-	src, err := os.Open(filepath.Join(b.dir, rel))
+	src, err := os.Open(b.path(rel))
 	if err != nil {
 		return "", err
 	}
@@ -225,7 +304,7 @@ func (b *BodyStore) decodeGzip(rel string) (string, error) {
 	}
 	cerr := func(e error) (string, error) {
 		out.Close()
-		_ = os.Remove(filepath.Join(b.dir, outRel))
+		_ = os.Remove(b.path(outRel))
 		return "", e
 	}
 
@@ -245,7 +324,7 @@ func (b *BodyStore) decodeGzip(rel string) (string, error) {
 		return cerr(fmt.Errorf("mitm/bodystore: %s expands past %d bytes", rel, limit))
 	}
 	if err := out.Close(); err != nil {
-		_ = os.Remove(filepath.Join(b.dir, outRel))
+		_ = os.Remove(b.path(outRel))
 		return "", err
 	}
 	return outRel, nil

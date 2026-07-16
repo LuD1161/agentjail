@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -38,6 +39,9 @@ func newTunnel(t *testing.T, upstream *httptest.Server, bodies *BodyStore) *tunn
 	handler := NewMITMHandler(caCert, caKey, logger, func(rl *RequestLog) { logs <- rl })
 	handler.UpstreamTLSConfig = upstreamTLSConfig(upstream)
 	handler.Bodies = bodies
+	if bodies != nil {
+		handler.SessionID = bodies.SessionID()
+	}
 
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() { clientConn.Close(); serverConn.Close() })
@@ -60,7 +64,11 @@ func newTunnel(t *testing.T, upstream *httptest.Server, bodies *BodyStore) *tunn
 
 func newBodyStore(t *testing.T) *BodyStore {
 	t.Helper()
-	b, err := NewBodyStore(filepath.Join(t.TempDir(), "bodies"))
+	sid, err := NewSessionID()
+	if err != nil {
+		t.Fatalf("NewSessionID: %v", err)
+	}
+	b, err := NewBodyStore(filepath.Join(t.TempDir(), "bodies"), sid)
 	if err != nil {
 		t.Fatalf("NewBodyStore: %v", err)
 	}
@@ -338,14 +346,16 @@ func TestRequestBodyStoredWholePastScanWindow(t *testing.T) {
 	}
 }
 
-// Body files are 0600 in a 0700 directory.
+// Body files are 0600 in 0700 directories, grouped under the session.
 // See ADR 0092-persist-request-bodies (D1).
 func TestBodyFilePermissions(t *testing.T) {
 	b := newBodyStore(t)
-	if fi, err := os.Stat(b.Dir()); err != nil {
-		t.Fatalf("stat dir: %v", err)
-	} else if fi.Mode().Perm() != 0o700 {
-		t.Errorf("body dir mode = %o, want 700", fi.Mode().Perm())
+	for _, dir := range []string{b.Dir(), filepath.Join(b.Dir(), b.SessionID())} {
+		if fi, err := os.Stat(dir); err != nil {
+			t.Fatalf("stat %s: %v", dir, err)
+		} else if fi.Mode().Perm() != 0o700 {
+			t.Errorf("dir %s mode = %o, want 700", dir, fi.Mode().Perm())
+		}
 	}
 
 	c, err := b.Create()
@@ -357,6 +367,9 @@ func TestBodyFilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
+	if want := b.SessionID() + "/"; !strings.HasPrefix(rel, want) || !strings.HasSuffix(rel, ".body") {
+		t.Errorf("stored path = %q, want %s<id>.body: bodies are not grouped per session", rel, want)
+	}
 	fi, err := os.Stat(filepath.Join(b.Dir(), rel))
 	if err != nil {
 		t.Fatalf("stat body: %v", err)
@@ -366,11 +379,46 @@ func TestBodyFilePermissions(t *testing.T) {
 	}
 }
 
+// The session of the row and the session of the directory are one fact.
+// See ADR 0092-persist-request-bodies (D1).
+func TestCaptureGroupsBodiesUnderRowSession(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("pong"))
+	}))
+	defer upstream.Close()
+
+	bodies := newBodyStore(t)
+	tn := newTunnel(t, upstream, bodies)
+	req, _ := http.NewRequest("GET", "https://localhost/ping", nil)
+	go req.Write(tn.client)
+	resp, err := http.ReadResponse(bufio.NewReader(tn.client), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	rl := tn.waitLog(t)
+	if rl.SessionID == "" {
+		t.Fatal("RequestLog.SessionID is empty: session_id is a column nothing populates")
+	}
+	dir, file := path.Split(rl.ResponseBodyPath)
+	if strings.TrimSuffix(dir, "/") != rl.SessionID {
+		t.Errorf("body stored under %q but the row says session %q", dir, rl.SessionID)
+	}
+	if !strings.HasSuffix(file, ".body") {
+		t.Errorf("body file %q does not end in .body", file)
+	}
+	if got := readBody(t, bodies, rl.ResponseBodyPath); string(got) != "pong" {
+		t.Errorf("stored body = %q, want %q", got, "pong")
+	}
+}
+
 // A missing body file is absent, not an error.
 // See ADR 0092-persist-request-bodies (D1).
 func TestMissingBodyFileIsAbsent(t *testing.T) {
 	b := newBodyStore(t)
-	rc, err := b.Open("deadbeefdeadbeefdeadbeefdeadbeef.body")
+	rc, err := b.Open(b.SessionID() + "/deadbeefdeadbeefdeadbeefdeadbeef.body")
 	if err != nil {
 		t.Errorf("Open of a deleted body returned an error: %v", err)
 	}
@@ -380,12 +428,35 @@ func TestMissingBodyFileIsAbsent(t *testing.T) {
 	}
 }
 
-// A body path must never escape the store directory.
+// A stored path comes from a same-uid writable DB, so it is untrusted input: it
+// must name exactly one body inside the store.
+// See ADR 0092-persist-request-bodies (D1).
 func TestBodyPathTraversalRejected(t *testing.T) {
 	b := newBodyStore(t)
-	for _, rel := range []string{"../network.db", "sub/x.body", "/etc/passwd"} {
-		if _, err := b.Open(rel); err == nil {
+
+	// A session component that is a symlink would re-point every read of it.
+	secrets := t.TempDir()
+	os.WriteFile(filepath.Join(secrets, "x.body"), []byte("stolen"), 0o600)
+	if err := os.Symlink(secrets, filepath.Join(b.Dir(), "aaaaaaaaaaaaaaaa")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	for _, rel := range []string{
+		"../network.db",
+		"../../etc/passwd",
+		"/etc/passwd",
+		"a/b/c.body",
+		".hidden/x.body",
+		"deadbeef.body",              // no session component
+		"aaaaaaaaaaaaaaaa/x.body",    // session component is a symlink
+		b.SessionID() + "/../x.body", // traversal past the session
+	} {
+		rc, err := b.Open(rel)
+		if err == nil {
 			t.Errorf("Open(%q) was accepted, want rejected", rel)
+			if rc != nil {
+				rc.Close()
+			}
 		}
 	}
 }
@@ -404,7 +475,7 @@ func TestEmptyBodyLeavesNoFile(t *testing.T) {
 	if rel != "" || raw {
 		t.Errorf("Finish of an empty capture = (%q, %v), want (\"\", false)", rel, raw)
 	}
-	entries, _ := os.ReadDir(b.Dir())
+	entries, _ := os.ReadDir(filepath.Join(b.Dir(), b.SessionID()))
 	if len(entries) != 0 {
 		t.Errorf("%d files left behind for an empty body", len(entries))
 	}
