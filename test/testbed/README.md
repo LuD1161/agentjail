@@ -84,6 +84,34 @@ binaries:
 - **Tier 2 (shield):** with cwd = the project dir (like a real session),
   Landlock blocks `~/.ssh` write + private-key read and allows project writes.
 
+### Chaos scenarios — failure injection
+
+Every other scenario is a happy-path feature test: nothing kills the daemon.
+That blind spot shipped a real 3-day outage (AGE-212) — the daemon stopped, the
+supervisor never restarted it, the shield kept activating so the statusline
+stayed green, and the hook fell back to `levelAllow`. The agent ran with **no
+policy enforcement** and nobody noticed.
+
+The signature of that whole bug class is **`shield.activated` climbing while
+`decisions` stays flat**. The shield opens the store on its own path, so it
+stays healthy precisely when enforcement is off.
+
+| Scenario | Injects | Asserts |
+|---|---|---|
+| `chaos-daemon-outage` | daemon stopped mid-session; stale socket file | hook still renders a decision and never hangs; fail-open is **visible** on stdout `systemMessage` (ADR 0073 — Claude Code discards hook stderr on exit 0) on both the claude and codex paths; sentinel written; `doctor` reports the fail-open window; the divergence signature reproduces; daemon + sentinel restored |
+| `chaos-supervisor-restart` | `SIGTERM` (clean exit) then `SIGKILL` (crash) to the daemon PID | supervisor respawns on **both** paths; `Restart=always` / `KeepAlive=true` pinned per OS (ADR 0070 — the updater's clean `exit(0)` went un-restarted under `Restart=on-failure`); enforcement proven real again, not just `is-active` green |
+| `chaos-hook-tamper` | hook entry stripped / settings file deleted, daemon up **and** down | hookwatch re-injects with the daemon up (ADR 0026); does **not** with the daemon down — the watchdog is a goroutine inside the daemon, blind during the outage it should mitigate; a full file delete is a pinned gap (hookwatch only repairs an existing file) |
+
+```sh
+test/testbed/testbed.sh test <name> chaos-daemon-outage
+```
+
+All three are safe to re-run and restore the daemon and any config they touch on
+every exit path (`trap`). They skip cleanly when a precondition is missing (no
+systemd/launchd, daemon already down, no `sqlite3`). They are deliberately **not**
+in `record-cli-report.sh`'s list: they take minutes, and a report of a
+deliberately broken box is not the CLI tour.
+
 Two important lessons baked into the scenario:
 
 1. **Shield grants cwd read-write.** Test from a *project* dir, never `$HOME`
