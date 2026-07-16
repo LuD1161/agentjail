@@ -79,6 +79,9 @@ func (m *mockReadOnlyStore) ListGrantAuditLog(_ context.Context, _ int) ([]store
 }
 
 func (m *mockReadOnlyStore) Close() error { return nil }
+func (m *mockReadOnlyStore) CountWouldBlock(ctx context.Context, since time.Time) ([]store.WouldBlockCount, error) {
+	return nil, nil
+}
 
 func TestResolveSessionPrefix_ExactMatch(t *testing.T) {
 	st := &mockReadOnlyStore{

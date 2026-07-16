@@ -1,6 +1,16 @@
 -- name: InsertDecision :exec
-INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: CountWouldBlockByRule :many
+-- Monitor-mode report: what policy would have stopped, grouped by rule. Rows
+-- where would_action is empty are enforce-mode decisions and are excluded.
+-- See ADR 0091-monitor-mode-tools.
+SELECT rule_id, would_action, tool_name, COUNT(*) AS count
+FROM decisions
+WHERE would_action != '' AND ts >= ?
+GROUP BY rule_id, would_action, tool_name
+ORDER BY count DESC;
 
 -- name: UpsertSession :exec
 INSERT INTO sessions (session_id, start_ts, end_ts, agent, cwd, decision_count)

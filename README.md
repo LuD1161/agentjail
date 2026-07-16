@@ -194,6 +194,7 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 ```sh
 agentjail status                      # verify everything is wired
 agentjail doctor                      # diagnose a specific setup problem
+agentjail doctor --fix                # repair what it can (dead daemon, dangling shim, stale service unit), then re-check
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail sessions list               # active and past agent sessions
@@ -204,11 +205,19 @@ agentjail replay -session 625d86f1    # interactive TUI replay
 **Is this session actually protected?** In Claude Code, the status line tells you, for the whole life of the session:
 
 ```
-🔒 [secured by agentjail (v0.8.2)]     ← running inside the shield
-⚠  [UNSECURED · agentjail]             ← hooks may apply, but no kernel sandbox
+🔒 [secured by agentjail (v0.8.2)]        ← shield active, policy daemon answering
+⚠  [POLICY OFF · shield only · agentjail]  ← kernel sandbox on, but policy is NOT enforced
+⚠  [UNSECURED · agentjail]                 ← hooks may apply, but no kernel sandbox
 ```
 
-It never renders nothing while agentjail is installed — silence would be indistinguishable from protection. Launch warnings go to stderr and get scrolled away the moment Claude Code takes over the terminal, so the badge is the one signal that survives ([ADR 0064](./docs/adr/0064-statusline-always-attests.md)). `UNSECURED` means the session is not running under `agentjail-shield`: use `agentjail claude`, or install the [PATH shim](#install) to get it automatically. When agentjail is uninstalled the badge disappears entirely.
+It never renders nothing while agentjail is installed — silence would be indistinguishable from protection. Launch warnings go to stderr and get scrolled away the moment Claude Code takes over the terminal, so the badge is the one signal that survives ([ADR 0064](./docs/adr/0064-statusline-always-attests.md)).
+
+The badge attests **both** enforcement layers ([ADR 0085](./docs/adr/0085-statusline-attests-daemon.md)):
+
+- `UNSECURED` — the session is not running under `agentjail-shield`. Use `agentjail claude`, or install the [PATH shim](#install) to get it automatically.
+- `POLICY OFF` — the shield is holding, but the policy daemon is unreachable and the hook is failing open, so no rule is being evaluated. Restart the daemon; `agentjail doctor` says why.
+
+The padlock only appears when both are live. When agentjail is uninstalled the badge disappears entirely.
 
 <details>
 <summary><b>More install options</b></summary>
@@ -222,6 +231,8 @@ agentjail install --all               # non-interactive, install all detected
 **Agent discovery + picker:** the installer presents a styled interactive multi-select - all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
 
 **Linux note:** a fully supported install target. `agentjail install` writes a systemd `--user` unit at `~/.config/systemd/user/agentjail-daemon.service` (`Restart=always`) and runs `systemctl --user enable --now` to start it — no root required. Auto-update, hook wiring, and all policies work the same as on macOS (launchd), just backed by systemd instead. Requires a systemd `--user` session (present on any normal desktop or SSH login on a systemd-based distro); if none is reachable (e.g. a bare container with no login session), the unit is still written and `agentjail install` prints the manual `systemctl --user enable --now agentjail-daemon.service` command to run once a session exists. See [ADR 0051](./docs/adr/0051-linux-install-support.md).
+
+`Restart=always` is load-bearing: the auto-updater swaps the binaries and exits 0, relying on the supervisor to bring the daemon back ([ADR 0070](./docs/adr/0070-supervisor-restarts-daemon-on-clean-exit.md)). Installs predating that default have `Restart=on-failure` on disk, which does **not** restart a clean exit — so the daemon would stay down after an auto-update. `agentjail doctor` now reads the *deployed* unit (macOS: the launchd plist's `KeepAlive`) and fails if it would not restart the daemon; `agentjail doctor --fix` and `agentjail update` repair it in place. A definition that already satisfies the invariant is never rewritten, so hand-edits like the plist's `EnvironmentVariables` block survive. See [ADR 0088](./docs/adr/0088-deployed-supervisor-verified.md).
 
 **Terminal PATH shim (opt-in):**
 ```sh
@@ -556,12 +567,56 @@ standing while the daemon is away.
 
 Every fail-open occurrence now prints a loud, per-occurrence stderr banner
 naming the active level and the exact recovery command
-(`agentjail daemon restart`, diagnose with `agentjail doctor`) — replacing
+(`agentjail daemon restart`, diagnose with `agentjail doctor`, or let
+`agentjail doctor --fix` restart it through its supervisor and verify the
+daemon answers before saying so — [ADR 0086](./docs/adr/0086-doctor-repairs-diagnosed.md)) — replacing
 the old one-time warning. The daemon compiles the current level (and, for
 `degraded`, the offline rule set) into `~/.agentjail/hook-fallback.json` on
 startup and every config reload; a missing or unreadable sidecar falls back to
 `allow`, since a daemon that never started has published no rules to enforce —
 `degraded` protects you from a daemon that *died*, not one that never ran.
+
+### Monitor mode — see what it would block, before it blocks anything
+
+Try agentjail against your real work without it stopping anything
+([ADR 0091](./docs/adr/0091-monitor-mode-tools.md)):
+
+```yaml
+# ~/.agentjail/policy.yaml
+enforcement: monitor   # enforce (default) | monitor
+```
+
+Every tool call is evaluated against the full policy set and the verdict is
+recorded — but nothing is blocked. Run it for a day, then read the report:
+
+```console
+$ agentjail monitor --since 24h
+Would have blocked 3 tool call(s) since 24h:
+
+COUNT  VERDICT  TOOL  RULE
+3      deny     Read  file_policy/sensitive_credential
+```
+
+When you like what you see, set `enforcement: enforce` and the same rules start
+acting. `agentjail monitor --json` gives the machine-readable form.
+
+**Monitor mode means the guardrail is off.** It is opt-in and never a default,
+the daemon warns at startup, and every affected tool call tells the agent what
+would have happened and why. The unenforced window is recorded as an
+`enforcement.mode_changed` audit event, because a log full of `allow` rows
+cannot explain itself. A project's `.agentjail/policy.yaml` **cannot** turn it
+on — only the global config can, which the shield grants read-only.
+
+Two things it is not:
+
+- It is **not** `daemon_unreachable`. That axis covers a daemon that is *gone*;
+  this one covers a healthy daemon choosing not to act.
+- It **only covers tool calls**. Network egress needs the tunnel
+  ([AGE-243](https://linear.app/agentjail/issue/AGE-243)); filesystem access is
+  kernel-enforced by Landlock/Seatbelt and cannot be shadowed at all
+  ([AGE-244](https://linear.app/agentjail/issue/AGE-244)). A quiet report means
+  *your tool calls* were clean — and a thin ruleset flags nothing, which looks
+  identical.
 
 ---
 

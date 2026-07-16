@@ -747,7 +747,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	if sshOverrideInjected(env) {
 		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
 	}
-	env = append(env, "AGENTJAIL_SHIELDED=1")
+	env = AppendShieldedEnv(env, Sandboxed)
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: setting HTTPS_PROXY=http://%s (per-session enforcement via netproxy)\n", netproxyDefaultAddr)
@@ -782,7 +782,7 @@ func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, w
 	if sshOverrideInjected(env) {
 		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
 	}
-	env = append(env, "AGENTJAIL_SHIELDED=1")
+	env = AppendShieldedEnv(env, NotSandboxed)
 	if withNetproxy {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
 	}

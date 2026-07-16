@@ -41,6 +41,13 @@ type DecisionRecord struct {
 	CWD               string
 	ToolInput         map[string]interface{} `json:"-"`
 	ToolInputRedacted string
+
+	// Action is what was ACTUALLY enforced. WouldAction is the verdict policy
+	// returned when monitor mode downgraded it, and is empty when the two
+	// matched. Action must never claim a block that did not happen -- a reader
+	// of this row has no other way to tell (AGE-212).
+	// See ADR 0091-monitor-mode-tools.
+	WouldAction string
 }
 
 // AuditRecord is one policy-mutation audit event (replaces audit.log).
@@ -170,7 +177,20 @@ type ReadOnlyStore interface {
 	ListDistinctCWDs(ctx context.Context) ([]string, error)
 	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	ListDistinctSkillInputs(ctx context.Context) ([]string, error)
+	CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error)
 	Close() error
+}
+
+// WouldBlockCount is one row of the monitor-mode report: a rule that fired,
+// the verdict it returned, and how often -- for calls that ran anyway.
+// Aggregated in SQL rather than over ListDecisions, whose limit is clamped and
+// would silently truncate the report.
+// See ADR 0091-monitor-mode-tools.
+type WouldBlockCount struct {
+	RuleID      string
+	WouldAction string
+	ToolName    string
+	Count       int64
 }
 
 // The key-matching rules live in internal/redact. They used to live here and

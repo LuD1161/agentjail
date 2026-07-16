@@ -93,6 +93,11 @@ type server struct {
 	// event by drainDecisions so under-recording is visible (ADR 0072).
 	decDropped atomic.Int64
 
+	// monitoring mirrors PolicyConfig.Enforcement == monitor. Read on the hot
+	// path and rewritten by reload(), so it is atomic rather than living behind
+	// the config pointer. See ADR 0091-monitor-mode-tools.
+	monitoring atomic.Bool
+
 	// activeSessions tracks which session IDs have open connections.
 	activeSessions *activeTracker
 
@@ -211,7 +216,10 @@ func (s *server) drainDecisions(ctx context.Context) {
 	for {
 		select {
 		case d := <-s.decCh:
-			if err := s.eventStore.RecordDecision(ctx, d); err != nil {
+			// Detached: ctx cancellation must end the loop, not abort a write
+			// already dequeued. select picks randomly among ready cases, so a
+			// cancelled ctx here loses records the shutdown drain would keep.
+			if err := s.eventStore.RecordDecision(context.Background(), d); err != nil {
 				s.decDropped.Add(1)
 				slog.Warn("store write decision failed (fail-open)", "err", err, "session_id", d.SessionID)
 			}
@@ -310,10 +318,15 @@ func (s *server) reloadPolicy(ctx context.Context) error {
 		return fmt.Errorf("reload: compile: %w", err)
 	}
 
+	// Set only after the engine swap succeeds: a failed reload keeps serving the
+	// old engine, so the old enforcement mode must stay with it.
+	s.setMonitoring(newCfg.Monitoring())
+
 	slog.Info("policy reloaded",
 		"rules_dir", s.rulesDir,
 		"mcp_allowed", newCfg.MCP.Allowed,
 		"mcp_blocked_count", len(newCfg.MCP.Blocked),
+		"enforcement", newCfg.Enforcement,
 	)
 
 	// Emit policy.reloaded audit event (best-effort).
@@ -481,6 +494,10 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		elapsed := time.Since(start)
 
 		if err == nil {
+			// Monitor mode downgrades here, before telemetry and persistence, so
+			// every downstream consumer records what actually happened rather
+			// than what policy wanted. See ADR 0091-monitor-mode-tools.
+			resp = applyMonitorMode(resp, s.monitoring.Load())
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
 
@@ -521,7 +538,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
 		} else {
-			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
+			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "would_action", resp.WouldAction, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
 			// Persist the decision to SQLite (async, fail-open). The full
 			// tool_input is redacted at the store boundary (ADR 0019).
 			s.enqueueDecision(store.DecisionRecord{
@@ -530,13 +547,14 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 				Agent:     req.Agent,
 				ToolName:  req.ToolName,
 				Summary:   summary,
-				Action:    resp.Action,
-				RuleID:    resp.RuleID,
-				Reason:    resp.Reason,
-				Impact:    resp.Impact,
-				ElapsedUs: elapsed.Microseconds(),
-				CWD:       req.CWD,
-				ToolInput: req.ToolInput,
+				Action:      resp.Action,
+				WouldAction: resp.WouldAction,
+				RuleID:      resp.RuleID,
+				Reason:      resp.Reason,
+				Impact:      resp.Impact,
+				ElapsedUs:   elapsed.Microseconds(),
+				CWD:         req.CWD,
+				ToolInput:   req.ToolInput,
 			})
 		}
 
@@ -581,6 +599,55 @@ func isClientGone(err error) bool {
 	return errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, net.ErrClosed)
+}
+
+// setMonitoring records the enforcement mode and, when it actually changes,
+// emits an audit event. Monitor mode means nothing is enforced; the decisions
+// table alone cannot explain a run of allows, so the window must be
+// reconstructable from the audit log. Called on startup and after every
+// successful reload. See ADR 0091-monitor-mode-tools.
+func (s *server) setMonitoring(monitoring bool) {
+	if s.monitoring.Swap(monitoring) == monitoring {
+		return // unchanged -- a reload that did not touch the mode stays quiet
+	}
+	mode := string(agentconfig.EnforcementEnforce)
+	if monitoring {
+		mode = string(agentconfig.EnforcementMonitor)
+		slog.Warn("enforcement mode: MONITOR — policy verdicts are recorded, nothing is blocked")
+	} else {
+		slog.Info("enforcement mode: enforce")
+	}
+	if s.eventStore != nil {
+		_ = s.eventStore.Emit(context.Background(), audit.Event{
+			EventType: audit.EnforcementModeChanged,
+			Actor:     "daemon",
+			Detail:    map[string]string{"mode": mode},
+		})
+	}
+}
+
+// actionAllow is the permissive verdict. The action vocabulary is a bare string
+// at every layer (policy.Decision, policyeval.Response, store.DecisionRecord)
+// with no enum to check it -- see AGE-242's landmine note. Monitor mode
+// therefore adds no new action value; it downgrades to this one and records the
+// original in WouldAction.
+const actionAllow = "allow"
+
+// applyMonitorMode downgrades an enforcing verdict to allow and parks the real
+// verdict in WouldAction, so the decision row and the hook can both say what
+// policy wanted without claiming it happened. Enforce mode, an allow, or an
+// empty action returns resp untouched.
+//
+// Deliberately not inside policyeval.Eval: its decision cache is keyed on input
+// only, so flipping the mode there would poison cached entries across a reload.
+// See ADR 0091-monitor-mode-tools.
+func applyMonitorMode(resp policyeval.Response, monitoring bool) policyeval.Response {
+	if !monitoring || resp.Action == "" || resp.Action == actionAllow {
+		return resp
+	}
+	resp.WouldAction = resp.Action
+	resp.Action = actionAllow
+	return resp
 }
 
 // loadConfig loads ~/.agentjail/policy.yaml, merges it over Default(), and
@@ -916,6 +983,11 @@ func Run(args []string) int {
 	} else {
 		slog.Warn("sqlite event store open failed; continuing without persistence (fail-open on logging)", "db", *dbPath, "err", serr)
 	}
+
+	// After the store is wired, so the mode-changed audit event has somewhere to
+	// land. The zero value is false (enforce), so a monitor-mode config emits the
+	// event on startup and an enforce-mode one stays silent.
+	srv.setMonitoring(cfg.Monitoring())
 
 	// Wire telemetry recorder: nil-safe, failure-tolerant — if init fails, the
 	// daemon continues without telemetry. The same ctx is cancelled on

@@ -104,7 +104,8 @@ func (s *sqliteStore) migrate() error {
 			impact          TEXT,
 			elapsed_us      INTEGER,
 			cwd             TEXT,
-			tool_input_redacted TEXT
+			tool_input_redacted TEXT,
+			would_action    TEXT    NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_session_ts ON decisions(session_id, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_ts ON decisions(ts)`,
@@ -167,6 +168,16 @@ func (s *sqliteStore) migrate() error {
 		}
 	}
 
+	// CREATE TABLE IF NOT EXISTS above is a no-op on a database that predates a
+	// column, so additive columns must be ALTERed in separately or every
+	// existing install keeps the old shape. Idempotent: guarded on the column
+	// not already being there.
+	if tableExists(s.db, "decisions") && !columnExists(s.db, "decisions", "would_action") {
+		if _, err := s.db.Exec(`ALTER TABLE decisions ADD COLUMN would_action TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("store: migrate: add decisions.would_action: %w", err)
+		}
+	}
+
 	// Migrate legacy audit_events into audit_log (idempotent).
 	if tableExists(s.db, "audit_events") {
 		_, _ = s.db.Exec(`INSERT INTO audit_log (ts, event_type, entity, actor)
@@ -209,10 +220,40 @@ func (s *sqliteStore) migrate() error {
 	return nil
 }
 
+// CountWouldBlock returns the monitor-mode report rows since the given time:
+// the rules that fired on calls that ran anyway. Rows with an empty
+// would_action are enforce-mode decisions and are excluded by the query.
+// See ADR 0091-monitor-mode-tools.
+func (s *sqliteStore) CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error) {
+	rows, err := s.queries.CountWouldBlockByRule(ctx, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("store: count would-block: %w", err)
+	}
+	out := make([]WouldBlockCount, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, WouldBlockCount{
+			RuleID:      r.RuleID.String,
+			WouldAction: r.WouldAction,
+			ToolName:    r.ToolName,
+			Count:       r.Count,
+		})
+	}
+	return out, nil
+}
+
 // tableExists reports whether a table with the given name exists in the DB.
 func tableExists(db *sql.DB, name string) bool {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
+	return err == nil && n > 0
+}
+
+// columnExists reports whether table has the named column. pragma_table_info is
+// used as a table-valued function so the name can be bound rather than
+// interpolated.
+func columnExists(db *sql.DB, table, column string) bool {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n)
 	return err == nil && n > 0
 }
 
@@ -229,9 +270,9 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.ExecContext(ctx, `INSERT INTO decisions
-		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted,
+		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction,
 	); err != nil {
 		return fmt.Errorf("store: insert decision: %w", err)
 	}
@@ -327,7 +368,7 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		}
 		args = append(args, f.AfterID)
 	}
-	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted FROM decisions"
+	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action FROM decisions"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -354,8 +395,9 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			elapsed   sql.NullInt64
 			cwd       sql.NullString
 			toolInput sql.NullString
+			wouldAct  sql.NullString
 		)
-		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput); err != nil {
+		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput, &wouldAct); err != nil {
 			return nil, fmt.Errorf("store: scan decision: %w", err)
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, tsStr)
@@ -373,6 +415,7 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			ElapsedUs:         elapsed.Int64,
 			CWD:               cwd.String,
 			ToolInputRedacted: toolInput.String,
+			WouldAction:       wouldAct.String,
 		})
 	}
 	return out, rows.Err()
@@ -965,6 +1008,9 @@ func (r *sqliteROStore) ListDistinctMCPToolNames(ctx context.Context) ([]string,
 }
 func (r *sqliteROStore) ListDistinctSkillInputs(ctx context.Context) ([]string, error) {
 	return r.inner.ListDistinctSkillInputs(ctx)
+}
+func (r *sqliteROStore) CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error) {
+	return r.inner.CountWouldBlock(ctx, since)
 }
 func (r *sqliteROStore) Close() error { return r.inner.Close() }
 

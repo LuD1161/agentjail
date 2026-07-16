@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/wire"
 	"github.com/spf13/cobra"
 )
 
@@ -107,27 +109,73 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// shieldBadge renders the session's protection state. It always returns a
-// badge: silence is not an option here, because this status line is the only
-// channel that survives. agentjail-shield and the PATH shim warn on stderr when
-// a session is unprotected, but Claude Code takes over the terminal on startup
-// and those warnings scroll away unread — an unprotected session then looks
-// exactly like a protected one. See ADR 0064.
-//
-// Two states, keyed on shield activation only (ADR 0064): the badge attests
-// kernel-level enforcement, which is precisely what AGENTJAIL_SHIELDED records.
-// Rendering nothing is reserved for agentjail not being installed at all, which
-// happens by construction — uninstall removes the statusLine entry (ADR 0063),
-// so this code is not running.
-func shieldBadge() string {
-	if os.Getenv("AGENTJAIL_SHIELDED") == "1" {
+// protection is the session's enforcement state. The three constants are the
+// whole domain: every session is exactly one of them, so the badge can never
+// have nothing to render. See ADR 0085-statusline-attests-daemon.
+type protection int
+
+const (
+	// unshielded: no kernel-level enforcement. Zero value, so a protection that
+	// was never computed reads as unprotected rather than as secured.
+	unshielded protection = iota
+	// shieldedPolicyDown: Landlock/sbpl is on, but the daemon is unreachable and
+	// the hook is failing open — the AGE-212 state.
+	shieldedPolicyDown
+	// fullySecured: shield active and daemon answering.
+	fullySecured
+)
+
+// Hang guard, not a budget: only bites on a wedged daemon.
+// See ADR 0085-statusline-attests-daemon.
+const statuslineProbeTimeout = 50 * time.Millisecond
+
+// Must ping, not dial: connect() succeeds against a wedged daemon, so a dial
+// badges one that enforces nothing as secured.
+// See ADR 0085-statusline-attests-daemon.
+func daemonAlive(sockPath string) bool {
+	l, _ := probeDaemon(sockPath, statuslineProbeTimeout)
+	return l == daemonHealthy
+}
+
+// detectProtection resolves the session's state. The probe is skipped when the
+// shield is off — the badge is UNSECURED either way, so the dial would buy
+// nothing but latency. See ADR 0085-statusline-attests-daemon.
+func detectProtection(shielded bool, probe func() bool) protection {
+	if !shielded {
+		return unshielded
+	}
+	if !probe() {
+		return shieldedPolicyDown
+	}
+	return fullySecured
+}
+
+// Never returns empty: silence is indistinguishable from protection, and this
+// is the only channel that survives.
+// See ADR 0064-statusline-always-attests.
+func (p protection) badge() string {
+	switch p {
+	case fullySecured:
 		b := "🔒 [secured by \033[38;5;208magentjail\033[0m"
 		if v := displayVersion(); v != "" {
 			b += " (" + v + ")"
 		}
 		return b + "]"
+	case shieldedPolicyDown:
+		return "⚠ [\033[1;33mPOLICY OFF\033[0m · shield only · \033[38;5;208magentjail\033[0m]"
+	default:
+		// unshielded, and any state this switch does not know: an unrecognised
+		// protection must never claim to be secured.
+		return "⚠ [\033[1;31mUNSECURED\033[0m · \033[38;5;208magentjail\033[0m]"
 	}
-	return "⚠ [\033[1;31mUNSECURED\033[0m · \033[38;5;208magentjail\033[0m]"
+}
+
+// shieldBadge renders the badge for the current session.
+func shieldBadge() string {
+	shielded := os.Getenv("AGENTJAIL_SHIELDED") == "1"
+	return detectProtection(shielded, func() bool {
+		return daemonAlive(wire.DefaultSocketPath())
+	}).badge()
 }
 
 func runStatusline(cmd *cobra.Command, args []string) {

@@ -41,6 +41,7 @@ type DBDecision struct {
 	ElapsedUs         sql.NullInt64  `json:"elapsed_us"`
 	Cwd               sql.NullString `json:"cwd"`
 	ToolInputRedacted sql.NullString `json:"tool_input_redacted"`
+	WouldAction       string         `json:"would_action"`
 }
 
 type DBDiscoveredSkill struct {

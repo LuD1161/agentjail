@@ -73,6 +73,14 @@ const (
 	// is missing/stale, so a write failure degrades observability, not
 	// enforcement.
 	HookFallbackWriteFailed = "hook_fallback.write_failed"
+	// EnforcementModeChanged records the daemon entering or leaving monitor
+	// mode (startup or SIGHUP reload). Monitor mode means deny/ask verdicts are
+	// recorded but not acted on, so the window in which nothing was enforced
+	// must be reconstructable from the audit log alone -- the decisions table
+	// shows allow rows and cannot, by itself, say the mode was the reason.
+	// Detail carries {"mode": "enforce"|"monitor"}. See ADR
+	// 0091-monitor-mode-tools.
+	EnforcementModeChanged = "enforcement.mode_changed"
 )
 
 // Event is one audit log entry.

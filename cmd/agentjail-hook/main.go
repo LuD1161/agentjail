@@ -285,9 +285,12 @@ func failOpenCursor(category, detail, toolName string, toolInput map[string]inte
 
 	decision := resolveFailOpenDecision(fb, toolName, toolInput, cwd)
 	if decision.Deny {
+		// decision.Reason already carries restartInstructions on every deny path.
 		writeCursorDeny(decision.Reason)
 	} else {
-		writeCursorAllowWithMessage(decision.Reason)
+		// Not decision.Reason: it omits restartInstructions at levelAllow, and
+		// Cursor has no status line to carry the notice instead (ADR 0073).
+		writeCursorAllowWithMessage(failOpenSystemMessage(fb.Level))
 	}
 	os.Exit(0)
 }
@@ -357,6 +360,32 @@ func writeAllowWithSystemMessage(reason, msg string) {
 	_ = enc.Encode(out)
 }
 
+// monitorNotice renders the user-visible text for a verdict monitor mode
+// declined to act on. Empty when wouldAction is empty (enforce mode) — the
+// common path, where the hook must stay silent.
+//
+// It names the rule and says the call was allowed anyway, because the whole
+// point of monitor mode is deciding what to enforce later: a notice that only
+// said "policy matched" would not tell the user what changes if they switch.
+// See ADR 0091-monitor-mode-tools.
+func monitorNotice(wouldAction, ruleID, reason string) string {
+	if wouldAction == "" {
+		return ""
+	}
+	verb := "blocked"
+	if wouldAction == "ask" {
+		verb = "asked for approval on"
+	}
+	msg := fmt.Sprintf("agentjail (monitor mode): would have %s this — allowed because enforcement is off", verb)
+	if ruleID != "" {
+		msg += fmt.Sprintf(" [rule=%s]", ruleID)
+	}
+	if reason != "" {
+		msg += ": " + reason
+	}
+	return msg + "\nSet `enforcement: enforce` in ~/.agentjail/policy.yaml to act on this. Report so far: agentjail monitor"
+}
+
 // writeAsk writes a Claude Code "ask" hook response to stdout.
 func writeAsk(reason string) {
 	out := claudeHookOutput{
@@ -378,9 +407,9 @@ func writeCursorAllow() {
 }
 
 // writeCursorAllowWithMessage writes a Cursor "allow" response to stdout with
-// an optional user_message. Used by failOpenCursor so the friendly fail-open
-// message is shown only on the first fail-open in a session; an empty
-// userMessage omits the field entirely.
+// an optional user_message (empty omits the field). user_message, not
+// agent_message: the fail-open notice is for the human, and an allowed call
+// gives the agent nothing to act on.
 func writeCursorAllowWithMessage(userMessage string) {
 	out := cursorHookOutput{Permission: "allow", UserMessage: userMessage}
 	enc := json.NewEncoder(os.Stdout)
@@ -639,6 +668,17 @@ func runClaude(agent string) {
 		// One-time ssh-agent remediation advisory (non-blocking, stderr
 		// only, allow-path only - never on deny/ask).
 		maybeEmitSSHAgentWarning(input.ToolName, input.ToolInput)
+		// Monitor mode: the daemon downgraded a real verdict. Say so, or the run
+		// is indistinguishable from a clean one. Must ride systemMessage --
+		// Claude Code discards hook stderr on exit 0 (ADR 0073).
+		if notice := monitorNotice(resp.WouldAction, resp.RuleID, resp.Reason); notice != "" {
+			if agent == "codex" {
+				writeCodexSystemMessage(notice)
+				os.Exit(0)
+			}
+			writeAllowWithSystemMessage(resp.Reason, notice)
+			os.Exit(0)
+		}
 		if agent == "codex" {
 			os.Exit(0)
 		}
@@ -705,6 +745,12 @@ func runCursor() {
 		// One-time ssh-agent remediation advisory (non-blocking, stderr
 		// only, allow-path only - never on deny/ask).
 		maybeEmitSSHAgentWarning(req.ToolName, req.ToolInput)
+		// Monitor mode: surface the verdict the daemon declined to act on
+		// (ADR 0091-monitor-mode-tools).
+		if notice := monitorNotice(resp.WouldAction, resp.RuleID, resp.Reason); notice != "" {
+			writeCursorAllowWithMessage(notice)
+			break
+		}
 		writeCursorAllow()
 	}
 

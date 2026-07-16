@@ -1,49 +1,186 @@
 package main
 
 import (
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
-// TestShieldBadge_Shielded: a shielded session is attested by name.
-func TestShieldBadge_Shielded(t *testing.T) {
-	t.Setenv("AGENTJAIL_SHIELDED", "1")
-
-	got := shieldBadge()
-	if !strings.Contains(got, "secured by") || !strings.Contains(got, "agentjail") {
-		t.Errorf("expected a secured badge, got %q", got)
+// Guards the state -> badge mapping, including the AGE-212 state (shield up,
+// daemon down) that ADR 0064-statusline-always-attests rendered as "secured".
+func TestProtectionBadge(t *testing.T) {
+	tests := []struct {
+		name       string
+		state      protection
+		wantSubstr []string
+		denySubstr []string
+	}{
+		{
+			name:       "fully secured",
+			state:      fullySecured,
+			wantSubstr: []string{"secured by", "agentjail"},
+			denySubstr: []string{"UNSECURED", "POLICY OFF"},
+		},
+		{
+			name:       "shielded but daemon down",
+			state:      shieldedPolicyDown,
+			wantSubstr: []string{"POLICY OFF", "shield only", "agentjail"},
+			denySubstr: []string{"secured by"},
+		},
+		{
+			name:       "unshielded",
+			state:      unshielded,
+			wantSubstr: []string{"UNSECURED", "agentjail"},
+			denySubstr: []string{"secured by", "POLICY OFF"},
+		},
+		{
+			name:       "unknown state never claims secured",
+			state:      protection(99),
+			wantSubstr: []string{"UNSECURED"},
+			denySubstr: []string{"secured by", "POLICY OFF"},
+		},
 	}
-	if strings.Contains(got, "UNSECURED") {
-		t.Errorf("shielded session must not render UNSECURED, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.state.badge()
+			if got == "" {
+				t.Fatal("badge must never be empty")
+			}
+			for _, s := range tt.wantSubstr {
+				if !strings.Contains(got, s) {
+					t.Errorf("badge %q missing %q", got, s)
+				}
+			}
+			for _, s := range tt.denySubstr {
+				if strings.Contains(got, s) {
+					t.Errorf("badge %q must not contain %q", got, s)
+				}
+			}
+		})
 	}
 }
 
-// TestShieldBadge_Unshielded is the regression this badge exists for: an
-// unprotected session used to render nothing, which is indistinguishable from a
-// protected one once the stderr warnings scroll away (ADR 0064).
-func TestShieldBadge_Unshielded(t *testing.T) {
-	t.Setenv("AGENTJAIL_SHIELDED", "")
-
-	got := shieldBadge()
-	if got == "" {
-		t.Fatal("an unshielded session must never render an empty badge")
+// Guards that liveness is consulted only when the shield is on, and that a dead
+// daemon downgrades the state instead of being ignored.
+func TestDetectProtection(t *testing.T) {
+	tests := []struct {
+		name       string
+		shielded   bool
+		daemonUp   bool
+		want       protection
+		wantProbed bool
+	}{
+		{"shield on, daemon up", true, true, fullySecured, true},
+		{"shield on, daemon down (AGE-212)", true, false, shieldedPolicyDown, true},
+		{"shield off, daemon up", false, true, unshielded, false},
+		{"shield off, daemon down", false, false, unshielded, false},
 	}
-	if !strings.Contains(got, "UNSECURED") {
-		t.Errorf("expected UNSECURED, got %q", got)
-	}
-	if strings.Contains(got, "secured by") {
-		t.Errorf("unshielded session must not claim to be secured, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			probed := false
+			got := detectProtection(tt.shielded, func() bool {
+				probed = true
+				return tt.daemonUp
+			})
+			if got != tt.want {
+				t.Errorf("detectProtection(%v) = %v, want %v", tt.shielded, got, tt.want)
+			}
+			if probed != tt.wantProbed {
+				t.Errorf("probed = %v, want %v", probed, tt.wantProbed)
+			}
+		})
 	}
 }
 
-// TestShieldBadge_OnlyExactValueCounts: AGENTJAIL_SHIELDED is set to exactly
-// "1" by the shield. Any other value is not an activation record and must not
-// be read as one.
+// Guards the three dial outcomes against a real socket: only a live listener
+// counts. See ADR 0085-statusline-attests-daemon.
+func TestDaemonAlive(t *testing.T) {
+	dir := t.TempDir()
+
+	// A healthy daemon: answers ControlOpPing.
+	live := filepath.Join(dir, "live.sock")
+	ln, err := net.Listen("unix", live)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				var req wire.ControlRequest
+				if err := json.NewDecoder(c).Decode(&req); err != nil {
+					return
+				}
+				_ = json.NewEncoder(c).Encode(wire.ControlResponse{OK: true})
+			}(c)
+		}
+	}()
+
+	// A WEDGED daemon: listening, never accepts. The kernel completes the
+	// AF_UNIX handshake into the accept backlog, so a bare connect() succeeds
+	// and would badge this as secured — it enforces nothing.
+	wedged := filepath.Join(dir, "wedged.sock")
+	wedgedLn, err := net.Listen("unix", wedged)
+	if err != nil {
+		t.Fatalf("listen wedged: %v", err)
+	}
+	defer wedgedLn.Close()
+
+	// A socket file with no listener behind it: what a crashed daemon leaves.
+	stale := filepath.Join(dir, "stale.sock")
+	staleLn, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Fatalf("listen stale: %v", err)
+	}
+	if err := staleLn.Close(); err != nil {
+		t.Fatalf("close stale: %v", err)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		f, err := os.Create(stale)
+		if err != nil {
+			t.Fatalf("recreate stale: %v", err)
+		}
+		f.Close()
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"daemon answers ping", live, true},
+		{"daemon wedged: listening, never accepts", wedged, false},
+		{"stale socket file, no listener", stale, false},
+		{"missing socket", filepath.Join(dir, "absent.sock"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := daemonAlive(tt.path); got != tt.want {
+				t.Errorf("daemonAlive(%s) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShieldBadge_OnlyExactValueCounts(t *testing.T) {
-	for _, v := range []string{"0", "true", "yes", "2"} {
-		t.Run(v, func(t *testing.T) {
+	for _, v := range []string{"", "0", "true", "yes", "2"} {
+		t.Run("value_"+v, func(t *testing.T) {
 			t.Setenv("AGENTJAIL_SHIELDED", v)
-			if got := shieldBadge(); !strings.Contains(got, "UNSECURED") {
+			got := shieldBadge()
+			if got == "" {
+				t.Fatal("badge must never be empty")
+			}
+			if !strings.Contains(got, "UNSECURED") {
 				t.Errorf("AGENTJAIL_SHIELDED=%q must not read as shielded, got %q", v, got)
 			}
 		})
