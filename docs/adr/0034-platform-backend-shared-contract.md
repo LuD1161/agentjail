@@ -62,6 +62,36 @@ This is the interface + implementor pattern already preferred elsewhere in the
 codebase (registries and abstractions over `switch`-per-call): the contract is
 the interface, the `_os.go` files are the implementors.
 
+### Worked example: the tunnel address plan (AGE-224)
+
+The rule is not only about per-OS files. Any value re-declared away from its
+owner can drift, and the drift is silent by construction.
+
+`internal/dnsvip` owns the tunnel address plan: the VIP pool is `10.78.0.0/16`,
+allocated from `.1` upward. `internal/netns` separately hardcoded the agent's
+TUN address as `10.78.0.2/16`, and `internal/tunnel` documented the gateway as
+`10.78.0.1`. Three packages, one address plan, no shared constant — so the pool
+handed `.2` to the second hostname of every session. That host dialed its own
+interface and its traffic never left the box, while every other host worked.
+
+Two properties made it expensive to find:
+
+- **It looked like flakiness.** Exactly one host per session failed, and which
+  one depended on resolution order, so it never reproduced in isolation.
+- **The tests asserted the collision.** They pinned `10.78.0.1` and
+  `10.78.0.2` as the expected first two VIPs. A literal in a test is a claim
+  about the address plan; these claims were wrong and green.
+
+The fix is the contract, not the constant: `dnsvip` reserves the datapath
+offsets and exports `GatewayV4()`/`AgentV4()`; `netns` derives `TUNAddrCIDR`
+from `dnsvip.AgentV4()`. The address now exists in one place, so the pool and
+the TUN cannot disagree. Tests assert properties (in-pool, not-a-datapath-
+address, sticky) rather than literals.
+
+Generalizing: when two packages must agree on a value, one of them owns it and
+the other derives it. If a test has to name the literal to check the agreement,
+the agreement is not encoded in the code.
+
 ## Consequences
 
 - Adding a path/runtime/capability is a one-line change to the shared contract
