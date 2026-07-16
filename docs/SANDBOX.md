@@ -194,8 +194,10 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 
 > **Interim (ADR 0046):** per-host egress enforcement (`agentjail-netproxy`) is
 > **opt-in and OFF by default**. The credentialed proxy URL broke Claude Code's
-> MCP transport on macOS, and the transparent tunnel (planned) will
-> supersede the proxy with real per-session isolation and no proxy env. Until
+> MCP transport on macOS. The transparent tunnel that supersedes the proxy with
+> real per-session isolation and no proxy env now **ships on Linux** behind
+> `--tunnel` (ADR 0079); it is opt-in per session, and default-on is a later
+> step. Until
 > then the shield runs **port-only by default** (filesystem/process/keychain
 > sandbox stays fully on); pass `--netproxy` to turn per-host filtering on. The
 > "with netproxy" section below describes the `--netproxy` path.

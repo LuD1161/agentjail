@@ -491,6 +491,43 @@ agentjail policy list
 
 ---
 
+## Network tunnel (Linux)
+
+By default the shield filters network access by port only. Pass `--tunnel` to
+route the agent's traffic through a transparent forwarder instead, so policy can
+see and act on what the agent actually does on the network:
+
+```sh
+agentjail run --tunnel -- claude
+```
+
+**No sudo, no daemon, no install-time setup.** On Linux the tunnel runs in
+unprivileged user + network + mount namespaces the shield creates and owns
+([ADR 0079](./docs/adr/0079-agent-netns-veth-vs-userns-tunfd.md)). Nothing is
+provisioned at install; a session that never tunnels is never asked for anything
+([ADR 0078](./docs/adr/0078-lazy-tunnel-consent.md)). The tunnel is opt-in per
+session today.
+
+**It decrypts HTTPS by default, and says so.** Policy templates only reach
+HTTP(S) traffic through TLS interception, so `--tunnel` terminates TLS using a CA
+minted per session, kept in memory, and injected **only** into that agent's
+namespace trust store — never the host's, never your browser's. Every launch
+prints which posture it is in
+([ADR 0077](./docs/adr/0077-tunnel-mitm-default-and-consent.md)):
+
+```
+✓ transparent tunnel active (userns) · TLS interception ON — decrypting this agent's HTTPS
+```
+
+To keep the tunnel but relay TLS opaquely — for cert-pinned endpoints, or if you
+will not accept decryption — use `--no-mitm`, or set `network.tunnel_mitm: false`
+in `policy.yaml` for a standing opt-out. The trade is real: without interception
+agentjail sees only destination IP, SNI, and byte counts, and **HTTP(S) policy
+templates cannot match** (database and SSH rules still apply).
+
+Run `agentjail doctor` to see the current posture without launching an agent.
+macOS uses a different backend and does not have this yet.
+
 ## When the daemon is unreachable
 
 `agentjail-hook` is stdlib-only and dials the daemon with a 30 ms budget. If
