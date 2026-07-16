@@ -25,6 +25,7 @@ type tunnelSession struct {
 	dns       *dnsvip.Server
 	store     *mitm.RequestStore // non-nil when TLS interception is enabled
 	caCleanup func()             // removes the temp CA cert dir; nil if no MITM
+	caEnv     map[string]string  // CA trust env for the agent; nil if no MITM
 	cancel    context.CancelFunc
 }
 
@@ -128,7 +129,10 @@ func startTunnel(ctx context.Context, mitmEnabled bool) (*tunnelSession, bool) {
 		logger.Warn("tunnel TLS interception UNAVAILABLE (CA setup failed); relaying HTTPS opaque — HTTP(S) policy templates will NOT match", "err", err)
 	} else {
 		sess.caCleanup = caCleanup
-		_ = caDir
+		// Bind-mounting the cert over the namespace trust store is not enough:
+		// Node and Python's requests ignore it and use bundled roots, so the
+		// agent's env must point them at the CA too (ADR 0034, AGE-113).
+		sess.caEnv = TunnelCAEnv(TunnelCACertPath(caDir))
 		if store, serr := mitm.NewRequestStore(mitm.DefaultDBPath()); serr != nil {
 			logger.Warn("tunnel TLS interception UNAVAILABLE despite --mitm (network.db open failed); relaying HTTPS opaque", "err", serr)
 		} else {

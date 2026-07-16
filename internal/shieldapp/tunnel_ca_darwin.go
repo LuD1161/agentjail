@@ -37,11 +37,7 @@ func setupTunnelCADarwin(caDir string) (envVars map[string]string, cleanup func(
 		return nil, func() {}, fmt.Errorf("tunnel CA cert not found at %s: %w", certPath, statErr)
 	}
 
-	vars := map[string]string{
-		"SSL_CERT_FILE":       certPath,
-		"NODE_EXTRA_CA_CERTS": certPath,
-		"REQUESTS_CA_BUNDLE":  certPath,
-	}
+	vars := TunnelCAEnv(certPath)
 
 	// cleanup is a no-op: caDir is owned by the caller who must keep it alive
 	// until the agent exits. The caller removes caDir on the error path only.

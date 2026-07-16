@@ -377,6 +377,11 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	var agentCmd *exec.Cmd
 	if tunnelSess != nil {
 		agentCmd = tunnelSess.ns.AgentCommand(agentPath, agentArgs, landlockRulesetFD)
+		// Runtimes that ignore the namespace trust store need the CA named in
+		// the env (ADR 0034, AGE-113).
+		for k, v := range tunnelSess.caEnv {
+			env = append(env, k+"="+v)
+		}
 	} else {
 		agentCmd = exec.Command(agentPath, agentArgs...)
 	}
