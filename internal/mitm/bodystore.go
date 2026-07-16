@@ -56,8 +56,37 @@ func encodingRawSides(reqRaw, respRaw bool) EncodingRawSides {
 	}
 }
 
-// bodyFileExt is the suffix every stored body path carries.
-const bodyFileExt = ".body"
+// The suffixes a stored body path may carry: a plaintext body, stage 1's
+// encrypted wire bytes, or stage 2's encrypted decoded copy.
+// See ADR 0095-chunked-body-envelope.
+const (
+	bodyFileExt    = ".body"
+	rawEncFileExt  = ".raw.enc"
+	bodyEncFileExt = ".body.enc"
+)
+
+var bodyFileExts = []string{bodyEncFileExt, rawEncFileExt, bodyFileExt}
+
+// contentEnc is what Content-Encoding means for the capture: store as-is,
+// attempt a gunzip pass, or keep raw because we cannot decode it.
+type contentEnc uint8
+
+const (
+	encIdentity contentEnc = iota
+	encGzip
+	encUnsupported
+)
+
+func normalizeEncoding(s string) contentEnc {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "identity":
+		return encIdentity
+	case "gzip", "x-gzip":
+		return encGzip
+	default:
+		return encUnsupported
+	}
+}
 
 // DefaultBodyDir returns the default body directory: ~/.agentjail/bodies.
 // The session dir goes UNDER it: ~/.agentjail/bodies/<session>, because the
@@ -97,17 +126,30 @@ func validIDComponent(s string) bool {
 	return true
 }
 
+// validBodyFileName reports whether name is exactly <id> plus one known
+// suffix, so no other file under the store can be named by a stored path.
+func validBodyFileName(name string) bool {
+	for _, ext := range bodyFileExts {
+		if base, ok := strings.CutSuffix(name, ext); ok {
+			return validIDComponent(base)
+		}
+	}
+	return false
+}
+
 // BodyStore holds captured request/response bodies as files, grouped per
 // session: paths recorded on a row are "<session_id>/<body_id>.body", relative
 // to the store's root directory.
 type BodyStore struct {
 	dir     string // root, e.g. ~/.agentjail/bodies
 	session string // this launch's group; captures land in dir/session
+	keys    KeyWrapper
 }
 
 // NewBodyStore creates (or opens) the root and this session's directory, both
-// 0700.
-func NewBodyStore(dir, sessionID string) (*BodyStore, error) {
+// 0700. A nil keys stores bodies in the clear; supply one and every byte at
+// rest is chunked AEAD. See ADR 0095-chunked-body-envelope.
+func NewBodyStore(dir, sessionID string, keys KeyWrapper) (*BodyStore, error) {
 	if !validIDComponent(sessionID) {
 		return nil, fmt.Errorf("mitm/bodystore: bad session id %q", sessionID)
 	}
@@ -119,7 +161,7 @@ func NewBodyStore(dir, sessionID string) (*BodyStore, error) {
 			return nil, fmt.Errorf("mitm/bodystore: chmod %s: %w", d, err)
 		}
 	}
-	return &BodyStore{dir: dir, session: sessionID}, nil
+	return &BodyStore{dir: dir, session: sessionID, keys: keys}, nil
 }
 
 // Dir returns the store's root directory, not this session's subdirectory.
@@ -136,8 +178,7 @@ func (b *BodyStore) resolve(rel string) (string, error) {
 	if len(comps) != 2 || !validIDComponent(comps[0]) {
 		return "", fmt.Errorf("mitm/bodystore: bad body path %q", rel)
 	}
-	base, ok := strings.CutSuffix(comps[1], bodyFileExt)
-	if !ok || !validIDComponent(base) {
+	if !validBodyFileName(comps[1]) {
 		return "", fmt.Errorf("mitm/bodystore: bad body path %q", rel)
 	}
 	// A symlink at any component would re-point a read outside the store.
@@ -158,24 +199,63 @@ func (b *BodyStore) resolve(rel string) (string, error) {
 	return filepath.Join(b.dir, comps[0], comps[1]), nil
 }
 
-// Open returns a reader for a stored body. A missing file is absent, not an
-// error: (nil, nil). See ADR 0092-persist-request-bodies (D1).
+// Open returns a reader for a stored body, decrypting as it streams. A missing
+// file is absent, not an error: (nil, nil).
+// See ADR 0092-persist-request-bodies (D1).
 func (b *BodyStore) Open(rel string) (io.ReadCloser, error) {
 	if b == nil || rel == "" {
 		return nil, nil
 	}
-	full, err := b.resolve(rel)
-	if err != nil {
+	if _, err := b.resolve(rel); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(full)
+	rc, err := b.openStored(rel)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
+	return rc, err
+}
+
+func (b *BodyStore) openStored(rel string) (io.ReadCloser, error) {
+	f, err := os.Open(b.path(rel))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("mitm/bodystore: open %s: %w", rel, err)
 	}
-	return f, nil
+	if b.keys == nil {
+		return f, nil
+	}
+	r, err := newBodyReader(f, b.keys)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("mitm/bodystore: open %s: %w", rel, err)
+	}
+	return r, nil
+}
+
+// captureSink is what a capture writes into: a buffered plaintext file, or a
+// chunked-AEAD writer. Close finalizes and closes the underlying file.
+type captureSink interface {
+	io.Writer
+	Close() error
+}
+
+// plainSink is the unencrypted sink, kept for a store with no KeyWrapper.
+type plainSink struct {
+	f *os.File
+	w *bufio.Writer
+}
+
+func (s *plainSink) Write(p []byte) (int, error) { return s.w.Write(p) }
+
+func (s *plainSink) Close() error {
+	err := s.w.Flush()
+	if cerr := s.f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // bodyCapture streams a body to a file and counts every byte that passes.
@@ -184,24 +264,28 @@ func (b *BodyStore) Open(rel string) (io.ReadCloser, error) {
 // See ADR 0092-persist-request-bodies (D1).
 type bodyCapture struct {
 	rel   string
-	f     *os.File
-	w     *bufio.Writer
+	side  Side
+	enc   contentEnc
+	sink  captureSink
 	total int64
 	err   error
 }
 
 // Create opens a capture. The name is generated before any byte is written:
 // the body streams to disk before the INSERT that would assign a row id.
-// See ADR 0092-persist-request-bodies (D1).
-func (b *BodyStore) Create() (*bodyCapture, error) {
+// contentEncoding is taken now because it picks the sink's stage-1 identity.
+// See ADR 0092-persist-request-bodies (D1), ADR 0095-chunked-body-envelope.
+func (b *BodyStore) Create(side Side, contentEncoding string) (*bodyCapture, error) {
 	if b == nil {
 		return nil, nil
 	}
-	rel, f, err := b.createFile()
+	enc := normalizeEncoding(contentEncoding)
+	// Wire bytes are the plaintext body only when nothing encoded them.
+	rel, sink, err := b.createSink(side, enc != encIdentity)
 	if err != nil {
 		return nil, err
 	}
-	return &bodyCapture{rel: rel, f: f, w: bufio.NewWriterSize(f, captureBufSize)}, nil
+	return &bodyCapture{rel: rel, side: side, enc: enc, sink: sink}, nil
 }
 
 // path maps a stored relative path to this store's filesystem path. Stored
@@ -210,12 +294,56 @@ func (b *BodyStore) path(rel string) string {
 	return filepath.Join(b.dir, filepath.FromSlash(rel))
 }
 
-func (b *BodyStore) createFile() (string, *os.File, error) {
+// createSink opens a new body file. raw says the bytes about to be written are
+// still encoded, which names the file and fills imeta's encoding_raw.
+func (b *BodyStore) createSink(side Side, raw bool) (string, captureSink, error) {
+	ext := bodyFileExt
+	if b.keys != nil {
+		ext = bodyEncFileExt
+		if raw {
+			ext = rawEncFileExt
+		}
+	}
+	rel, f, err := b.createFile(ext)
+	if err != nil {
+		return "", nil, err
+	}
+	if b.keys == nil {
+		return rel, &plainSink{f: f, w: bufio.NewWriterSize(f, captureBufSize)}, nil
+	}
+	fileID, err := newFileID()
+	if err != nil {
+		f.Close()
+		_ = os.Remove(b.path(rel))
+		return "", nil, fmt.Errorf("mitm/bodystore: file id: %w", err)
+	}
+	encoding := bodyEncodingDecoded
+	if raw {
+		encoding = bodyEncodingRaw
+	}
+	w, err := newBodyWriter(f, b.keys, imeta{
+		dataAlg:      bodyAlgAES256GCM,
+		chunkSize:    bodyChunkSize,
+		fileID:       fileID,
+		side:         side,
+		sessionID:    sessionKey(b.session),
+		encodingRaw:  encoding,
+		plaintextLen: bodyPlaintextLenUnknown,
+	})
+	if err != nil {
+		f.Close()
+		_ = os.Remove(b.path(rel))
+		return "", nil, fmt.Errorf("mitm/bodystore: create %s: %w", rel, err)
+	}
+	return rel, w, nil
+}
+
+func (b *BodyStore) createFile(ext string) (string, *os.File, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", nil, fmt.Errorf("mitm/bodystore: name: %w", err)
 	}
-	rel := b.session + "/" + hex.EncodeToString(buf[:]) + bodyFileExt
+	rel := b.session + "/" + hex.EncodeToString(buf[:]) + ext
 	f, err := os.OpenFile(b.path(rel), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", nil, fmt.Errorf("mitm/bodystore: create %s: %w", rel, err)
@@ -229,7 +357,7 @@ func (c *bodyCapture) Write(p []byte) (int, error) {
 	}
 	c.total += int64(len(p))
 	if c.err == nil {
-		if _, err := c.w.Write(p); err != nil {
+		if _, err := c.sink.Write(p); err != nil {
 			c.err = err
 		}
 	}
@@ -246,20 +374,17 @@ func (c *bodyCapture) Size() int64 {
 }
 
 func (c *bodyCapture) close() error {
-	if err := c.w.Flush(); err != nil && c.err == nil {
-		c.err = err
-	}
-	if err := c.f.Close(); err != nil && c.err == nil {
+	if err := c.sink.Close(); err != nil && c.err == nil {
 		c.err = err
 	}
 	return c.err
 }
 
-// Finish closes the capture and normalizes it against contentEncoding,
-// returning the stored path and whether the file holds raw encoded bytes.
-// Decoding is best-effort; the bytes are not.
-// See ADR 0092-persist-request-bodies (D1).
-func (b *BodyStore) Finish(c *bodyCapture, contentEncoding string) (rel string, raw bool, err error) {
+// Finish closes stage 1 and runs stage 2 if the bytes are gzip, returning the
+// stored path and whether the file holds raw encoded bytes. A decode failure
+// keeps stage 1's file: decoding is best-effort, the bytes are not.
+// See ADR 0092-persist-request-bodies (D1), ADR 0095-chunked-body-envelope.
+func (b *BodyStore) Finish(c *bodyCapture) (rel string, raw bool, err error) {
 	if b == nil || c == nil {
 		return "", false, nil
 	}
@@ -268,25 +393,23 @@ func (b *BodyStore) Finish(c *bodyCapture, contentEncoding string) (rel string, 
 		_ = os.Remove(b.path(c.rel))
 		return "", false, closeErr
 	}
-	switch strings.ToLower(strings.TrimSpace(contentEncoding)) {
-	case "", "identity":
-		return c.rel, false, closeErr
-	case "gzip", "x-gzip":
-		decoded, derr := b.decodeGzip(c.rel)
-		if derr != nil {
-			return c.rel, true, closeErr
-		}
-		_ = os.Remove(b.path(c.rel))
-		return decoded, false, closeErr
-	default:
+	if c.enc != encGzip {
+		return c.rel, c.enc != encIdentity, closeErr
+	}
+	decoded, derr := b.decodeGzip(c)
+	if derr != nil {
 		return c.rel, true, closeErr
 	}
+	_ = os.Remove(b.path(c.rel))
+	return decoded, false, closeErr
 }
 
-// decodeGzip streams rel through gzip into a new file, so peak memory stays at
-// the copy buffer. Any failure leaves rel untouched for the raw fallback.
-func (b *BodyStore) decodeGzip(rel string) (string, error) {
-	src, err := os.Open(b.path(rel))
+// decodeGzip is stage 2: read stage 1's file back, inflate and re-seal, one
+// chunk at a time, so peak memory stays bounded and no plaintext byte is ever
+// written. Any failure leaves stage 1's file for the raw fallback.
+// See ADR 0095-chunked-body-envelope.
+func (b *BodyStore) decodeGzip(c *bodyCapture) (string, error) {
+	src, err := b.openStored(c.rel)
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +421,7 @@ func (b *BodyStore) decodeGzip(rel string) (string, error) {
 	}
 	defer gr.Close()
 
-	outRel, out, err := b.createFile()
+	outRel, out, err := b.createSink(c.side, false)
 	if err != nil {
 		return "", err
 	}
@@ -308,20 +431,16 @@ func (b *BodyStore) decodeGzip(rel string) (string, error) {
 		return "", e
 	}
 
-	in, err := src.Stat()
-	if err != nil {
-		return cerr(err)
-	}
-	limit := in.Size() * maxExpansionRatio
+	limit := c.total * maxExpansionRatio
 	if limit < maxExpansionFloor {
 		limit = maxExpansionFloor
 	}
-	n, err := io.Copy(out, io.LimitReader(gr, limit+1))
+	n, err := io.CopyBuffer(out, io.LimitReader(gr, limit+1), make([]byte, bodyChunkSize))
 	if err != nil {
 		return cerr(err)
 	}
 	if n > limit {
-		return cerr(fmt.Errorf("mitm/bodystore: %s expands past %d bytes", rel, limit))
+		return cerr(fmt.Errorf("mitm/bodystore: %s expands past %d bytes", c.rel, limit))
 	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(b.path(outRel))

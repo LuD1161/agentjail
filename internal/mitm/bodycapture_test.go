@@ -62,13 +62,27 @@ func newTunnel(t *testing.T, upstream *httptest.Server, bodies *BodyStore) *tunn
 	return &tunnel{client: clientTLS, logs: logs, done: done}
 }
 
-func newBodyStore(t *testing.T) *BodyStore {
+func newBodyStore(t *testing.T) *BodyStore { return newStore(t, nil) }
+
+// newEncBodyStore is the same store with bodies sealed at rest, so every D1
+// invariant can be re-asserted on the encrypted path.
+// See ADR 0095-chunked-body-envelope.
+func newEncBodyStore(t *testing.T) *BodyStore {
+	t.Helper()
+	kw, err := NewMemoryKeyWrapper()
+	if err != nil {
+		t.Fatalf("NewMemoryKeyWrapper: %v", err)
+	}
+	return newStore(t, kw)
+}
+
+func newStore(t *testing.T, keys KeyWrapper) *BodyStore {
 	t.Helper()
 	sid, err := NewSessionID()
 	if err != nil {
 		t.Fatalf("NewSessionID: %v", err)
 	}
-	b, err := NewBodyStore(filepath.Join(t.TempDir(), "bodies"), sid)
+	b, err := NewBodyStore(filepath.Join(t.TempDir(), "bodies"), sid, keys)
 	if err != nil {
 		t.Fatalf("NewBodyStore: %v", err)
 	}
@@ -358,12 +372,12 @@ func TestBodyFilePermissions(t *testing.T) {
 		}
 	}
 
-	c, err := b.Create()
+	c, err := b.Create(SideResponse, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	c.Write([]byte("secret"))
-	rel, _, err := b.Finish(c, "")
+	rel, _, err := b.Finish(c)
 	if err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
@@ -464,11 +478,11 @@ func TestBodyPathTraversalRejected(t *testing.T) {
 // An empty body leaves no file and no path.
 func TestEmptyBodyLeavesNoFile(t *testing.T) {
 	b := newBodyStore(t)
-	c, err := b.Create()
+	c, err := b.Create(SideResponse, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	rel, raw, err := b.Finish(c, "")
+	rel, raw, err := b.Finish(c)
 	if err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
@@ -490,12 +504,12 @@ func TestGzipBombStoredRaw(t *testing.T) {
 	zw.Close()
 
 	b := newBodyStore(t)
-	c, err := b.Create()
+	c, err := b.Create(SideResponse, "gzip")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	c.Write(gz.Bytes())
-	rel, raw, err := b.Finish(c, "gzip")
+	rel, raw, err := b.Finish(c)
 	if err != nil {
 		t.Fatalf("Finish: %v", err)
 	}

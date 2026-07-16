@@ -149,9 +149,8 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		// to disk is recorded even when the hop failed.
 		// See ADR 0092-persist-request-bodies (D1).
 		var reqCapture, respCapture *bodyCapture
-		var reqEncoding, respEncoding string
 		emitLog := func() {
-			h.finishCaptures(reqLog, reqCapture, reqEncoding, respCapture, respEncoding)
+			h.finishCaptures(reqLog, reqCapture, respCapture)
 			h.emit(reqLog)
 		}
 
@@ -200,8 +199,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 				emitLog()
 				return
 			}
-			reqCapture = h.startCapture()
-			reqEncoding = req.Header.Get("Content-Encoding")
+			reqCapture = h.startCapture(SideRequest, req.Header.Get("Content-Encoding"))
 			// Exact only while the body fits the scan window; past that it is
 			// the bytes seen so far, corrected once the body streams upstream.
 			reqLog.RequestSize = int64(len(bodyBuf))
@@ -316,8 +314,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		// Tee the response to disk as it passes. Buffering it before forwarding
 		// would make the agent wait for the whole stream -- SSE model turns run
 		// for seconds. See ADR 0092-persist-request-bodies (D1).
-		respCapture = h.startCapture()
-		respEncoding = resp.Header.Get("Content-Encoding")
+		respCapture = h.startCapture(SideResponse, resp.Header.Get("Content-Encoding"))
 		counter := &countingWriter{}
 		var sink io.Writer = counter
 		if respCapture != nil {
@@ -355,11 +352,11 @@ func (h *MITMHandler) emit(rl *RequestLog) {
 
 // startCapture opens a body file, or returns nil: recording is not allowed to
 // fail a request. See ADR 0092-persist-request-bodies (D1).
-func (h *MITMHandler) startCapture() *bodyCapture {
+func (h *MITMHandler) startCapture(side Side, contentEncoding string) *bodyCapture {
 	if h.Bodies == nil {
 		return nil
 	}
-	c, err := h.Bodies.Create()
+	c, err := h.Bodies.Create(side, contentEncoding)
 	if err != nil {
 		h.Logger.Warn("body capture unavailable", "err", err)
 		return nil
@@ -369,20 +366,20 @@ func (h *MITMHandler) startCapture() *bodyCapture {
 
 // finishCaptures normalizes both captures and records their paths on rl. It is
 // idempotent: every exit path calls it, and only the first does the work.
-func (h *MITMHandler) finishCaptures(rl *RequestLog, reqC *bodyCapture, reqEnc string, respC *bodyCapture, respEnc string) {
+func (h *MITMHandler) finishCaptures(rl *RequestLog, reqC *bodyCapture, respC *bodyCapture) {
 	if h.Bodies == nil || rl.bodiesFinished {
 		return
 	}
 	rl.bodiesFinished = true
-	reqPath, reqRaw := h.finishOne(reqC, reqEnc)
-	respPath, respRaw := h.finishOne(respC, respEnc)
+	reqPath, reqRaw := h.finishOne(reqC)
+	respPath, respRaw := h.finishOne(respC)
 	rl.RequestBodyPath = reqPath
 	rl.ResponseBodyPath = respPath
 	rl.EncodingRaw = encodingRawSides(reqRaw, respRaw)
 }
 
-func (h *MITMHandler) finishOne(c *bodyCapture, enc string) (string, bool) {
-	rel, raw, err := h.Bodies.Finish(c, enc)
+func (h *MITMHandler) finishOne(c *bodyCapture) (string, bool) {
+	rel, raw, err := h.Bodies.Finish(c)
 	if err != nil {
 		// A short file is a partial capture, not a decode failure: keep the row.
 		h.Logger.Warn("body capture incomplete", "path", rel, "err", err)
