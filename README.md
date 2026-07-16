@@ -194,7 +194,7 @@ Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts th
 ```sh
 agentjail status                      # verify everything is wired
 agentjail doctor                      # diagnose a specific setup problem
-agentjail doctor --fix                # repair what it can (dead daemon, dangling shim), then re-check
+agentjail doctor --fix                # repair what it can (dead daemon, dangling shim, stale service unit), then re-check
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail sessions list               # active and past agent sessions
@@ -231,6 +231,8 @@ agentjail install --all               # non-interactive, install all detected
 **Agent discovery + picker:** the installer presents a styled interactive multi-select - all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.
 
 **Linux note:** a fully supported install target. `agentjail install` writes a systemd `--user` unit at `~/.config/systemd/user/agentjail-daemon.service` (`Restart=always`) and runs `systemctl --user enable --now` to start it — no root required. Auto-update, hook wiring, and all policies work the same as on macOS (launchd), just backed by systemd instead. Requires a systemd `--user` session (present on any normal desktop or SSH login on a systemd-based distro); if none is reachable (e.g. a bare container with no login session), the unit is still written and `agentjail install` prints the manual `systemctl --user enable --now agentjail-daemon.service` command to run once a session exists. See [ADR 0051](./docs/adr/0051-linux-install-support.md).
+
+`Restart=always` is load-bearing: the auto-updater swaps the binaries and exits 0, relying on the supervisor to bring the daemon back ([ADR 0070](./docs/adr/0070-supervisor-restarts-daemon-on-clean-exit.md)). Installs predating that default have `Restart=on-failure` on disk, which does **not** restart a clean exit — so the daemon would stay down after an auto-update. `agentjail doctor` now reads the *deployed* unit (macOS: the launchd plist's `KeepAlive`) and fails if it would not restart the daemon; `agentjail doctor --fix` and `agentjail update` repair it in place. A definition that already satisfies the invariant is never rewritten, so hand-edits like the plist's `EnvironmentVariables` block survive. See [ADR 0088](./docs/adr/0088-deployed-supervisor-verified.md).
 
 **Terminal PATH shim (opt-in):**
 ```sh
