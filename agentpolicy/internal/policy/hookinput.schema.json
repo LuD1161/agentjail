@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HookInput",
+  "description": "The OPA `input` document seen by hook-path Rego rules. Mirrors the JSON tags of policy.HookInput (engine.go) exactly; hookinput_schema_test.go fails if the two drift.",
+  "type": "object",
+  "properties": {
+    "hook_event": {
+      "type": "string",
+      "description": "\"PreToolUse\" or \"PostToolUse\"."
+    },
+    "tool_name": {
+      "type": "string",
+      "description": "\"Bash\", \"Write\", \"Edit\", \"Read\", \"mcp__server__tool\", ..."
+    },
+    "tool_input": {
+      "type": "object",
+      "description": "Raw tool_input from the hook. Free-form by design: the key set is the tool's, not ours, so this stays an untyped object and input.tool_input.<anything> remains legal."
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "repo_root": {
+      "type": "string",
+      "description": "Optional (omitempty). Git repo root resolved by the daemon; undefined when not a git repo."
+    },
+    "aws_account": {
+      "type": "string",
+      "description": "Optional (omitempty). AWS account id resolved from `aws --profile <name>`; undefined for non-AWS commands."
+    },
+    "command_binaries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional (omitempty). Command binary basenames parsed out of a Bash tool_input.command; undefined for non-Bash tools."
+    }
+  },
+  "required": [
+    "hook_event",
+    "tool_name",
+    "tool_input",
+    "session_id",
+    "cwd"
+  ]
+}
