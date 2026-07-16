@@ -1874,3 +1874,91 @@ func TestMergeDaemonUnreachableKeepsBaseWhenOverlayEmpty(t *testing.T) {
 		t.Errorf("expected base to be kept, got %q", merged.DaemonUnreachable)
 	}
 }
+
+// ---- AGE-242: enforcement mode ----
+
+// TestDefaultEnforcementIsEnforce guards the opt-in invariant: monitor mode
+// must never be reached by omission. See ADR 0091-monitor-mode-tool-calls.
+func TestDefaultEnforcementIsEnforce(t *testing.T) {
+	if got := Default().Enforcement; got != EnforcementEnforce {
+		t.Errorf("Default().Enforcement = %q, want %q", got, EnforcementEnforce)
+	}
+	if Default().Monitoring() {
+		t.Error("Default() must not be monitoring")
+	}
+}
+
+// TestLoadEnforcementUnsetStaysEmpty verifies decode does not invent a value —
+// the default is applied by Merge, not by the decoder.
+func TestLoadEnforcementUnsetStaysEmpty(t *testing.T) {
+	cfg, err := decode(strings.NewReader("mcp:\n  allowed: [\"*\"]\n"))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if cfg.Enforcement != "" {
+		t.Errorf("expected empty Enforcement when unset, got %q", cfg.Enforcement)
+	}
+}
+
+func TestLoadEnforcementValidValues(t *testing.T) {
+	for _, mode := range []EnforcementMode{EnforcementEnforce, EnforcementMonitor} {
+		cfg, err := decode(strings.NewReader("enforcement: " + string(mode) + "\n"))
+		if err != nil {
+			t.Fatalf("decode(%q): unexpected error: %v", mode, err)
+		}
+		if cfg.Enforcement != mode {
+			t.Errorf("decode(%q): got %q", mode, cfg.Enforcement)
+		}
+	}
+}
+
+func TestLoadEnforcementInvalidValueRejected(t *testing.T) {
+	_, err := decode(strings.NewReader("enforcement: bogus\n"))
+	if err == nil {
+		t.Fatal("expected error for invalid enforcement value, got nil")
+	}
+	if !strings.Contains(err.Error(), "enforcement") {
+		t.Errorf("error should mention enforcement, got: %v", err)
+	}
+}
+
+// TestMergeEnforcementFallback covers the three-way resolution: overlay wins,
+// else base, else the enforce default.
+func TestMergeEnforcementFallback(t *testing.T) {
+	cases := []struct {
+		name          string
+		base, overlay EnforcementMode
+		want          EnforcementMode
+	}{
+		{"overlay wins", EnforcementEnforce, EnforcementMonitor, EnforcementMonitor},
+		{"base when overlay unset", EnforcementMonitor, "", EnforcementMonitor},
+		{"default when both unset", "", "", EnforcementEnforce},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			base := &PolicyConfig{Enforcement: c.base}
+			merged := Merge(base, &PolicyConfig{Enforcement: c.overlay})
+			if merged.Enforcement != c.want {
+				t.Errorf("Merge = %q, want %q", merged.Enforcement, c.want)
+			}
+		})
+	}
+}
+
+// TestMergeProjectOverlayCannotDisableEnforcement is the security guard: a
+// project's .agentjail/policy.yaml lives in the repo the agent can write, so an
+// overlay must never be able to turn enforcement off. MergeProjectOverlay is
+// additive-only and Enforcement is not among the fields it widens.
+func TestMergeProjectOverlayCannotDisableEnforcement(t *testing.T) {
+	base := Default() // Enforcement: enforce
+	poisoned := &PolicyConfig{Enforcement: EnforcementMonitor}
+	merged := MergeProjectOverlay(base, poisoned)
+	if merged.Enforcement != EnforcementEnforce {
+		t.Errorf("SECURITY: project overlay set Enforcement=%q, want %q — "+
+			"an agent-writable overlay must not disable enforcement",
+			merged.Enforcement, EnforcementEnforce)
+	}
+	if merged.Monitoring() {
+		t.Error("SECURITY: project overlay turned on monitoring")
+	}
+}
