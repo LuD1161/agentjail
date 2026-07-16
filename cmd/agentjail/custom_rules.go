@@ -103,9 +103,12 @@ func runPolicyAdd(path string) int {
 		return 1
 	}
 
-	// Step 2: full-bundle validation (OPA compile).
+	// Step 2: full-bundle validation (OPA compile + input schema type-check).
 	if err := validateFullBundle(path, src); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail policy add: bundle validation failed: %v\n", err)
+		if isUnknownInputRefError(err) {
+			fmt.Fprint(os.Stderr, unknownInputRefHint)
+		}
 		return 1
 	}
 
@@ -323,6 +326,33 @@ func validateFullBundle(candidatePath string, candidateSrc []byte) error {
 	}
 	return nil
 }
+
+// ---- unknown input.* reference ----------------------------------------------
+
+// isUnknownInputRefError reports whether err is OPA's type error for a
+// reference to a field that does not exist on the `input` document — i.e. the
+// rule names a fact the daemon never sends.
+//
+// The check is on OPA's stable error code plus the ref prefix rather than on
+// the rendered message, so it does not depend on OPA's wording.
+func isUnknownInputRefError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "rego_type_error") && strings.Contains(msg, "undefined ref: input.")
+}
+
+// unknownInputRefHint explains the stakes behind the OPA type error above.
+// The compile error names the bad reference and its line; what it does not say
+// is why this is worth blocking an install over — which is the whole point of
+// the check (ADR 0016 addendum).
+const unknownInputRefHint = `
+  This rule references a field that is not part of the hook input document.
+  Rego does not fail on an unknown reference — it evaluates to undefined, so
+  the rule would install cleanly, report healthy, and never fire. A 'deny'
+  rule that never fires silently permits what it was written to block.
+
+  Fix the reference (the error above lists the valid fields) and re-run.
+  Field meanings: agentpolicy/internal/policy/hookinput.schema.json
+`
 
 // ---- atomicWrite ------------------------------------------------------------
 
