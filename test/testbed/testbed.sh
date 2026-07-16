@@ -207,6 +207,9 @@ do_gate() {
         tart_stop_other_testbeds "$(inst "$name")"
         trap "tart stop '$(inst "$name")' >/dev/null 2>&1 || true" EXIT
     fi
+    # Ask before the clone, not after a 20-minute provision discovers the cap.
+    # The gate is not exempt from MAX_TESTBEDS -- it asks for a slot instead.
+    gate_reclaim_slot "$(inst "$name")"
     if "${DRIVER}_exists" "$name"; then
         log "reusing '$name' — resetting to clean golden"
         do_reset "$name"

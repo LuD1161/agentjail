@@ -49,10 +49,29 @@ It **refuses rather than evicting the oldest**: a testbed may be mid-investigati
 in another terminal, and destroying it to make room is a surprise this repo does
 not ship. The caller decides what to drop.
 
-**The release gate is not exempt.** `make e2e-release` creates `tb-release-gate`
-if absent and hits the same cap, so a full disk fails the gate rather than
-silently getting a pass no other command gets. One rule, no special cases - keep
-a slot free before cutting a release.
+**The release gate is not exempt - it asks for a slot.** `make e2e-release` needs
+`tb-release-gate` and is the one command with a job that must finish, so at the
+cap it offers to clear a slot rather than only refusing:
+
+```
+testbed: destroy testbed dev to free a slot for the release gate? [y/N]
+```
+
+A `no` fails the gate, exactly as a full disk would. It frees **one** slot and
+stops - never a clean sweep - and never touches its own box. Consent is the whole
+point: the gate earns a slot by asking, it is not handed one.
+
+`TESTBED_RECLAIM` controls this:
+
+| value | behavior |
+|---|---|
+| `ask` (default) | prompt per testbed until there is room |
+| `always` | destroy without asking - for an unattended gate |
+| `never` | refuse and fail early |
+
+An unattended gate (no TTY) **dies with instructions rather than hanging** on a
+prompt nobody will answer - set `TESTBED_RECLAIM=always` for that case. It never
+guesses.
 
 This caps how many testbeds **exist** (a disk concern). How many may **run** at
 once is a different axis: macOS caps concurrent VMs at ~2, which `gate` handles

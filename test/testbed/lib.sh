@@ -158,6 +158,64 @@ tart_testbed_names() { tart list 2>/dev/null | awk 'NR>1 {print $2}' | grep "^${
 # nothing. Only tb-prefixed VMs; a golden image is not a testbed.
 testbed_names() { "${DRIVER}_testbed_names"; }
 
+# testbed_count -> stdout: how many testbeds exist. Its own function because
+# `grep -c` on empty input prints 0 but exits 1, which is the standard way a
+# counter like this silently reports 1 at the empty state.
+testbed_count() { printf '%s' "$(testbed_names)" | grep -c . || true; }
+
+# gate_confirm_destroy <short-name> - may the gate destroy this testbed?
+#
+# TESTBED_RECLAIM: ask (default) | always | never. `always` exists for an
+# unattended gate; without it, a non-TTY run dies rather than hanging on a read
+# nobody will answer, or worse, guessing.
+gate_confirm_destroy() {
+    local short="${1:?gate_confirm_destroy: name required}"
+    case "${TESTBED_RECLAIM:-ask}" in
+        always) log "TESTBED_RECLAIM=always: destroying $short without asking"; return 0 ;;
+        never)  return 1 ;;
+    esac
+    if [ ! -t 0 ]; then
+        die "the gate needs a slot but stdin is not a terminal, so it cannot ask.
+Destroy one first:         $0 destroy <name>
+Or let the gate reclaim:   TESTBED_RECLAIM=always $0 gate
+Or refuse and fail early:  TESTBED_RECLAIM=never $0 gate"
+    fi
+    local reply
+    printf 'testbed: destroy testbed %s to free a slot for the release gate? [y/N] ' "$short" >&2
+    read -r reply || return 1
+    case "$reply" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
+}
+
+# gate_reclaim_slot <gate-instance> - make room for the gate, with consent.
+#
+# The gate is the one command with a job that must finish, so unlike `create` it
+# offers to clear a slot instead of only refusing. It is NOT exempt from the cap
+# (ADR 0092's one-rule-no-special-cases): it earns its slot by asking, and a `no`
+# fails the gate exactly as a full disk would.
+#
+# Never destroys the gate's own box, and stops as soon as there is room -- it
+# takes one slot, not a clean sweep.
+gate_reclaim_slot() {
+    local keep="${1:?gate_reclaim_slot: gate instance required}"
+    "${DRIVER}_exists" "$keep" && return 0   # reusing the gate box needs no new slot
+    [ "$(testbed_count)" -lt "$MAX_TESTBEDS" ] && return 0
+
+    log "the gate needs a slot: $(testbed_count) testbed(s) exist, cap is $MAX_TESTBEDS"
+    local vm short
+    for vm in $(testbed_names); do
+        [ "$(testbed_count)" -lt "$MAX_TESTBEDS" ] && break
+        [ "$vm" = "$keep" ] && continue
+        short="${vm#"$TB_PREFIX"}"
+        if gate_confirm_destroy "$short"; then
+            log "destroying $vm to free a slot for the gate"
+            do_destroy "$short"
+        fi
+    done
+
+    [ "$(testbed_count)" -lt "$MAX_TESTBEDS" ] || die "still at the cap ($(testbed_count)/$MAX_TESTBEDS): nothing was freed, so the gate has nowhere to run.
+Destroy a testbed and re-run: $0 destroy <name>"
+}
+
 # assert_testbed_capacity <name> - refuse to create an N+1th testbed.
 #
 # Refuses rather than evicting the oldest: a testbed may be mid-investigation in
@@ -169,13 +227,12 @@ assert_testbed_capacity() {
     local name="${1:?assert_testbed_capacity: name required}"
     "${DRIVER}_exists" "$name" && return 0
 
-    local names count
-    names="$(testbed_names)"
-    count="$(printf '%s' "$names" | grep -c . || true)"
+    local count
+    count="$(testbed_count)"
     [ "$count" -lt "$MAX_TESTBEDS" ] && return 0
 
     local listing
-    listing="$(printf '%s' "$names" | sed "s/^${TB_PREFIX}//" | tr '\n' ' ')"
+    listing="$(printf '%s' "$(testbed_names)" | sed "s/^${TB_PREFIX}//" | tr '\n' ' ')"
     die "$count testbed(s) already exist and the cap is $MAX_TESTBEDS: $listing
 Each is a full disk clone, so they are capped rather than left to accumulate.
 Destroy one first:            $0 destroy <name>
