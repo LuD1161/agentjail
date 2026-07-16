@@ -325,7 +325,7 @@ func TestAcceptStatsTracking(t *testing.T) {
 	}
 
 	const wantAllocated = 5
-	const wantAvailable = ipv4PoolSize - wantAllocated // 65534 - 5 = 65529
+	const wantAvailable = ipv4HostPoolSize - wantAllocated // 65534 - 5 = 65529
 
 	allocated, available := reg.Stats()
 	if allocated != wantAllocated {

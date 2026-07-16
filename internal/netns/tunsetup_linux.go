@@ -41,6 +41,8 @@ import (
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+
+	"github.com/LuD1161/agentjail/internal/dnsvip"
 )
 
 const (
@@ -72,16 +74,20 @@ const (
 	// TUNIfName is the TUN interface name created inside the agent's netns.
 	TUNIfName = "ajtun0"
 
-	// TUNAddrCIDR is the address assigned to the TUN inside the agent's netns.
-	// The gateway answers any destination the agent dials, so the peer address
-	// is unused; the /16 just gives the agent a routable source address.
-	TUNAddrCIDR = "10.78.0.2/16"
-
 	// TUNMTU is the MTU set on the netns TUN. It matches tunnel.Config's default
 	// MTU (1420) so the userspace forwarder and the device agree and neither
 	// side has to fragment.
 	TUNMTU = 1420
 )
+
+// TUNAddrCIDR is the address assigned to the TUN inside the agent's netns.
+// The gateway answers any destination the agent dials, so the peer address is
+// unused; the /16 just gives the agent a routable source address.
+//
+// Derived from dnsvip, which owns the address plan and reserves this address
+// from the VIP pool — hardcoding it here once let the pool hand the same
+// address to a hostname. ADR 0034-platform-backend-shared-contract.
+var TUNAddrCIDR = dnsvip.AgentV4().String() + "/16"
 
 // MaybeRunReexec MUST be the first statement in main(), before flag parsing.
 // If this process was re-exec'd as a namespace holder or a hardened-exec shim,

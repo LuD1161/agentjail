@@ -17,16 +17,18 @@ func TestAllocate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ip1.String(); got != "10.78.0.1" {
-		t.Fatalf("first alloc = %s, want 10.78.0.1", got)
+	// .1 (gateway/DNS) and .2 (agent TUN) are the datapath, so hostnames start
+	// at .3 — see TestAllocateNeverReturnsDatapathAddress.
+	if got := ip1.String(); got != "10.78.0.3" {
+		t.Fatalf("first alloc = %s, want 10.78.0.3", got)
 	}
 
 	ip2, err := r.Allocate("host-b.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ip2.String(); got != "10.78.0.2" {
-		t.Fatalf("second alloc = %s, want 10.78.0.2", got)
+	if got := ip2.String(); got != "10.78.0.4" {
+		t.Fatalf("second alloc = %s, want 10.78.0.4", got)
 	}
 }
 
@@ -86,8 +88,8 @@ func TestFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ip.String(); got != "10.78.0.1" {
-		t.Fatalf("after free, alloc = %s, want 10.78.0.1 (recycled)", got)
+	if got := ip.String(); got != "10.78.0.3" {
+		t.Fatalf("after free, alloc = %s, want 10.78.0.3 (recycled)", got)
 	}
 
 	host, ok := r.Lookup(ip)
@@ -95,7 +97,7 @@ func TestFree(t *testing.T) {
 		t.Fatalf("reverse lookup after recycle: host=%q ok=%v", host, ok)
 	}
 
-	host, _ = r.Lookup(net.ParseIP("10.78.0.1"))
+	host, _ = r.Lookup(net.ParseIP("10.78.0.3"))
 	if host == "a.test" {
 		t.Fatal("freed hostname should not be in reverse map")
 	}
@@ -134,8 +136,8 @@ func TestConcurrent(t *testing.T) {
 	if alloc != n {
 		t.Fatalf("allocated = %d, want %d", alloc, n)
 	}
-	if avail != ipv4PoolSize-n {
-		t.Fatalf("available = %d, want %d", avail, ipv4PoolSize-n)
+	if avail != ipv4HostPoolSize-n {
+		t.Fatalf("available = %d, want %d", avail, ipv4HostPoolSize-n)
 	}
 }
 
@@ -145,7 +147,7 @@ func TestExhaustion(t *testing.T) {
 	}
 
 	r := NewRegistry()
-	for i := range ipv4PoolSize {
+	for i := range ipv4HostPoolSize {
 		_, err := r.Allocate(fmt.Sprintf("h%d.test", i))
 		if err != nil {
 			t.Fatalf("allocation %d failed: %v", i+1, err)
@@ -153,8 +155,8 @@ func TestExhaustion(t *testing.T) {
 	}
 
 	alloc, avail := r.Stats()
-	if alloc != ipv4PoolSize {
-		t.Fatalf("allocated = %d, want %d", alloc, ipv4PoolSize)
+	if alloc != ipv4HostPoolSize {
+		t.Fatalf("allocated = %d, want %d", alloc, ipv4HostPoolSize)
 	}
 	if avail != 0 {
 		t.Fatalf("available = %d, want 0", avail)
@@ -212,9 +214,14 @@ func TestDNSRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("answer type = %T, want *dns.A", r.Answer[0])
 	}
+	// Assert the VIP's properties, not a literal address: it must be in the pool
+	// and must not be a datapath address (see TestAllocateNeverReturnsDatapathAddress).
 	gotIP := a.A.Addr.String()
-	if gotIP != "10.78.0.1" {
-		t.Fatalf("DNS response IP = %s, want 10.78.0.1", gotIP)
+	if !reg.IsVIP(net.ParseIP(gotIP)) {
+		t.Fatalf("DNS response IP = %s, want an address inside the VIP pool", gotIP)
+	}
+	if gotIP == GatewayV4().String() || gotIP == AgentV4().String() {
+		t.Fatalf("DNS response IP = %s — that is a datapath address, not a VIP", gotIP)
 	}
 
 	host, found := reg.Lookup(net.ParseIP(gotIP))

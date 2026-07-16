@@ -15,7 +15,7 @@ func ChaosTestPoolExhaustion(t *testing.T) {
 	r := NewRegistry()
 
 	// Allocate all VIPs.
-	for i := range ipv4PoolSize {
+	for i := range ipv4HostPoolSize {
 		_, err := r.Allocate(fmt.Sprintf("exhaust-%d.test", i))
 		if err != nil {
 			t.Fatalf("allocation %d failed: %v", i+1, err)
@@ -23,8 +23,8 @@ func ChaosTestPoolExhaustion(t *testing.T) {
 	}
 
 	alloc, avail := r.Stats()
-	if alloc != ipv4PoolSize {
-		t.Errorf("after full alloc: allocated=%d, want %d", alloc, ipv4PoolSize)
+	if alloc != ipv4HostPoolSize {
+		t.Errorf("after full alloc: allocated=%d, want %d", alloc, ipv4HostPoolSize)
 	}
 	if avail != 0 {
 		t.Errorf("after full alloc: available=%d, want 0", avail)
@@ -37,14 +37,14 @@ func ChaosTestPoolExhaustion(t *testing.T) {
 	}
 
 	// Free the first half.
-	const half = ipv4PoolSize / 2
+	const half = ipv4HostPoolSize / 2
 	for i := range half {
 		r.Free(fmt.Sprintf("exhaust-%d.test", i))
 	}
 
 	alloc, avail = r.Stats()
-	if alloc != ipv4PoolSize-half {
-		t.Errorf("after freeing half: allocated=%d, want %d", alloc, ipv4PoolSize-half)
+	if alloc != ipv4HostPoolSize-half {
+		t.Errorf("after freeing half: allocated=%d, want %d", alloc, ipv4HostPoolSize-half)
 	}
 	if avail != half {
 		t.Errorf("after freeing half: available=%d, want %d", avail, half)
@@ -303,7 +303,7 @@ func ChaosTestIPv6PoolIndependence(t *testing.T) {
 	r := NewRegistry()
 
 	// Allocate all 65534 entries (v4 exhausts first; v4=65534, v6=65535).
-	for i := range ipv4PoolSize {
+	for i := range ipv4HostPoolSize {
 		_, err := r.Allocate(fmt.Sprintf("v6ind-%d.test", i))
 		if err != nil {
 			t.Fatalf("allocation %d failed: %v", i, err)
@@ -344,7 +344,7 @@ func ChaosTestIPv6PoolIndependence(t *testing.T) {
 	}
 
 	// Verify v6 addresses are in the expected fd78:: range for allocated entries.
-	sampleHost := fmt.Sprintf("v6ind-%d.test", ipv4PoolSize/2+1)
+	sampleHost := fmt.Sprintf("v6ind-%d.test", ipv4HostPoolSize/2+1)
 	ip6, err := r.AllocateV6(sampleHost) // already allocated, returns cached v6
 	if err != nil {
 		t.Fatalf("AllocateV6 for already-allocated host failed: %v", err)

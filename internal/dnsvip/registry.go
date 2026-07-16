@@ -10,12 +10,38 @@ import (
 	"sync"
 )
 
-// IPv4 pool: 10.78.0.1 – 10.78.255.254  (skip .0 network, .255.255 broadcast)
+// IPv4 pool: 10.78.0.3 – 10.78.255.254  (skip .0 network, .255.255 broadcast,
+// and the two datapath addresses below)
 // IPv6 pool: fd78::1   – fd78::ffff
 const (
 	ipv4PoolSize = 65534 // 256*256 - 2
 	ipv6PoolSize = 65535 // 0x0001 – 0xffff
 )
+
+// The tunnel datapath lives inside the v4 pool: .1 is the gateway (and the DNS
+// server), .2 is the agent's TUN address. Neither may be handed out as a
+// hostname's VIP — a VIP equal to the agent's own TUN address never leaves the
+// box, so that host silently fails to connect. Reserved here, in the package
+// that owns the pool, and re-exported so the backends derive their addresses
+// rather than re-declaring them. ADR 0034-platform-backend-shared-contract.
+const (
+	gatewayOffsetV4   = 1 // 10.78.0.1 — gateway + DNS
+	agentOffsetV4     = 2 // 10.78.0.2 — agent TUN
+	firstHostOffsetV4 = 3 // first offset a hostname may occupy
+
+	// ipv4HostPoolSize is how many hostnames the v4 pool can hold — the pool
+	// minus the datapath. This, not ipv4PoolSize, is the allocator's capacity.
+	ipv4HostPoolSize = ipv4PoolSize - (firstHostOffsetV4 - 1)
+)
+
+// The v6 pool reserves nothing: the tunnel datapath is v4-only, so no fd78::
+// address is claimed by the gateway or the TUN.
+
+// GatewayV4 returns the gateway's in-tunnel address (also the DNS server's).
+func GatewayV4() net.IP { return offsetToV4(gatewayOffsetV4) }
+
+// AgentV4 returns the agent-side TUN address inside the tunnel.
+func AgentV4() net.IP { return offsetToV4(agentOffsetV4) }
 
 var (
 	// ErrPoolExhausted is returned when no more VIPs are available.
@@ -70,8 +96,9 @@ type Registry struct {
 	byV4   map[[4]byte]string
 	byV6   map[[16]byte]string
 
-	// Sequential counters (next offset to allocate). Offset 0 is skipped
-	// (network address for v4, zero for v6).
+	// Sequential counters (next offset to allocate). For v4 the first
+	// hostname-usable offset is firstHostOffsetV4 (0 is the network address,
+	// 1 and 2 are the datapath). For v6, offset 0 is skipped.
 	nextV4 uint32 // 1-based offset into the /16
 	nextV6 uint32
 
@@ -86,7 +113,7 @@ func NewRegistry() *Registry {
 		byHost: make(map[string]*entry),
 		byV4:   make(map[[4]byte]string),
 		byV6:   make(map[[16]byte]string),
-		nextV4: 1, // first usable offset
+		nextV4: firstHostOffsetV4, // .1/.2 are the datapath, not hostnames
 		nextV6: 1,
 	}
 }
@@ -245,7 +272,7 @@ func (r *Registry) Stats() (allocated, available int) {
 	defer r.mu.RUnlock()
 
 	allocated = len(r.byHost)
-	available = ipv4PoolSize - allocated
+	available = ipv4HostPoolSize - allocated
 	return
 }
 

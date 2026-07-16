@@ -28,6 +28,12 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 	addr := pc.LocalAddr().String()
 	c := dns.NewClient()
 
+	// firstVIP is whatever the pool hands out first; the scenarios below assert
+	// the properties a VIP must have, not a literal address. Pinning the literal
+	// is what let the pool's overlap with the datapath (.1 gateway, .2 agent TUN)
+	// go unnoticed — see TestAllocateNeverReturnsDatapathAddress.
+	var firstVIP string
+
 	// Scenario 1: First resolution — agent queries api.github.com
 	t.Run("first_resolution", func(t *testing.T) {
 		m := dns.NewMsg("api.github.com.", dns.TypeA)
@@ -39,11 +45,11 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 			t.Fatalf("expected 1 answer, got %d", len(r.Answer))
 		}
 		a := r.Answer[0].(*dns.A)
-		ip := a.A.Addr.String()
-		if ip != "10.78.0.1" {
-			t.Fatalf("first VIP = %s, want 10.78.0.1", ip)
+		firstVIP = a.A.Addr.String()
+		if firstVIP == GatewayV4().String() || firstVIP == AgentV4().String() {
+			t.Fatalf("first VIP = %s — that is a datapath address, not a VIP", firstVIP)
 		}
-		t.Logf("api.github.com -> %s ✓", ip)
+		t.Logf("api.github.com -> %s ✓", firstVIP)
 	})
 
 	// Scenario 2: Same host again — sticky VIP
@@ -51,8 +57,8 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 		m := dns.NewMsg("api.github.com.", dns.TypeA)
 		r, _, _ := c.Exchange(context.Background(), m, "udp", addr)
 		a := r.Answer[0].(*dns.A)
-		if a.A.Addr.String() != "10.78.0.1" {
-			t.Fatalf("same host returned different VIP: %s", a.A.Addr)
+		if a.A.Addr.String() != firstVIP {
+			t.Fatalf("same host returned different VIP: %s, want %s", a.A.Addr, firstVIP)
 		}
 		t.Logf("api.github.com -> %s (sticky) ✓", a.A.Addr)
 	})
@@ -62,8 +68,11 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 		m := dns.NewMsg("registry.npmjs.org.", dns.TypeA)
 		r, _, _ := c.Exchange(context.Background(), m, "udp", addr)
 		a := r.Answer[0].(*dns.A)
-		if a.A.Addr.String() == "10.78.0.1" {
+		if a.A.Addr.String() == firstVIP {
 			t.Fatal("different host got same VIP as first")
+		}
+		if got := a.A.Addr.String(); got == AgentV4().String() {
+			t.Fatalf("second host got %s — the agent's own TUN address; its traffic would never leave the namespace", got)
 		}
 		t.Logf("registry.npmjs.org -> %s ✓", a.A.Addr)
 	})
@@ -85,12 +94,12 @@ func TestE2E_DNSVIPWorkflow(t *testing.T) {
 
 	// Scenario 5: Gateway reverse lookup — this is how the gateway maps VIP→hostname
 	t.Run("gateway_reverse_lookup", func(t *testing.T) {
-		vip := net.ParseIP("10.78.0.1")
+		vip := net.ParseIP(firstVIP)
 		host, ok := reg.Lookup(vip)
 		if !ok || host != "api.github.com" {
 			t.Fatalf("reverse lookup failed: host=%q ok=%v", host, ok)
 		}
-		t.Logf("10.78.0.1 -> %s ✓", host)
+		t.Logf("%s -> %s ✓", firstVIP, host)
 	})
 
 	// Scenario 6: Multiple hosts for realistic traffic
