@@ -6,8 +6,8 @@ Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for
 
 #### TL;DR
 
-- **Monitor mode** (ADR 0091): the daemon evaluates every tool call and enforces nothing, recording the verdict that would have fired. `agentjail monitor` shows what policy would have stopped, so you can dial in rules against your real workflow before turning them on.
-- **The status padlock stops lying**: the badge now attests the policy daemon by pinging it, shows UNSECURED when not shielded, and policy defaults to a degraded posture instead of silent-allow when the daemon is unreachable.
+- **Monitor mode** (ADR 0091): the daemon evaluates every tool call and enforces nothing, recording the verdict that would have fired. `agentjail monitor` shows what a rule set would allow, deny, or ask about, so you can try it against your real workflow before turning it on.
+- **Attestation now verifies the daemon end to end**: the status line pings the policy daemon rather than assuming it, shows UNSECURED when not shielded, and defaults to a degraded posture instead of silent-allow when the daemon is unreachable - so a green badge is a verified claim.
 - **Control-plane token auth** (ADR 0067/0068/0069): every privileged control-socket verb now requires a token the shield withholds from the sandboxed agent, closing a path where the guarded agent could reach the guard's own control plane.
 
 ### Added
