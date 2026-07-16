@@ -1,6 +1,18 @@
 # 0019 — Redaction policy for persisted tool inputs
 
-Status: Accepted
+Status: Accepted (amended by
+[ADR 0084-redact-secret-values](./0084-redact-secret-values.md))
+
+> **Addendum (2026-07-15).** The "Key-based, not value-based" limit below is
+> **closed**. Value-level redaction now runs underneath the key rule at the same
+> boundary: recognised secret shapes are replaced with `[redacted:TYPE]`
+> wherever they appear, including inside positional values like a Bash `command`
+> string. The key rule described here is unchanged and still runs first. See
+> ADR 0084-redact-secret-values for the pattern set, ordering, and cost.
+>
+> The forward reference in "What is redacted" to value-level redaction
+> "(below)" pointed at a section that was never written; ADR 0084 is that
+> section.
 
 ## Context
 
@@ -78,13 +90,14 @@ redacted column — it cannot un-redact.
 
 ### Limits (acknowledged)
 
-- **Key-based, not value-based.** A secret placed under a key that does not
-  match the substrings (e.g. `Authorization`, `X-Custom-Header`) is not
-  redacted by the key rule. The foot-gun model rarely sees this (agents pass
-  secrets via env or credential files, not via tool_input header keys), and
-  the DB is 0600 + agent-unreadable. A future value-based heuristic (detect
-  AWS-key-shaped strings, high-entropy blobs) can layer on top without
-  changing this policy.
+- ~~**Key-based, not value-based.**~~ **Closed by ADR 0084-redact-secret-values.**
+  A secret placed under a key that does not match the substrings (e.g.
+  `Authorization`, `X-Custom-Header`) was not redacted by the key rule. This ADR
+  judged the case rare — "agents pass secrets via env or credential files, not
+  via tool_input header keys" — which turned out to understate it: the `Bash`
+  tool's `command` is an unstructured string under a non-matching key, and it is
+  the most common tool call we record. Value-based redaction now layers on top,
+  exactly as anticipated here, without changing this policy.
 - **Recursive but shallow on values.** A secret buried inside an opaque
   encoded string (base64, JSON-in-a-string) under a redacted key is
   replaced wholesale with `"[redacted]"`, which is correct. Under a

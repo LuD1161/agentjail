@@ -773,7 +773,8 @@ func (s *sqliteStore) Emit(ctx context.Context, e audit.Event) error {
 }
 
 // redactDetail serialises a Detail map to JSON, replacing secret-bearing keys
-// with "[redacted]" and truncating to maxRedactedLen.
+// with "[redacted]", sweeping the remaining values for secret-shaped strings
+// (ADR 0084-redact-secret-values), and truncating to maxRedactedLen.
 func redactDetail(d map[string]string) string {
 	if len(d) == 0 {
 		return ""
@@ -783,7 +784,7 @@ func redactDetail(d map[string]string) string {
 		if shouldRedactKey(k) {
 			redacted[k] = "[redacted]"
 		} else {
-			redacted[k] = v
+			redacted[k] = redactSecretsInText(v)
 		}
 	}
 	b, err := json.Marshal(redacted)

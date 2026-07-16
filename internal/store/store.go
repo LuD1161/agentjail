@@ -6,9 +6,10 @@
 // JSON line is retained as a debug trail during the transition. Telemetry
 // (anonymous, remote, PostHog) is a separate concern and stays out of here.
 //
-// The full tool_input is persisted but redacted (ADR 0019): values for keys
-// containing secret/key/token/password/cred are replaced with "[redacted]"
-// and the JSON is truncated to 4 KB.
+// The full tool_input is persisted but redacted, then truncated to 4 KB:
+// secret-bearing keys become "[redacted]" (ADR 0019-redaction-policy) and
+// secret-shaped values become "[redacted:TYPE]" wherever they appear
+// (ADR 0084-redact-secret-values).
 package store
 
 import (
@@ -207,8 +208,10 @@ func RedactToolInput(in map[string]interface{}) string {
 	return s[:end] + "…"
 }
 
-// redactValue recursively walks maps and slices, replacing values whose KEY
-// (map case only) matches a redact substring. Scalars are returned unchanged.
+// redactValue recursively walks maps and slices. Key-matched values are
+// replaced wholesale; string scalars are also swept for secret-shaped values,
+// which is what catches a credential in a positional value like a Bash
+// command (ADR 0084-redact-secret-values).
 func redactValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case map[string]interface{}:
@@ -227,6 +230,8 @@ func redactValue(v interface{}) interface{} {
 			out[i] = redactValue(vv)
 		}
 		return out
+	case string:
+		return redactSecretsInText(val)
 	default:
 		return v
 	}
