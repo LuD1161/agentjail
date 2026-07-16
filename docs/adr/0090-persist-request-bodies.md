@@ -1,6 +1,16 @@
-# ADR 0090: network.db stores full request/response bodies, and the agent may not read it
+# ADR 0090: the network store persists full request/response bodies, and the agent may not read it
 
 **Status:** Proposed — supersedes the S-C2 clause of [ADR 0076](./0076-tunnel-mitm-vs-passthrough-default-posture.md), retained by [ADR 0077](./0077-tunnel-mitm-default-and-consent.md)
+
+> **Amended before implementation (2026-07-15):** D1 originally stored bodies as
+> `BLOB` columns inside `network.db`. It does not: bodies are **files on disk**,
+> and the DB holds a path. A `BLOB` insert takes one `[]byte`, so "no per-body
+> cap" would have meant peak daemon memory equal to the largest body the agent
+> chose to fetch — an agent-triggerable OOM of the process meant to police it.
+> The original text reasoned carefully about one huge body defeating the *disk*
+> budget (D2) and never noticed the same body defeating *memory*, which is why
+> the gap read as considered. Recorded inline in D1/D2/D3 rather than as a new
+> ADR: nothing had been built against the original text yet.
 
 ## Context
 
@@ -65,13 +75,41 @@ Three facts, verified, that the design has to start from:
 **Persist full request and response bodies -- whole, unredacted, bounded only by
 retention -- and deny the sandboxed agent read access to the store.**
 
-### D1 — Bodies are persisted whole; there is no per-body cap
+### D1 — Bodies are persisted whole, as files; there is no per-body cap
 
-`network.db` gains request and response body columns. Every body is stored in
-full. **No per-body size limit**: "save everything" means everything, and the
-measured traffic says a limit would be theatre — across 110+ requests of a real
-Claude Code session the largest body was 1.3 MB (a web page), and the model
-turns were 1.7–3.5 KB each. Only the retention bounds in D2 apply.
+Bodies are written to **`~/.agentjail/bodies/`, one file per body**, and
+`network_requests` gains `request_body_path` / `response_body_path` columns
+holding a store-relative path. Every body is stored in full. **No per-body size
+limit**: "save everything" means everything, and the measured traffic says a
+limit would be theatre — across 110+ requests of a real Claude Code session the
+largest body was 1.3 MB (a web page), and the model turns were 1.7–3.5 KB each.
+Only the retention bounds in D2 apply.
+
+**Files, not `BLOB`s, and the reason is memory, not taste.** A `BLOB` insert
+takes one `[]byte`: the whole body must be resident at `INSERT` no matter how
+carefully the proxy tees on the way in. Combined with "no per-body cap", peak
+daemon memory would equal the largest body the agent chose to fetch — so
+`curl`ing a multi-GB file would OOM the daemon, and the shield fails open when
+the daemon dies. That turns a recording feature into a way to switch off
+enforcement, which is not a trade this ADR will make. A file sink is bounded by
+the copy buffer instead, and it is what makes "no per-body cap" honest rather
+than aspirational.
+
+The costs are real and are accepted here rather than discovered later:
+
+- **The store is now two things that can disagree** — rows in `network.db`,
+  bytes in `bodies/`. Every failure below is a form of that.
+- **Filenames are generated before capture starts**, not derived from the row
+  `id`: the body streams to disk before the `INSERT` that would assign one.
+  Mode `0600`, directory `0700`.
+- **A file may outlive its row, and a row may outlive its file.** A crash
+  mid-capture orphans a file (no row ever written); a user deleting `bodies/`
+  strands a row. Both must be survivable: readers treat a missing body as
+  **absent, not an error**, and retention sweeps orphans (D2). A dangling row is
+  not a corruption to repair, it is a body we no longer have.
+- **A capture can be partial** — the client hangs up mid-stream, the disk fills.
+  The row records what was actually captured; a short file is not a decode
+  failure and must not be reported as one.
 
 No body redaction, either: a body is arbitrary JSON, source code and prose with
 no key names to match on, so redaction there is unreliable in a way header
@@ -91,8 +129,9 @@ pinned down rather than assumed:
 - **What is stored is a normalized capture, not verbatim wire bytes.** The body
   is stored after transfer-decoding (chunk framing removed) and after
   content-decoding (decompressed), because a gzipped blob is not a transcript
-  anyone can read. `BLOB`, not `TEXT` — bodies are not guaranteed UTF-8. This
-  is a deliberate readability choice and the ADR will not call it "verbatim".
+  anyone can read. The file holds raw bytes and is never assumed to be UTF-8.
+  This is a deliberate readability choice and the ADR will not call it
+  "verbatim".
 - **Decoding is best-effort; the bytes are not.** If a body cannot be decoded
   safely or at all — unsupported encoding, corrupt stream, or an expansion ratio
   that smells like a decompression bomb — the **raw encoded bytes are stored**
@@ -115,31 +154,41 @@ configurable under `network:` in policy.yaml.
 long sessions growing superlinearly (each turn resends the conversation), heavy
 use reaches it well before 90 days.
 
-**The cap is a logical target and the ADR will not claim otherwise.** SQLite
-does not return pages to the filesystem on `DELETE`, and the store runs in WAL
-mode, so on-disk bytes can exceed the cap:
+**The budget spans the DB and `bodies/` together** — the directory is the
+dominant term, and a cap that only counted rows would measure the wrong thing.
 
-- eviction must be followed by a reclamation step. `incremental_vacuum` is
-  preferable to a full `VACUUM` (which needs free space equal to the DB and
-  takes an exclusive lock) — **but it is not free to adopt**. Measured on the
-  real `network.db`: `auto_vacuum = 0`, and setting
-  `PRAGMA auto_vacuum=INCREMENTAL` alone leaves it at `0`. It only takes effect
-  after a full `VACUUM` rebuild:
+**The cap is a logical target and the ADR will not claim otherwise.** But moving
+bodies out of SQLite (D1) dissolves most of what made this hard, and the ADR
+should say so plainly rather than keep the scar tissue:
 
-  ```
-  pragma auto_vacuum=INCREMENTAL           -> 0   (no effect)
-  pragma auto_vacuum=INCREMENTAL; VACUUM;  -> 2   (a one-time rebuild)
-  ```
+- **Body bytes are reclaimed by `unlink`, immediately and completely.** The
+  `auto_vacuum` problem below applied to *bodies in pages*; bodies are not in
+  pages any more. Eviction of a body is a file delete, and the space comes back.
+- **The `auto_vacuum` / `VACUUM` migration is no longer required.** It was the
+  price of storing MB-scale blobs in a store that never returns pages to the
+  filesystem. `network.db` is now metadata plus paths, so it stays small and
+  the reclamation problem shrinks with it. The measured gotcha is retained
+  below because it is true and someone will otherwise rediscover it — not
+  because this design still needs it.
+- **It does not shrink to nothing, and this is the honest remainder:** URLs and
+  query strings carry credentials too (D4), and a `DELETE` leaves those in
+  freelist pages until overwritten. "Evicted" still means "unreachable by
+  query", not "gone from the device" — now for metadata rather than for
+  transcripts. `wal_checkpoint(TRUNCATE)` is still wanted on the eviction path.
+- **Deleting a body file does not scrub the device either.** `unlink` returns
+  the blocks; it does not overwrite them, and on a CoW or log-structured
+  filesystem, or an SSD's FTL, the old bytes may persist. Nothing here is a
+  secure-erase guarantee and must not be described as one.
 
-  So every existing install pays the exact full-`VACUUM` cost this choice was
-  meant to avoid — once, as a migration. New databases must set the pragma
-  **before** table creation. Whoever implements this must not discover that
-  after shipping the eviction path.
-- `network.db-wal` holds recent bodies until checkpoint, so the eviction path
-  needs a `wal_checkpoint(TRUNCATE)` or the WAL becomes the leak.
-- **deleted rows are not destroyed** — freelist pages retain body bytes until
-  overwritten. "Evicted" means "unreachable by query", not "gone from the
-  device". Say so, or a user will assume a 90-day guarantee we do not provide.
+Retained, because it is measured and true — for whoever later reconsiders
+storing anything large in this DB. On the real `network.db`, `auto_vacuum = 0`,
+and setting the pragma alone leaves it at `0`; it only takes effect after a full
+rebuild:
+
+```
+pragma auto_vacuum=INCREMENTAL           -> 0   (no effect)
+pragma auto_vacuum=INCREMENTAL; VACUUM;  -> 2   (a one-time rebuild)
+```
 - **One huge body can evict everything else, and can defeat the cap outright.**
   With no per-body cap (D1), a single multi-GB download exceeds the budget by
   itself and pushes older sessions out. Worse, a body larger than the 1 GB
@@ -149,7 +198,18 @@ mode, so on-disk bytes can exceed the cap:
   stop when there is nothing left to drop rather than eat the current session.
   Accepted: it is rare (observed maximum 1.3 MB), and capping bodies to protect
   history would trade a certain loss for a hypothetical one. Revisit with real
-  numbers, not a guess.
+  numbers, not a guess. **Under D1 this costs disk, not availability** — the
+  daemon no longer holds the body in memory, so the failure is a full disk and a
+  thinned history rather than a dead policy enforcer.
+- **Eviction order is row first, then file.** The reverse strands a row pointing
+  at bytes that are gone; this way a crash in between leaves an orphan file,
+  which the sweep below reclaims. The DB is the index of truth, and it should
+  never claim a body it cannot produce.
+- **Orphan sweep.** A crash mid-capture leaves a file no row references. Nothing
+  will ever read it and nothing will ever evict it by age, so retention must
+  reclaim files in `bodies/` with no referencing row. Without this, the leak is
+  unbounded and invisible — bytes we promised to bound, held forever, by a path
+  no query can reach.
 
 Eviction emits an audit event (rows, bytes, cutoff — never body content), and so
 does a retention **config change**, since lowering retention destroys history
@@ -157,9 +217,19 @@ does a retention **config change**, since lowering retention destroys history
 
 ### D3 — The agent may not read the store — a mediation control, not a boundary
 
-`network.db` **and its sidecars** (`-wal`, `-shm`, any rollback journal, any
-vacuum temp file) must be unreadable by the agent. Shipped in the same change
-as D1.
+`network.db`, **its sidecars** (`-wal`, `-shm`, any rollback journal, any vacuum
+temp file), **and the `bodies/` directory** must be unreadable by the agent.
+Shipped in the same change as D1.
+
+**`bodies/` is where the transcripts actually live now (D1), so it is the more
+important half of this rule, not an addendum.** Denying `network.db` while
+leaving `bodies/` readable would protect the index and publish the content — a
+deny rule that reads as complete and is worthless. Note the shape difference:
+the store names are *files*, `bodies/` is a *directory*, and Linux's
+`AgentjailReadDeniedNames()` skips names when enumerating `~/.agentjail`'s
+children. Skipping the name grants nothing under it, so the subtree is denied by
+the allowlist's default — but that is a claim to **test**, not to assume, since
+it is the first directory the mechanism has had to cover.
 
 The two backends get there by **different mechanisms**, and saying "the shared
 contract covers both" would be self-serving:
@@ -223,16 +293,21 @@ hand**, not treated as already decided.
 - **The product does what it claimed.** AGE-79's "complete visibility" and
   AGE-111's session replay become buildable. This is the feature the tunnel
   exists for.
-- **`network.db` becomes the most sensitive file agentjail writes** — source
-  code and credentials, in one place, on disk, unencrypted. D3 closes the
+- **`~/.agentjail/bodies/` becomes the most sensitive thing agentjail writes** —
+  source code and credentials, on disk, unencrypted, and now in **plain files
+  rather than inside a database**. That is a real ergonomic downgrade for
+  secrecy: `grep -r` over the directory yields secrets with no SQLite client and
+  no schema knowledge, where a `BLOB` at least demanded both. D3 closes the
   contained-agent path on Linux (macOS already had it). Encryption at rest is
   **not** in scope and would be its own ADR; until then the honest summary is
   "0600, a deny rule, and the user's disk".
-- **Captures are unshippable.** A `network.db` cannot be attached to an issue,
-  shared for support, or committed — sharper than the existing testbed-recording
-  rule. The baseline fixture's leak gate checks *headers* and does not make a
-  body capture publishable. Any UI export needs a warning, and bug-report
-  tooling must never collect this file by default.
+- **Captures are unshippable.** Neither `network.db` nor `bodies/` can be
+  attached to an issue, shared for support, or committed — sharper than the
+  existing testbed-recording rule. The baseline fixture's leak gate checks
+  *headers* and does not make a body capture publishable. Any UI export needs a
+  warning, and bug-report tooling must never collect either by default. Note
+  that a loose directory of files is far easier to sweep up by accident — into
+  a backup, a sync client, an editor's search index — than a single DB file was.
 - **"Nothing legitimate regresses" would be too strong.** D3 breaks any
   in-sandbox reader of the store: an agent debugging its own traffic, an MCP
   tool reading `~/.agentjail` for observability, a future in-sandbox viewer.
@@ -279,17 +354,31 @@ hand**, not treated as already decided.
 
 For the ticket that builds this, so they are not rediscovered:
 
-- [ ] Deny `network.db` **and every sidecar**; test that a shielded agent can
-      read none of them, on **both** OSes.
+- [ ] Deny `network.db`, **every sidecar**, **and `bodies/`**; test that a
+      shielded agent can read none of them, on **both** OSes. `bodies/` is a
+      directory and the first one this mechanism covers — assert the subtree,
+      not just the name.
 - [ ] No recursive read grant on `~/.agentjail` (Linux); no later sbpl
       `file-read*` allow covering it (macOS) — asserted by a profile test.
 - [ ] Capture tees; it must NOT buffer a response before forwarding. Test with
       a real SSE endpoint and assert first-byte latency is unchanged — this is
       the constraint that keeps interactive streaming alive.
-- [ ] Eviction: `wal_checkpoint(TRUNCATE)` + incremental vacuum, and the
-      one-time `auto_vacuum=INCREMENTAL; VACUUM;` migration for existing DBs
-      (new DBs set the pragma before table creation). Tested with a concurrent
-      writer. Audit event with counts, never content.
+- [ ] **Peak memory does not scale with body size.** The point of D1's file
+      sink. Test with a body far larger than any plausible buffer and assert
+      the daemon's memory does not track it — otherwise the BLOB design has
+      been reintroduced by accident.
+- [ ] Body files are `0600` in a `0700` directory, named before capture starts.
+- [ ] A missing body file is **absent, not an error**: a row whose file was
+      deleted must still list and still render.
+- [ ] Orphan sweep reclaims `bodies/` files with no referencing row; tested by
+      simulating a crash mid-capture.
+- [ ] Eviction deletes the row before the file; budget counts DB + `bodies/`;
+      tested with a concurrent writer. `wal_checkpoint(TRUNCATE)` on the
+      eviction path. Audit event with counts, never content.
 - [ ] Policy evaluation must not regress when the store is unavailable; the
       failure is audited to `agentjail.db`, not just printed.
 - [ ] `maxBodyScan` (1 MiB policy window) is untouched by this work.
+- [ ] `request_size` / `response_size` must be the **true** sizes. The scan
+      window silently capped `request_size` at 1048577 for every larger upload
+      (fixed, AGE-243) — D2 budgets against these numbers, so a lie here is a
+      retention bug, not a cosmetic one.
