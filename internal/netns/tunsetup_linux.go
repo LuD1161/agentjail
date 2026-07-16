@@ -61,6 +61,11 @@ const (
 	// nsenter must open the holder's nsfs ns files, which Landlock cannot cover.
 	hardenLandlockFDFlag = "--landlock-fd"
 
+	// hardenWorkdirFlag precedes the directory the shim chdir's into, inside
+	// the namespaces, before it execve's the agent. Without it the agent
+	// inherits the namespace holder's cwd ("/"). See AgentCommand. AGE-231.
+	hardenWorkdirFlag = "--workdir"
+
 	// tunHandoffFD is the fd number the inherited handoff socket lands on in the
 	// re-exec'd holder (ExtraFiles[0] => fd 3).
 	tunHandoffFD = 3
@@ -329,8 +334,30 @@ func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlock
 		"--target", strconv.Itoa(ns.pid),
 		"--user", "--preserve-credentials",
 		"--net", "--mount",
+	}
+
+	args = append(args,
 		"--",
 		exe, reexecHardenArg,
+	)
+
+	// Restore the shield's working directory inside the namespace. nsenter
+	// otherwise leaves the agent in the TARGET's cwd -- the holder's, which is
+	// "/" -- so a coding agent starts at the filesystem root, cannot write to
+	// its project, and getcwd() fails outright. The non-tunnel path inherits
+	// the shield's cwd, so the tunnel must too: --tunnel is about networking
+	// and has no business changing where the agent stands. AGE-231.
+	//
+	// Done in our shim rather than with nsenter's --wd/--wdns:
+	//   - --wd opens the directory BEFORE setns, and the resulting cwd is not
+	//     resolvable afterwards -- relative paths work but getcwd() returns
+	//     EACCES, which breaks git and anything else that asks where it is.
+	//   - --wdns resolves after setns and does work, but only exists in
+	//     util-linux >= 2.38; on an older nsenter the flag is rejected and the
+	//     agent does not start at all.
+	// The shim already runs inside the namespaces, so it can just chdir.
+	if wd, werr := os.Getwd(); werr == nil && wd != "" {
+		args = append(args, hardenWorkdirFlag, wd)
 	}
 	if landlockFD >= 0 {
 		args = append(args, hardenLandlockFDFlag, strconv.Itoa(landlockHandoffFD))
@@ -352,21 +379,45 @@ func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlock
 // process, applies the inherited Landlock ruleset (if any) now that nsenter is
 // done, then execve's the agent.
 func runHardenExec(args []string) {
-	// Optional inherited Landlock ruleset fd, applied AFTER nsenter (AGE-166).
+	// Shim flags, in any order, until the "--" separator. Order-independent on
+	// purpose: this and AgentCommand are edited apart, and a positional parser
+	// turns a reordered append into "exec --landlock-fd: no such file".
 	landlockFD := -1
-	if len(args) >= 2 && args[0] == hardenLandlockFDFlag {
-		fd, err := strconv.Atoi(args[1])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "netns harden-exec: bad %s value %q: %v\n", hardenLandlockFDFlag, args[1], err)
-			os.Exit(2)
+	workdir := ""
+	for len(args) >= 2 {
+		switch args[0] {
+		case hardenLandlockFDFlag:
+			fd, err := strconv.Atoi(args[1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "netns harden-exec: bad %s value %q: %v\n", hardenLandlockFDFlag, args[1], err)
+				os.Exit(2)
+			}
+			landlockFD = fd
+			args = args[2:]
+		case hardenWorkdirFlag:
+			workdir = args[1]
+			args = args[2:]
+		default:
+			goto flagsDone
 		}
-		landlockFD = fd
-		args = args[2:]
 	}
+flagsDone:
 
 	// Strip the leading "--" separator that AgentCommand inserts.
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
+	}
+
+	// Restore the working directory now that we are inside the namespaces, and
+	// before Landlock is applied. AGE-231.
+	if workdir != "" {
+		if err := os.Chdir(workdir); err != nil {
+			// Non-fatal: a cwd we cannot enter must not stop the agent. It
+			// lands in the holder's "/" instead -- the old behaviour, degraded
+			// but stated rather than silent.
+			fmt.Fprintf(os.Stderr, "netns harden-exec: could not enter working directory %s: %v\n"+
+				"  the agent will start in / instead\n", workdir, err)
+		}
 	}
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "netns harden-exec: no agent command given")
