@@ -32,6 +32,32 @@ test/testbed/testbed.sh ls
 test/testbed/testbed.sh destroy <name>
 ```
 
+### At most 2 testbeds exist at once
+
+Each testbed is a full disk clone (~28G), and nothing ever reaped them - four
+stale boxes had quietly accumulated ~113G before anyone looked. `create` now
+refuses past `MAX_TESTBEDS` (default 2) and tells you what to destroy:
+
+```
+testbed: 2 testbed(s) already exist and the cap is 2: dev release-gate
+Destroy one first:            test/testbed/testbed.sh destroy <name>
+Or reuse one:                 ... reset <name> && ... provision <name>
+Or raise the cap for one run: MAX_TESTBEDS=3 ... create <name>
+```
+
+It **refuses rather than evicting the oldest**: a testbed may be mid-investigation
+in another terminal, and destroying it to make room is a surprise this repo does
+not ship. The caller decides what to drop.
+
+**The release gate is not exempt.** `make e2e-release` creates `tb-release-gate`
+if absent and hits the same cap, so a full disk fails the gate rather than
+silently getting a pass no other command gets. One rule, no special cases - keep
+a slot free before cutting a release.
+
+This caps how many testbeds **exist** (a disk concern). How many may **run** at
+once is a different axis: macOS caps concurrent VMs at ~2, which `gate` handles
+by stopping other running testbeds up front (`tart_stop_other_testbeds`).
+
 The driver (Lima vs Tart) is auto-selected by host OS. `provision` builds the
 tarball from the given worktree (default: this repo checkout), pushes it, and
 runs `guest-provision.sh` inside the guest, which:

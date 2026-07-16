@@ -39,6 +39,10 @@ shift || true
 
 do_create() {
     local name="${1:?usage: testbed.sh create <name>}"
+    # Before the clone, not after: a refused create must not leave a disk behind.
+    # No exemption for the gate -- it reaches this same function, and one rule
+    # with no special cases is worth more than a gate that never has to think.
+    assert_testbed_capacity "$name"
     case "$DRIVER" in
         lima)
             log "creating $(inst "$name") from lima-template.yaml (first run downloads the Ubuntu image)"

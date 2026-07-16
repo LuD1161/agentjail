@@ -143,6 +143,46 @@ guest_exec() { "${DRIVER}_guest_exec" "$@"; }
 guest_push() { "${DRIVER}_guest_push" "$@"; }
 guest_pull() { "${DRIVER}_guest_pull" "$@"; }
 
+# ---- capacity ---------------------------------------------------------------
+
+# MAX_TESTBEDS caps how many testbeds may EXIST, which is a disk concern and a
+# different axis from how many may RUN at once (the macOS ~2-VM cap that
+# tart_stop_other_testbeds handles). Each testbed is a full ~28G disk; stale
+# boxes accumulate silently because nothing ever reaped them.
+MAX_TESTBEDS="${MAX_TESTBEDS:-2}"
+
+lima_testbed_names() { limactl list --format '{{.Name}}' 2>/dev/null | grep "^${TB_PREFIX}" || true; }
+tart_testbed_names() { tart list 2>/dev/null | awk 'NR>1 {print $2}' | grep "^${TB_PREFIX}" || true; }
+
+# testbed_names -> stdout: every existing testbed instance, one per line, or
+# nothing. Only tb-prefixed VMs; a golden image is not a testbed.
+testbed_names() { "${DRIVER}_testbed_names"; }
+
+# assert_testbed_capacity <name> - refuse to create an N+1th testbed.
+#
+# Refuses rather than evicting the oldest: a testbed may be mid-investigation in
+# another terminal, and destroying it to make room would be a silent surprise of
+# exactly the kind this repo does not ship. The caller decides what to drop.
+#
+# Reusing an existing name is never a new testbed, so it always passes.
+assert_testbed_capacity() {
+    local name="${1:?assert_testbed_capacity: name required}"
+    "${DRIVER}_exists" "$name" && return 0
+
+    local names count
+    names="$(testbed_names)"
+    count="$(printf '%s' "$names" | grep -c . || true)"
+    [ "$count" -lt "$MAX_TESTBEDS" ] && return 0
+
+    local listing
+    listing="$(printf '%s' "$names" | sed "s/^${TB_PREFIX}//" | tr '\n' ' ')"
+    die "$count testbed(s) already exist and the cap is $MAX_TESTBEDS: $listing
+Each is a full disk clone, so they are capped rather than left to accumulate.
+Destroy one first:            $0 destroy <name>
+Or reuse one:                 $0 reset <name> && $0 provision <name>
+Or raise the cap for one run: MAX_TESTBEDS=$((MAX_TESTBEDS + 1)) $0 create $name"
+}
+
 # ---- chaos scenario support ------------------------------------------------
 
 # chaos_expected_version -> stdout: the version this checkout's dist-tarball
