@@ -211,7 +211,10 @@ func (s *server) drainDecisions(ctx context.Context) {
 	for {
 		select {
 		case d := <-s.decCh:
-			if err := s.eventStore.RecordDecision(ctx, d); err != nil {
+			// Detached: ctx cancellation must end the loop, not abort a write
+			// already dequeued. select picks randomly among ready cases, so a
+			// cancelled ctx here loses records the shutdown drain would keep.
+			if err := s.eventStore.RecordDecision(context.Background(), d); err != nil {
 				s.decDropped.Add(1)
 				slog.Warn("store write decision failed (fail-open)", "err", err, "session_id", d.SessionID)
 			}
