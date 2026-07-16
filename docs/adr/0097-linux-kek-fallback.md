@@ -45,10 +45,18 @@ list (ADR 0034-platform-backend-shared-contract), so one entry covers both.
 
 macOS is unchanged: the login keychain is reached via `store_darwin.go`.
 
-We explicitly **reject Chromium's fallback**, which encrypts under the hardcoded
-password `peanuts` when no keyring is present — equal to not using a password at
-all. Our fallback is a real random key; the difference is where it lives, not
-whether it exists.
+**Chromium's precedent does not answer our case, so we answer it explicitly.**
+Contributors to the r/netsec thread that popularised `peanuts` state it was
+deprecated in early 2011 and kept only to migrate pre-upgrade credential DBs (an
+upgraded Chromium copies them into the keystore and deletes the old DB), and
+that Chromium has used the OS keystore — GNOME/KDE, Keychain, DPAPI — ever
+since. So `peanuts` was never Chromium's answer to a missing keyring, and citing
+it as a rejected design would be a strawman.
+
+What that thread never answers is its own top reply: whether `peanuts` is still
+what you get when the keystore is *denied or absent*. That unanswered question is
+exactly our situation. Our answer is a random 32-byte key — the difference from
+`peanuts` is where the key lives, not whether one exists.
 
 ## Consequences
 
@@ -58,9 +66,18 @@ whether it exists.
   backup, which takes key and ciphertext together. Secret Service and macOS
   Keychain do. `doctor` reports which tier is live and what it buys; claiming a
   flat "encrypted" would be a lie in the file-KEK case.
+- **The silent downgrade is the failure mode to avoid, and it is not
+  hypothetical.** That same thread's OP reports gnome-keyring running,
+  `--password-store=gnome` set explicitly, and cookies still unencrypted with no
+  warning at all: "I would expect to see some warning if the gnome keyring is not
+  going to be used." Shipping encryption that quietly does nothing is worse than
+  shipping none, because it is believed. This is what AGE-254's posture
+  reporting exists to prevent.
 - **This still does not stop the agent.** It never did (ADR 0076 S-C1: same uid,
-  so 0600 is not a boundary). Mediation of the agent's reads is ADR 0092 D3's
-  job. The carve-out above is D3 doing that job, not this KEK doing it.
+  so 0600 is not a boundary). The thread asks this too — how a keystore protects
+  a key from another process running as the same user — and never answers it. It
+  does not. Mediation of the agent's reads is ADR 0092 D3's job; the carve-out
+  above is D3 doing that job, not this KEK doing it.
 - **Not stolen-disk protection.** That is FDE's job.
 - Rotation is unaffected: the KEK is opaque to the envelope, and `emeta` rewrap
   (ADR 0095-chunked-body-envelope) works the same under either backend.
