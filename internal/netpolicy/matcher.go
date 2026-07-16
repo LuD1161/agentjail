@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"text/template"
@@ -48,6 +49,14 @@ func NewMatcher(templateDirs ...string) (*Matcher, error) {
 	return &Matcher{templates: all}, nil
 }
 
+// ValidateDir reports whether every template in dir parses and is meaningful.
+// It exists so a launch path can refuse a malformed template up front, instead
+// of discovering it somewhere that fails open. AGE-227.
+func ValidateDir(dir string) error {
+	_, err := LoadTemplates(dir)
+	return err
+}
+
 // LoadTemplates reads all .yaml files from a directory.
 // Files may contain multiple YAML documents separated by "---".
 func LoadTemplates(dir string) ([]Template, error) {
@@ -79,9 +88,16 @@ func LoadTemplates(dir string) ([]Template, error) {
 
 // parseTemplates parses YAML data that may contain multiple documents
 // separated by "---".
+//
+// Decoding is strict (KnownFields). A template whose shape is wrong used to
+// load silently as an empty MatchSpec -- which matches everything -- with an
+// empty action, so it enforced nothing while looking installed. A policy that
+// silently does nothing is the failure this project exists to prevent, so a
+// template we cannot understand is an error, not a shrug. AGE-227.
 func parseTemplates(data []byte) ([]Template, error) {
 	var templates []Template
 	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
 	for {
 		var t Template
 		err := dec.Decode(&t)
@@ -92,9 +108,13 @@ func parseTemplates(data []byte) ([]Template, error) {
 			}
 			return nil, err
 		}
-		// Skip empty documents (e.g. trailing "---").
-		if t.ID == "" {
+		// Skip genuinely empty documents (e.g. a trailing "---"), but a
+		// document with content and no id is a mistake, not a blank.
+		if isZeroTemplate(&t) {
 			continue
+		}
+		if err := validateTemplate(&t); err != nil {
+			return nil, err
 		}
 		if err := compileScanRules(&t); err != nil {
 			return nil, fmt.Errorf("template %s: %w", t.ID, err)
@@ -102,6 +122,30 @@ func parseTemplates(data []byte) ([]Template, error) {
 		templates = append(templates, t)
 	}
 	return templates, nil
+}
+
+// isZeroTemplate reports whether a decoded document carried no fields at all.
+func isZeroTemplate(t *Template) bool {
+	return reflect.DeepEqual(*t, Template{})
+}
+
+// validActions is the closed set of actions the matcher can act on. Anything
+// else scores 0 in actionPriority and is silently a no-op, so it is rejected
+// here rather than at request time.
+var validActions = map[string]bool{"allow": true, "ask": true, "deny": true}
+
+// validateTemplate rejects a template that would load but never do anything.
+func validateTemplate(t *Template) error {
+	if t.ID == "" {
+		return fmt.Errorf("template is missing an id (name=%q)", t.Info.Name)
+	}
+	if t.Action == "" {
+		return fmt.Errorf("template %s has no action: expected one of allow, ask, deny", t.ID)
+	}
+	if !validActions[strings.ToLower(t.Action)] {
+		return fmt.Errorf("template %s has action %q: expected one of allow, ask, deny", t.ID, t.Action)
+	}
+	return nil
 }
 
 // compileScanRules pre-compiles regex patterns in all scan rules of a template.

@@ -39,6 +39,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/envaudit"
 	"github.com/LuD1161/agentjail/internal/netns"
+	"github.com/LuD1161/agentjail/internal/netpolicy"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -151,6 +152,23 @@ func Run(args []string) int {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: policy file %s exists but could not be loaded: %v\n", *policyPath, err)
 		fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch the agent with a malformed policy file -- fix the file or remove it to use built-in defaults")
 		return 1
+	}
+
+	// Same reasoning as the policy file above, applied to the L7 templates: a
+	// malformed template used to load as a match-everything no-op, so a typo
+	// silently disabled the rule the user thought they had. Checked here rather
+	// than in startTunnel because the tunnel is fail-open by design -- a load
+	// error there would drop to netproxy and lose the policy just as quietly.
+	// Only when --tunnel is requested: that is when templates are consulted.
+	// ADR 0040, ADR 0041, AGE-227.
+	if *tunnelMode {
+		if dir := resolveNetpacksDir(); dir != "" {
+			if err := netpolicy.ValidateDir(dir); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: invalid network policy template: %v\n", err)
+				fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch the agent with a malformed template -- a template that cannot be parsed enforces nothing")
+				return 1
+			}
+		}
 	}
 
 	// Resolve the agent binary from PATH before we exec so we get a clear

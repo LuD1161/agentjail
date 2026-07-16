@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/LuD1161/agentjail/internal/dnsvip"
 	"github.com/LuD1161/agentjail/internal/mitm"
@@ -29,24 +28,6 @@ type tunnelSession struct {
 	// mitmActive is the posture ACHIEVED, not the one requested. ADR 0077 (D6).
 	mitmActive bool
 	cancel     context.CancelFunc
-}
-
-// resolveNetpacksDir returns the directory of L7 policy templates to load into
-// the tunnel matcher, or "" (observe/log-only) when none is configured. It
-// prefers AGENTJAIL_NETPACKS_DIR, then ~/.agentjail/netpacks if that directory
-// exists. Returning "" keeps the fail-open default: no templates => no denials,
-// just logging.
-func resolveNetpacksDir() string {
-	if d := os.Getenv("AGENTJAIL_NETPACKS_DIR"); d != "" {
-		return d
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		def := filepath.Join(home, ".agentjail", "netpacks")
-		if fi, err := os.Stat(def); err == nil && fi.IsDir() {
-			return def
-		}
-	}
-	return ""
 }
 
 // startTunnel sets up the unprivileged-userns transparent tunnel (ADR 0079,

@@ -15,10 +15,14 @@ type Template struct {
 
 // TemplateInfo holds metadata about a template.
 type TemplateInfo struct {
-	Name     string   `yaml:"name"`
-	Author   string   `yaml:"author"`
-	Severity string   `yaml:"severity"` // "info", "low", "medium", "high", "critical"
-	Tags     []string `yaml:"tags"`
+	Name string `yaml:"name"`
+	// Description is prose for the human reading the pack. The shipped
+	// ssh.yaml already carried one; the field was missing here, so it was
+	// silently dropped until strict decoding surfaced it (AGE-227).
+	Description string   `yaml:"description"`
+	Author      string   `yaml:"author"`
+	Severity    string   `yaml:"severity"` // "info", "low", "medium", "high", "critical"
+	Tags        []string `yaml:"tags"`
 }
 
 // MatchSpec defines which operations this template applies to.
