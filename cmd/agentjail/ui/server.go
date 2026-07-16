@@ -4,7 +4,7 @@
 //
 // Routes:
 //
-//	GET  /                       embedded index.html
+//	GET  /                       SPA from static/dist, else legacy index.html
 //	GET  /events                 Server-Sent Events stream of daemon log lines
 //	GET  /api/state              JSON snapshot (sessions + recent events + counters)
 //	GET  /api/session            redacted chronological replay or downloadable bundle
@@ -21,6 +21,7 @@
 //	GET  /api/policy/project-config  read/write project-level policy.yaml
 //	GET  /api/network/recent     recent intercepted requests (tunnel + MITM only)
 //	GET  /api/network/stats      per-host traffic totals (tunnel + MITM only)
+//	GET  /api/network/body       streams one captured body (never inlined in JSON)
 package ui
 
 import (
@@ -30,10 +31,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -72,6 +76,14 @@ type Server struct {
 	netPath  string
 	netStore *mitm.RequestStore
 
+	// bodyDir empty means mitm.DefaultBodyDir(). Injectable for the same reason
+	// as netPath. See ADR 0092-persist-request-bodies (D3).
+	bodyDir string
+	// bodyKeys nil reads bodies in the clear. The keyring-backed KeyWrapper is
+	// not built yet, so an encrypted body streams as ciphertext until it is.
+	// See ADR 0095-chunked-body-envelope.
+	bodyKeys mitm.KeyWrapper
+
 	// SSE broadcaster state.
 	subsMu sync.Mutex
 	subs   map[chan string]struct{}
@@ -107,7 +119,7 @@ func (s *Server) Start(
 ) error {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/", s.handleSPA)
 	mux.HandleFunc("/events", s.handleSSE)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/session", s.handleSession)
@@ -125,6 +137,11 @@ func (s *Server) Start(
 	})
 	mux.HandleFunc("/api/network/recent", s.handleNetworkRecent)
 	mux.HandleFunc("/api/network/stats", s.handleNetworkStats)
+	mux.HandleFunc("/api/network/body", s.handleNetworkBody)
+	mux.HandleFunc("/api/network/sessions", s.handleNetworkSessions)
+	mux.HandleFunc("/api/requests", s.handleRequestsList)
+	mux.HandleFunc("/api/requests/stream", s.handleRequestsStream)
+	mux.HandleFunc("/api/requests/", s.handleRequestDetail)
 	mux.HandleFunc("/api/policy/reload", s.handlePolicyReload)
 	mux.HandleFunc("/api/policy/mcp-scan", s.handlePolicyMCPScan)
 	mux.HandleFunc("/api/policy/mcp-where", s.handlePolicyMCPWhere)
@@ -136,20 +153,96 @@ func (s *Server) Start(
 
 	srv := &http.Server{
 		Addr:    s.addr,
-		Handler: mux,
+		Handler: guardRebinding(mux),
 	}
 	return srv.ListenAndServe()
+}
+
+// guardRebinding rejects any request whose Host or Origin is not loopback.
+// The UI is unauthenticated on loopback, so a DNS rebind would let any page
+// the user visits read this store. See ADR 0092-persist-request-bodies (D1).
+func guardRebinding(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			http.Error(w, "forbidden: non-loopback Host", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && !loopbackOrigin(o) {
+			http.Error(w, "forbidden: cross-origin request", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loopbackHost reports whether a Host header names a loopback address.
+func loopbackHost(host string) bool {
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	h = strings.Trim(h, "[]")
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// loopbackOrigin reports whether an Origin header names a loopback address.
+func loopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return loopbackHost(u.Host)
 }
 
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+// spaBuilt reports whether `make ui` produced real assets. A clean clone
+// embeds only static/dist/.gitkeep, and must still serve a working UI.
+func spaBuilt() bool {
+	_, err := spaFS.ReadFile("static/dist/index.html")
+	return err == nil
+}
+
+// handleSPA serves the built SPA, falling back to the legacy UI when dist/ is
+// empty. Unmatched non-asset paths get index.html: react-router uses
+// BrowserRouter, so /policies and /network are client-side routes.
+func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
 		http.NotFound(w, r)
 		return
 	}
+	if !spaBuilt() {
+		s.handleIndex(w, r)
+		return
+	}
+	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	if name != "" && name != "." {
+		if content, err := spaFS.ReadFile("static/dist/" + name); err == nil {
+			if ct := mime.TypeByExtension(filepath.Ext(name)); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Write(content)
+			return
+		}
+	}
+	content, err := spaFS.ReadFile("static/dist/index.html")
+	if err != nil {
+		s.handleIndex(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(content)
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	content, err := staticFS.ReadFile("static/index.html")
@@ -1076,6 +1169,10 @@ func (s *Server) openNetworkStore() (*mitm.RequestStore, error) {
 	return st, nil
 }
 
+// netUnavailableMsg names why the history is empty. An empty Network tab is
+// indistinguishable from "no traffic", and silence reads as safety.
+const netUnavailableMsg = "no network history yet — requests are recorded only under `agentjail-shield --tunnel` with interception on"
+
 // handleNetworkRecent lists recent intercepted requests, newest first.
 func (s *Server) handleNetworkRecent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1086,7 +1183,7 @@ func (s *Server) handleNetworkRecent(w http.ResponseWriter, r *http.Request) {
 
 	st, err := s.openNetworkStore()
 	if err != nil {
-		writeJSONError(w, "no network history yet — requests are recorded only under `agentjail-shield --tunnel` with interception on", http.StatusServiceUnavailable)
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1122,7 +1219,7 @@ func (s *Server) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
 
 	st, err := s.openNetworkStore()
 	if err != nil {
-		writeJSONError(w, "no network history yet — requests are recorded only under `agentjail-shield --tunnel` with interception on", http.StatusServiceUnavailable)
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1155,6 +1252,288 @@ func (s *Server) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
 		"total_bytes":    totalBytes,
 	})
 }
+
+// netQueryCeiling mirrors internal/mitm's own LIMIT ceiling: rows past it are
+// unreachable by paging, so it bounds both the page scan and total.
+const netQueryCeiling = 10000
+
+// SessionInfo is the JSON shape for one session in GET /api/network/sessions.
+// The frontend's types.ts calls it internal/mitm.SessionInfo, which does not
+// exist on this branch; the shape below is what the page actually reads.
+type SessionInfo struct {
+	SessionID    string `json:"session_id"`
+	FirstSeen    string `json:"first_seen"`
+	LastSeen     string `json:"last_seen"`
+	RequestCount int64  `json:"request_count"`
+}
+
+// networkRows returns rows matching the SQL-expressible filters. Status,
+// policy and session are filtered in Go: RequestFilter cannot express them and
+// internal/mitm is not this package's to change.
+func (s *Server) networkRows(r *http.Request, limit int) ([]mitm.RequestLog, error) {
+	st, err := s.openNetworkStore()
+	if err != nil {
+		return nil, err
+	}
+	q := r.URL.Query()
+	rows, err := st.Query(r.Context(), mitm.RequestFilter{
+		Host:   q.Get("host"),
+		Method: q.Get("method"),
+		Limit:  limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	status, policy, session := q.Get("status"), q.Get("policy"), q.Get("session")
+	if status == "" && policy == "" && session == "" {
+		return rows, nil
+	}
+	out := rows[:0]
+	for _, rl := range rows {
+		if status != "" && strconv.Itoa(rl.StatusCode) != status {
+			continue
+		}
+		if policy != "" && rl.PolicyAction != policy {
+			continue
+		}
+		if session != "" && rl.SessionID != session {
+			continue
+		}
+		out = append(out, rl)
+	}
+	return out, nil
+}
+
+// handleRequestsList backs the Network table. The SPA calls /api/requests, not
+// /api/network/recent -- the route it wanted 404'd, so the table rendered empty
+// against a full database. See ADR 0092-persist-request-bodies.
+func (s *Server) handleRequestsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	q := r.URL.Query()
+	limit, offset := 50, 0
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		limit = n
+	}
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
+		offset = n
+	}
+	// Fetch to the store's own ceiling, not offset+limit: total counts the
+	// matching set, and a total capped at the page size makes pagination lie.
+	rows, err := s.networkRows(r, netQueryCeiling)
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	total := len(rows)
+	if offset < len(rows) {
+		rows = rows[offset:]
+	} else {
+		rows = nil
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	if rows == nil {
+		rows = []mitm.RequestLog{}
+	}
+	writeJSON(w, map[string]any{"requests": rows, "count": len(rows), "total": total})
+}
+
+// handleRequestDetail serves one row. Bodies are referenced by path, never
+// inlined: see handleNetworkBody and ADR 0092-persist-request-bodies (D1).
+func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/requests/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSONError(w, "bad request id", http.StatusBadRequest)
+		return
+	}
+	st, err := s.openNetworkStore()
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	// No Get(id) on RequestStore; scan the newest page for it.
+	rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: netQueryCeiling})
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	for _, rl := range rows {
+		if rl.ID == id {
+			writeJSON(w, rl)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+// handleRequestsStream pushes newly logged rows as SSE. The store has no
+// change feed, so this polls; the shield writes network.db from another
+// process, which rules out an in-process broadcaster.
+func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	st, err := s.openNetworkStore()
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	fmt.Fprint(w, ":ok\n\n")
+	flusher.Flush()
+
+	// Only rows logged after the client connected: the table loads history via
+	// /api/requests, and replaying it here would double every row.
+	var lastID int64
+	if rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: 1}); err == nil && len(rows) > 0 {
+		lastID = rows[0].ID
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rows, err := st.Query(ctx, mitm.RequestFilter{Limit: defaultStreamPage})
+			if err != nil {
+				continue
+			}
+			for i := len(rows) - 1; i >= 0; i-- { // Query is newest-first; emit oldest-first.
+				if rows[i].ID <= lastID {
+					continue
+				}
+				b, err := json.Marshal(rows[i])
+				if err != nil {
+					continue
+				}
+				fmt.Fprintf(w, "data: %s\n\n", b)
+				lastID = rows[i].ID
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// defaultStreamPage bounds one poll. A burst larger than this catches up on
+// the next tick, since lastID only advances over rows actually emitted.
+const defaultStreamPage = 200
+
+// handleNetworkSessions aggregates rows per session. The store has no
+// Sessions() and internal/mitm is not this package's to change.
+func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	rows, err := s.networkRows(r, netQueryCeiling)
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	byID := map[string]*SessionInfo{}
+	order := []string{}
+	for _, rl := range rows {
+		if rl.SessionID == "" {
+			continue
+		}
+		ts := rl.Ts.UTC().Format(time.RFC3339)
+		si, ok := byID[rl.SessionID]
+		if !ok {
+			si = &SessionInfo{SessionID: rl.SessionID, FirstSeen: ts, LastSeen: ts}
+			byID[rl.SessionID] = si
+			order = append(order, rl.SessionID)
+		}
+		si.RequestCount++
+		if ts < si.FirstSeen {
+			si.FirstSeen = ts
+		}
+		if ts > si.LastSeen {
+			si.LastSeen = ts
+		}
+	}
+	out := make([]SessionInfo, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byID[id])
+	}
+	writeJSON(w, map[string]any{"sessions": out, "count": len(out)})
+}
+
+// handleNetworkBody streams one captured body. Bodies are unbounded, so they
+// stream from here and are never inlined into a JSON detail response.
+// See ADR 0092-persist-request-bodies (D1).
+func (s *Server) handleNetworkBody(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	if rel == "" {
+		writeJSONError(w, "missing path parameter", http.StatusBadRequest)
+		return
+	}
+
+	dir := s.bodyDir
+	if dir == "" {
+		dir = mitm.DefaultBodyDir()
+	}
+	if _, err := os.Stat(dir); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	// BodyStore.resolve is the only validator of a stored path; reuse it rather
+	// than re-spell it here. See ADR 0092-persist-request-bodies (D1).
+	bs, err := mitm.NewBodyStore(dir, uiReadSession, s.bodyKeys)
+	if err != nil {
+		writeJSONError(w, "body store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	rc, err := bs.Open(rel)
+	if err != nil {
+		writeJSONError(w, "invalid body path", http.StatusBadRequest)
+		return
+	}
+	if rc == nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer rc.Close()
+
+	// Sequential only: the body format is chunk-granular, so no Range support.
+	w.Header().Set("Accept-Ranges", "none")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.Copy(w, rc)
+}
+
+// uiReadSession names the group NewBodyStore mkdirs for this read-only caller.
+// Open ignores it -- the session comes from the requested path.
+const uiReadSession = "uiread"
 
 func (s *Server) openSQLite() (localstore.ReadOnlyStore, error) {
 	s.dbMu.Lock()
