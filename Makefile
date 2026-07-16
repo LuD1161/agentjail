@@ -1,4 +1,4 @@
-.PHONY: help build dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball e2e-release
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean licenses licenses-check sign dist-tarball e2e-release
 
 BIN ?= bin/agentjail
 
@@ -64,6 +64,9 @@ shim:  ## build the C PATH shim into bin/agentjail-shim
 
 vet:  ## go vet on the laptop tree
 	go vet ./...
+
+adr-check:  ## fail on duplicate ADR numbers / bad ADR filenames (ADR 0083)
+	./scripts/adr-check.sh
 
 test:  ## go test the laptop tree with -race
 	go test ./... -race

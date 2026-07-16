@@ -16,7 +16,7 @@ import (
 
 // The Protection section answers the question the rest of doctor cannot:
 // "was enforcement actually running?" — not "is it running right now".
-// See ADR 0075.
+// See ADR 0082-doctor-attests-enforcement.
 const (
 	// enforcementGapMargin is how far the newest shield activation may lead
 	// the newest decision before it reads as a gap. A shielded session that
