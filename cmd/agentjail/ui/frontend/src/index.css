@@ -1,0 +1,218 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark, .dark *));
+
+/* agentjail is dark-theme-only: the :root tokens below ARE the (only)
+   theme. No separate .dark override block -- see cmd/agentjail/ui/static/
+   index.html for the reference colors this mirrors. */
+:root {
+  --radius: 0.5rem;
+
+  /* agentjail dark palette */
+  --aj-bg: #131720;
+  --aj-bg-alt: #1a1f2e;
+  --aj-hover: #1c2333;
+  --aj-border: #2a3040;
+  --aj-border-strong: #3b4252;
+  --aj-accent: #58a6ff;
+  --aj-green: #56d364;
+  --aj-red: #ff7b72;
+  --aj-yellow: #e3b341;
+  --aj-text: #f0f3f6;
+  --aj-text-dim: #9ca3af;
+  --aj-text-dimmer: #6b7280;
+
+  --background: var(--aj-bg);
+  --foreground: var(--aj-text);
+  --card: var(--aj-bg-alt);
+  --card-foreground: var(--aj-text);
+  --popover: var(--aj-bg-alt);
+  --popover-foreground: var(--aj-text);
+  --primary: var(--aj-accent);
+  --primary-foreground: #0b0e14;
+  --secondary: var(--aj-hover);
+  --secondary-foreground: var(--aj-text);
+  --muted: var(--aj-bg-alt);
+  --muted-foreground: var(--aj-text-dim);
+  --accent: var(--aj-hover);
+  --accent-foreground: var(--aj-text);
+  --destructive: var(--aj-red);
+  --border: var(--aj-border);
+  --input: var(--aj-border-strong);
+  --ring: var(--aj-accent);
+  --sidebar: var(--aj-bg);
+  --sidebar-foreground: var(--aj-text);
+  --sidebar-primary: var(--aj-accent);
+  --sidebar-primary-foreground: #0b0e14;
+  --sidebar-accent: var(--aj-hover);
+  --sidebar-accent-foreground: var(--aj-text);
+  --sidebar-border: var(--aj-border);
+  --sidebar-ring: var(--aj-accent);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-mono);
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-mono;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-size: 13px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--aj-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--aj-border-strong);
+  border-radius: 3px;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aj-green);
+  animation: aj-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes aj-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Resizable panel handles -- the separator between panels.
+   react-resizable-panels v4 sets aria-orientation on the separator:
+   - "horizontal" = separator is horizontal (between vertically stacked panels)
+   - "vertical" = separator is vertical (between side-by-side panels)
+*/
+.resizable-handle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--aj-bg-alt);
+  transition: background 0.15s;
+}
+.resizable-handle:hover,
+.resizable-handle[data-resize-handle-active] {
+  background: color-mix(in srgb, var(--aj-accent) 40%, transparent);
+}
+
+/* Vertical separator (between side-by-side panels) */
+.resizable-handle[aria-orientation="vertical"],
+.resizable-handle:not([aria-orientation]) {
+  width: 8px;
+  min-width: 8px;
+  cursor: col-resize;
+  border-left: 1px solid var(--aj-border);
+  border-right: 1px solid var(--aj-border);
+}
+
+/* Horizontal separator (between stacked panels) */
+.resizable-handle[aria-orientation="horizontal"] {
+  height: 8px;
+  min-height: 8px;
+  width: 100%;
+  cursor: row-resize;
+  border-top: 1px solid var(--aj-border);
+  border-bottom: 1px solid var(--aj-border);
+}
+
+.resizable-handle-grip {
+  z-index: 10;
+  width: 3px;
+  height: 24px;
+  border-radius: 4px;
+  background: var(--aj-border-strong);
+  flex-shrink: 0;
+}
+.resizable-handle[aria-orientation="horizontal"] .resizable-handle-grip {
+  width: 24px;
+  height: 3px;
+}
+.resizable-handle:hover .resizable-handle-grip {
+  background: white;
+}
+
+.col-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  background: var(--aj-border);
+  border-radius: 2px;
+  z-index: 1;
+}
+.col-resize-handle:hover {
+  background: var(--aj-accent);
+}
+.col-resize-handle.active {
+  background: var(--aj-accent);
+}
+

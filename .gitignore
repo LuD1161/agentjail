@@ -22,9 +22,12 @@
 __pycache__/
 *.pyc
 
-# Web UI generated artifacts
+# Web UI generated artifacts. dist/* is ignored but .gitkeep is tracked: the
+# `//go:embed all:static/dist` pattern must match on a clean clone or the build
+# fails before npm ever runs. Ignore the contents, never the directory.
 cmd/agentjail/ui/frontend/node_modules/
-cmd/agentjail/ui/static/dist/
+cmd/agentjail/ui/static/dist/*
+!cmd/agentjail/ui/static/dist/.gitkeep
 
 # dev-install build output
 /build/
