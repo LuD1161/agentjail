@@ -216,12 +216,10 @@ func runLandlockAgentjailChild() {
 		fmt.Fprintf(os.Stdout, "sock_connect=ERR:%v\n", cerr)
 	}
 
-	// Probe 3: connect() ~/.agentjail/run/daemon-ctl.sock -- must be DENIED.
-	// This is the grant control plane: session register and
-	// grant list/approve/deny all ride this socket. Unlike daemon.sock it gets
-	// NO single-file write grant, so the read-only ~/.agentjail grant withholds
-	// the write access AF_UNIX connect() needs -> EACCES. If this ever succeeded
-	// the sandboxed agent could register sessions or approve its own grants.
+	// Probe 3: connect() ~/.agentjail/run/daemon-ctl.sock. Records reachability,
+	// does NOT assert a denial: Landlock does not mediate AF_UNIX connect(), so
+	// this returns ok and the token -- not the path -- is the boundary.
+	// See ADR 0067-control-plane-token-auth.
 	ctlPath := filepath.Join(home, ".agentjail", "run", "daemon-ctl.sock")
 	cconn, ccerr := net.Dial("unix", ctlPath)
 	if ccerr == nil {
@@ -357,11 +355,9 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 		}
 	}()
 
-	// Live listener at $HOME/.agentjail/run/daemon-ctl.sock so the
-	// inode exists (connect would succeed but for Landlock). The read-only
-	// ~/.agentjail grant has NO single-file write grant here, so the child's
-	// connect() must be denied -- proving the grant control plane is agent-
-	// unreachable while daemon.sock stays reachable.
+	// Live listener at $HOME/.agentjail/run/daemon-ctl.sock so the inode exists.
+	// The child's connect() here succeeds -- Landlock does not mediate AF_UNIX
+	// connect(). See ADR 0067-control-plane-token-auth.
 	runDir := filepath.Join(ajDir, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatalf("mkdir %s: %v", runDir, err)
