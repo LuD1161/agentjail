@@ -6,14 +6,15 @@
 
 ADR numbers collide, silently, and we only find out at merge time.
 
-At the time of writing this repo had **three duplicate numbers** — and two of
-them had been sitting there for weeks without anyone noticing:
+At the time of writing there were **three duplicate numbers** — two live on
+`main` and unnoticed for weeks, and a third that only appeared once a long-lived
+branch merged, which is the pattern in miniature:
 
-| number | claimed by |
-|---|---|
-| 0016 | `rego-at-both-tiers` and `tier2-microsandbox-substrate` |
-| 0048 | `ini-parser-for-aws-config` and `secrets-broker-key-store-excluded-from-agentjail-self-read` |
-| 0075 | `bound-the-sighup-reload-rate` and `doctor-reports-whether-enforcement-ran` |
+| number | claimed by | where |
+|---|---|---|
+| 0016 | `rego-at-both-tiers` and `tier2-microsandbox-substrate` | `main` |
+| 0075 | `bound-the-sighup-reload-rate` and `doctor-reports-whether-enforcement-ran` | `main` |
+| 0048 | `secrets-broker-key-store-excluded-from-agentjail-self-read` (main) and `ini-parser-for-aws-config` (`feat/network-visibility`) | only once merged |
 
 A third pair (0049: the netns/TUN ADR vs the cloud-metadata egress guard) was
 resolved by hand, twice, when the tunnel branch merged — the netns ADR moved
@@ -83,10 +84,11 @@ three of the duplicates above at PR time.
 
 ## Consequences
 
-- **The three existing duplicates are resolved**, by renumbering the
-  less-referenced ADR of each pair and repointing its references by context:
-  0016 → `0080-rego-both-tiers`, 0048 → `0081-aws-config-ini`,
-  0075 → `0082-doctor-attests-enforcement`. The check cannot go green otherwise.
+- **The three duplicates are resolved**, by renumbering the less-referenced ADR
+  of each pair and repointing its references by context: 0016 →
+  `0080-rego-both-tiers`, 0075 → `0082-doctor-attests-enforcement`, and 0048 →
+  `0081-aws-config-ini` (the branch-side claimant, so it lands when
+  `feat/network-visibility` merges). The check cannot go green otherwise.
 - **Mixed slug lengths, on purpose.** ADRs below 0080 keep their long slugs.
   Uniformity is not worth rewriting every link.
 - **Numbers still race, they just cannot land.** Two branches can still pick
@@ -99,7 +101,9 @@ three of the duplicates above at PR time.
 
 ## Related
 
-- [ADR 0079-agent-netns-veth-vs-userns-tunfd](./0079-agent-netns-veth-vs-userns-tunfd.md)
-  — the ADR that got renumbered twice; the case that prompted this.
+- `ADR 0079-agent-netns-veth-vs-userns-tunfd` (lands with
+  `feat/network-visibility`) — the ADR that got renumbered twice, 0049 → 0075 →
+  0079; the case that prompted this. Named without a link because this scheme
+  ships to `main` ahead of the branch that motivated it.
 - `scripts/adr-check.sh`, `make adr-check`, `.github/workflows/ci.yml`.
 - [`AGENTS.md`](../../AGENTS.md) — the decision-log cadence this scheme serves.
