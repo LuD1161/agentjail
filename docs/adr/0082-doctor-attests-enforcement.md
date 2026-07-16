@@ -1,4 +1,4 @@
-# 0075 — doctor reports whether enforcement ran, not just whether it is configured
+# ADR 0082-doctor-attests-enforcement: doctor reports whether enforcement ran
 
 Status: Accepted
 

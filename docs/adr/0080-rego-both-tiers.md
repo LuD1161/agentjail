@@ -1,4 +1,4 @@
-# 0016 — Rego at both tiers: one DSL, one engine
+# ADR 0080-rego-both-tiers: Rego at both tiers
 
 Status: Accepted
 

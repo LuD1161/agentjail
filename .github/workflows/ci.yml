@@ -32,6 +32,12 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      # Two branches can pick the same ADR number without either noticing; it
+      # only bites at merge, when a bare "ADR 0049" stops identifying one
+      # document. Catch it here instead. See ADR 0083-adr-numbering-scheme.
+      - name: adr check
+        run: ./scripts/adr-check.sh
+
       - name: test
         run: go test ./... -race
 
