@@ -290,19 +290,19 @@ const (
 
 const doctorPingTimeout = 500 * time.Millisecond
 
-// probeDaemon requires a ControlOpPing reply, not a bare connect(): --fix gates
-// a restart on this check, and a dial-and-close cannot tell a live daemon from
-// a wedged one still holding the socket (ADR 0086-doctor-repairs-diagnosed).
-func probeDaemon(sockPath string) (daemonLiveness, error) {
+// Must require a ping reply: a wedged daemon still holds the socket, so a
+// dial-and-close reads as healthy. Callers pass their own budget.
+// See ADR 0086-doctor-repairs-diagnosed.
+func probeDaemon(sockPath string, timeout time.Duration) (daemonLiveness, error) {
 	if _, err := os.Stat(sockPath); err != nil {
 		return daemonSocketAbsent, err
 	}
-	conn, err := net.DialTimeout("unix", sockPath, doctorPingTimeout)
+	conn, err := net.DialTimeout("unix", sockPath, timeout)
 	if err != nil {
 		return daemonNoListener, err
 	}
 	defer conn.Close() //nolint:errcheck
-	_ = conn.SetDeadline(time.Now().Add(doctorPingTimeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := json.NewEncoder(conn).Encode(wire.ControlRequest{Type: wire.ControlType, Op: wire.ControlOpPing}); err != nil {
 		return daemonUnresponsive, err
 	}
@@ -346,7 +346,7 @@ func daemonSocketPath(home string) string {
 
 func daemonSocketCheck(home string) doctorCheck {
 	sockPath := daemonSocketPath(home)
-	l, err := probeDaemon(sockPath)
+	l, err := probeDaemon(sockPath, doctorPingTimeout)
 	return daemonLivenessCheck(l, sockPath, err)
 }
 
@@ -670,7 +670,7 @@ func recheckDaemonAfterRestart(home string) doctorCheck {
 	sockPath := daemonSocketPath(home)
 	deadline := time.Now().Add(daemonRepairWait)
 	for {
-		l, err := probeDaemon(sockPath)
+		l, err := probeDaemon(sockPath, doctorPingTimeout)
 		if l == daemonHealthy || !time.Now().Before(deadline) {
 			return daemonLivenessCheck(l, sockPath, err)
 		}

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // Guards the state -> badge mapping, including the AGE-212 state (shield up,
@@ -99,6 +102,7 @@ func TestDetectProtection(t *testing.T) {
 func TestDaemonAlive(t *testing.T) {
 	dir := t.TempDir()
 
+	// A healthy daemon: answers ControlOpPing.
 	live := filepath.Join(dir, "live.sock")
 	ln, err := net.Listen("unix", live)
 	if err != nil {
@@ -111,9 +115,26 @@ func TestDaemonAlive(t *testing.T) {
 			if err != nil {
 				return
 			}
-			c.Close()
+			go func(c net.Conn) {
+				defer c.Close()
+				var req wire.ControlRequest
+				if err := json.NewDecoder(c).Decode(&req); err != nil {
+					return
+				}
+				_ = json.NewEncoder(c).Encode(wire.ControlResponse{OK: true})
+			}(c)
 		}
 	}()
+
+	// A WEDGED daemon: listening, never accepts. The kernel completes the
+	// AF_UNIX handshake into the accept backlog, so a bare connect() succeeds
+	// and would badge this as secured — it enforces nothing.
+	wedged := filepath.Join(dir, "wedged.sock")
+	wedgedLn, err := net.Listen("unix", wedged)
+	if err != nil {
+		t.Fatalf("listen wedged: %v", err)
+	}
+	defer wedgedLn.Close()
 
 	// A socket file with no listener behind it: what a crashed daemon leaves.
 	stale := filepath.Join(dir, "stale.sock")
@@ -125,8 +146,6 @@ func TestDaemonAlive(t *testing.T) {
 		t.Fatalf("close stale: %v", err)
 	}
 	if _, err := os.Stat(stale); err != nil {
-		// Go unlinks the socket on Close; recreate the bare file so the dial
-		// hits ECONNREFUSED rather than ENOENT.
 		f, err := os.Create(stale)
 		if err != nil {
 			t.Fatalf("recreate stale: %v", err)
@@ -139,7 +158,8 @@ func TestDaemonAlive(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"live listener", live, true},
+		{"daemon answers ping", live, true},
+		{"daemon wedged: listening, never accepts", wedged, false},
 		{"stale socket file, no listener", stale, false},
 		{"missing socket", filepath.Join(dir, "absent.sock"), false},
 	}
@@ -152,9 +172,6 @@ func TestDaemonAlive(t *testing.T) {
 	}
 }
 
-// AGENTJAIL_SHIELDED is set to exactly "1" by the shield. Any other value is
-// not an activation record and must not be read as one (ADR
-// 0064-statusline-always-attests).
 func TestShieldBadge_OnlyExactValueCounts(t *testing.T) {
 	for _, v := range []string{"", "0", "true", "yes", "2"} {
 		t.Run("value_"+v, func(t *testing.T) {

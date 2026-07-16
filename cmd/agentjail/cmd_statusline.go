@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"runtime/debug"
@@ -126,22 +125,16 @@ const (
 	fullySecured
 )
 
-// statuslineProbeTimeout bounds the liveness dial. Deliberately tighter than
-// install.go's one-shot 200ms and doctor's 500ms: this runs on every prompt
-// render. AF_UNIX connect is kernel-local (~1ms of plumbing, ADR 0002) and a
-// stale socket fails instantly. See ADR 0085-statusline-attests-daemon.
+// Hang guard, not a budget: only bites on a wedged daemon.
+// See ADR 0085-statusline-attests-daemon.
 const statuslineProbeTimeout = 50 * time.Millisecond
 
-// daemonAlive reports whether a listener accepts on sockPath. A missing file
-// (ENOENT) and a stale file with no listener (ECONNREFUSED) both fail fast and
-// both mean the same thing here: policy is not being enforced.
+// Must ping, not dial: connect() succeeds against a wedged daemon, so a dial
+// badges one that enforces nothing as secured.
+// See ADR 0085-statusline-attests-daemon.
 func daemonAlive(sockPath string) bool {
-	conn, err := net.DialTimeout("unix", sockPath, statuslineProbeTimeout)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
+	l, _ := probeDaemon(sockPath, statuslineProbeTimeout)
+	return l == daemonHealthy
 }
 
 // detectProtection resolves the session's state. The probe is skipped when the
@@ -157,15 +150,9 @@ func detectProtection(shielded bool, probe func() bool) protection {
 	return fullySecured
 }
 
-// badge renders the state. It always returns a non-empty string: silence is not
-// an option here, because this status line is the only channel that survives.
-// agentjail-shield and the PATH shim warn on stderr when a session is
-// unprotected, but Claude Code takes over the terminal on startup and those
-// warnings scroll away unread. See ADR 0064-statusline-always-attests.
-//
-// Rendering nothing is reserved for agentjail not being installed at all, which
-// happens by construction — uninstall removes the statusLine entry (ADR
-// 0063-uninstall-restores-statusline), so this code is not running.
+// Never returns empty: silence is indistinguishable from protection, and this
+// is the only channel that survives.
+// See ADR 0064-statusline-always-attests.
 func (p protection) badge() string {
 	switch p {
 	case fullySecured:
