@@ -204,11 +204,19 @@ agentjail replay -session 625d86f1    # interactive TUI replay
 **Is this session actually protected?** In Claude Code, the status line tells you, for the whole life of the session:
 
 ```
-🔒 [secured by agentjail (v0.8.2)]     ← running inside the shield
-⚠  [UNSECURED · agentjail]             ← hooks may apply, but no kernel sandbox
+🔒 [secured by agentjail (v0.8.2)]        ← shield active, policy daemon answering
+⚠  [POLICY OFF · shield only · agentjail]  ← kernel sandbox on, but policy is NOT enforced
+⚠  [UNSECURED · agentjail]                 ← hooks may apply, but no kernel sandbox
 ```
 
-It never renders nothing while agentjail is installed — silence would be indistinguishable from protection. Launch warnings go to stderr and get scrolled away the moment Claude Code takes over the terminal, so the badge is the one signal that survives ([ADR 0064](./docs/adr/0064-statusline-always-attests.md)). `UNSECURED` means the session is not running under `agentjail-shield`: use `agentjail claude`, or install the [PATH shim](#install) to get it automatically. When agentjail is uninstalled the badge disappears entirely.
+It never renders nothing while agentjail is installed — silence would be indistinguishable from protection. Launch warnings go to stderr and get scrolled away the moment Claude Code takes over the terminal, so the badge is the one signal that survives ([ADR 0064](./docs/adr/0064-statusline-always-attests.md)).
+
+The badge attests **both** enforcement layers ([ADR 0085](./docs/adr/0085-statusline-attests-daemon.md)):
+
+- `UNSECURED` — the session is not running under `agentjail-shield`. Use `agentjail claude`, or install the [PATH shim](#install) to get it automatically.
+- `POLICY OFF` — the shield is holding, but the policy daemon is unreachable and the hook is failing open, so no rule is being evaluated. Restart the daemon; `agentjail doctor` says why.
+
+The padlock only appears when both are live. When agentjail is uninstalled the badge disappears entirely.
 
 <details>
 <summary><b>More install options</b></summary>
