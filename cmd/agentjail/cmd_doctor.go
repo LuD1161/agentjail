@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -11,114 +12,126 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/sshagent"
+	"github.com/LuD1161/agentjail/internal/wire"
 	"github.com/spf13/cobra"
 )
+
+var doctorFix bool
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check agentjail installation health",
-	Long:  "Diagnose the agentjail installation: platform capabilities, daemon status,\nhook configuration, shield availability, and IDE wrapper setup.",
+	Long:  "Diagnose the agentjail installation: platform capabilities, daemon status,\nhook configuration, shield availability, and IDE wrapper setup.\n\nWith --fix, repair the failures agentjail can safely repair itself, then\nre-check and report the real post-repair state.",
 	Run: func(cmd *cobra.Command, args []string) {
-		os.Exit(runDoctor())
+		mode := diagnoseOnly
+		if doctorFix {
+			mode = repairFailures
+		}
+		os.Exit(runDoctor(mode))
 	},
 }
 
 func init() {
+	doctorCmd.Flags().BoolVar(&doctorFix, "fix", false, "repair the failures doctor can safely repair (default: diagnose only)")
 	rootCmd.AddCommand(doctorCmd)
 }
 
+// checkStatus is a check's verdict. Named so a check cannot be given a status
+// that printCheck and the exit-code logic disagree about.
+type checkStatus string
+
+const (
+	statusOK   checkStatus = "ok"
+	statusWarn checkStatus = "warn"
+	statusFail checkStatus = "fail"
+	statusSkip checkStatus = "skip"
+)
+
 type doctorCheck struct {
 	label  string
-	status string // "ok", "warn", "fail", "skip"
+	status checkStatus
 	detail string
+	// repair names the fix for this finding, empty for advice-only findings.
+	// A repair runs only when the check carrying its id failed
+	// (ADR 0086-doctor-repairs-diagnosed).
+	repair repairID
 }
 
-func runDoctor() int {
+// repairMode gates every mutation doctor can make. Diagnose-only is the
+// default: doctor exists to attest, and a repair that runs unasked can turn an
+// honest "you are unprotected" into a false "all good"
+// (ADR 0086-doctor-repairs-diagnosed).
+type repairMode int
+
+const (
+	diagnoseOnly repairMode = iota
+	repairFailures
+)
+
+// doctorSection is one printed group of checks. gatesExit preserves the
+// per-section exit semantics ADR 0082-doctor-attests-enforcement settled.
+type doctorSection struct {
+	name      string
+	run       func(home string) []doctorCheck
+	gatesExit bool
+}
+
+func doctorSections() []doctorSection {
+	return []doctorSection{
+		{name: "Platform", run: func(string) []doctorCheck { return checkPlatform() }},
+		{name: "Shield", run: checkShield, gatesExit: true},
+		{name: "Daemon", run: checkDaemon, gatesExit: true},
+		// Everything above reports what is configured RIGHT NOW; this reports
+		// whether enforcement actually ran (ADR 0082-doctor-attests-enforcement).
+		{name: "Protection", run: checkProtection, gatesExit: true},
+		{name: "Hooks", run: checkHooks, gatesExit: true},
+		{name: "Launch Integration", run: checkLaunchIntegration},
+		{name: "SSH", run: checkSSHAgent, gatesExit: true},
+	}
+}
+
+func runDoctor(mode repairMode) int {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail doctor: cannot determine home directory: %v\n", err)
 		return 1
 	}
 
-	var checks []doctorCheck
-	hasFailure := false
+	var repairable []doctorCheck
+	otherFailures, gatingRepairs := 0, 0
 
-	// ── Platform ────────────────────────────────────────────────────────
-	fmt.Fprintln(os.Stdout, "Platform")
-	checks = append(checks, checkPlatform()...)
-	for _, c := range checks {
-		printCheck(c)
-	}
-	fmt.Fprintln(os.Stdout)
-
-	// ── Shield ──────────────────────────────────────────────────────────
-	fmt.Fprintln(os.Stdout, "Shield")
-	shieldChecks := checkShield(home)
-	for _, c := range shieldChecks {
-		printCheck(c)
-		if c.status == "fail" {
-			hasFailure = true
+	for _, s := range doctorSections() {
+		fmt.Fprintln(os.Stdout, s.name)
+		for _, c := range s.run(home) {
+			printCheck(c)
+			if c.status != statusFail {
+				continue
+			}
+			if c.repair != "" {
+				repairable = append(repairable, c)
+			}
+			if !s.gatesExit {
+				continue
+			}
+			if c.repair == "" {
+				otherFailures++
+			} else {
+				gatingRepairs++
+			}
 		}
+		fmt.Fprintln(os.Stdout)
 	}
-	fmt.Fprintln(os.Stdout)
 
-	// ── Daemon ──────────────────────────────────────────────────────────
-	fmt.Fprintln(os.Stdout, "Daemon")
-	daemonChecks := checkDaemon(home)
-	for _, c := range daemonChecks {
-		printCheck(c)
-		if c.status == "fail" {
-			hasFailure = true
-		}
+	if mode == repairFailures {
+		return runRepairPass(home, repairRegistry, repairable, otherFailures)
 	}
-	fmt.Fprintln(os.Stdout)
 
-	// ── Protection ──────────────────────────────────────────────────────
-	// Everything above reports what is configured RIGHT NOW; this reports
-	// whether enforcement actually ran (ADR 0082-doctor-attests-enforcement).
-	fmt.Fprintln(os.Stdout, "Protection")
-	protectionChecks := checkProtection(home)
-	for _, c := range protectionChecks {
-		printCheck(c)
-		if c.status == "fail" {
-			hasFailure = true
-		}
+	if len(repairable) > 0 {
+		fmt.Fprintf(os.Stdout, "%d failure(s) above can be repaired: agentjail doctor --fix\n", len(repairable))
 	}
-	fmt.Fprintln(os.Stdout)
-
-	// ── Hooks ───────────────────────────────────────────────────────────
-	fmt.Fprintln(os.Stdout, "Hooks")
-	hookChecks := checkHooks(home)
-	for _, c := range hookChecks {
-		printCheck(c)
-		if c.status == "fail" {
-			hasFailure = true
-		}
-	}
-	fmt.Fprintln(os.Stdout)
-
-	// ── Launch Integration ──────────────────────────────────────────────
-	fmt.Fprintln(os.Stdout, "Launch Integration")
-	launchChecks := checkLaunchIntegration(home)
-	for _, c := range launchChecks {
-		printCheck(c)
-	}
-	fmt.Fprintln(os.Stdout)
-
-	// ── SSH ─────────────────────────────────────────────────────────────
-	fmt.Fprintln(os.Stdout, "SSH")
-	sshChecks := checkSSHAgent(home)
-	for _, c := range sshChecks {
-		printCheck(c)
-		if c.status == "fail" {
-			hasFailure = true
-		}
-	}
-	fmt.Fprintln(os.Stdout)
-
-	// ── Summary ─────────────────────────────────────────────────────────
-	if hasFailure {
+	if otherFailures+gatingRepairs > 0 {
 		fmt.Fprintln(os.Stdout, "Run `agentjail install --all` to fix issues.")
 		return 1
 	}
@@ -127,16 +140,64 @@ func runDoctor() int {
 	return 0
 }
 
+// runRepairPass applies each failed check's repair and then re-checks it
+// independently. The reported state is the observed post-repair state, never
+// the repair's own return value (ADR 0086-doctor-repairs-diagnosed).
+func runRepairPass(home string, reg map[repairID]repairAction, repairable []doctorCheck, otherFailures int) int {
+	if len(repairable) == 0 {
+		if otherFailures > 0 {
+			fmt.Fprintln(os.Stdout, "Nothing here is safely repairable — run `agentjail install --all` to fix issues.")
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "All checks passed. Nothing to repair.")
+		return 0
+	}
+
+	fmt.Fprintln(os.Stdout, "Repair")
+	allRepaired := true
+	for _, c := range repairable {
+		act, ok := reg[c.repair]
+		if !ok {
+			printCheck(doctorCheck{label: c.label, status: statusFail, detail: fmt.Sprintf("no repair registered for %q", c.repair)})
+			allRepaired = false
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "  ->    %s\n", act.label)
+		if err := act.apply(home); err != nil {
+			printCheck(doctorCheck{label: c.label, status: statusFail, detail: fmt.Sprintf("repair FAILED: %v", err)})
+			allRepaired = false
+			continue
+		}
+		post := act.recheck(home)
+		printCheck(post)
+		if post.status != statusOK {
+			allRepaired = false
+		}
+	}
+	fmt.Fprintln(os.Stdout)
+
+	switch {
+	case !allRepaired:
+		fmt.Fprintln(os.Stdout, "Repair did NOT restore every check — you are still not protected. Run `agentjail install --all`.")
+		return 1
+	case otherFailures > 0:
+		fmt.Fprintln(os.Stdout, "Repaired what doctor can; other checks still fail. Run `agentjail install --all` to fix issues.")
+		return 1
+	}
+	fmt.Fprintln(os.Stdout, "Repaired and verified.")
+	return 0
+}
+
 func printCheck(c doctorCheck) {
 	var marker string
 	switch c.status {
-	case "ok":
+	case statusOK:
 		marker = "  [ok]  "
-	case "warn":
+	case statusWarn:
 		marker = "  [!]   "
-	case "fail":
+	case statusFail:
 		marker = "  [ERR] "
-	case "skip":
+	case statusSkip:
 		marker = "  [-]   "
 	}
 	if c.detail != "" {
@@ -151,7 +212,7 @@ func checkPlatform() []doctorCheck {
 
 	checks = append(checks, doctorCheck{
 		label:  "OS",
-		status: "ok",
+		status: statusOK,
 		detail: fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
 	})
 
@@ -161,7 +222,7 @@ func checkPlatform() []doctorCheck {
 		if abi == 0 {
 			checks = append(checks, doctorCheck{
 				label:  "Landlock",
-				status: "fail",
+				status: statusFail,
 				detail: "not available (kernel < 5.13)",
 			})
 		} else {
@@ -173,20 +234,20 @@ func checkPlatform() []doctorCheck {
 			}
 			checks = append(checks, doctorCheck{
 				label:  "Landlock",
-				status: "ok",
+				status: statusOK,
 				detail: detail,
 			})
 		}
 	case "darwin":
 		checks = append(checks, doctorCheck{
 			label:  "Seatbelt",
-			status: "ok",
+			status: statusOK,
 			detail: "available",
 		})
 	default:
 		checks = append(checks, doctorCheck{
 			label:  "Sandbox",
-			status: "warn",
+			status: statusWarn,
 			detail: "no OS-native sandbox on this platform",
 		})
 	}
@@ -194,6 +255,8 @@ func checkPlatform() []doctorCheck {
 	return checks
 }
 
+// checkShield stays advice-only: replacing a missing binary is an install
+// action (fetch, verify, place), not a repair (ADR 0086-doctor-repairs-diagnosed).
 func checkShield(home string) []doctorCheck {
 	var checks []doctorCheck
 
@@ -201,13 +264,13 @@ func checkShield(home string) []doctorCheck {
 	if err != nil {
 		checks = append(checks, doctorCheck{
 			label:  "agentjail-shield",
-			status: "fail",
+			status: statusFail,
 			detail: "not found — run `agentjail install`",
 		})
 	} else {
 		checks = append(checks, doctorCheck{
 			label:  "agentjail-shield",
-			status: "ok",
+			status: statusOK,
 			detail: shieldBin,
 		})
 	}
@@ -215,36 +278,80 @@ func checkShield(home string) []doctorCheck {
 	return checks
 }
 
-func checkDaemon(home string) []doctorCheck {
-	var checks []doctorCheck
+// daemonLiveness is what actually holds daemon.sock.
+type daemonLiveness int
 
-	sockPath := filepath.Join(home, ".agentjail", "daemon.sock")
-	if _, err := os.Stat(sockPath); os.IsNotExist(err) {
-		checks = append(checks, doctorCheck{
-			label:  "Socket",
-			status: "fail",
-			detail: fmt.Sprintf("not found at %s", sockPath),
-		})
-		return checks
+const (
+	daemonSocketAbsent daemonLiveness = iota
+	daemonNoListener                  // socket file present, dial failed
+	daemonUnresponsive                // dialed, no valid ping reply
+	daemonHealthy                     // answered ControlOpPing
+)
+
+const doctorPingTimeout = 500 * time.Millisecond
+
+// probeDaemon requires a ControlOpPing reply, not a bare connect(): --fix gates
+// a restart on this check, and a dial-and-close cannot tell a live daemon from
+// a wedged one still holding the socket (ADR 0086-doctor-repairs-diagnosed).
+func probeDaemon(sockPath string) (daemonLiveness, error) {
+	if _, err := os.Stat(sockPath); err != nil {
+		return daemonSocketAbsent, err
 	}
-
-	conn, err := net.DialTimeout("unix", sockPath, 500*time.Millisecond)
+	conn, err := net.DialTimeout("unix", sockPath, doctorPingTimeout)
 	if err != nil {
-		checks = append(checks, doctorCheck{
-			label:  "Socket",
-			status: "fail",
-			detail: fmt.Sprintf("cannot connect: %v", err),
-		})
-	} else {
-		conn.Close()
-		checks = append(checks, doctorCheck{
-			label:  "Socket",
-			status: "ok",
-			detail: "connected",
-		})
+		return daemonNoListener, err
 	}
+	defer conn.Close() //nolint:errcheck
+	_ = conn.SetDeadline(time.Now().Add(doctorPingTimeout))
+	if err := json.NewEncoder(conn).Encode(wire.ControlRequest{Type: wire.ControlType, Op: wire.ControlOpPing}); err != nil {
+		return daemonUnresponsive, err
+	}
+	var resp wire.ControlResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return daemonUnresponsive, err
+	}
+	if !resp.OK {
+		return daemonUnresponsive, fmt.Errorf("daemon replied not ok: %s", resp.Error)
+	}
+	return daemonHealthy, nil
+}
 
-	return checks
+// daemonLivenessCheck maps a probe result to a check. Pure, so the repair gate
+// is tested without a daemon.
+func daemonLivenessCheck(l daemonLiveness, sockPath string, probeErr error) doctorCheck {
+	switch l {
+	case daemonHealthy:
+		return doctorCheck{label: "Socket", status: statusOK, detail: "daemon answered ping"}
+	case daemonNoListener:
+		return doctorCheck{
+			label: "Socket", status: statusFail, repair: repairDaemon,
+			detail: fmt.Sprintf("nothing listening on %s: %v — policy is NOT being enforced", sockPath, probeErr),
+		}
+	case daemonUnresponsive:
+		return doctorCheck{
+			label: "Socket", status: statusFail, repair: repairDaemon,
+			detail: fmt.Sprintf("%s accepts connections but did not answer a ping: %v — policy is NOT being enforced", sockPath, probeErr),
+		}
+	default:
+		return doctorCheck{
+			label: "Socket", status: statusFail, repair: repairDaemon,
+			detail: fmt.Sprintf("not found at %s — the daemon is not running, so policy is NOT being enforced", sockPath),
+		}
+	}
+}
+
+func daemonSocketPath(home string) string {
+	return filepath.Join(home, ".agentjail", "daemon.sock")
+}
+
+func daemonSocketCheck(home string) doctorCheck {
+	sockPath := daemonSocketPath(home)
+	l, err := probeDaemon(sockPath)
+	return daemonLivenessCheck(l, sockPath, err)
+}
+
+func checkDaemon(home string) []doctorCheck {
+	return []doctorCheck{daemonSocketCheck(home)}
 }
 
 func checkHooks(home string) []doctorCheck {
@@ -254,7 +361,7 @@ func checkHooks(home string) []doctorCheck {
 	if _, err := os.Stat(hookBin); os.IsNotExist(err) {
 		checks = append(checks, doctorCheck{
 			label:  "Hook binary",
-			status: "fail",
+			status: statusFail,
 			detail: "not found — run `agentjail install`",
 		})
 		return checks
@@ -262,7 +369,7 @@ func checkHooks(home string) []doctorCheck {
 
 	checks = append(checks, doctorCheck{
 		label:  "Hook binary",
-		status: "ok",
+		status: statusOK,
 		detail: hookBin,
 	})
 
@@ -272,20 +379,20 @@ func checkHooks(home string) []doctorCheck {
 		if strings.Contains(string(b), "agentjail-hook") {
 			checks = append(checks, doctorCheck{
 				label:  "Claude Code",
-				status: "ok",
+				status: statusOK,
 				detail: "hook installed",
 			})
 		} else {
 			checks = append(checks, doctorCheck{
 				label:  "Claude Code",
-				status: "warn",
+				status: statusWarn,
 				detail: "settings.json exists but agentjail hook not found",
 			})
 		}
 	} else if os.IsNotExist(err) {
 		checks = append(checks, doctorCheck{
 			label:  "Claude Code",
-			status: "skip",
+			status: statusSkip,
 			detail: "~/.claude/settings.json not found",
 		})
 	}
@@ -293,35 +400,40 @@ func checkHooks(home string) []doctorCheck {
 	return checks
 }
 
-func checkLaunchIntegration(home string) []doctorCheck {
-	var checks []doctorCheck
-
-	// PATH shim.
+// pathShimCheck reports the shim's state. Only the dangling case is repairable:
+// the "never opted in" case carries no repair, because installing a shim the
+// user never consented to is not a repair (ADR 0086-doctor-repairs-diagnosed).
+func pathShimCheck(home string) doctorCheck {
 	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
 	switch _, err := os.Stat(shimPath); {
 	case err == nil:
-		checks = append(checks, doctorCheck{
+		return doctorCheck{
 			label:  "PATH shim",
-			status: "ok",
+			status: statusOK,
 			detail: shimPath,
-		})
+		}
 	case shimConsentRecorded(home):
 		// Dangling: the shell profile still prepends ~/.agentjail/bin to PATH,
 		// but no shim sits there, so `claude` silently resolves to the real
 		// unshielded binary. Reported as a failure, not a neutral "opt-in"
 		// note — the user opted in and is not getting it (ADR 0062).
-		checks = append(checks, doctorCheck{
+		return doctorCheck{
 			label:  "PATH shim",
-			status: "fail",
-			detail: "MISSING but your shell profile opts into it — `claude` is running UNSHIELDED. Repair: agentjail install --with-path-shim",
-		})
+			status: statusFail,
+			repair: repairPathShim,
+			detail: "MISSING but your shell profile opts into it — `claude` is running UNSHIELDED. Repair: agentjail doctor --fix (or agentjail install --with-path-shim)",
+		}
 	default:
-		checks = append(checks, doctorCheck{
+		return doctorCheck{
 			label:  "PATH shim",
-			status: "skip",
+			status: statusSkip,
 			detail: "not installed (opt-in: agentjail install --with-path-shim)",
-		})
+		}
 	}
+}
+
+func checkLaunchIntegration(home string) []doctorCheck {
+	checks := []doctorCheck{pathShimCheck(home)}
 
 	// VS Code wrapper.
 	vscodeStatus := checkVSCodeWrapper(home, "Code")
@@ -362,7 +474,7 @@ func sshAgentCheck(st sshagent.Status) doctorCheck {
 	if st.Readiness == sshagent.ReadinessReady && st.PinnedBlindSpot() {
 		return doctorCheck{
 			label:  "ssh-agent",
-			status: "warn",
+			status: statusWarn,
 			detail: "ssh key is loaded but your ssh config pins an IdentityFile the shield blocks, so ssh reads it first and fails. Fix: " + st.PinnedRemediation(runtime.GOOS) + " (git is auto-handled by the shield unless AGENTJAIL_NO_SSH_OVERRIDE is set)",
 		}
 	}
@@ -370,7 +482,7 @@ func sshAgentCheck(st sshagent.Status) doctorCheck {
 	if !st.KeysOnDisk && !st.PinnedIdentity() {
 		return doctorCheck{
 			label:  "ssh-agent",
-			status: "skip",
+			status: statusSkip,
 			detail: "no ssh keys in ~/.ssh — skipping",
 		}
 	}
@@ -378,7 +490,7 @@ func sshAgentCheck(st sshagent.Status) doctorCheck {
 	if st.Readiness == sshagent.ReadinessReady {
 		return doctorCheck{
 			label:  "ssh-agent",
-			status: "ok",
+			status: statusOK,
 			detail: "key(s) loaded in agent",
 		}
 	}
@@ -388,7 +500,7 @@ func sshAgentCheck(st sshagent.Status) doctorCheck {
 	// it must never trip hasFailure — status stays "warn".
 	return doctorCheck{
 		label:  "ssh-agent",
-		status: "warn",
+		status: statusWarn,
 		detail: "ssh keys on disk but not loaded in ssh-agent; the shield blocks key-file reads, so ssh needs the agent. Fix: " + st.Remediation(runtime.GOOS),
 	}
 }
@@ -398,7 +510,7 @@ func checkVSCodeWrapper(home, app string) doctorCheck {
 	if settingsPath == "" {
 		return doctorCheck{
 			label:  app + " wrapper",
-			status: "skip",
+			status: statusSkip,
 			detail: app + " not detected",
 		}
 	}
@@ -407,7 +519,7 @@ func checkVSCodeWrapper(home, app string) doctorCheck {
 	if err != nil {
 		return doctorCheck{
 			label:  app + " wrapper",
-			status: "skip",
+			status: statusSkip,
 			detail: "settings file not readable",
 		}
 	}
@@ -417,20 +529,20 @@ func checkVSCodeWrapper(home, app string) doctorCheck {
 		if strings.Contains(content, "agentjail") {
 			return doctorCheck{
 				label:  app + " wrapper",
-				status: "ok",
+				status: statusOK,
 				detail: "agentjail wrapper configured",
 			}
 		}
 		return doctorCheck{
 			label:  app + " wrapper",
-			status: "warn",
+			status: statusWarn,
 			detail: "claudeProcessWrapper set to non-agentjail value",
 		}
 	}
 
 	return doctorCheck{
 		label:  app + " wrapper",
-		status: "skip",
+		status: statusSkip,
 		detail: "claudeProcessWrapper not set",
 	}
 }
@@ -498,6 +610,82 @@ func detectLandlockABI() int {
 // findShieldBinary is defined in cmd_run.go but used by doctor too.
 // If cmd_run.go is not compiled (shouldn't happen), this would fail at link time
 // which is the correct behavior — both commands should always be present.
+
+// repairID names a repairable finding, and is the only link between a check
+// and a mutation: doctor never repairs something it did not diagnose
+// (ADR 0086-doctor-repairs-diagnosed).
+type repairID string
+
+const (
+	repairDaemon   repairID = "daemon"
+	repairPathShim repairID = "path-shim"
+)
+
+// repairAction is one finding's fix plus its independent re-check. recheck must
+// observe real state and never echo apply's return value — doctor attests, so
+// an unverified repair is not a repair (ADR 0086-doctor-repairs-diagnosed).
+type repairAction struct {
+	label   string
+	apply   func(home string) error
+	recheck func(home string) doctorCheck
+}
+
+// repairRegistry selects the repair by id rather than a switch at the call
+// site. Membership here is the definition of "safely repairable" — a finding
+// absent from this map stays advice-only (ADR 0086-doctor-repairs-diagnosed).
+var repairRegistry = map[repairID]repairAction{
+	repairDaemon: {
+		label:   "asking the supervisor to restart the policy daemon",
+		apply:   restartDaemonViaSupervisor,
+		recheck: recheckDaemonAfterRestart,
+	},
+	repairPathShim: {
+		label:   "restoring the PATH shim your shell profile opts into",
+		apply:   restorePathShim,
+		recheck: pathShimCheck,
+	},
+}
+
+// daemonRepairWait bounds how long the post-restart re-check waits for the
+// daemon to bind its socket.
+const daemonRepairWait = 5 * time.Second
+
+// daemonServiceTarget is the supervisor's handle for the daemon: a launchd
+// plist path on macOS, a systemd unit name on Linux (ADR 0034).
+func daemonServiceTarget(home string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, "Library", "LaunchAgents", plistFilename)
+	}
+	return systemdUnitFilename
+}
+
+// restartDaemonViaSupervisor goes through launchd/systemd rather than spawning
+// a daemon itself: the supervisor owns the process, and an unsupervised daemon
+// would not survive the next restart (ADR 0070, ADR 0086-doctor-repairs-diagnosed).
+func restartDaemonViaSupervisor(home string) error {
+	return selfupdate.RestartDaemon(daemonServiceTarget(home))
+}
+
+func recheckDaemonAfterRestart(home string) doctorCheck {
+	sockPath := daemonSocketPath(home)
+	deadline := time.Now().Add(daemonRepairWait)
+	for {
+		l, err := probeDaemon(sockPath)
+		if l == daemonHealthy || !time.Now().Before(deadline) {
+			return daemonLivenessCheck(l, sockPath, err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// restorePathShim re-asserts a choice already on record. The rc block is that
+// record, so a missing block means there is nothing to restore (ADR 0062).
+func restorePathShim(home string) error {
+	if !shimConsentRecorded(home) {
+		return fmt.Errorf("no recorded opt-in for the PATH shim — run `agentjail install --with-path-shim`")
+	}
+	return installPathShim(home)
+}
 
 // findAgentBinary checks if an agent binary exists on PATH.
 func findAgentBinary(name string) string {

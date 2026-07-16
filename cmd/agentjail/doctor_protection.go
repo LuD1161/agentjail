@@ -46,14 +46,14 @@ func enforcementGapCheck(sig protectionSignals, now time.Time) doctorCheck {
 	if sig.LastShield.IsZero() || now.Sub(sig.LastShield) > protectionLookback {
 		return doctorCheck{
 			label:  "Enforcement",
-			status: "skip",
+			status: statusSkip,
 			detail: "no recent shield activity to cross-check",
 		}
 	}
 	if sig.LastDecision.IsZero() {
 		return doctorCheck{
 			label:  "Enforcement",
-			status: "fail",
+			status: statusFail,
 			detail: fmt.Sprintf("shield ran (last %s) but NO decision was ever recorded — policy enforcement is not reaching the daemon. Check: agentjail doctor / restart: agentjail daemon restart",
 				humanAgo(now, sig.LastShield)),
 		}
@@ -61,14 +61,14 @@ func enforcementGapCheck(sig protectionSignals, now time.Time) doctorCheck {
 	if gap := sig.LastShield.Sub(sig.LastDecision); gap > enforcementGapMargin {
 		return doctorCheck{
 			label:  "Enforcement",
-			status: "fail",
+			status: statusFail,
 			detail: fmt.Sprintf("shield ran %s but the last decision is %s — %s of shielded work went unrecorded, so policy was likely NOT enforced. Restart: agentjail daemon restart",
 				humanAgo(now, sig.LastShield), humanAgo(now, sig.LastDecision), roundDur(gap)),
 		}
 	}
 	return doctorCheck{
 		label:  "Enforcement",
-		status: "ok",
+		status: statusOK,
 		detail: fmt.Sprintf("decisions current (last %s)", humanAgo(now, sig.LastDecision)),
 	}
 }
@@ -80,13 +80,13 @@ func daemonDowntimeCheck(sig protectionSignals, now time.Time) doctorCheck {
 	if sig.DaemonDownSince.IsZero() {
 		return doctorCheck{
 			label:  "Fail-open history",
-			status: "ok",
+			status: statusOK,
 			detail: "no unresolved fail-open window",
 		}
 	}
 	return doctorCheck{
 		label:  "Fail-open history",
-		status: "warn",
+		status: statusWarn,
 		detail: fmt.Sprintf("the hook failed open at %s (%s ago) and the daemon has not started since — everything after that ran unenforced. Restart: agentjail daemon restart",
 			sig.DaemonDownSince.Format(time.RFC3339), roundDur(now.Sub(sig.DaemonDownSince))),
 	}
@@ -99,13 +99,13 @@ func droppedDecisionsCheck(sig protectionSignals) doctorCheck {
 	if sig.Dropped == 0 {
 		return doctorCheck{
 			label:  "Decision recording",
-			status: "ok",
+			status: statusOK,
 			detail: "no dropped decisions",
 		}
 	}
 	return doctorCheck{
 		label:  "Decision recording",
-		status: "warn",
+		status: statusWarn,
 		detail: fmt.Sprintf("%d decision(s) dropped — enforcement was applied but the record is incomplete", sig.Dropped),
 	}
 }
