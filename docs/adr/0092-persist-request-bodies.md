@@ -10,7 +10,9 @@
 > The original text reasoned carefully about one huge body defeating the *disk*
 > budget (D2) and never noticed the same body defeating *memory*, which is why
 > the gap read as considered. Recorded inline in D1/D2/D3 rather than as a new
-> ADR: nothing had been built against the original text yet.
+> ADR: at the time nothing on this branch had been built against the original
+> text. That was true of *this* branch and false of the repository — see the
+> Context, which is the same mistake twice.
 
 ## Context
 
@@ -36,13 +38,29 @@ event stranded them and unwired `internal/mitm` on both platforms (AGE-149).
 Today there is no `tunnel_shield_darwin.go` at all, so macOS does not even write
 the store, let alone read it.
 
-This matters to every decision below. "Show the user every request and response"
-is not a greenfield feature whose cost we are choosing to take on for the first
-time; it is **recovering something that worked**, and the body persistence this
-ADR decides is the part that was *never* there — the old tab showed
-`network_requests` metadata, not bodies. Writing the ADR as though the consumer
-were unbuilt made the reversal of ADR 0076 S-C2 look more speculative than it
-is.
+**And the ADR was wrong a second time, about the bigger claim.** The correction
+above still asserted that "the body persistence this ADR decides is the part
+that was *never* there — the old tab showed `network_requests` metadata, not
+bodies." That is false. Bodies were built too, on the same day, and shipped as a
+Burp-style request/response viewer that ran on the author's Mac. It was stranded
+by the same history rewrite and survived only in a stale remote-tracking ref;
+it is now rescued onto `rescue/burp-ui-2026-07-05`:
+
+- `36ba7ab2 feat(mitm): capture request/response bodies for Burp-style inspection`
+  — `RequestBody` / `ResponseBody` / `BodyTruncated` on `RequestLog`, a
+  `bodyCapture` tee on the response, columns on `network_requests`.
+- `2f3d28ce fix(mitm): decompress gzip response bodies before storing`
+- `6ef49e02` / `19ca0c9a` / `0a014948` — the `/network` viewer and its split
+  req/resp detail panel.
+
+So **D1 is a restoration, not a greenfield decision**, and the two corrections
+compound: this ADR twice re-derived from first principles a thing that already
+existed and worked, because the code was invisible to `git log` on this branch.
+Both of the ADR's confident "not built" claims came from reading the branch it
+was written on and calling that the world. That is the actual lesson, and it is
+worth more than either individual fix. The reversal of ADR 0076 S-C2 is not
+speculative in either direction: the transcript S-C2 forbade has already been
+written to a real database on a real machine.
 
 **The product goal (AGE-79)** is complete visibility:
 
@@ -91,11 +109,17 @@ Three facts, verified, that the design has to start from:
    (`sensitiveReadPaths`, `shield_darwin.go`). So this exposure is **Linux-only
    today**, and D3 is Linux catching up to macOS — the reverse of the usual
    asymmetry, where Linux's allowlist is the stricter shape.
-3. **Response bodies are not captured at all today.** `mitm.go` tees the
-   response through a `countingWriter` to count bytes and never buffers it.
-   Request bodies are buffered only to `maxBodyScan` (1 MiB); beyond that the
-   remainder is streamed straight through (`io.MultiReader`). "Store bodies"
-   is therefore **a proxy data-path change, not a schema change** — see D1.
+3. **Response bodies are not captured on this branch today — because the code
+   that captured them was deleted, not because it was never written.** At HEAD,
+   `mitm.go` tees the response through a `countingWriter` that counts bytes and
+   never buffers it; request bodies are buffered only to `maxBodyScan` (1 MiB),
+   beyond which the remainder streams straight through (`io.MultiReader`). That
+   is the *regressed* state. The Jul-5 code replaced `countingWriter` with a
+   `bodyCapture` that tees into a bounded buffer, stored both bodies, and
+   rendered them. So "store bodies" is **restoring a data path, plus fixing two
+   bugs in it, plus one deliberate change of tradeoff** — see D1. It is not the
+   first attempt at the problem, and the ADR should stop pretending it has no
+   prior art to answer to.
 
 ## Decision
 
@@ -108,19 +132,32 @@ Bodies are written to **`~/.agentjail/bodies/`, one file per body**, and
 `network_requests` gains `request_body_path` / `response_body_path` columns
 holding a store-relative path. Every body is stored in full. **No per-body size
 limit**: "save everything" means everything, and the measured traffic says a
-limit would be theatre — across 110+ requests of a real Claude Code session the
+limit would rarely bite — across 110+ requests of a real Claude Code session the
 largest body was 1.3 MB (a web page), and the model turns were 1.7–3.5 KB each.
 Only the retention bounds in D2 apply.
 
-**Files, not `BLOB`s, and the reason is memory, not taste.** A `BLOB` insert
-takes one `[]byte`: the whole body must be resident at `INSERT` no matter how
-carefully the proxy tees on the way in. Combined with "no per-body cap", peak
-daemon memory would equal the largest body the agent chose to fetch — so
-`curl`ing a multi-GB file would OOM the daemon, and the shield fails open when
-the daemon dies. That turns a recording feature into a way to switch off
-enforcement, which is not a trade this ADR will make. A file sink is bounded by
-the copy buffer instead, and it is what makes "no per-body cap" honest rather
-than aspirational.
+**Removing the cap is the change, and it is what creates the memory problem.**
+The Jul-5 code capped stored bodies at `maxBodyStore = 256 KiB` and set a
+`body_truncated` flag past it. That cap is precisely what bounded memory: the
+capture buffer could not exceed 256 KiB per body no matter what the agent
+fetched. Nobody ever hit an OOM, because nothing was ever unbounded. So the ADR
+must not tell itself the story that it is fixing a flaw in a naive design — it
+is not. It is taking a **different tradeoff, deliberately**: "save everything"
+is an instruction that trades a bounded buffer for an unbounded one, and the
+file sink is the price of honouring it. Truncation was the old design's answer
+to the same question, and it was a defensible one; we are rejecting it because a
+truncated transcript is not a transcript, not because it was wrong.
+
+**Given no cap, files rather than `BLOB`s, and the reason is memory, not taste.**
+A `BLOB` insert takes one `[]byte`: the whole body must be resident at `INSERT`
+no matter how carefully the proxy tees on the way in. Uncapped, peak daemon
+memory would equal the largest body the agent chose to fetch — so `curl`ing a
+multi-GB file would OOM the daemon, and the shield fails open when the daemon
+dies. That turns a recording feature into a way to switch off enforcement, which
+is not a trade this ADR will make. A file sink is bounded by the copy buffer
+instead, and it is what makes "no per-body cap" honest rather than aspirational.
+Note the dependency, since it is the whole argument: `BLOB`s were survivable
+*with* the 256 KiB cap. It is our own instruction that makes them untenable.
 
 The costs are real and are accepted here rather than discovered later:
 
@@ -143,9 +180,18 @@ no key names to match on, so redaction there is unreliable in a way header
 redaction is not — it would give the appearance of safety while missing most
 secrets, and mangle the record we are keeping it for.
 
-Because no response capture path exists today (`mitm.go` tees the response
-through a byte counter and never holds it), the capture contract has to be
-pinned down rather than assumed:
+**The Jul-5 code already met the load-bearing constraint, and D1 keeps its
+shape.** It did not buffer-then-forward: it wrapped the response in
+`io.TeeReader(resp.Body, capture)` where `capture` was a `bodyCapture{buf,
+total, max}` writer, so bytes reached the client as they passed and
+`ResponseSize = capture.total` was the **true** size, not the captured prefix.
+The constraint this ADR calls load-bearing was therefore already satisfied by
+working code. D1 is a **small delta on it**, not a rewrite: keep the tee, keep
+`bodyCapture`'s shape (a writer on the tee that owns the sink and counts the
+total), and swap the bounded `bytes.Buffer` for a file sink. Anything that
+re-derives the capture path from scratch has thrown away a correct answer.
+
+The contract, restated so it survives the next rewrite:
 
 - **Capture tees, and must never buffer a response before forwarding it.**
   This is the load-bearing constraint. The model turns are **SSE**
@@ -153,12 +199,23 @@ pinned down rather than assumed:
   seconds. Buffering a response to store it would make the agent wait for the
   whole stream — the exact reason SSE appears to hang through Burp, which
   buffers. Bytes go to disk as they pass, or interactive token streaming dies.
+- **The total is counted on the tee, never inferred from the sink.**
+  `ResponseSize` must be the bytes that crossed the wire, independent of what
+  the sink kept or dropped. The Jul-5 code had this right (`capture.total`);
+  say it here so a file sink does not tempt someone into `stat`ing the file.
 - **What is stored is a normalized capture, not verbatim wire bytes.** The body
   is stored after transfer-decoding (chunk framing removed) and after
   content-decoding (decompressed), because a gzipped blob is not a transcript
   anyone can read. The file holds raw bytes and is never assumed to be UTF-8.
   This is a deliberate readability choice and the ADR will not call it
   "verbatim".
+- **Bytes, not `string`. This is the first thing Jul-5 got wrong.** It stored
+  bodies as `string(raw)` into a **`TEXT`** column. Any non-UTF-8 body — an
+  image, a tarball, a protobuf, a failed gzip decode — is corrupted on the way
+  in: invalid sequences are mangled and the original bytes are unrecoverable.
+  The file sink makes this structurally hard to reproduce (files hold bytes),
+  but the lesson generalizes to every column: a body is a byte string, and a
+  type that cannot say so will silently lie about what was captured.
 - **Decoding is best-effort; the bytes are not.** If a body cannot be decoded
   safely or at all — unsupported encoding, corrupt stream, or an expansion ratio
   that smells like a decompression bomb — the **raw encoded bytes are stored**
@@ -166,6 +223,20 @@ pinned down rather than assumed:
   rule for every decode failure, not a special case: decoding is a readability
   convenience, and it must never become a reason to drop bytes we promised to
   keep. Nothing is ever partially decoded and truncated.
+- **The `encoding_raw` marker is not hypothetical — its absence is a live bug in
+  a database that exists. This is the second thing Jul-5 got wrong.** The gzip
+  path (`2f3d28ce`) decoded from `capture.buf`, which held only the first 256 KB
+  of the **compressed** stream. Any gzip response larger than that leaves a
+  truncated stream, so `gzip.NewReader` / `io.ReadAll` errors — and the code
+  only assigns `raw = decoded` when `readErr == nil`. On error it falls through
+  and stores **the raw compressed bytes**, as `TEXT`, **with no marker at all**.
+  The row is indistinguishable from a successfully-stored plaintext body; the
+  viewer renders gzip framing as garbage, which is the exact symptom `2f3d28ce`
+  set out to fix and did not, for every body over the cap. Both bugs compound:
+  the corrupting `string()` cast lands on the one path that most needs raw
+  bytes. D1's rule — decode from the *whole* body, and mark the fallback —
+  exists because this failure has already shipped, not because someone imagined
+  it.
 - **`maxBodyScan` (1 MiB) stays exactly as it is.** It is the *policy scan*
   window, unchanged by this ADR: it governs what the DSL inspects, not what is
   stored. Note the resulting asymmetry, since it will surprise someone: a 5 MB
@@ -322,7 +393,10 @@ hand**, not treated as already decided.
   exists for. Note the split: restoring the orphaned Network tab (`6ceecc3`)
   brings back request/response **metadata**, and needs nothing from this ADR.
   Only **bodies** depend on D1 — so the two should not be sequenced as one
-  thing, and a body-less tab is worth shipping first.
+  thing, and a body-less tab is worth shipping first. The rescued Burp-style
+  viewer (`6ef49e02`, `19ca0c9a`) already renders bodies when the rows carry
+  them, so the UI half of D1 is largely **restoration**; the work is in the
+  capture path and the two bugs, not the frontend.
 - **`~/.agentjail/bodies/` becomes the most sensitive thing agentjail writes** —
   source code and credentials, on disk, unencrypted, and now in **plain files
   rather than inside a database**. That is a real ergonomic downgrade for
@@ -376,6 +450,10 @@ hand**, not treated as already decided.
   reach D3 by *different* mechanisms (Linux: `AgentjailReadDeniedNames()`;
   macOS: the pre-existing whole-subtree deny), so this is one contract with two
   translations, and the sbpl invariant is what keeps macOS's translation honest.
+- **`rescue/burp-ui-2026-07-05`** — the stranded prior art this ADR is
+  restoring, not inventing: `36ba7ab2` (body capture, the correct tee),
+  `2f3d28ce` (gzip, and the unmarked-fallback bug), `6ef49e02` / `19ca0c9a` /
+  `0a014948` (the `/network` viewer). Read it before implementing D1.
 - AGE-79 (the visibility goal), AGE-111 (session tracing/replay — the consumer),
   AGE-232 (header redaction, retained by D4), AGE-171 (default-on — to be
   re-argued, see D5).
@@ -384,6 +462,18 @@ hand**, not treated as already decided.
 
 For the ticket that builds this, so they are not rediscovered:
 
+- [ ] **Start from `rescue/burp-ui-2026-07-05`, do not rewrite the capture
+      path.** `36ba7ab2` already tees correctly. The delta is: `bodyCapture`'s
+      `bytes.Buffer` becomes a file sink, `total` stays as-is, the two bugs
+      below get fixed. A from-scratch capture path is a red flag on review.
+- [ ] **Bodies are `[]byte` end to end, never `string` into `TEXT`** — the
+      Jul-5 corruption bug. A non-UTF-8 body (image, tarball, protobuf) must
+      round-trip byte-identical; assert that, not that it "renders".
+- [ ] **Content-decoding reads the whole body, not the sink's prefix**, and a
+      failed decode stores raw bytes **with the `encoding_raw` marker set** —
+      the Jul-5 gzip bug, which stored compressed bytes unmarked. Test with a
+      gzip response larger than any buffer and assert the marker, since the
+      unmarked failure is invisible by construction.
 - [ ] Deny `network.db`, **every sidecar**, **and `bodies/`**; test that a
       shielded agent can read none of them, on **both** OSes. `bodies/` is a
       directory and the first one this mechanism covers — assert the subtree,
