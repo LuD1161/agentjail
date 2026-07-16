@@ -394,6 +394,20 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// Important: sbpl uses LAST-MATCH-WINS ordering (not first-match).
 	// The carve-out allows for system trust stores appear AFTER this deny block
 	// so they take precedence over the broad .pem regex.
+	//
+	// Precise rule, measured (AGE-216, test/sbpl-probe/) -- "last-match-wins"
+	// alone is an incomplete model and misreads the network section below:
+	//   - Among rules of the SAME specificity (both filtered, same target), the
+	//     LAST one wins. That is what the carve-out pattern here relies on, and
+	//     it is why a control-socket deny must be emitted after any allow that
+	//     could name the same path.
+	//   - An UNFILTERED catch-all (e.g. the trailing `(deny network*)`) does NOT
+	//     override an earlier FILTERED allow. That is why the network allow-list
+	//     below survives the catch-all instead of being dead rules -- and why the
+	//     catch-all cannot be relied on to backstop a deny that some later allow
+	//     has already overridden.
+	// The two blocks look contradictory (denies first here, catch-all last there)
+	// and are both correct, for these two different reasons.
 	sb.WriteString("(deny file-read*\n")
 	for _, p := range sensitiveReadPaths(home) {
 		fmt.Fprintf(&sb, "    (subpath %q)\n", p)

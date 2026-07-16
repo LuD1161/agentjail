@@ -52,7 +52,12 @@ unauthenticated caller.
 ## Consequences
 
 All three control sockets now authenticate. The token, not the path and not the peer UID, is the
-boundary on Linux; macOS keeps its sbpl deny as a second layer.
+boundary on Linux; macOS keeps its sbpl profile as a second layer.
+
+On macOS that second layer is now verified by execution rather than by reading the generator
+(AGE-216; `test/sbpl-probe/`). It holds — a shielded agent reaches none of the three sockets —
+but the enforcing rule is the trailing `(deny network*)` catch-all, **not** the explicit
+per-path denies, which are redundant today. See ADR 0067 for the corrected mechanism.
 
 The `daemon_reload` DoS lever is closed *on this socket*. **SIGHUP is not**, and reload remains
 reachable by a same-UID agent through it: Landlock does not mediate signals. It is serialized by

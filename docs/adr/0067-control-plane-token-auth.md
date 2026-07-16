@@ -27,10 +27,29 @@ Neither property does what was assumed:
   daemon, so a UID-equality check passes. It proves "same Unix user", never "outside the
   sandbox".
 
-macOS is unaffected in principle: the sbpl profile denies `network-outbound` to the control
-socket paths, and Seatbelt does model `AF_UNIX connect()` as network-outbound. That asymmetry
-is exactly why a Linux-only assumption survived — the property held on one platform and the
-comments generalised it to both.
+macOS is unaffected in principle, and this is now **verified by execution** rather than by
+reading the generator (AGE-216; probe and evidence in `test/sbpl-probe/`). Measured on a clean
+macOS 15.7.7 box against the real `agentjail-shield` binary:
+
+- Seatbelt **does** model `AF_UNIX connect()` as `network-outbound` — confirmed, not assumed.
+- A shielded agent **cannot** reach any of the three control sockets. The conclusion above
+  stands.
+
+Two corrections to what this ADR originally asserted, both found only by running it:
+
+1. **The explicit `(deny network-outbound (literal <ctl sock>))` rules are not the boundary.**
+   Deleting them entirely (with the profile still compiling) leaves the sockets denied. The
+   trailing `(deny network*)` catch-all is what actually enforces, for all three. The denies
+   are defence-in-depth; they become load-bearing only if some allow grows to cover a
+   control-socket path.
+2. **`secrets.sock` had no explicit deny at all** — the claim "the profile denies the control
+   socket paths" was literally false for it; it survived on the catch-all alone. It also lives
+   at `~/.agentjail/secrets.sock`, *not* under `~/.agentjail/run/` with the other two. Fixed.
+
+The Linux/macOS asymmetry is exactly why a Linux-only assumption survived — the property held
+on one platform and the comments generalised it to both. Worth noting the same failure shape
+recurred *here*: the conclusion was right, the stated reason was wrong, and only execution
+separated them.
 
 The consequence on Linux is that path separation alone is not a boundary for any control
 verb, including the broker's `grant`, which returns credential material. `policy.yaml` decides
@@ -94,8 +113,11 @@ Costs and residuals:
   reachable by a same-UID agent. It is serialized by the signal loop, so it offers no
   amplification, and it is the documented admin interface. Not addressed here.
 - Fail-open on daemon-unreachable (`DaemonUnreachable: Allow`) is unchanged.
-- macOS gets the token too, on top of the sbpl deny. Redundant there today, but it means the
-  boundary no longer depends on which platform you are on — the drift that made this necessary.
+- macOS gets the token too, on top of the sbpl profile. **Verified redundant there today**
+  (AGE-216, `test/sbpl-probe/`) rather than believed redundant — but it means the boundary no
+  longer depends on which platform you are on, which is the drift that made this necessary.
+  Redundancy is the point: the macOS gate turned out to rest on the catch-all, and a token
+  that does not care which rule enforces is the cheaper thing to reason about.
 
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
