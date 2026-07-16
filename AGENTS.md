@@ -204,6 +204,29 @@ This goes in the same commit as the code change, not a follow-up.
   - Reversing a prior decision
   - Any significant architectural choice
 
+## Comments are pointers, not essays
+
+**Rationale lives in the decision log. Code comments carry a one-line TL;DR and
+the slug to read for the rest.** An agent that needs the full story can open the
+ADR; a human reading the code should not have to scroll past it.
+
+```go
+// Must precede provider tokens, else the scheme word gets redacted instead.
+// See ADR 0084-redact-secret-values.
+```
+
+Not the same thing, spread over twelve lines of the file.
+
+- **Say the constraint, name the file.** A comment earns its place by stating
+  something the code cannot show — an ordering constraint, an invariant, a
+  platform quirk. Then it stops and cites the slug.
+- **No history, no narration.** Never explain where code came from, what the
+  next line does, or why the change is correct. That is PR-review talk and it is
+  noise the moment it merges.
+- **If it doesn't fit in ~3 lines, it's an ADR** (or a doc under `docs/`). Write
+  the file, cite the slug. Do not inline the argument.
+- Applies to test files too — name what the test guards and the slug, not why.
+
 ## Common workflows
 
 ### Before any non-trivial code change
