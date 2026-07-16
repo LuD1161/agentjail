@@ -40,6 +40,13 @@ type DecisionRecord struct {
 	CWD               string
 	ToolInput         map[string]interface{} `json:"-"`
 	ToolInputRedacted string
+
+	// Action is what was ACTUALLY enforced. WouldAction is the verdict policy
+	// returned when monitor mode downgraded it, and is empty when the two
+	// matched. Action must never claim a block that did not happen -- a reader
+	// of this row has no other way to tell (AGE-212).
+	// See ADR 0091-monitor-mode-tool-calls.
+	WouldAction string
 }
 
 // AuditRecord is one policy-mutation audit event (replaces audit.log).
