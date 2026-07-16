@@ -360,6 +360,32 @@ func writeAllowWithSystemMessage(reason, msg string) {
 	_ = enc.Encode(out)
 }
 
+// monitorNotice renders the user-visible text for a verdict monitor mode
+// declined to act on. Empty when wouldAction is empty (enforce mode) — the
+// common path, where the hook must stay silent.
+//
+// It names the rule and says the call was allowed anyway, because the whole
+// point of monitor mode is deciding what to enforce later: a notice that only
+// said "policy matched" would not tell the user what changes if they switch.
+// See ADR 0091-monitor-mode-tool-calls.
+func monitorNotice(wouldAction, ruleID, reason string) string {
+	if wouldAction == "" {
+		return ""
+	}
+	verb := "blocked"
+	if wouldAction == "ask" {
+		verb = "asked for approval on"
+	}
+	msg := fmt.Sprintf("agentjail (monitor mode): would have %s this — allowed because enforcement is off", verb)
+	if ruleID != "" {
+		msg += fmt.Sprintf(" [rule=%s]", ruleID)
+	}
+	if reason != "" {
+		msg += ": " + reason
+	}
+	return msg + "\nSet `enforcement: enforce` in ~/.agentjail/policy.yaml to act on this. Report so far: agentjail monitor"
+}
+
 // writeAsk writes a Claude Code "ask" hook response to stdout.
 func writeAsk(reason string) {
 	out := claudeHookOutput{
@@ -642,6 +668,17 @@ func runClaude(agent string) {
 		// One-time ssh-agent remediation advisory (non-blocking, stderr
 		// only, allow-path only - never on deny/ask).
 		maybeEmitSSHAgentWarning(input.ToolName, input.ToolInput)
+		// Monitor mode: the daemon downgraded a real verdict. Say so, or the run
+		// is indistinguishable from a clean one. Must ride systemMessage --
+		// Claude Code discards hook stderr on exit 0 (ADR 0073).
+		if notice := monitorNotice(resp.WouldAction, resp.RuleID, resp.Reason); notice != "" {
+			if agent == "codex" {
+				writeCodexSystemMessage(notice)
+				os.Exit(0)
+			}
+			writeAllowWithSystemMessage(resp.Reason, notice)
+			os.Exit(0)
+		}
 		if agent == "codex" {
 			os.Exit(0)
 		}
@@ -708,6 +745,12 @@ func runCursor() {
 		// One-time ssh-agent remediation advisory (non-blocking, stderr
 		// only, allow-path only - never on deny/ask).
 		maybeEmitSSHAgentWarning(req.ToolName, req.ToolInput)
+		// Monitor mode: surface the verdict the daemon declined to act on
+		// (ADR 0091-monitor-mode-tool-calls).
+		if notice := monitorNotice(resp.WouldAction, resp.RuleID, resp.Reason); notice != "" {
+			writeCursorAllowWithMessage(notice)
+			break
+		}
 		writeCursorAllow()
 	}
 
