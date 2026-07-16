@@ -124,6 +124,14 @@ type Store interface {
 	Tier() Tier
 }
 
+// Locker is the optional Store extension for backends whose mint is a
+// read-modify-write two processes can race. Held across mint so two daemons
+// converge on one KEK. See ADR 0097-linux-kek-fallback.
+type Locker interface {
+	// Lock blocks until the mint lock is held, returning its release.
+	Lock() (func(), error)
+}
+
 // Keyring wraps and unwraps DEKs under a keychain-held KEK.
 type Keyring struct {
 	store Store
@@ -196,26 +204,45 @@ func (k *Keyring) Unwrap(kekID string, wrapped []byte, aad []byte) ([]byte, erro
 
 // current returns the active KEK, minting one on first use.
 func (k *Keyring) current() (KEKID, []byte, error) {
-	idBytes, err := k.store.Get(CurrentAccount())
-	switch {
-	case err == nil:
-		id := KEKID(idBytes)
-		kek, err := k.lookup(id)
-		if err != nil {
-			return "", nil, err
-		}
-		return id, kek, nil
-	case errors.Is(err, errNotFound):
+	id, kek, err := k.loadCurrent()
+	if errors.Is(err, errNotFound) {
 		return k.mint()
-	default:
+	}
+	return id, kek, err
+}
+
+func (k *Keyring) loadCurrent() (KEKID, []byte, error) {
+	idBytes, err := k.store.Get(CurrentAccount())
+	if err != nil {
 		return "", nil, err
 	}
+	id := KEKID(idBytes)
+	kek, err := k.lookup(id)
+	if err != nil {
+		return "", nil, err
+	}
+	return id, kek, nil
 }
 
 // mint generates a KEK, stores it under its fingerprint, then marks it current.
 // Order matters: a crash between the two leaves an orphan item, never a current
 // pointer to a KEK that was never stored.
 func (k *Keyring) mint() (KEKID, []byte, error) {
+	if l, ok := k.store.(Locker); ok {
+		unlock, err := l.Lock()
+		if err != nil {
+			return "", nil, err
+		}
+		defer unlock()
+		// Another minter may have won while we waited for the lock.
+		id, kek, err := k.loadCurrent()
+		if err == nil {
+			return id, kek, nil
+		}
+		if !errors.Is(err, errNotFound) {
+			return "", nil, err
+		}
+	}
 	kek := make([]byte, KEKSize)
 	if _, err := rand.Read(kek); err != nil {
 		return "", nil, fmt.Errorf("keyring: generate KEK: %w", err)

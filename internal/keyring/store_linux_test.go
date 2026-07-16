@@ -22,6 +22,7 @@ const openBound = 2 * dbusDeadline
 // Guards the hang: a locked collection, a wedged bus, or an absent one must all
 // resolve within the deadline. secret-tool hangs forever on exactly this host.
 func TestOpenIsBoundedAndTyped(t *testing.T) {
+	stageKEKHome(t)
 	start := time.Now()
 	k, err := Open()
 	elapsed := time.Since(start)
@@ -30,7 +31,7 @@ func TestOpenIsBoundedAndTyped(t *testing.T) {
 		t.Fatalf("Open() took %s, over the %s bound: a recorder would stall", elapsed, openBound)
 	}
 	if err == nil {
-		t.Logf("this host has a reachable, unlocked keychain (%s) in %s", k.Backend(), elapsed)
+		t.Logf("Open selected %s (tier %s) in %s", k.Backend(), k.Tier(), elapsed)
 		return
 	}
 	if !errors.Is(err, ErrNoKeychain) {
@@ -42,15 +43,41 @@ func TestOpenIsBoundedAndTyped(t *testing.T) {
 	t.Logf("no keychain in %s: %v", elapsed, err)
 }
 
-// The ephemeral "session" collection would satisfy a naive backend and silently
-// give a process-lifetime KEK -- plan 014 §5's rejected option C.
-func TestBackendNeverNamesTheMemoryStore(t *testing.T) {
+// The ladder is Secret Service then file KEK; the ephemeral "session"
+// collection or a process-lifetime key would be plan 014 §5's rejected option
+// C, arrived at by accident. See ADR 0097-linux-kek-fallback.
+func TestOpenSelectsALadderRungNeverMemory(t *testing.T) {
+	stageKEKHome(t)
 	k, err := Open()
 	if err != nil {
-		t.Skipf("no keychain on this host: %v", err)
+		t.Skipf("no keychain and no file KEK on this host: %v", err)
 	}
-	if k.Backend() != "linux-secret-service" {
-		t.Fatalf("Open() selected %q, not the Secret Service backend", k.Backend())
+	switch k.Backend() {
+	case "linux-secret-service":
+		if k.Tier() != TierKeychain {
+			t.Fatalf("secret service reported tier %q", k.Tier())
+		}
+	case "file-kek":
+		if k.Tier() != TierFileKEK {
+			t.Fatalf("file KEK reported tier %q", k.Tier())
+		}
+	default:
+		t.Fatalf("Open() selected %q, which is not a rung of the ladder", k.Backend())
+	}
+}
+
+// A locked collection must land on the file KEK, not on plaintext bodies.
+func TestLockedKeychainFallsBackToFileKEK(t *testing.T) {
+	stageKEKHome(t)
+	if _, err := openSecretService(); !errors.Is(err, ErrNoKeychain) {
+		t.Skipf("this host has an unlocked Secret Service: %v", err)
+	}
+	s, err := openOSStore()
+	if err != nil {
+		t.Fatalf("openOSStore: %v", err)
+	}
+	if s.Tier() != TierFileKEK {
+		t.Fatalf("fell back to %q (tier %q), want the file KEK", s.Name(), s.Tier())
 	}
 }
 
