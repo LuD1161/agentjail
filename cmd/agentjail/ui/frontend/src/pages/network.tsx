@@ -8,7 +8,7 @@ import { DataTable } from '@/components/data-table'
 import { DataTableColumnHeader } from '@/components/data-table-column-header'
 import { RequestDetail } from '@/components/request-detail'
 import { useEventSource } from '@/hooks/use-event-source'
-import { fetchRequests, fetchState } from '@/lib/api'
+import { fetchNetworkSessions, fetchRequests } from '@/lib/api'
 import { formatTime, formatBytes } from '@/lib/format'
 import type { RequestLog } from '@/types'
 
@@ -151,15 +151,15 @@ export function NetworkPage() {
   >(null)
   const queryClient = useQueryClient()
 
-  const stateQuery = useQuery({
-    queryKey: ['state'],
-    queryFn: fetchState,
+  // Sidebar sessions must come from the network store: its rows carry a
+  // body/network session id, a different identity from the daemon's tool-call
+  // sessions. See AGE-252.
+  const sessionsQuery = useQuery({
+    queryKey: ['network-sessions'],
+    queryFn: fetchNetworkSessions,
     refetchInterval: 10000,
   })
 
-  // Network requests use shield tunnel session IDs (shield-*), not daemon
-  // session IDs (uuid). Until the mapping is wired, fetch all requests and
-  // filter client-side by the daemon session's time window.
   const requestsQuery = useQuery({
     queryKey: ['requests'],
     queryFn: () => fetchRequests({ limit: 200 }),
@@ -190,52 +190,44 @@ export function NetworkPage() {
 
   const allRequests = requestsQuery.data?.requests ?? []
 
-  // Filter requests by the selected session's time window since daemon
-  // session IDs and tunnel session IDs are different namespaces.
-  const selectedSessionData = (stateQuery.data?.sessions ?? []).find(
-    (s) => s.id === selectedSession,
-  )
+  // Requests key off the network session id -- the same identity the sidebar
+  // now lists. See AGE-252.
   const requests = React.useMemo(() => {
-    if (!selectedSession || !selectedSessionData) return allRequests
-    const start = new Date(selectedSessionData.first_seen).getTime() - 5000
-    const end = new Date(selectedSessionData.last_seen).getTime() + 5000
-    return allRequests.filter((r) => {
-      const t = new Date(r.ts).getTime()
-      return t >= start && t <= end
-    })
-  }, [allRequests, selectedSession, selectedSessionData])
+    if (!selectedSession) return allRequests
+    return allRequests.filter((r) => r.session_id === selectedSession)
+  }, [allRequests, selectedSession])
 
   const selectedRequest =
     requests.find((r) => r.id === selectedRequestId) ?? null
 
-  // Count network requests per session by time window
+  // Deny counts are not in the sessions payload; derive them from the loaded
+  // rows, grouped by the same network session id.
+  const denyBySession = React.useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of allRequests) {
+      if (!r.session_id || r.policy_action?.toLowerCase() !== 'deny') continue
+      m.set(r.session_id, (m.get(r.session_id) ?? 0) + 1)
+    }
+    return m
+  }, [allRequests])
+
+  // A network session is "active" if its last row is recent -- the payload
+  // carries no live flag.
+  const activeWindowMs = 120_000
   const sessions = React.useMemo(() => {
-    const daemonSessions = stateQuery.data?.sessions ?? []
-    return daemonSessions
-      .map((s) => {
-        const start = new Date(s.first_seen).getTime() - 5000
-        const end = new Date(s.last_seen).getTime() + 5000
-        const sessionRequests = allRequests.filter((r) => {
-          const t = new Date(r.ts).getTime()
-          return t >= start && t <= end
-        })
-        const netDenyCount = sessionRequests.filter(
-          (r) => r.policy_action?.toLowerCase() === 'deny'
-        ).length
-        return {
-          id: s.id,
-          agent: s.agent,
-          cwd: s.cwd,
-          repoName: s.repo_name,
-          active: s.active,
-          requestCount: s.total,
-          networkCount: sessionRequests.length,
-          denyCount: netDenyCount,
-          lastSeen: s.last_seen,
-        }
-      })
+    const netSessions = sessionsQuery.data?.sessions ?? []
+    const now = Date.now()
+    return netSessions
+      .map((s) => ({
+        id: s.session_id,
+        active: now - new Date(s.last_seen).getTime() < activeWindowMs,
+        requestCount: s.request_count,
+        networkCount: s.request_count,
+        denyCount: denyBySession.get(s.session_id) ?? 0,
+        lastSeen: s.last_seen,
+      }))
       .sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())
-  }, [stateQuery.data?.sessions, allRequests])
+  }, [sessionsQuery.data?.sessions, denyBySession])
 
   return (
     <Layout connected={connected}>
