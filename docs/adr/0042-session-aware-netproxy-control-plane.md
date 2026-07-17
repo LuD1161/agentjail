@@ -49,11 +49,17 @@ One netproxy, session-aware, with a control plane the agent cannot reach.
   DATA-PLANE bearer only; it carries no control power because the socket is
   unreachable:
   - **Linux:** `~/.agentjail` is granted read-only to the agent
-    (see [ADR 0034]/`shield_agentpaths.go`); AF_UNIX `connect()` requires the
-    WRITE access right on the socket inode, which the read-only grant withholds
-    (the exact inverse of the single-file write grant that keeps `daemon.sock`
-    reachable). A Landlock enforcement test proves the agent cannot `connect()`
-    the control socket while it still can `connect()` the daemon socket.
+    (see [ADR 0034]/`shield_agentpaths.go`).
+
+    **Corrected (AGE-216).** This paragraph originally claimed AF_UNIX
+    `connect()` requires the WRITE access right on the socket inode, so the
+    read-only grant made the control socket unreachable, and that a Landlock
+    enforcement test proved it. All of that is false: Landlock is a filesystem
+    LSM and does not mediate `AF_UNIX connect()` at all — the cited test records
+    `ctl_connect=ok`. No arrangement of filesystem grants makes this socket
+    unreachable on Linux; the read-denied control token is the boundary
+    (ADR 0067-control-plane-token-auth). The `daemon.sock` write grant this
+    contrasted against was itself measured a no-op and has been removed.
   - **macOS:** the sbpl profile emits `(deny network-outbound (literal <path>))`.
     Seatbelt models AF_UNIX `connect()` as a network op under `(allow default)`,
     so an explicit deny is required.

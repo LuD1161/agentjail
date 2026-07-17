@@ -16,6 +16,16 @@ SETTINGS="$HOME/.claude/settings.json"
 BACKUP="/tmp/chaos-hook-tamper.settings.bak"
 SOCK="$HOME/.agentjail/daemon.sock"
 
+# `set -u` cannot catch a failed source: without the `||` the scenario would run
+# on with chaos_assert_fresh_binaries undefined and still print a PASS tally.
+# That is how the guard shipped inert for its first three runs. See AGE-236.
+CHAOS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chaos-lib.sh"
+# shellcheck source=test/testbed/scenarios/chaos-lib.sh
+. "$CHAOS_LIB" || {
+    echo "ABORT: cannot source $CHAOS_LIB - refusing to run unguarded rather than report results that nothing verified." >&2
+    exit 1
+}
+
 command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout  >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
@@ -93,6 +103,10 @@ if ! daemon_active; then
     echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="
     exit 0
 fi
+# These assertions track HEAD; the binaries under test may not. A stale binary
+# reports fake FAILs against features it predates. See AGE-236, chaos-lib.sh.
+chaos_assert_fresh_binaries "$AJ"
+
 cp "$SETTINGS" "$BACKUP" || { skip "could not back up the settings file"; echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="; exit 0; }
 
 hook_present && ok "baseline: agentjail-hook is wired in the Claude settings file" \

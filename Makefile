@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release chaos
 
 BIN ?= bin/agentjail
 
@@ -87,6 +87,26 @@ e2e: ## full new-user E2E test (build, daemon, hook, store, replay, UI, filters,
 
 e2e-release: ## RELEASE GATE: clean VM -> real installer -> policy enforcement (run before tagging)
 	bash test/testbed/testbed.sh gate --worktree .
+
+# Cadence: run locally before pushing to main, and before a major release. NOT
+# every PR, NOT minor/patch, NOT in CI -- a local gate like e2e-release, not a
+# runner job. Slow by construction (hookwatch is a 30s ticker), so kept out of
+# e2e-release to keep the release gate fast enough to actually get run.
+# See ADR 0092-chaos-run-cadence.
+#
+# Explicit list, never a chaos-*.sh glob: chaos-lib.sh matches that glob and is a
+# sourced library, not a scenario.
+CHAOS_SCENARIOS := chaos-daemon-outage chaos-supervisor-restart chaos-hook-tamper
+
+chaos:  ## failure-injection suite against a provisioned testbed (TESTBED=<name>)
+	@[ -n "$(TESTBED)" ] || { echo "usage: make chaos TESTBED=<name>   (see test/testbed/README.md)"; exit 2; }
+	@failed=""; \
+	for s in $(CHAOS_SCENARIOS); do \
+		echo "=== $$s"; \
+		bash test/testbed/testbed.sh test "$(TESTBED)" "$$s" || failed="$$failed $$s"; \
+	done; \
+	if [ -n "$$failed" ]; then echo ""; echo "chaos FAILED:$$failed"; exit 1; fi; \
+	echo ""; echo "chaos: all $(words $(CHAOS_SCENARIOS)) scenarios passed"
 
 # Full codesign identity, e.g. "Developer ID Application: NAME (TEAMID)".
 # Kept out of the tree: set the APPLE_SIGNING_IDENTITY env var (the matching

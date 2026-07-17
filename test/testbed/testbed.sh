@@ -39,6 +39,10 @@ shift || true
 
 do_create() {
     local name="${1:?usage: testbed.sh create <name>}"
+    # Before the clone, not after: a refused create must not leave a disk behind.
+    # No exemption for the gate -- it reaches this same function, and one rule
+    # with no special cases is worth more than a gate that never has to think.
+    assert_testbed_capacity "$name"
     case "$DRIVER" in
         lima)
             log "creating $(inst "$name") from lima-template.yaml (first run downloads the Ubuntu image)"
@@ -203,6 +207,9 @@ do_gate() {
         tart_stop_other_testbeds "$(inst "$name")"
         trap "tart stop '$(inst "$name")' >/dev/null 2>&1 || true" EXIT
     fi
+    # Ask before the clone, not after a 20-minute provision discovers the cap.
+    # The gate is not exempt from MAX_TESTBEDS -- it asks for a slot instead.
+    gate_reclaim_slot "$(inst "$name")"
     if "${DRIVER}_exists" "$name"; then
         log "reusing '$name' — resetting to clean golden"
         do_reset "$name"
@@ -226,8 +233,11 @@ do_test() {
     log "running scenario '$scenario' in '$name'"
     guest_exec "$name" "mkdir -p /tmp/testbed/scenarios"
     guest_push "$name" "$TESTBED_DIR/reportlib.sh" "/tmp/testbed/reportlib.sh"
+    # Unconditional, not just for chaos-*: a conditional push is one more place
+    # for the shipping contract to drift out from under the guard. See AGE-236.
+    guest_push "$name" "$TESTBED_DIR/scenarios/chaos-lib.sh" "/tmp/testbed/scenarios/chaos-lib.sh"
     guest_push "$name" "$script" "/tmp/testbed/scenarios/${scenario}.sh"
-    guest_exec "$name" "bash /tmp/testbed/scenarios/${scenario}.sh"
+    guest_exec "$name" "$(chaos_env) bash /tmp/testbed/scenarios/${scenario}.sh"
 }
 
 # do_record runs scenarios under asciinema in the guest, pulls each recording
@@ -240,13 +250,20 @@ do_record() {
     local name="${1:?usage: testbed.sh record <name> [scenario...]}"; shift
     local scenarios=("$@")
     if [ ${#scenarios[@]} -eq 0 ]; then
-        for f in "$TESTBED_DIR"/scenarios/*.sh; do scenarios+=("$(basename "$f" .sh)"); done
+        # chaos-lib.sh matches scenarios/*.sh but is a sourced library, not a
+        # scenario -- executing it would run nothing and report nothing.
+        for f in "$TESTBED_DIR"/scenarios/*.sh; do
+            local b; b="$(basename "$f" .sh)"
+            [ "$b" = "chaos-lib" ] && continue
+            scenarios+=("$b")
+        done
     fi
     local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)"
     local out="$TESTBED_DIR/reports/$ts"; mkdir -p "$out"
 
     guest_exec "$name" "mkdir -p /tmp/testbed/scenarios"
     guest_push "$name" "$TESTBED_DIR/reportlib.sh" "/tmp/testbed/reportlib.sh"
+    guest_push "$name" "$TESTBED_DIR/scenarios/chaos-lib.sh" "/tmp/testbed/scenarios/chaos-lib.sh"
 
     for s in "${scenarios[@]}"; do
         local script="$TESTBED_DIR/scenarios/${s}.sh"
@@ -256,7 +273,8 @@ do_record() {
         local mode; mode=$(grep -oE '# *testbed-mode: *[a-z]+' "$script" | grep -oE '[a-z]+$' | tail -1 || true); mode="${mode:-single}"
         log "recording '$s' (mode=$mode)"
         guest_push "$name" "$script" "/tmp/testbed/scenarios/${s}.sh"
-        local env="SCN_JSON=/tmp/testbed/${s}.result.json SCN_CAST=/tmp/testbed/${s}.cast TERM=xterm-256color"
+        local cenv; cenv="$(chaos_env)"
+        local env="$cenv SCN_JSON=/tmp/testbed/${s}.result.json SCN_CAST=/tmp/testbed/${s}.cast TERM=xterm-256color"
         if [ "$mode" = "tmux" ]; then
             guest_exec "$name" "$env bash /tmp/testbed/scenarios/${s}.sh" || log "  (scenario reported failures)"
         else

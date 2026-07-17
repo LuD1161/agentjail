@@ -359,7 +359,6 @@ func resolveMITM(mitmFlag, noMITMFlag bool, cfgTunnelMITM *bool) bool {
 		return true
 	}
 }
-
 // resolveNoNetproxy computes the effective "netproxy disabled" value from the
 // two flags. Egress enforcement is OPT-IN (ADR 0046): it is on only when
 // --netproxy is passed and --no-netproxy is not. The default (both false) is

@@ -27,10 +27,29 @@ Neither property does what was assumed:
   daemon, so a UID-equality check passes. It proves "same Unix user", never "outside the
   sandbox".
 
-macOS is unaffected in principle: the sbpl profile denies `network-outbound` to the control
-socket paths, and Seatbelt does model `AF_UNIX connect()` as network-outbound. That asymmetry
-is exactly why a Linux-only assumption survived — the property held on one platform and the
-comments generalised it to both.
+macOS is unaffected in principle, and this is now **verified by execution** rather than by
+reading the generator (AGE-216; probe and evidence in `test/sbpl-probe/`). Measured on a clean
+macOS 15.7.7 box against the real `agentjail-shield` binary:
+
+- Seatbelt **does** model `AF_UNIX connect()` as `network-outbound` — confirmed, not assumed.
+- A shielded agent **cannot** reach any of the three control sockets. The conclusion above
+  stands.
+
+Two corrections to what this ADR originally asserted, both found only by running it:
+
+1. **The explicit `(deny network-outbound (literal <ctl sock>))` rules are not the boundary.**
+   Deleting them entirely (with the profile still compiling) leaves the sockets denied. The
+   trailing `(deny network*)` catch-all is what actually enforces, for all three. The denies
+   are defence-in-depth; they become load-bearing only if some allow grows to cover a
+   control-socket path.
+2. **`secrets.sock` had no explicit deny at all** — the claim "the profile denies the control
+   socket paths" was literally false for it; it survived on the catch-all alone. It also lives
+   at `~/.agentjail/secrets.sock`, *not* under `~/.agentjail/run/` with the other two. Fixed.
+
+The Linux/macOS asymmetry is exactly why a Linux-only assumption survived — the property held
+on one platform and the comments generalised it to both. Worth noting the same failure shape
+recurred *here*: the conclusion was right, the stated reason was wrong, and only execution
+separated them.
 
 The consequence on Linux is that path separation alone is not a boundary for any control
 verb, including the broker's `grant`, which returns credential material. `policy.yaml` decides
@@ -94,12 +113,35 @@ Costs and residuals:
   reachable by a same-UID agent. It is serialized by the signal loop, so it offers no
   amplification, and it is the documented admin interface. Not addressed here.
 - Fail-open on daemon-unreachable (`DaemonUnreachable: Allow`) is unchanged.
-- macOS gets the token too, on top of the sbpl deny. Redundant there today, but it means the
-  boundary no longer depends on which platform you are on — the drift that made this necessary.
+- macOS gets the token too, on top of the sbpl profile. **Verified redundant there today**
+  (AGE-216, `test/sbpl-probe/`) rather than believed redundant — but it means the boundary no
+  longer depends on which platform you are on, which is the drift that made this necessary.
+  Redundancy is the point: the macOS gate turned out to rest on the catch-all, and a token
+  that does not care which rule enforces is the cheaper thing to reason about.
+
+- **The code comments contradicted this ADR for as long as it has existed** (found in the
+  AGE-216 review; corrected on main in `644b384`). `shield_agentpaths.go`, `shield_linux.go`
+  and `shield_linux_enforce_test.go` all described `daemon-ctl.sock` as "agent-unreachable"
+  because "Landlock denies `connect()` without write" — the precise claim the Context above
+  refutes, sitting a few hundred lines from an assertion that logs `ctl_connect=ok` as the
+  expected result and a denial as a "bonus". The ADR was right and unread. Anything that
+  describes Linux as path-isolating the control plane is wrong by construction; the token is
+  the boundary. `ControlSocketPaths` (`shield_contract.go`) is the shared list, and it is
+  darwin-enforceable only — named there, not silently.
+- **Measured, then dropped.** The `~/.agentjail/daemon.sock` single-file write grant
+  (`AgentPaths.HomeFilesRW`) was added believing `AF_UNIX connect()` needs write on the socket
+  inode. It does not — A/B-measured as a `connect()` no-op on Landlock ABI 2 (addendum 1). The
+  same false premise had a second instance, the `SSH_AUTH_SOCK` `rwFileAccess` grant, measured
+  the same way (addendum 2). Both were left in place pending a human call; that call was made
+  and **both are now removed**. `TestLandlockAgentjailStateEnforcement`'s `sock_connect=ok`
+  assertion guards the invariant that the hook still reaches the daemon without a grant.
 
 Related: ADR 0004 (credential broker), ADR 0048 (secrets-store read denial — the mechanism
 reused here), ADR 0058 (on-demand broker), ADR 0066 (`daemon_reload` off the agent socket —
 which this makes a real boundary on Linux rather than a structural one).
+
+Review record for the macOS verification and the comment corrections above:
+[`docs/reviews/age-216-item3-sbpl-control-sockets.md`](../reviews/age-216-item3-sbpl-control-sockets.md).
 
 ## Addendum: the `daemon.sock` write grant measured (AGE-216)
 
@@ -144,6 +186,51 @@ the socket inode)". That is measurably false here. The same stale premise is wha
 `daemon-ctl.sock`'s "Linux Landlock denies connect() without write" comment asserts — and
 `ctl_connect=ok` contradicts it, which is precisely the gap this ADR's token exists to close.
 
-The grant is **left in place**; dropping it and correcting the comments is a human decision.
-Note the grant is not load-bearing on macOS either (sbpl permits the connect via
-allow-default network), so removal would be a Linux-and-macOS no-op — but that is untested.
+**The grant has since been removed** (the human decision this addendum left open). Verified on
+the same kernel after removal: `sock_connect=ok` still holds, so the hook reaches the daemon
+with no grant at all. `HomeFilesRW` is consumed only by `shield_linux.go`, so the removal is
+Linux-only by construction; macOS never had this grant.
+
+## Addendum 2: the `SSH_AUTH_SOCK` write grant measured (AGE-216 item 3.3)
+
+The same false premise had a second instance, on a different socket: `applyLandlock`
+(`shield_linux.go`) grants `rwFileAccess` on the resolved `SSH_AUTH_SOCK` when it points
+outside `/tmp`. Addendum 1 falsified the premise for `daemon.sock` but measured only that
+socket. This one is now measured too — found by grepping the class, not the instance.
+
+Host: kernel `6.1.0-44-amd64`, **Landlock ABI 2** — the same box and ABI as Addendum 1.
+Method: the same A/B, via `runLandlockAgentjailChild`, with `SSH_AUTH_SOCK` pointed at a live
+listener in `$XDG_RUNTIME_DIR` (`/run/user/<uid>`), which is outside `/tmp`.
+
+| arm | `ssh_grant` (control) | `ssh_connect` |
+|---|---|---|
+| grant present (as-is) | `live(ENXIO)` | `ok` |
+| grant removed | `absent(EACCES)` | `ok` |
+
+**The grant is a no-op for `connect()`.** Same conclusion as `daemon.sock`: withholding write
+on the socket inode withholds nothing.
+
+The result is not vacuous — three controls:
+
+- **The control flips.** `applyLandlock` grants `/run` **read-only**, so a write-flavoured
+  `open(O_WRONLY)` on that inode is permitted *only* by the single-file grant under test.
+  With the grant it returns `ENXIO` (Landlock allowed; the kernel refuses to `open` a socket);
+  without it, `EACCES`. So the grant is provably applied, and its removal provably observable —
+  while `connect()` is unmoved in both arms.
+- **The sandbox is live.** `policy_write=EACCES` and `trust_write=EACCES` in both arms.
+- **The probe can report failure.** Pointed at a listener-less path it returns
+  `ssh_connect=ERR:...no such file or directory`, not `ok`.
+
+Placement matters and is easy to get wrong: `SSH_AUTH_SOCK` must resolve **outside** `/tmp`,
+or the grant code skips it *and* `/tmp`'s blanket RW grant masks the result — two independent
+routes to a vacuous pass.
+
+**The grant has since been removed**, together with `daemon.sock`'s — the human decision both
+addenda left open. Verified on the same kernel after removal: the full `shieldapp` suite passes
+and `sock_connect=ok` still holds.
+
+**The removal is Linux-only, and the asymmetry is the whole point.** On macOS the sbpl
+`(allow network-outbound (path $SSH_AUTH_SOCK))` is genuinely load-bearing — Seatbelt *does*
+model `AF_UNIX connect()` as `network-outbound`, so without it `ssh` cannot reach its agent.
+That allow stays, guarded against control-socket paths (AGE-216 item 3.2). Deleting it to
+"match Linux" would break `ssh` under the shield on macOS.

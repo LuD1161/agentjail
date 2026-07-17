@@ -21,6 +21,16 @@ SOCK="$HOME/.agentjail/daemon.sock"
 SENTINEL="$HOME/.agentjail/fail-open-warned"
 DB="$HOME/.agentjail/agentjail.db"
 
+# `set -u` cannot catch a failed source: without the `||` the scenario would run
+# on with chaos_assert_fresh_binaries undefined and still print a PASS tally.
+# That is how the guard shipped inert for its first three runs. See AGE-236.
+CHAOS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chaos-lib.sh"
+# shellcheck source=test/testbed/scenarios/chaos-lib.sh
+. "$CHAOS_LIB" || {
+    echo "ABORT: cannot source $CHAOS_LIB - refusing to run unguarded rather than report results that nothing verified." >&2
+    exit 1
+}
+
 command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout  >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
@@ -86,6 +96,9 @@ fi
 for f in "$HOOK" "$AJ"; do
     [ -x "$f" ] || { skip "$(basename "$f") not installed"; echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="; exit 0; }
 done
+# These assertions track HEAD; the binaries under test may not. A stale binary
+# reports fake FAILs against features it predates. See AGE-236, chaos-lib.sh.
+chaos_assert_fresh_binaries "$AJ"
 if ! daemon_active; then
     skip "daemon not active at scenario start — nothing to kill (run e2e-smoke first)"
     echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="
@@ -108,11 +121,28 @@ drive_hook() {
     fi
     HERR=$(cat /tmp/chaos-hook.err 2>/dev/null || true)
 }
+# extract_system_message <json> -> the systemMessage VALUE, not the whole blob.
+# "daemon"/"restart" also appear in decision-reason fields, so grepping $HOUT
+# directly produces false PASSes when no systemMessage exists at all.
+extract_system_message() {
+    echo "$1" | grep -o '"systemMessage":"[^"]*"' | sed -E 's/^"systemMessage":"(.*)"$/\1/'
+}
 
 # ===========================================================================
 echo "=== baseline: daemon UP, hook is quiet ==="
 # The control for every "fail-open is visible" assertion below: with the daemon
 # up the SAME call must carry no warning. Without this the checks are vacuous.
+#
+# Serving, not merely up: a freshly provisioned box leaves the daemon up but not
+# yet answering for a beat, and the control would catch that warm-up fail-open
+# and fail. Readiness is a PRECONDITION here, not a finding - if the daemon never
+# serves, every assertion below is meaningless, so abort rather than report. The
+# baseline assertions that follow stay as the control they were written to be.
+if ! chaos_daemon_ready "$HOOK" "$PROJECT"; then
+    bad "daemon never started serving within 30s - cannot establish a baseline, so every assertion below would be meaningless"
+    echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="
+    exit 1
+fi
 drive_hook
 [ "$HRC" = 0 ] && ok "baseline: in-project write allowed (exit 0)" || bad "baseline: in-project write exit $HRC (expected 0)"
 if echo "$HOUT" | grep -q 'systemMessage'; then
@@ -145,20 +175,24 @@ esac
 # exit-0 stdout JSON is what actually reaches the TUI. That invisible-stderr gap
 # is the root cause of the 3-day outage; assert the stdout channel.
 if [ "$HRC" = 0 ]; then
-    if echo "$HOUT" | grep -q '"systemMessage"'; then
+    SYSMSG=$(extract_system_message "$HOUT")
+    if [ -n "$SYSMSG" ]; then
         ok "fail-open emits a systemMessage on stdout (the channel the user sees)"
+        # Content checks nested here on purpose: with no systemMessage there is
+        # nothing to grade, and "daemon"/"restart" still appear elsewhere in
+        # $HOUT (e.g. decision reason fields) -- grading the whole blob is vacuous.
+        if echo "$SYSMSG" | grep -qi 'daemon'; then
+            ok "systemMessage names the daemon as the cause"
+        else
+            bad "systemMessage does not name the daemon"
+        fi
+        if echo "$SYSMSG" | grep -qiE 'restart|doctor'; then
+            ok "systemMessage carries a recovery instruction (restart/doctor)"
+        else
+            bad "systemMessage carries no recovery instruction"
+        fi
     else
         bad "fail-open emitted NO systemMessage on stdout — the warning is invisible (ADR 0073)"
-    fi
-    if echo "$HOUT" | grep -qi 'daemon'; then
-        ok "systemMessage names the daemon as the cause"
-    else
-        bad "systemMessage does not name the daemon"
-    fi
-    if echo "$HOUT" | grep -qiE 'restart|doctor'; then
-        ok "systemMessage carries a recovery instruction (restart/doctor)"
-    else
-        bad "systemMessage carries no recovery instruction"
     fi
 else
     skip "stdout systemMessage checks (daemon_unreachable level is not 'allow'; hook denied instead)"
@@ -175,7 +209,7 @@ fi
 # lesson applies to agent backends too. Assert it, don't assume it.
 drive_hook "--agent=codex"
 if [ "$HRC" = 0 ]; then
-    if echo "$HOUT" | grep -q '"systemMessage"'; then
+    if [ -n "$(extract_system_message "$HOUT")" ]; then
         ok "codex fail-open path also emits a systemMessage"
     else
         bad "codex fail-open path emitted NO systemMessage"
@@ -264,7 +298,7 @@ if [ -e "$SOCK" ] && [ ! -S "$SOCK" ]; then
         *)   bad "hook returned exit $HRC on a stale socket (expected 0 or 2)" ;;
     esac
     if [ "$HRC" = 0 ]; then
-        echo "$HOUT" | grep -q '"systemMessage"' \
+        [ -n "$(extract_system_message "$HOUT")" ] \
             && ok "stale socket also surfaces the fail-open systemMessage" \
             || bad "stale socket failed open SILENTLY (no systemMessage)"
     else
@@ -283,16 +317,23 @@ daemon_start
 if wait_up; then
     ok "daemon restarted and re-created a real socket"
     [ -S "$SOCK" ] && ok "daemon socket is a socket again (stale file replaced)" || bad "daemon socket path is not a socket after restart"
-    # The daemon clears the sentinel on startup so the warning re-arms for the
-    # NEXT outage. Without this the banner would fire at most once, ever.
-    sleep 2
-    [ -f "$SENTINEL" ] && bad "daemon did not clear the fail-open sentinel on startup (warning would not re-arm)" \
-                       || ok "daemon cleared the fail-open sentinel on startup (warning re-armed)"
-    drive_hook
-    if echo "$HOUT" | grep -q 'systemMessage'; then
-        bad "hook still warns after the daemon is back (stuck in fail-open)"
+    # wait_up only proves the process is up and the socket exists; a socket file
+    # is not a serving daemon. Poll until the hook actually stops failing open,
+    # or the next two assertions race the daemon's startup and flake. A fixed
+    # sleep here failed ~1 run in 4 on Darwin. See AGE-236.
+    if chaos_daemon_ready "$HOOK" "$PROJECT"; then
+        # The daemon clears the sentinel on startup so the warning re-arms for
+        # the NEXT outage. Without this the banner would fire at most once, ever.
+        [ -f "$SENTINEL" ] && bad "daemon did not clear the fail-open sentinel on startup (warning would not re-arm)" \
+                           || ok "daemon cleared the fail-open sentinel on startup (warning re-armed)"
+        drive_hook
+        if echo "$HOUT" | grep -q 'systemMessage'; then
+            bad "hook still warns after the daemon is back (stuck in fail-open)"
+        else
+            ok "hook is quiet again after the daemon is back"
+        fi
     else
-        ok "hook is quiet again after the daemon is back"
+        bad "daemon came up but never started serving within 30s (hook still failing open) - box left degraded"
     fi
 else
     bad "daemon did NOT come back within 30s — box left degraded"

@@ -15,6 +15,18 @@
 set -u
 AJ="$HOME/.agentjail/bin/agentjail"
 SOCK="$HOME/.agentjail/daemon.sock"
+HOOK="$HOME/.agentjail/bin/agentjail-hook"
+PROJECT="$HOME/work/demo"
+
+# `set -u` cannot catch a failed source: without the `||` the scenario would run
+# on with chaos_assert_fresh_binaries undefined and still print a PASS tally.
+# That is how the guard shipped inert for its first three runs. See AGE-236.
+CHAOS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chaos-lib.sh"
+# shellcheck source=test/testbed/scenarios/chaos-lib.sh
+. "$CHAOS_LIB" || {
+    echo "ABORT: cannot source $CHAOS_LIB - refusing to run unguarded rather than report results that nothing verified." >&2
+    exit 1
+}
 
 command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout  >/dev/null 2>&1 || timeout(){ shift; "$@"; }
@@ -66,6 +78,12 @@ wait_respawn() {
     return 1
 }
 
+# A socket/exit-0 alone can't distinguish serving from fail-open (fail-open also
+# exits 0), so readiness polls a benign write for the absence of the fail-open
+# markers (ADR 0073) AND a clean exit. Bounded, not skipped: never-ready is a
+# real bad(). Lives in chaos-lib.sh so daemon-outage cannot drift from it.
+daemon_ready() { chaos_daemon_ready "$HOOK" "$PROJECT"; }
+
 restore() { daemon_active || daemon_start; }
 trap restore EXIT INT TERM
 
@@ -81,6 +99,9 @@ case "$OS" in
         skip "unsupported OS '$OS' — no systemd/launchd supervisor to exercise"
         echo "=== RESULT: $PASS pass, $FAIL fail, $SKIP skip ==="; exit 0 ;;
 esac
+# These assertions track HEAD; the binaries under test may not. A stale binary
+# reports fake FAILs against features it predates. See AGE-236, chaos-lib.sh.
+chaos_assert_fresh_binaries "$AJ"
 
 # ===========================================================================
 echo "=== supervisor config pins ADR 0070 (static) ==="
@@ -155,10 +176,12 @@ fi
 echo "=== enforcement is real again, not just 'active' ==="
 # `is-active` was green throughout the 3-day outage. Prove the restarted daemon
 # actually decides, rather than trusting the supervisor's own status word.
-HOOK="$HOME/.agentjail/bin/agentjail-hook"
-PROJECT="$HOME/work/demo"
 if [ -x "$HOOK" ]; then
-    sleep 2
+    if daemon_ready; then
+        ok "daemon serving genuine decisions again before enforcement checks"
+    else
+        bad "daemon never resumed genuine decisions within 30s after restart (still fail-open)"
+    fi
     OUT=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"%s/.ssh/authorized_keys","content":"x"},"session_id":"chaos","cwd":"%s"}' "$HOME" "$PROJECT" \
         | timeout 20 "$HOOK" 2>&1); RC=$?
     if [ "$RC" = 2 ]; then

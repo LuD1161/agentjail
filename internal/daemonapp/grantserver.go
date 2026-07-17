@@ -3,14 +3,22 @@
 // (cmd/agentjail-netproxy/control.go) with a daemon-hosted equivalent: the
 // same request/list/approve/deny lifecycle, backed by grantctl.Registry,
 // but serving a SEPARATE privileged socket (~/.agentjail/run/daemon-ctl.sock)
-// rather than the agent-reachable daemon.sock.
+// rather than daemon.sock.
 //
 // Two sockets, two trust levels:
-//   - daemon.sock (agent-reachable): carries policy eval requests AND now
-//     grant_request submissions (an agent may file a request for itself).
-//   - daemon-ctl.sock (privileged/host-resident only): carries grant_list,
-//     grant_approve, grant_deny -- the human-only decision verbs. The
-//     sandboxed agent cannot reach this socket (see grantctl.ControlSocketPath).
+//   - daemon.sock: carries policy eval requests AND now grant_request
+//     submissions (an agent may file a request for itself).
+//   - daemon-ctl.sock (privileged): carries grant_list, grant_approve,
+//     grant_deny -- the human-only decision verbs.
+//
+// What makes daemon-ctl.sock privileged is the ctlauth control TOKEN gating
+// its verbs, NOT its path (ADR 0067/0069). This comment used to say "the
+// sandboxed agent cannot reach this socket" and cite grantctl -- which says
+// the opposite: "the socket path itself is not a boundary on Linux". A
+// Landlocked agent CAN connect() here (Landlock is an FS-only LSM and does not
+// mediate AF_UNIX connect; ctl_connect=ok on kernel 6.1). It just cannot
+// produce the token, which it cannot read. macOS additionally denies
+// reachability via sbpl, verified by execution (test/sbpl-probe/).
 //
 // Approval is transactional and fail-closed: ClaimGrant marks the pending
 // entry unclaimed-elsewhere, PolicyChangeRequested is emitted BEFORE the

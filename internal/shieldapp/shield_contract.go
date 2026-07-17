@@ -21,7 +21,10 @@ import (
 	"strconv"
 
 	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/mitm"
+	"github.com/LuD1161/agentjail/internal/proxyctl"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 // AccessMode is the access level granted for a PathGrant.
@@ -181,12 +184,14 @@ func AgentjailSecretsProtectedNames() map[string]bool {
 }
 
 // AgentjailReadDeniedNames returns every ~/.agentjail child the sandboxed agent
-// must not be able to READ. shield_linux.go enumerates against this; macOS
-// denies the whole subtree instead (sensitiveReadPaths).
+// must not be able to READ: the secrets set plus the control-plane token, the
+// network DB, and the bodies transcripts. shield_linux.go enumerates against
+// this; macOS denies the whole subtree instead (sensitiveReadPaths).
 //
 // Dropping the token silently disarms control-plane auth — the read denial IS
-// the boundary. See ADR 0067-control-plane-token-auth; separate from
-// AgentjailSecretsProtectedNames per ADR 0048.
+// the boundary (ADR 0067). Kept separate from AgentjailSecretsProtectedNames
+// because that set mirrors uninstall's --keep-secrets preserve list (ADR 0048)
+// and the token must not be preserved.
 //
 // The network store holds decrypted bodies and the agent shares our uid, so
 // 0600 is not a boundary. See ADR 0092-persist-request-bodies (D3).
@@ -373,4 +378,22 @@ func AppendShieldedEnv(env []string, s SandboxState) []string {
 		return env
 	}
 	return append(env, "AGENTJAIL_SHIELDED=1")
+}
+
+// ControlSocketPaths is the OS-agnostic source of truth for every control-plane
+// AF_UNIX socket a sandboxed agent must never reach.
+//
+// darwin translates these into sbpl denies, emitted last. Linux does NOT enforce
+// this by path — Landlock does not mediate AF_UNIX connect(); the control token
+// is the boundary there. Named non-parity, not an omission.
+// See ADR 0067-control-plane-token-auth.
+//
+// Not collapsible to one subpath rule: secrets.sock is at ~/.agentjail/secrets.sock,
+// the other two under ~/.agentjail/run/.
+func ControlSocketPaths(home string) []string {
+	return []string{
+		proxyctl.ControlSocketPathForHome(home),
+		grantctl.ControlSocketPathForHome(home),
+		sandbox.SecretsSocketPathForHome(home),
+	}
 }

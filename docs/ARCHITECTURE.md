@@ -265,10 +265,11 @@ for the end-to-end walkthrough see [`docs/FLOW.md`](./FLOW.md).
 project CWD, read-only to system directories and `$HOME`, and denies everything
 else. Sensitive subdirectories (`~/.ssh`, `~/.aws`, `~/.gnupg`) are never
 allowlisted. `~/.agentjail` -- agentjail's own enforcement state -- is granted
-**read-only**, with a single-file write grant on `~/.agentjail/daemon.sock`
-alone: the sandboxed hook must `connect()` that socket (which on Linux needs
-write access to the socket inode) while `policy.yaml`, the SQLite DB, and
-`trusted.yaml` stay unwritable so the agent cannot disable its own guardrail.
+**read-only**, so `policy.yaml`, the SQLite DB, and `trusted.yaml` stay
+unwritable and the agent cannot disable its own guardrail. The sandboxed hook
+still reaches `daemon.sock` with no write grant of any kind: Landlock is a
+filesystem LSM and does not mediate `AF_UNIX connect()` at all (measured --
+ADR 0067-control-plane-token-auth, addendum 1).
 `~/.agentjail/run/daemon-ctl.sock` (the grant control socket, ADR 0047) is
 deliberately excluded from the write grant -- the agent can file grant requests
 through `daemon.sock` but cannot approve them.

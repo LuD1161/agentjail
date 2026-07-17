@@ -627,7 +627,10 @@ func vetGitGrants(grants []gitGrant, home string) []gitGrant {
 }
 
 // safeGitGrant rejects a gitdir target that would widen access past the git
-// database itself — $HOME, an ancestor of it, the root, or a credential dir.
+// database itself — $HOME, an ancestor of it, the filesystem root, or a
+// credential directory (~/.ssh, ~/.aws, ~/.gnupg). A .git file's contents are
+// attacker-controllable by anything that can write the checkout, so the pointer
+// is treated as untrusted input rather than followed blindly.
 func safeGitGrant(p, home string) bool {
 	if p == "" || p == string(filepath.Separator) {
 		return false
@@ -873,21 +876,6 @@ func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, erro
 			}
 			if err := allowPath(c.path, access); err != nil {
 				fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", c.path, err)
-			}
-		}
-	}
-
-	// SSH agent socket: if SSH_AUTH_SOCK points outside /tmp (e.g.
-	// /run/user/<uid>/... via systemd/gnome-keyring), grant RW on the
-	// socket. Note connect(2) does not depend on this grant -- Landlock
-	// does not mediate AF_UNIX connect() (ADR 0067-control-plane-token-auth).
-	// The env var itself is passed through via EnvAllowlistBaseline.
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if resolved, err := filepath.EvalSymlinks(sock); err == nil {
-			if !strings.HasPrefix(resolved, "/tmp/") && !strings.HasPrefix(resolved, "/tmp") {
-				if err := allowPath(resolved, rwFileAccess); err != nil {
-					fmt.Fprintf(os.Stderr, "agentjail-shield: skip SSH_AUTH_SOCK %s: %v\n", resolved, err)
-				}
 			}
 		}
 	}

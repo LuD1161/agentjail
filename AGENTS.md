@@ -219,16 +219,14 @@ ADR; a human reading the code should not have to scroll past it.
 
 Not the same thing, spread over twelve lines of the file.
 
-- **Hard limit: 3 lines.** Not a guideline. If the comment is longer, the
-  argument belongs in an ADR (or a doc under `docs/`) and the comment becomes a
-  TL;DR plus the slug. No exceptions for "but this one is genuinely subtle" —
-  subtle is exactly what the decision log is for.
 - **Say the constraint, name the file.** A comment earns its place by stating
   something the code cannot show — an ordering constraint, an invariant, a
   platform quirk. Then it stops and cites the slug.
 - **No history, no narration.** Never explain where code came from, what the
   next line does, or why the change is correct. That is PR-review talk and it is
   noise the moment it merges.
+- **If it doesn't fit in ~3 lines, it's an ADR** (or a doc under `docs/`). Write
+  the file, cite the slug. Do not inline the argument.
 - **Cite a slug, not a number** — `ADR 0092-persist-request-bodies (D3)`, or a
   ticket (`AGE-231`) when the decision has no ADR. The reader can open it; you
   do not have to retell it.
