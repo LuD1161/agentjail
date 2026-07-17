@@ -53,6 +53,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/logrotate"
+	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/policyeval"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/store"
@@ -982,6 +983,14 @@ func Run(args []string) int {
 		slog.Info("sqlite event store opened", "db", *dbPath, "retention", *retentionDur)
 	} else {
 		slog.Warn("sqlite event store open failed; continuing without persistence (fail-open on logging)", "db", *dbPath, "err", serr)
+	}
+
+	// One retention window governs both the store and the captured body files.
+	// A sweep failure is non-fatal. See ADR 0092-persist-request-bodies (D2).
+	if n, berr := mitm.SweepBodies(mitm.DefaultBodyDir(), *retentionDur, time.Now()); berr != nil {
+		slog.Warn("body retention sweep failed (non-fatal)", "err", berr, "removed", n)
+	} else if n > 0 {
+		slog.Info("body retention sweep", "removed", n, "retention", *retentionDur)
 	}
 
 	// After the store is wired, so the mode-changed audit event has somewhere to
