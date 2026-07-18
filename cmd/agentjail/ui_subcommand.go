@@ -24,6 +24,7 @@ func runUI(args []string) int {
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
 	insecureBind := false
 	editPolicy := false
+	var trustedHosts []string
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -33,6 +34,11 @@ func runUI(args []string) int {
 			addr = args[i]
 		case len(a) > 7 && a[:7] == "--addr=":
 			addr = a[7:]
+		case a == "--trusted-host" && i+1 < len(args):
+			i++
+			trustedHosts = append(trustedHosts, args[i])
+		case len(a) > 15 && a[:15] == "--trusted-host=":
+			trustedHosts = append(trustedHosts, a[15:])
 		case a == "--log" && i+1 < len(args):
 			i++
 			logPath = args[i]
@@ -71,6 +77,7 @@ func runUI(args []string) int {
 
 	store := ui.NewStore()
 	srv := ui.NewServer(addr, logPath, dbPath, editPolicy, store, buildinfo.Version)
+	srv.SetTrustedHosts(trustedHosts)
 
 	// Graceful shutdown on SIGINT / SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -96,6 +103,8 @@ func printUIUsage() {
 	fmt.Fprintln(os.Stderr, "  --log PATH         path to daemon.log (default: ~/.agentjail/daemon.log)")
 	fmt.Fprintln(os.Stderr, "  --edit-policy      allow policy enable/disable controls (default: read-only)")
 	fmt.Fprintln(os.Stderr, "  --insecure-bind    allow non-loopback bind (no auth/TLS; use with care)")
+	fmt.Fprintln(os.Stderr, "  --trusted-host H   allow this Host/Origin through the rebinding guard (repeatable;")
+	fmt.Fprintln(os.Stderr, "                     for access behind a trusted reverse proxy)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "NOTE: local dev tool only — NOT in the v0.1.0-alpha release")
 }

@@ -63,6 +63,11 @@ type Server struct {
 	editPolicy bool
 	version    string
 
+	// trustedHosts allow-lists non-loopback Host/Origin values for the rebinding
+	// guard. Empty = loopback only (the default). Dev opt-in via `--trusted-host`
+	// for access behind a trusted reverse proxy. See ADR 0092-persist-request-bodies.
+	trustedHosts map[string]bool
+
 	store *Store
 
 	// Cached read-only SQLite connection (lazily opened, shared across requests).
@@ -113,6 +118,21 @@ func NewServer(addr, logPath, dbPath string, editPolicy bool, store *Store, vers
 	}
 }
 
+// SetTrustedHosts allow-lists non-loopback hostnames for the rebinding guard.
+// Startup-only; empty leaves the guard loopback-only. See ADR 0092-persist-request-bodies.
+func (s *Server) SetTrustedHosts(hosts []string) {
+	if len(hosts) == 0 {
+		return
+	}
+	m := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			m[h] = true
+		}
+	}
+	s.trustedHosts = m
+}
+
 // Start registers handlers, launches the log-tail goroutine, and begins
 // serving. It blocks until the server exits.
 func (s *Server) Start(
@@ -156,7 +176,7 @@ func (s *Server) Start(
 
 	srv := &http.Server{
 		Addr:    s.addr,
-		Handler: guardRebinding(mux),
+		Handler: guardRebinding(mux, s.trustedHosts),
 	}
 	return srv.ListenAndServe()
 }
@@ -164,18 +184,42 @@ func (s *Server) Start(
 // guardRebinding rejects any request whose Host or Origin is not loopback.
 // The UI is unauthenticated on loopback, so a DNS rebind would let any page
 // the user visits read this store. See ADR 0092-persist-request-bodies (D1).
-func guardRebinding(next http.Handler) http.Handler {
+func guardRebinding(next http.Handler, trusted map[string]bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !loopbackHost(r.Host) {
+		if !hostAllowed(r.Host, trusted) {
 			http.Error(w, "forbidden: non-loopback Host", http.StatusForbidden)
 			return
 		}
-		if o := r.Header.Get("Origin"); o != "" && !loopbackOrigin(o) {
+		if o := r.Header.Get("Origin"); o != "" && !originAllowed(o, trusted) {
 			http.Error(w, "forbidden: cross-origin request", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hostAllowed passes loopback, or a hostname explicitly trusted via --trusted-host.
+func hostAllowed(host string, trusted map[string]bool) bool {
+	if loopbackHost(host) {
+		return true
+	}
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	return trusted[strings.ToLower(strings.Trim(h, "[]"))]
+}
+
+// originAllowed passes a loopback Origin, or one whose host is trusted.
+func originAllowed(origin string, trusted map[string]bool) bool {
+	if loopbackOrigin(origin) {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	return trusted[strings.ToLower(u.Hostname())]
 }
 
 // loopbackHost reports whether a Host header names a loopback address.
