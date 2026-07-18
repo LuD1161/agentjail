@@ -155,11 +155,10 @@ export function SessionSidebar({
               return (
                 <div
                   key={s.id}
-                  onClick={() => handleSelect(s.id)}
+                  onClick={() => handleSelect(s.id === selectedId ? null : s.id)}
                   className={cn(
                     'cursor-pointer border-b border-[#1c2333] border-l-2 border-l-transparent px-3 py-2.5 transition-colors hover:bg-[#1c2333]',
-                    selected && 'border-l-[#58a6ff] bg-[#1c2333]',
-                    !active && 'opacity-60',
+                    selected && 'border-l-[#58a6ff] bg-[#202b40] hover:bg-[#202b40]',
                   )}
                   title={s.cwd || s.id}
                 >
@@ -185,7 +184,11 @@ export function SessionSidebar({
                         <span
                           className={cn(
                             'truncate text-xs font-semibold',
-                            active ? 'text-[#c9d1d9]' : 'text-[#8b95a1]',
+                            selected
+                              ? 'text-[#e6edf3]'
+                              : active
+                                ? 'text-[#c9d1d9]'
+                                : 'text-[#8b95a1]',
                           )}
                         >
                           {label}
@@ -230,7 +233,7 @@ export function SessionSidebar({
                   </>
                 )}
                 {activeSessions.length > 0 && inactiveSessions.length > 0 && (
-                  <div className="mx-3 my-1 border-t border-[#2a3040]" />
+                  <div className="my-1 border-t border-[#2a3040]" />
                 )}
                 {inactiveSessions.length > 0 && (
                   <>

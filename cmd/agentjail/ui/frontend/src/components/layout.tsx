@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 
 const AgentjailLogo = () => (
@@ -90,13 +90,19 @@ export function Layout({ children, connected = true, status }: LayoutProps) {
       <header className="flex-none border-b border-[#2a3040] px-5 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <AgentjailLogo />
-            <span
-              className="font-bold tracking-wider text-white"
-              style={{ letterSpacing: '0.15em', fontSize: 15 }}
+            <Link
+              to="/"
+              title="Home"
+              className="flex items-center gap-4 transition-opacity hover:opacity-80"
             >
-              AGENTJAIL
-            </span>
+              <AgentjailLogo />
+              <span
+                className="font-bold tracking-wider text-white"
+                style={{ letterSpacing: '0.15em', fontSize: 15 }}
+              >
+                AGENTJAIL
+              </span>
+            </Link>
             <nav className="ml-2 flex items-center gap-0" style={{ marginBottom: -1 }}>
               <NavLink to="/" end className={navTabClass}>
                 Monitor

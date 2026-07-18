@@ -171,7 +171,7 @@ export function DataTable<TData, TValue>({
                 {headerGroup.headers.map((header) => (
                   <TableHead
                     key={header.id}
-                    className="relative h-9 pr-3 text-[#9ca3af]"
+                    className="relative h-11 px-3 text-[#9ca3af]"
                     style={header.getSize() < 10000 ? { width: header.getSize() } : undefined}
                   >
                     {header.isPlaceholder
@@ -219,7 +219,7 @@ export function DataTable<TData, TValue>({
                   {row.getVisibleCells().map((cell) => (
                     <TableCell
                       key={cell.id}
-                      className="py-1.5 overflow-hidden text-ellipsis"
+                      className="py-3 px-3 overflow-hidden text-ellipsis"
                       style={cell.column.getSize() < 10000 ? { width: cell.column.getSize() } : undefined}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}

@@ -63,9 +63,11 @@ const columns: ColumnDef<RequestLog>[] = [
         {row.original.method}
       </span>
     ),
-    size: 65,
-    minSize: 50,
-    maxSize: 100,
+    // Wide enough to show the filter funnel (label + sort chevron + funnel)
+    // after the header's horizontal padding.
+    size: 115,
+    minSize: 100,
+    maxSize: 150,
   },
   {
     accessorKey: 'host',
@@ -246,7 +248,9 @@ export function NetworkPage() {
             pageSize={50}
             getRowId={(row) => row.id}
             selectedRowId={selectedRequestId}
-            onRowClick={(row) => setSelectedRequestId(row.id)}
+            onRowClick={(row) =>
+              setSelectedRequestId((cur) => (cur === row.id ? null : row.id))
+            }
             emptyMessage={
               requestsQuery.data?.unavailable
                 ? 'Network store unavailable -- is agentjail-shield running?'
