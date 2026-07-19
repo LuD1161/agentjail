@@ -1,160 +1,4 @@
-<<<<<<< HEAD
-import Foundation
-import NetworkExtension
-import os.log
-
-private let log = OSLog(subsystem: "com.blinkerlm.agentjail.tunnel", category: "app")
-
-// MARK: - TunnelManager
-
-/// Manages the lifecycle of the AgentJail packet-tunnel VPN configuration.
-///
-/// The host app (or agentjail-shield) calls `activate` / `deactivate` to
-/// start and stop the NEPacketTunnelProvider system extension.  State is
-/// persisted in System Preferences via `NETunnelProviderManager`.
-class TunnelManager {
-
-    /// Bundle identifier of the TunnelExtension target.
-    private static let extensionBundleID = "com.blinkerlm.agentjail.tunnel.extension"
-
-    /// Human-readable name shown in System Settings > VPN.
-    private static let localizedDescription = "AgentJail"
-
-    // MARK: Activate
-
-    /// Loads (or creates) the VPN configuration and starts the tunnel.
-    ///
-    /// - Parameter completion: Called on the main queue with `nil` on success,
-    ///   or an `Error` if loading or starting the tunnel fails.
-    static func activate(completion: @escaping (Error?) -> Void) {
-        NETunnelProviderManager.loadAllFromPreferences { managers, error in
-            if let error = error {
-                os_log("loadAllFromPreferences failed: %{public}@",
-                       log: log, type: .error, error.localizedDescription)
-                DispatchQueue.main.async { completion(error) }
-                return
-            }
-
-            // Find an existing AgentJail configuration or create a new one.
-            let manager = managers?.first(where: { mgr in
-                (mgr.protocolConfiguration as? NETunnelProviderProtocol)?
-                    .providerBundleIdentifier == extensionBundleID
-            }) ?? NETunnelProviderManager()
-
-            // (Re-)configure in case this is the first run.
-            let proto = NETunnelProviderProtocol()
-            proto.providerBundleIdentifier = extensionBundleID
-            proto.serverAddress = "AgentJail"   // cosmetic; actual routing is done in the extension
-            manager.protocolConfiguration = proto
-            manager.localizedDescription = localizedDescription
-            manager.isEnabled = true
-
-            manager.saveToPreferences { saveError in
-                if let saveError = saveError {
-                    os_log("saveToPreferences failed: %{public}@",
-                           log: log, type: .error, saveError.localizedDescription)
-                    DispatchQueue.main.async { completion(saveError) }
-                    return
-                }
-
-                // Reload after save — required before starting the tunnel.
-                manager.loadFromPreferences { loadError in
-                    if let loadError = loadError {
-                        os_log("loadFromPreferences (post-save) failed: %{public}@",
-                               log: log, type: .error, loadError.localizedDescription)
-                        DispatchQueue.main.async { completion(loadError) }
-                        return
-                    }
-
-                    do {
-                        try manager.connection.startVPNTunnel()
-                        os_log("Tunnel start requested", log: log, type: .info)
-                        DispatchQueue.main.async { completion(nil) }
-                    } catch {
-                        os_log("startVPNTunnel failed: %{public}@",
-                               log: log, type: .error, error.localizedDescription)
-                        DispatchQueue.main.async { completion(error) }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: Deactivate
-
-    /// Stops the running tunnel (if any).
-    static func deactivate() {
-        NETunnelProviderManager.loadAllFromPreferences { managers, error in
-            if let error = error {
-                os_log("deactivate – loadAllFromPreferences failed: %{public}@",
-                       log: log, type: .error, error.localizedDescription)
-                return
-            }
-            managers?
-                .filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?
-                    .providerBundleIdentifier == extensionBundleID }
-                .forEach { mgr in
-                    mgr.connection.stopVPNTunnel()
-                    os_log("Tunnel stop requested", log: log, type: .info)
-                }
-        }
-    }
-
-    // MARK: Status observation
-
-    /// Registers a block that fires whenever the tunnel connection status changes.
-    ///
-    /// - Returns: An opaque observer token; retain it for the lifetime of your
-    ///   interest.  Passing it to `NotificationCenter.default.removeObserver`
-    ///   cancels the subscription.
-    @discardableResult
-    static func observeStatus(_ handler: @escaping (NEVPNStatus) -> Void) -> NSObjectProtocol {
-        NotificationCenter.default.addObserver(
-            forName: .NEVPNStatusDidChange,
-            object: nil,
-            queue: .main
-        ) { notification in
-            guard let connection = notification.object as? NEVPNConnection else { return }
-            handler(connection.status)
-        }
-    }
-}
-
-// MARK: - Entry point
-
-// When compiled as a standalone CLI shim (for integration with agentjail-shield),
-// honour two subcommands: "activate" and "deactivate".
-// In a full macOS app the TunnelManager methods would be called by the app delegate
-// in response to UI or IPC events.
-
-let args = CommandLine.arguments
-guard args.count > 1 else {
-    fputs("Usage: agentjail-tunnel <activate|deactivate>\n", stderr)
-    exit(1)
-}
-
-let sema = DispatchSemaphore(value: 0)
-
-switch args[1] {
-case "activate":
-    TunnelManager.activate { error in
-        if let error = error {
-            fputs("Error: \(error.localizedDescription)\n", stderr)
-            exit(1)
-        }
-        print("AgentJail tunnel activated.")
-        sema.signal()
-    }
-    sema.wait()
-
-case "deactivate":
-    TunnelManager.deactivate()
-    print("AgentJail tunnel deactivation requested.")
-
-default:
-    fputs("Unknown command: \(args[1])\n", stderr)
-=======
-// Host app — activates the system extension and saves a transparent-proxy
+// Host app - activates the system extension and saves a transparent-proxy
 // configuration into NETransparentProxyManager.  The extension does the
 // per-process filtering itself by walking each flow's audit-token chain
 // back to `com.blinkerlm.agentjail.app`, so we don't need NEAppRule /
@@ -162,12 +6,12 @@ default:
 // payload).
 //
 // CLI invocation:
-//   AgentjailTunnel install             — activate sysext + save proxy profile
-//   AgentjailTunnel start <wg-conf>     — load WG conf, start proxy
-//   AgentjailTunnel stop                — stop proxy
-//   AgentjailTunnel run -- <cmd> [args] — fork+exec cmd as child of AgentjailTunnel
+//   AgentjailTunnel install             - activate sysext + save proxy profile
+//   AgentjailTunnel start <wg-conf>     - load WG conf, start proxy
+//   AgentjailTunnel stop                - stop proxy
+//   AgentjailTunnel run -- <cmd> [args] - fork+exec cmd as child of AgentjailTunnel
 //                                         so the extension's PPID-walk picks it up
-//   AgentjailTunnel wipe                — remove all proxy configs (cleanup)
+//   AgentjailTunnel wipe                - remove all proxy configs (cleanup)
 import AppKit
 import Darwin
 import Foundation
@@ -204,7 +48,7 @@ case "start":
     guard CommandLine.arguments.count >= 3 else { usage() }
     startProxy(confPath: CommandLine.arguments[2])
 case "stop": stopProxy()
-case "run": runWrapped()    // synchronous; calls exit() -- never reaches runloop
+case "run": runWrapped()    // synchronous; calls exit() - never reaches runloop
 case "wipe": wipeAllConfigs()
 default: usage()
 }
@@ -220,7 +64,7 @@ func runWrapped() {
     let argv = Array(CommandLine.arguments.dropFirst(2)).filter { $0 != "--" }
     if argv.isEmpty { usage() }
 
-    // IPC handshake -- synchronously register our PID with the
+    // IPC handshake - synchronously register our PID with the
     // extension's session listener before posix_spawn'ing the child.
     // The handshake guarantees the ext has the PID in its registry
     // before the child's first flow can fire.
@@ -286,8 +130,8 @@ class ExtDelegate: NSObject, OSSystemExtensionRequestDelegate {
             saveProxyProfileAndExit()
         } else {
             // A non-.completed result means activation will only finish
-            // after a reboot -- surface that so the user knows it's pending.
-            FileHandle.standardError.write(Data("agentjail-macos: system extension activation incomplete (result \(result.rawValue)) -- a reboot may be required\n".utf8))
+            // after a reboot - surface that so the user knows it's pending.
+            FileHandle.standardError.write(Data("agentjail-macos: system extension activation incomplete (result \(result.rawValue)) - a reboot may be required\n".utf8))
             exit(1)
         }
     }
@@ -379,7 +223,7 @@ func startProxy(confPath: String) {
     NETransparentProxyManager.loadAllFromPreferences { managers, err in
         if let err = err { fail("loadAll: \(err)") }
         guard let manager = managers?.first(where: { $0.localizedDescription == proxyProfileName }) else {
-            fail("no proxy profile -- run `AgentjailTunnel install` first")
+            fail("no proxy profile - run `AgentjailTunnel install` first")
         }
         let prevConf: String = (manager.protocolConfiguration as? NETunnelProviderProtocol)?
             .providerConfiguration?["wg-conf"] as? String ?? ""
@@ -398,7 +242,7 @@ func startProxy(confPath: String) {
                     || manager.connection.status == .connecting
                 let confChanged = prevConf != conf
                 if running && confChanged {
-                    // Conf swap while running -- extension parses wg-conf
+                    // Conf swap while running - extension parses wg-conf
                     // once at startProxy.  Force a stop+start so the new
                     // peer key / address takes effect.
                     reloadTunnelAndExit(manager: manager, label: "wg-conf")
@@ -472,6 +316,5 @@ func wipeAllConfigs() {
 
 func fail(_ msg: String) -> Never {
     FileHandle.standardError.write(Data("agentjail-macos: \(msg)\n".utf8))
->>>>>>> e090c3f (feat(macos): rewrite host app for NETransparentProxyProvider)
     exit(1)
 }
