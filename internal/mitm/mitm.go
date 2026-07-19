@@ -90,23 +90,20 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 
 	// Step 2: wrap client conn with TLS server using the host cert.
 	//
-	// NextProtos states what we actually serve. It was unset, so the handshake
-	// settled on HTTP/1.1 by omission: curl quietly downgraded, and clients
-	// that cannot (gRPC, anything pinning h2) just failed. Saying "http/1.1"
-	// out loud is the honest version of the same limitation. ADR 0077 (D4),
-	// AGE-222; serving h2 for real is AGE-223.
+	// NextProtos states what we actually serve, in server-preference order:
+	// h2 first, so a client that offers both gets h2. Go's ALPN pick is
+	// server preference (RFC 7301 §3.2), not first-in-the-client's-list.
+	// ADR 0077 (D4), AGE-222; serving h2 for real is AGE-223.
+	var clientOfferedH2 bool
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{*hostCert},
 		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
-		// GetConfigForClient is the only place the offer is visible. Once we
-		// advertise http/1.1 only, ConnectionState().NegotiatedProtocol can
-		// never report that the client wanted h2 -- it reports what was agreed,
-		// which is always ours.
+		NextProtos:   []string{"h2", "http/1.1"},
+		// GetConfigForClient is the only place the client's raw offer is
+		// visible; ConnectionState().NegotiatedProtocol only reports what was
+		// agreed. Recorded here, checked after Handshake below.
 		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-			if offersH2(hello.SupportedProtos) {
-				h.noteH2Downgrade(host, hello.SupportedProtos)
-			}
+			clientOfferedH2 = offersH2(hello.SupportedProtos)
 			return nil, nil // nil => keep the base config
 		},
 	}
@@ -117,7 +114,16 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	}
 	defer clientTLS.Close()
 
-	// Step 3: dial upstream with real TLS (verify against system roots).
+	negotiated := clientTLS.ConnectionState().NegotiatedProtocol
+	// A client that offered h2 and did NOT get it is the only real downgrade
+	// left: we advertise h2 first, so this means the handshake itself
+	// overrode our preference, not that we chose not to serve it. See
+	// alpn.go and AGE-223.
+	if clientOfferedH2 && negotiated != "h2" {
+		h.noteH2Downgrade(host, []string{"h2"})
+	}
+
+	// Step 3: prepare upstream TLS (verify against system roots).
 	//
 	// ServerName is set even for an IP: Go omits an IP from the SNI extension
 	// itself, and uses ServerName to verify the cert's IP SAN. Clearing it
@@ -130,6 +136,15 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		upstreamTLS = h.UpstreamTLSConfig.Clone()
 		upstreamTLS.ServerName = host
 	}
+
+	// h2 takes over the connection entirely: http2.Server multiplexes streams
+	// and http.Transport dials/pools upstream h2 connections per request, so
+	// there is no single upstream conn to set up here the way h1 needs one.
+	if negotiated == "h2" {
+		h.serveH2(clientTLS, host, target, port, upstreamTLS)
+		return
+	}
+
 	upstream, err := tls.Dial("tcp", target.DialAddr(port), upstreamTLS)
 	if err != nil {
 		h.Logger.Error("upstream TLS dial failed", "host", host, "port", port, "err", err)
