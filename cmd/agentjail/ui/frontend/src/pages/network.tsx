@@ -213,16 +213,15 @@ export function NetworkPage() {
     return m
   }, [allRequests])
 
-  // A network session is "active" if its last row is recent -- the payload
-  // carries no live flag.
-  const activeWindowMs = 120_000
+  // "active" is authoritative from the server: it reflects the owning shield
+  // PID's liveness, so a running-but-network-idle agent stays active. The old
+  // 120s recency window is gone. See ADR 0100-network-active-pid.
   const sessions = React.useMemo(() => {
     const netSessions = sessionsQuery.data?.sessions ?? []
-    const now = Date.now()
     return netSessions
       .map((s) => ({
         id: s.session_id,
-        active: now - new Date(s.last_seen).getTime() < activeWindowMs,
+        active: s.active,
         requestCount: s.request_count,
         networkCount: s.request_count,
         denyCount: denyBySession.get(s.session_id) ?? 0,

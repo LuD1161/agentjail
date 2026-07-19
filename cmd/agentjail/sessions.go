@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/procutil"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -54,14 +54,11 @@ func loadActiveSessionsFromPath(path string) map[string]bool {
 	return m
 }
 
-// isProcessAlive checks if a process with the given PID exists.
+// isProcessAlive checks if a process with the given PID exists. The liveness
+// check is shared with the network UI via procutil.Alive so the two paths
+// cannot drift.
 func isProcessAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return procutil.Alive(pid)
 }
 
 type sessionOutput struct {

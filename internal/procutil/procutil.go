@@ -4,7 +4,11 @@
 // claude, codex, or cursor) by walking up the parent-PID chain.
 package procutil
 
-import "strings"
+import (
+	"os"
+	"strings"
+	"syscall"
+)
 
 // commTruncateLen is the longest comm the kernel will report. Linux caps
 // /proc/<pid>/comm at 15 bytes (TASK_COMM_LEN-1) and Darwin's p_comm is
@@ -48,6 +52,20 @@ func ReadProcessComm(pid int) string {
 // cannot be determined. The implementation is platform-specific.
 func ReadProcessPPID(pid int) int {
 	return readPPID(pid)
+}
+
+// Alive reports whether a process with the given PID currently exists. It
+// sends signal 0, which performs the kernel's permission/existence check
+// without delivering a signal. A non-positive PID is never alive.
+func Alive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 // FindAncestorPID walks up the process tree starting at startPID, calling
