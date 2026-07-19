@@ -186,6 +186,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
             ]
         }
         settings.includedNetworkRules = included
+        settings.dnsSettings = NEDNSSettings(servers: ["10.78.0.1"])
         setTunnelNetworkSettings(settings, completionHandler: completionHandler)
     }
 
@@ -451,8 +452,19 @@ class TransparentProxyProvider: NETransparentProxyProvider {
             }
             for (data, ep) in zip(datagrams!, endpoints ?? []) {
                 guard let host = ep as? NWHostEndpoint,
-                      let port = Int32(host.port),
-                      let ip = self.resolveIPv4(host.hostname) else { continue }
+                      let port = Int32(host.port) else { continue }
+                // DNS rewrite: redirect port-53 queries to the gateway's
+                // DNS-VIP server (10.78.0.1) inside the WireGuard netstack,
+                // instead of tunneling them to the real upstream resolver.
+                // This feeds the dnsvip.Registry so the gateway can map
+                // VIP->hostname for policy evaluation.
+                let ip: String
+                if port == 53 {
+                    ip = "10.78.0.1"
+                } else {
+                    guard let resolved = self.resolveIPv4(host.hostname) else { continue }
+                    ip = resolved
+                }
                 var errBuf = [CChar](repeating: 0, count: 256)
                 let cid = ip.withCString { hostC in
                     errBuf.withUnsafeMutableBufferPointer { ebuf in

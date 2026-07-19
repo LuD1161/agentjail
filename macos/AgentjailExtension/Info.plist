@@ -23,7 +23,7 @@
     <key>NSExtensionPointIdentifier</key>
     <string>com.apple.networkextension.app-proxy</string>
     <key>NSExtensionPrincipalClass</key>
-    <string>$(PRODUCT_MODULE_NAME).TransparentProxyProvider</string>
+    <string>AgentjailExtension.TransparentProxyProvider</string>
   </dict>
   <key>NSSystemExtensionUsageDescription</key>
   <string>Agentjail routes per-process traffic through the gateway.</string>
