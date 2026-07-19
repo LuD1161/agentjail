@@ -46,7 +46,33 @@ h2 + gRPC TUN-interception e2e is green. Docs (Round 5) start only after that.
 - [x] CHANGELOG Unreleased entry (h2/gRPC headline)
 - [ ] Release mechanics (SVG, release notes, tag, agentjail.io) — deferred to the actual release cut
 
-## STATUS: COMPLETELY DONE (automated). Remaining = 1 human step (live agent over tunnel) + release cut.
+## REAL-AGENT VALIDATION — ✅ GREEN (golden-VM gate, 2026-07-19)
+
+`testbed.sh gate --scenario tunnel-agent`: a live Claude Code session builds+commits
+a pelican SVG through `agentjail-shield --tunnel --mitm` in a clean Ubuntu 24.04 VM.
+**9 checks, 0 fail** — tunnel up (no netproxy fallback), artifact produced, **18 reqs /
+5 `/v1/messages` model turns / 252,583 B decrypted response captured**, every
+credential-shaped header `[REDACTED]`. This is the "live agent over tunnel" step
+Round 4 flagged as not-automatable — now a repeatable scenario.
+
+Getting there surfaced **three real bugs that only the installed (symlinked
+multicall) build + a real agent could hit** — invisible to the synthetic IP-dialing
+e2e. All fixed (ADR 0103-shield-reexec-argv0):
+1. **Role dispatch** — the holder/nsenter re-exec used `os.Executable()`, which
+   resolves the `agentjail-shield` symlink to `agentjail` → routed to the CLI → TUN
+   helper never ran → silent netproxy fallback. Fixed: dispatch by argv[0].
+2. **Holder liveness** — `Pdeathsig` fires on the cloning *thread*'s exit; Go retired
+   it mid-session → holder SIGKILLed → `nsenter` "cannot open /proc/PID/ns/user".
+   Fixed: socket-based liveness (holder Reads the handoff socket).
+3. **netns DNS** — systemd-resolved's `127.0.0.53` stub is unreachable inside the
+   netns → agent got ENOTIMP. Fixed: holder bind-mounts a resolver naming the
+   gateway (10.78.0.1).
+
+Also: the tunnel needs unprivileged userns; Ubuntu 23.10+ gates it behind
+`kernel.apparmor_restrict_unprivileged_userns=1` (documented host prerequisite;
+testbed relaxes it in provisioning).
+
+## STATUS: COMPLETELY DONE — automated e2e + real-agent golden-VM gate both green. Remaining = release cut.
 
 ## Round 3 — integration + e2e — ✅ DONE (merged `a2fd26c`)
 Core h2/gRPC interception already passes the real-TUN e2e against the Round-1
