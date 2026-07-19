@@ -9,9 +9,9 @@
   <key>CFBundleIdentifier</key>
   <string>com.blinkerlm.agentjail.app.extension</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.0.1</string>
+  <string>0.0.2</string>
   <key>CFBundlePackageType</key>
   <string>SYSX</string>
   <key>CFBundleExecutable</key>
@@ -32,7 +32,7 @@
     <key>NEProviderClasses</key>
     <dict>
       <key>com.apple.networkextension.app-proxy</key>
-      <string>$(PRODUCT_MODULE_NAME).TransparentProxyProvider</string>
+      <string>AgentjailExtension.TransparentProxyProvider</string>
     </dict>
   </dict>
 </dict>

@@ -77,6 +77,23 @@ plutil -lint "$APP/Contents/Info.plist"
 plutil -lint "$EXT/Contents/Info.plist"
 
 if [ "$NOTARIZE" = "1" ]; then
+    # NetworkExtension is a restricted entitlement: a Developer ID app that
+    # carries it is killed by AMFI (-413 "No matching profile found") on any
+    # clean Mac unless a matching Developer ID provisioning profile is embedded
+    # BEFORE signing. Notarization alone is not sufficient. See ADR
+    # 0086-macos-provisioning-profiles.
+    PROFILE_DIR="${PROFILE_DIR:-$REPO_ROOT/.secrets/profiles}"
+    APP_PROFILE="$PROFILE_DIR/com.blinkerlm.agentjail.app.provisionprofile"
+    EXT_PROFILE="$PROFILE_DIR/$EXT_ID.provisionprofile"
+    for p in "$APP_PROFILE" "$EXT_PROFILE"; do
+        [ -f "$p" ] || { echo "error: provisioning profile missing: $p" >&2
+            echo "  regenerate with scripts/asc-make-profiles (needs .secrets/asc.p8 + ASC_* in .env)" >&2
+            exit 1; }
+    done
+    echo "==> Step 4b: embedding Developer ID provisioning profiles"
+    cp "$APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
+    cp "$EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
+
     echo "==> Step 5: signing inner-to-outer with Developer ID ($IDENTITY)"
     codesign --force --timestamp --options runtime \
         --entitlements macos/AgentjailExtension/AgentjailExtension.entitlements \
