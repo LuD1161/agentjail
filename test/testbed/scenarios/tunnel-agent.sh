@@ -44,7 +44,7 @@ TASK="Create pelican.html in the current directory: a single self-contained HTML
 
 echo "  === running the agent through the tunnel ==="
 RUN_LOG="$WORK/.run.log"
-timeout 900 "$SHIELD" --tunnel -- \
+timeout 900 "$SHIELD" --tunnel --mitm -- \
   claude -p "$TASK" \
   --allowedTools "Write" "Edit" "Bash" "Read" \
   --output-format text \
@@ -55,6 +55,13 @@ tail -6 "$RUN_LOG" | grep -vE "landlock_add_rule|skip /home|denying read" | sed 
 #    h2 MITM path was never exercised (e.g. unprivileged userns blocked).
 if grep -qiE 'falling back to netproxy|tunnel not available' "$RUN_LOG"; then
   scn_fail "transparent tunnel came up (no netproxy fallback)"
+  echo "  --- fallback reason + userns diagnostics ---"
+  grep -iE 'tunnel unavailable|could not create|could not attach|tun-helper' "$RUN_LOG" | sed 's/^/    reason: /'
+  echo "    apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"
+  echo "    unshare -Urn: $(unshare -Urn true 2>&1 && echo OK || echo BLOCKED)"
+  echo "    /dev/net/tun: $(ls -l /dev/net/tun 2>&1)"
+  echo "    newuidmap: $(command -v newuidmap || echo MISSING)  newgidmap: $(command -v newgidmap || echo MISSING)"
+  echo "    /etc/subuid: $(grep "^$USER:" /etc/subuid 2>/dev/null || echo 'no entry')"
 else
   scn_ok "transparent tunnel came up (no netproxy fallback)"
 fi
