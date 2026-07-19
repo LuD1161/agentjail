@@ -46,7 +46,7 @@ type Gateway struct {
 	// stack it accepts SYNs to ANY destination IP (spoofing+promiscuous), so
 	// the agent's real-IP connections are delivered to handleConn instead of
 	// dropped. serveTCP is push-based like fwd; ListenAndServe installs it and
-	// blocks. See ADR 0087-macos-tunnel-promiscuous-gateway and servernetstack.go.
+	// blocks. See ADR 0104-tunnel-promiscuous-gateway and servernetstack.go.
 	serverNS *serverNetstack
 
 	// fwd is non-nil only for a transparent forward gateway
@@ -311,7 +311,7 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 
 	// The promiscuous serverNetstack path is also push-based: serveTCP installs
 	// a tcp.NewForwarder that delivers every accepted connection (to any dest)
-	// straight to handleConn. See ADR 0087-macos-tunnel-promiscuous-gateway.
+	// straight to handleConn. See ADR 0104-tunnel-promiscuous-gateway.
 	if g.serverNS != nil {
 		return g.serveServerNS(ctx)
 	}
@@ -362,7 +362,7 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 // (the macOS NE loopback path). serveTCP installs a TCP forwarder that pushes
 // every accepted conn (to any destination) into g.handleConn on its own
 // goroutine, so like serveForward this simply blocks until ctx is cancelled and
-// then tears the stack down. See ADR 0087-macos-tunnel-promiscuous-gateway.
+// then tears the stack down. See ADR 0104-tunnel-promiscuous-gateway.
 func (g *Gateway) serveServerNS(ctx context.Context) error {
 	g.serverNS.serveTCP(g.handleConn)
 	g.logger.Info("tunnel gateway listening", "addr", g.cfg.TunnelAddr)

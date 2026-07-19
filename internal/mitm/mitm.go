@@ -87,7 +87,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	// dials the REAL IP and `host` here is that raw IP; signing the leaf for the
 	// IP would fail the client's hostname check. Falling back to `host` covers
 	// the SNI-less case (agent dialed by IP) and the DNS-VIP path (host is
-	// already the hostname). See ADR 0088-mitm-sni-cert-selection.
+	// already the hostname). See ADR 0105-mitm-sni-cert.
 	//
 	// NextProtos advertises h2 first, then http/1.1, in server-preference order
 	// (Go picks by server preference, RFC 7301 §3.2), so a client that offers
@@ -129,7 +129,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	// Adopt the SNI as the canonical host for upstream verification, dialing and
 	// logging: it is the real destination name even when `host` arrived as a raw
 	// IP (no VIP mapping). An empty SNI (agent dialed by IP) keeps the original.
-	// See ADR 0088-mitm-sni-cert-selection.
+	// See ADR 0105-mitm-sni-cert.
 	if sni := clientTLS.ConnectionState().ServerName; sni != "" && sni != host {
 		host = sni
 		target = ParseHostTarget(sni)

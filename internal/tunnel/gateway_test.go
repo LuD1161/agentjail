@@ -296,7 +296,7 @@ func TestNewGateway(t *testing.T) {
 	}
 	// NewGateway now backs the WireGuard device with the promiscuous
 	// serverNetstack (accepts SYNs to any destination), not CreateNetTUN's tnet.
-	// See ADR 0087-macos-tunnel-promiscuous-gateway.
+	// See ADR 0104-tunnel-promiscuous-gateway.
 	if gw.serverNS == nil {
 		t.Error("gateway server netstack is nil")
 	}
