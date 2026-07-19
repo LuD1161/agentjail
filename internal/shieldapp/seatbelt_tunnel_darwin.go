@@ -27,7 +27,7 @@ import (
 // sbpl kept its normal port/host restriction here, the agent's SSH/DB/other
 // non-80/443 connection attempts would be denied at the sandbox boundary
 // before they ever reached the kernel's flow-interception point, so the
-// sysext would never see -- and therefore never police -- that traffic.
+// sysext would never see - and therefore never police - that traffic.
 //
 // Unlike the rescue original (dns-blackhole-fix tag), this takes no CA-key
 // path parameter: the tunnel CA is generated in memory (mitm.GenerateCAInMemory)
