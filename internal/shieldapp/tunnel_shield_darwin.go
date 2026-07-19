@@ -318,11 +318,16 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// launches the provider (which binds tunnelSessionSockPath in startProxy).
 	// Poll until the session socket accepts connections, or time out - a
 	// stuck/stale socket must degrade to a bounded error, never a hang.
-	if sockErr := waitForSessionSocket(tunnelSessionSockPath, 15*time.Second, 300*time.Millisecond); sockErr != nil {
+	// 30s, not 15s: when a provider from a prior session is still resident, the
+	// NE stack reloads it (stop -> wait .disconnected -> start) to pick up this
+	// run's fresh WG keys+port, and the session socket is unbound for the whole
+	// reload window (~10s) plus `app start` latency. 15s raced that and fell
+	// back spuriously. See ADR 0089-tunnel-socket-wait.
+	if sockErr := waitForSessionSocket(tunnelSessionSockPath, 30*time.Second, 300*time.Millisecond); sockErr != nil {
 		cleanupGateway()
 		_, _ = exec.Command(appPath, "stop").CombinedOutput()
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "session_socket_timeout")
-		fail("sysext session socket %s not ready in 15s: %v", tunnelSessionSockPath, sockErr)
+		fail("sysext session socket %s not ready in 30s: %v", tunnelSessionSockPath, sockErr)
 		return
 	}
 
