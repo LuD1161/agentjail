@@ -36,6 +36,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -53,6 +54,14 @@ const (
 	// reexecHardenArg marks a re-exec that hardens the process (ApplyHardening)
 	// then execve's the agent. Used by AgentCommand via nsenter.
 	reexecHardenArg = "__agentjail_harden_exec"
+
+	// shieldRoleName is the argv[0] basename the multicall binary dispatches on
+	// to reach the shield role (see cmd/agentjail main.go). A re-exec MUST
+	// present this name; os.Executable() resolves the installed agentjail-shield
+	// SYMLINK to `agentjail`, which routes to the CLI so the TUN helper/harden
+	// shim never runs and the tunnel silently falls back to netproxy.
+	// See ADR 0103-shield-reexec-argv0.
+	shieldRoleName = "agentjail-shield"
 
 	// hardenLandlockFDFlag precedes the fd number of an inherited Landlock
 	// ruleset in the harden shim's args. When present, the shim applies that
@@ -261,6 +270,9 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 		exe = "/proc/self/exe"
 	}
 	cmd := exec.Command(exe, reexecTUNArg, ifName, addrCIDR)
+	// Path (exe) execs the real file; argv[0] drives multicall dispatch. Force
+	// the shield role so the holder reaches runTUNHelper. See shieldRoleName.
+	cmd.Args[0] = shieldRoleName
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{childSock} // => fd 3 in the holder
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -324,11 +336,33 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 // and the shim calls landlock_restrict_self AFTER nsenter, so the agent is
 // FS-sandboxed without breaking namespace entry. Pass -1 to skip Landlock (e.g.
 // unsupported kernel / fail-open).
-func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlockFD int) *exec.Cmd {
+// shieldReexecPath returns a path to this binary whose basename is
+// shieldRoleName, so a re-exec that cannot set argv[0] independently (nsenter
+// execs its target with argv[0]=path) still dispatches back to the shield role.
+// It prefers the invocation path (which keeps the installed agentjail-shield
+// symlink); os.Executable() resolves that symlink to `agentjail` and would
+// misdispatch. The resolved exe is the correct fallback for the standalone
+// agentjail-shield dev binary, whose basename already names the role.
+func shieldReexecPath() string {
+	if a0 := os.Args[0]; filepath.Base(a0) == shieldRoleName {
+		if filepath.IsAbs(a0) {
+			return a0
+		}
+		if p, err := exec.LookPath(a0); err == nil {
+			return p
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		exe = "/proc/self/exe"
+		return "/proc/self/exe"
 	}
+	return exe
+}
+
+func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlockFD int) *exec.Cmd {
+	// nsenter execs `exe` with argv[0]=exe, so exe's basename must name the
+	// shield role for multicall dispatch to reach runHardenExec.
+	exe := shieldReexecPath()
 	args := []string{
 		"--target", strconv.Itoa(ns.pid),
 		"--user", "--preserve-credentials",
