@@ -11,8 +11,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
@@ -196,13 +198,18 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// it feeds the tunnel.extension_started audit detail so a fail-open MITM
 	// step never gets reported as "mitm: true". See AGE-149 T1.5.
 	var mitmActive bool
+	// Order matters: cancel the context first (stops the ListenAndServe
+	// goroutines below), then close the gateway/DNS server, then the CA temp
+	// dir last (nothing after this point still needs it). Delegated to
+	// runCleanupSteps so the ordering is unit-testable without a live
+	// gateway; see tunnel_shield_darwin_test.go. AGE-149 T1.7.
 	cleanupGateway := func() {
-		gwCancel()
-		_ = gateway.Close()
-		_ = dnsServer.Close()
-		if caCleanup != nil {
-			caCleanup()
-		}
+		runCleanupSteps(
+			gwCancel,
+			func() { _ = gateway.Close() },
+			func() { _ = dnsServer.Close() },
+			caCleanup,
+		)
 	}
 
 	go func() {
@@ -309,22 +316,14 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 
 	// --- WAIT FOR PROVIDER: `<app> start` returns before the OS actually
 	// launches the provider (which binds tunnelSessionSockPath in startProxy).
-	// Poll until the session socket accepts connections.
-	regDeadline := time.Now().Add(15 * time.Second)
-	for {
-		c, dialErr := net.DialTimeout("unix", tunnelSessionSockPath, time.Second)
-		if dialErr == nil {
-			c.Close()
-			break
-		}
-		if time.Now().After(regDeadline) {
-			cleanupGateway()
-			_, _ = exec.Command(appPath, "stop").CombinedOutput()
-			emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "session_socket_timeout")
-			fail("sysext session socket %s not ready in 15s: %v", tunnelSessionSockPath, dialErr)
-			return
-		}
-		time.Sleep(300 * time.Millisecond)
+	// Poll until the session socket accepts connections, or time out - a
+	// stuck/stale socket must degrade to a bounded error, never a hang.
+	if sockErr := waitForSessionSocket(tunnelSessionSockPath, 15*time.Second, 300*time.Millisecond); sockErr != nil {
+		cleanupGateway()
+		_, _ = exec.Command(appPath, "stop").CombinedOutput()
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "session_socket_timeout")
+		fail("sysext session socket %s not ready in 15s: %v", tunnelSessionSockPath, sockErr)
+		return
 	}
 
 	logger.Info("NETransparentProxyProvider tunnel active", "port", port)
@@ -377,6 +376,14 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "")
 	}
 
+	// The child is spawned (not exec'd - see doc comment), so it shares this
+	// process's terminal/process group and receives SIGINT/SIGTERM directly.
+	// Without arming a handler, Go's default action would kill THIS process
+	// on the same signal, skipping CLEANUP below (unregister, gateway close,
+	// `<app> stop`, grant revocation) entirely. Mirrors shield_linux.go's
+	// os/exec (non-tunnel) signal handling. See AGE-149 T1.7.
+	stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
+
 	exitCode := 0
 	runErr := child.Start()
 	if runErr == nil {
@@ -396,6 +403,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// defer) keeps the sequencing explicit. Runs because we never
 	// syscall.Exec'd. Best-effort: none of these should mask the agent's own
 	// exit code.
+	stopSignalDrain()
 	_ = tunnelSessionIPC(fmt.Sprintf("unregister %d\n", os.Getpid()))
 	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionUnregistered, sessionID, appPath, mitmActive, "")
 	cleanupGateway()
@@ -404,6 +412,65 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	revokeSecretGrants(activeGrants, ctlToken)
 
 	os.Exit(exitCode)
+}
+
+// runCleanupSteps runs each step in order, skipping nils. Extracted so the
+// shutdown sequence's ORDER (cancel, then close, then close, then the CA temp
+// dir) is unit-testable without a live gateway. See AGE-149 T1.7.
+func runCleanupSteps(steps ...func()) {
+	for _, step := range steps {
+		if step != nil {
+			step()
+		}
+	}
+}
+
+// waitForSessionSocket polls path until a unix listener answers, or returns
+// the last dial error once timeout elapses. A stuck or stale sysext socket
+// must degrade to a bounded error, never a hang. See AGE-149 T1.7.
+func waitForSessionSocket(path string, timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		c, dialErr := net.DialTimeout("unix", path, time.Second)
+		if dialErr == nil {
+			c.Close()
+			return nil
+		}
+		lastErr = dialErr
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		time.Sleep(interval)
+	}
+}
+
+// armSignalDrain intercepts sigs so Go's default (process-killing) action
+// never fires here: the spawned child (see startTunnelDarwin's doc comment on
+// why it is spawned, not exec'd) shares this process's terminal/process group
+// and receives the same signal directly, so this process only needs to
+// survive long enough to run CLEANUP after child.Wait() returns. The returned
+// stop func must be called before the process exits normally (not deferred
+// past os.Exit, which skips defers). Mirrors shield_linux.go's os/exec signal
+// handling for the non-tunnel path. See AGE-149 T1.7.
+func armSignalDrain(sigs ...os.Signal) (stop func()) {
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, sigs...)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-sigCh:
+				// Drain - the child already received it from the TTY.
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(sigCh)
+		close(done)
+	}
 }
 
 // emitTunnelExtensionEvent audits one step of the darwin tunnel's lifecycle
