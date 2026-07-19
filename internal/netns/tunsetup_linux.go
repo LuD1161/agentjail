@@ -37,7 +37,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"syscall"
 
@@ -173,10 +172,16 @@ func runTUNHelper(args []string) {
 		os.Exit(1)
 	}
 
-	// Keep the TUN fd open and block forever so the interface and namespaces
-	// persist for the session. Pdeathsig (set by the parent) kills us if the
-	// shield dies; cleanup also SIGKILLs us via Namespace.Close.
-	select {}
+	// Keep the TUN fd open and block until the shield (holding the other end of
+	// the handoff socket) closes it. A normal Namespace.Close() and an abnormal
+	// shield crash both close that end, so the holder always exits and the kernel
+	// tears the namespaces down. This replaces Pdeathsig, whose thread-lifetime
+	// semantics are unreliable under Go's runtime — the holder was SIGKILLed
+	// mid-session on a slower guest, breaking the follow-on nsenter.
+	// See ADR 0103-shield-reexec-argv0.
+	var b [1]byte
+	_, _ = uc.Read(b[:]) // unblocks on EOF (parent gone) or a stray byte
+	os.Exit(0)
 }
 
 // configureTUNInterface brings up loopback and the TUN device, assigns the
@@ -260,9 +265,13 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	if err != nil {
 		return nil, nil, fmt.Errorf("netns: handoff parent conn: %w", err)
 	}
-	defer parentConn.Close()
+	// parentConn stays open for the namespace lifetime: closing it (in
+	// Namespace.Close, or implicitly when the shield process dies) is what makes
+	// the holder's blocking Read return EOF so it exits. Error paths below close
+	// it explicitly; on success the Namespace owns it.
 	parentUC, ok := parentConn.(*net.UnixConn)
 	if !ok {
+		_ = parentConn.Close()
 		return nil, nil, fmt.Errorf("netns: handoff conn is not unix")
 	}
 
@@ -285,29 +294,14 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 			{ContainerID: 0, HostID: gid, Size: 1},
 		},
 		GidMappingsEnableSetgroups: false,
-		// Tie the holder's lifetime to ours: if the shield dies, the kernel
-		// SIGKILLs the holder, tearing down the namespaces (no leak).
-		Pdeathsig: syscall.SIGKILL,
+		// No Pdeathsig: it fires when the cloning THREAD exits, not the process,
+		// so Go retiring that thread SIGKILLed the holder mid-session (breaking
+		// the follow-on nsenter on a slower guest). Liveness is the handoff
+		// socket instead. See ADR 0103-shield-reexec-argv0.
 	}
 
-	// Fork on a LOCKED OS thread that we keep alive for the holder's lifetime.
-	// Pdeathsig fires when the cloning thread exits, not the process; if Go
-	// retires this thread after Start() returns, the holder is SIGKILLed
-	// mid-session and a later nsenter fails with "cannot open /proc/PID/ns/user"
-	// (seen on a slower guest, not the fast host). See ADR 0103-shield-reexec-argv0.
-	holderDone := make(chan struct{})
-	startErr := make(chan error, 1)
-	go func() {
-		runtime.LockOSThread() // deliberately never unlocked: on return the
-		// runtime destroys this thread; we want it alive until Close().
-		err := cmd.Start()
-		startErr <- err
-		if err != nil {
-			return
-		}
-		<-holderDone
-	}()
-	if err := <-startErr; err != nil {
+	if err := cmd.Start(); err != nil {
+		_ = parentConn.Close()
 		if isClonePermError(err) {
 			return nil, nil, fmt.Errorf(
 				"%w: unprivileged user namespaces disabled "+
@@ -326,15 +320,15 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	// TUN it exits before SendFD, so RecvFD returns an error here.
 	tunFD, err := RecvFD(parentUC)
 	if err != nil {
+		_ = parentConn.Close()
 		_ = cmd.Process.Kill()
-		close(holderDone) // release the locked cloning thread
 		go func() { _ = cmd.Wait() }()
 		return nil, nil, fmt.Errorf("netns: receive tun fd from holder: %w", err)
 	}
 	tun = os.NewFile(uintptr(tunFD), "/dev/net/tun:"+ifName)
 
-	ns = &Namespace{pid: cmd.Process.Pid, holderDone: holderDone}
-	go func() { _ = cmd.Wait() }() // reap when Close SIGKILLs the holder
+	ns = &Namespace{pid: cmd.Process.Pid, holderConn: parentConn}
+	go func() { _ = cmd.Wait() }() // reap after Close() closes the socket / SIGKILLs
 
 	return ns, tun, nil
 }

@@ -24,6 +24,7 @@ package netns
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -49,11 +50,12 @@ type Namespace struct {
 	// pid of the "holder" child that keeps the namespace alive.
 	pid int
 
-	// holderDone, when non-nil, releases the goroutine that forked the holder on
-	// a locked OS thread. Pdeathsig is delivered when the *cloning thread* exits,
-	// so that thread must live as long as the holder (else the holder is SIGKILLed
-	// mid-session). Closed by Close(). See ADR 0103-shield-reexec-argv0.
-	holderDone chan struct{}
+	// holderConn, when non-nil (CreateWithTUN path), is the parent end of the
+	// handoff socket. The holder blocks reading its end; closing this makes that
+	// Read return EOF so the holder exits and tears the namespaces down. This is
+	// the tunnel holder's liveness mechanism (replaces Pdeathsig, which was
+	// thread-lifetime-fragile). See ADR 0103-shield-reexec-argv0.
+	holderConn io.Closer
 
 	// cleanup state
 	mu     sync.Mutex
@@ -283,13 +285,14 @@ func (ns *Namespace) Close() error {
 	if err != nil {
 		return nil // already gone
 	}
-	// SIGKILL the holder -- it is just `sleep infinity`.
-	_ = proc.Signal(syscall.SIGKILL)
-	// Release the locked cloning thread (CreateWithTUN); nil for the sleep-based
-	// Create path.
-	if ns.holderDone != nil {
-		close(ns.holderDone)
+	// Close the handoff socket first (CreateWithTUN path): the holder's blocked
+	// Read returns EOF and it exits cleanly, tearing the namespaces down. The
+	// SIGKILL is then belt-and-suspenders (and the only path for the sleep-based
+	// Create holder, which has no socket).
+	if ns.holderConn != nil {
+		_ = ns.holderConn.Close()
 	}
+	_ = proc.Signal(syscall.SIGKILL)
 	return nil
 }
 
