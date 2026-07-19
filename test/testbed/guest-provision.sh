@@ -37,6 +37,11 @@ if [ "$(uname -s)" = "Linux" ] && ! command -v neofetch >/dev/null 2>&1; then
     sudo apt-get install -y -q neofetch >/dev/null 2>&1 || log "neofetch install failed (non-fatal)"
 fi
 
+# A git identity so a real agent task ("build X and commit it") doesn't stall
+# asking for user.name/user.email inside the sandboxed session.
+git config --global user.name  "Testbed Agent" 2>/dev/null || true
+git config --global user.email "agent@testbed.local" 2>/dev/null || true
+
 # ---- 1. Claude Code ---------------------------------------------------------
 
 if ! command -v claude >/dev/null 2>&1; then
