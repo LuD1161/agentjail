@@ -16,20 +16,30 @@ const TunnelCACertName = "root.crt"
 // bundle and Python's requests uses certifi's, so both ignore
 // /etc/ssl/certs/ca-certificates.crt entirely. A Linux backend that only
 // bind-mounts leaves every Node agent -- Claude Code included -- unable to
-// verify the MITM cert (AGE-113).
+// verify the MITM cert (AGE-113). curl and git shell out to their own TLS
+// stacks too (curl's CLI honors CURL_CA_BUNDLE over SSL_CERT_FILE; git's
+// libcurl-backed HTTPS transport only reads GIT_SSL_CAINFO) -- both are
+// common agent subprocesses (curl in bash tool calls, git in repo tooling),
+// so both need their own var pointed at the bundle (AGE-149).
 //
 // Two paths because the vars differ: bundlePath (system roots + our CA) for the
 // ones that REPLACE the store, certPath (bare CA) for the ones that ADD to it.
 // See AGE-221.
 func TunnelCAEnv(certPath, bundlePath string) map[string]string {
 	return map[string]string{
-		// Go, curl, OpenSSL-linked tools. REPLACES the store.
+		// Go, curl (libcurl default), OpenSSL-linked tools. REPLACES the store.
 		"SSL_CERT_FILE": bundlePath,
 		// Python requests/certifi. REPLACES certifi's bundle.
 		"REQUESTS_CA_BUNDLE": bundlePath,
 		// Node.js. ADDITIVE by Node's own semantics -- it keeps its compiled-in
 		// roots and adds this one, so it takes the bare CA.
 		"NODE_EXTRA_CA_CERTS": certPath,
+		// curl CLI/library: takes precedence over SSL_CERT_FILE when set.
+		// REPLACES the store, so it gets the bundle like SSL_CERT_FILE.
+		"CURL_CA_BUNDLE": bundlePath,
+		// git's HTTPS transport (libcurl-backed): does not honor
+		// SSL_CERT_FILE/CURL_CA_BUNDLE at all, only this var. REPLACES the store.
+		"GIT_SSL_CAINFO": bundlePath,
 	}
 }
 
