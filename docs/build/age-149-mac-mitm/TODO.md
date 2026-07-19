@@ -21,10 +21,22 @@ State: todo | claimed | in-review | done. Manual = needs human/credentials/hardw
 ### Phase 0 - tunnel package prerequisites (OS-agnostic; do first)
 | id | task | acceptance | state | claimant | commit |
 |----|------|------------|-------|----------|--------|
-| T0.1 | Port promiscuous serverNetstack into internal/tunnel | package builds; unit test exercises promiscuous accept | todo | - | - |
-| T0.2 | Zero-listen-port support + Gateway.ListenPort() | config.go accepts ListenPort==0; ListenPort() returns bound port after start; test | todo | - | - |
-| T0.3 | Gateway.DNSPacketConn() bound to netstack | returns usable PacketConn dnsvip.Server serves on; test | todo | - | - |
-| T0.4 | Phase 0 build/vet/test green | GOOS=darwin go build+vet ./internal/tunnel/...; go test ./internal/tunnel/... | todo | - | - |
+| T0.1 | Port promiscuous serverNetstack into internal/tunnel | package builds; unit test exercises promiscuous accept | done | macmitm-8b72ecfc | c88fb26b |
+| T0.2 | Zero-listen-port support + Gateway.ListenPort() | config.go accepts ListenPort==0; ListenPort() returns bound port after start; test | done | macmitm-8b72ecfc | 0919d94c,d4ddecea |
+| T0.3 | Gateway.DNSPacketConn() bound to netstack | returns usable PacketConn dnsvip.Server serves on; test | done | macmitm-8b72ecfc | d4ddecea |
+| T0.4 | Phase 0 build/vet/test green | GOOS=darwin go build+vet ./internal/tunnel/...; go test ./internal/tunnel/... | done | macmitm-8b72ecfc | verified by orchestrator |
+
+**Phase 0 verifier notes (carry into Phase 1):**
+- serverNetstack was added as a STANDALONE unwired primitive; it is NOT spliced into
+  NewGateway (feat/nv still uses netstack.CreateNetTUN). Phase 1 T1.1 must decide whether
+  the darwin NE-loopback path needs the promiscuous stack wired in.
+- DNSPacketConn() is implemented via tnet.ListenUDP (binds the stack's OWN addr:53), not
+  via the promiscuous serverNetstack. RISK: the rescue DNS-VIP path served DNS for VIP
+  destinations; if darwin needs to answer DNS sent to a VIP (not the stack's own addr),
+  this may be insufficient and the promiscuous stack must be wired. Phase 1 must verify
+  DNS-VIP resolution actually works on the darwin path.
+- Pre-existing flaky test (NOT ours): TestChaosPortCollision (fixed port 51845, racy
+  double-bind expectation). Ignore for this build; do not "fix" as part of AGE-149.
 
 ### Phase 1 - darwin MITM orchestration (internal/shieldapp)
 | id | task | acceptance | state | claimant | commit |
