@@ -36,12 +36,28 @@ echo "  network.db watermark before: $BEFORE"
 # One self-contained file, no CDN — the point is the model loop, not the art.
 TASK="Create pelican.html in the current directory: a single self-contained HTML page with an inline SVG drawing of a pelican (no external CDN links, no frameworks). Keep it under 120 lines. Then stage and commit it with git. Report the file you created."
 
+# guest_exec runs non-interactive bash, so the rcfile where provision exported
+# CLAUDE_CODE_OAUTH_TOKEN is never sourced. Load the seeded token here so the
+# real `claude -p` is authenticated.
+[ -f "$HOME/.claude-token" ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-token")"
+[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && scn_ok "Claude token present in scenario env" || scn_fail "Claude token present in scenario env"
+
 echo "  === running the agent through the tunnel ==="
+RUN_LOG="$WORK/.run.log"
 timeout 900 "$SHIELD" --tunnel -- \
   claude -p "$TASK" \
   --allowedTools "Write" "Edit" "Bash" "Read" \
   --output-format text \
-  2>&1 | grep -vE "landlock_add_rule|skip /home|denying read" | tail -6 | sed 's/^/    /'
+  >"$RUN_LOG" 2>&1 || true
+tail -6 "$RUN_LOG" | grep -vE "landlock_add_rule|skip /home|denying read" | sed 's/^/    /'
+
+# 0. The transparent tunnel must actually come up — a netproxy fallback means the
+#    h2 MITM path was never exercised (e.g. unprivileged userns blocked).
+if grep -qiE 'falling back to netproxy|tunnel not available' "$RUN_LOG"; then
+  scn_fail "transparent tunnel came up (no netproxy fallback)"
+else
+  scn_ok "transparent tunnel came up (no netproxy fallback)"
+fi
 
 # 1. The agent actually did the work (proves the session ran, not just started).
 [ -f "$WORK/pelican.html" ] && scn_ok "agent produced pelican.html" || scn_fail "agent produced pelican.html"
