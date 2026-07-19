@@ -78,10 +78,28 @@ State: todo | claimed | in-review | done. Manual = needs human/credentials/hardw
 ### Phase 4 - package + verify
 | id | task | acceptance | state | claimant | commit |
 |----|------|------------|-------|----------|--------|
-| T4.1 | Signed+notarized DMG + CLI app discovery | DMG mounts; CLI finds app at default path / AGENTJAIL_TUNNEL_APP | todo | - | - |
+| T4.1 | DMG packaging script + CLI app discovery | `make macos-dmg` builds + hdiutil-verifies DMG (ad-hoc); CLI discovery already exists (Phase 1a). Notarized DMG = manual (NOTARIZE=1) | done (script) | macmitm-8b72ecfc | a4b83a8c |
+| T4.4 | Darwin smoke script (A8/A11/A12) | test/tunnel-e2e/smoke_darwin.sh; syntax+shellcheck clean; SKIPs cleanly without the extension | done | macmitm-8b72ecfc | 750fdadd |
 | T4.2 | Verify e2e on build Mac | install+approve; agentjail-shield --tunnel -- claude; network.db rows; no DNS black hole | todo (Manual) | - | - |
 | T4.3 | Verify clean-Mac notarized install | non-build Mac: Gatekeeper ok, ext approves, Claude session captured | todo (Manual) | - | - |
-| T4.4 | Darwin smoke script (mirror tunnel-e2e A8/A11/A12) | rerunnable script PASSes on set-up Mac | todo | - | - |
+
+## MANUAL HANDOFF - the loop stops here (needs human / Apple creds / hardware)
+
+All code + build tooling is done and verified locally. The app builds and ad-hoc
+signs. Remaining steps cannot be automated:
+
+1. **Notarize (T3.2/T3.3):** `NOTARIZE=1 APPLE_ID=... TEAM_ID=... APP_PASSWORD=... make macos-app`
+   then `make macos-dmg` (the notarize/staple commands are printed by the scripts).
+   Needs your Developer ID cert + notarytool app-specific password.
+2. **Install + approve (T4.2):** `build/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel install`,
+   then click Allow in System Settings > Login Items & Extensions. Un-automatable dialog.
+3. **Run e2e (T4.2):** `agentjail-shield --tunnel -- claude`, then
+   `bash test/tunnel-e2e/smoke_darwin.sh` - expect A8/A11/A12 to PASS (not SKIP) and
+   rows in `~/.agentjail/network.db`.
+4. **Clean-Mac check (T4.3):** install the notarized DMG on a second Mac, confirm
+   Gatekeeper + approval + capture.
+
+Only after step 3 PASSes: do the prose docs pass (TD.4) per the user's "docs last".
 
 ### Docs / ADR (decision records land WITH their code commit; prose pass last)
 | id | task | acceptance | state | claimant | commit |
