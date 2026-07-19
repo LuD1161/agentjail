@@ -38,6 +38,30 @@ func (h *MITMHandler) serveH2(clientTLS *tls.Conn, host string, target HostTarge
 	srv.ServeConn(clientTLS, &http2.ServeConnOpts{Handler: rh, Context: context.Background()})
 }
 
+// hopByHopHeaders are connection-specific (RFC 9113 §8.2.2 forbids them on
+// h2 entirely). golang.org/x/net/http2 strips Connection and rewrites
+// Transfer-Encoding on the outgoing leg to upstream, but leaves the rest
+// (and never touches the response leg back to the client) for the caller.
+var hopByHopHeaders = []string{
+	"Connection", "Proxy-Connection", "Keep-Alive", "Transfer-Encoding",
+	"TE", "Upgrade", "Trailer",
+}
+
+// stripHopByHop removes hop-by-hop headers in place, including any header
+// named by a Connection field value (RFC 7230 §6.1), so neither the request
+// forwarded upstream nor the response copied to the client carries framing
+// headers that don't mean anything on h2.
+func stripHopByHop(h http.Header) {
+	if conn := h.Get("Connection"); conn != "" {
+		for _, name := range strings.Split(conn, ",") {
+			h.Del(strings.TrimSpace(name))
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		h.Del(name)
+	}
+}
+
 // h2RecordingHandler is the http.Handler http2.Server.ServeConn dispatches
 // each h2 stream to. One instance per CONNECT tunnel; transport is shared so
 // upstream h2 connections are reused across streams on the same tunnel.
@@ -184,10 +208,8 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		sink = io.MultiWriter(counter, respCapture)
 	}
 
+	stripHopByHop(resp.Header)
 	for k, vs := range resp.Header {
-		if k == "Trailer" {
-			continue // re-declared below from resp.Trailer, once its names are known
-		}
 		w.Header()[k] = vs
 	}
 	// Pre-declare trailer field names so the h2 responseWriter accepts values
@@ -254,6 +276,7 @@ func (rh *h2RecordingHandler) buildUpstreamRequest(r *http.Request) (*http.Reque
 	}
 	outReq.Host = rh.host
 	outReq.Header = r.Header.Clone()
+	stripHopByHop(outReq.Header)
 	outReq.ContentLength = r.ContentLength
 	outReq.Trailer = r.Trailer.Clone()
 	return outReq, nil
