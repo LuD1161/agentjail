@@ -27,6 +27,14 @@ func (h *MITMHandler) serveH2(clientTLS *tls.Conn, host string, target HostTarge
 	// dial: same host verification, same target normalization (AGE-220), but
 	// negotiated over ALPN so an upstream that cannot do h2 is served h1
 	// transparently by the transport itself.
+	//
+	// One Transport per tunnel, not per stream or process-global: h2 streams
+	// on the same tunnel share dialAddr, so pooling here (the Transport's own
+	// h2 conn pool) gets connection reuse across streams for free. Scoping it
+	// to the tunnel means CloseIdleConnections on return actually tears the
+	// pool down instead of leaking it into a shared pool that outlives the
+	// session -- srv.ServeConn blocks until the client conn closes, so the
+	// defer fires exactly once, when this tunnel is really done.
 	transport := &http.Transport{
 		TLSClientConfig:   upstreamTLS,
 		ForceAttemptHTTP2: true,
