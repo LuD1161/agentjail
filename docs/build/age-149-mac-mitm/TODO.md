@@ -71,7 +71,7 @@ State: todo | claimed | in-review | done. Manual = needs human/credentials/hardw
 ### Phase 3 - build + sign + notarize
 | id | task | acceptance | state | claimant | commit |
 |----|------|------------|-------|----------|--------|
-| T3.1 | Restore scripts/build-macos-app.sh + Makefile tunnel-lib | one cmd builds libagentjail_tunnel.a + extension + host app + locally-signed .app (NOTARIZE=0) | todo | - | - |
+| T3.1 | Restore scripts/build-macos-app.sh + Makefile tunnel-lib | `make macos-app` builds .app ad-hoc-signed; codesign valid; plutil OK; verified by orchestrator | done | macmitm-8b72ecfc | dd431cf9,4befb097 |
 | T3.2 | Sign extension+app (Developer ID + entitlements + profile) | codesign -d --entitlements :- ok; systemextensionsctl list; bundle IDs match profile | todo (Manual) | - | - |
 | T3.3 | Notarize + staple | xcrun notarytool log clean; spctl -a -vvv accepts | todo (Manual) | - | - |
 
