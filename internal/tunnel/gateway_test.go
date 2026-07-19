@@ -109,11 +109,19 @@ func TestConfigValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid listen port zero", func(t *testing.T) {
+	t.Run("listen port zero is OS-assigned, not invalid", func(t *testing.T) {
 		cfg := valid
 		cfg.ListenPort = 0
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error for port 0 (OS-assigned), got: %v", err)
+		}
+	})
+
+	t.Run("invalid listen port negative", func(t *testing.T) {
+		cfg := valid
+		cfg.ListenPort = -1
 		if err := cfg.Validate(); err == nil {
-			t.Error("expected error for port 0")
+			t.Error("expected error for negative port")
 		}
 	})
 
@@ -264,19 +272,18 @@ func TestNewGateway(t *testing.T) {
 
 	cfg := Config{
 		PrivateKey:    gwPriv,
-		ListenPort:    0, // invalid on purpose
+		ListenPort:    51821,
 		PeerPublicKey: peerPub,
 		TunnelAddr:    "10.78.0.1/16",
 	}
 
-	// Should fail validation (port 0).
-	_, err = NewGateway(cfg, reg, nil)
+	// Should fail validation: TunnelAddr is required.
+	badCfg := cfg
+	badCfg.TunnelAddr = ""
+	_, err = NewGateway(badCfg, reg, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid config")
 	}
-
-	// Use a valid ephemeral port.
-	cfg.ListenPort = 51821
 
 	gw, err := NewGateway(cfg, reg, nil)
 	if err != nil {
@@ -289,6 +296,95 @@ func TestNewGateway(t *testing.T) {
 	}
 	if gw.tnet == nil {
 		t.Error("gateway netstack is nil")
+	}
+}
+
+// TestNewGateway_ZeroListenPort is the T0.2 acceptance test: ListenPort:0
+// (OS-assigned) must construct successfully, and ListenPort() must read back
+// the actual bound UDP port from the WireGuard device instead of echoing 0.
+func TestNewGateway_ZeroListenPort(t *testing.T) {
+	gwPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (gw): %v", err)
+	}
+	_, peerPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (peer): %v", err)
+	}
+
+	reg := dnsvip.NewRegistry()
+	cfg := Config{
+		PrivateKey:    gwPriv,
+		ListenPort:    0, // OS-assigned
+		PeerPublicKey: peerPub,
+		TunnelAddr:    "10.78.0.1/16",
+	}
+
+	gw, err := NewGateway(cfg, reg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway with ListenPort:0: %v", err)
+	}
+	defer gw.Close()
+
+	port := gw.ListenPort()
+	if port == 0 {
+		t.Fatal("ListenPort() = 0, want the actual OS-assigned bound port")
+	}
+	if port < 1 || port > 65535 {
+		t.Fatalf("ListenPort() = %d, out of valid UDP port range", port)
+	}
+}
+
+// TestGateway_DNSPacketConn is the T0.3 acceptance test: DNSPacketConn must
+// return a usable net.PacketConn bound inside the gateway's netstack, on the
+// gateway's own tunnel address, port 53 — the address a host socket cannot
+// bind (it's inside the VIP range, not owned by the host kernel).
+func TestGateway_DNSPacketConn(t *testing.T) {
+	gwPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (gw): %v", err)
+	}
+	_, peerPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (peer): %v", err)
+	}
+
+	reg := dnsvip.NewRegistry()
+	cfg := Config{
+		PrivateKey:    gwPriv,
+		ListenPort:    51822,
+		PeerPublicKey: peerPub,
+		TunnelAddr:    "10.78.0.1/16",
+	}
+
+	gw, err := NewGateway(cfg, reg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	defer gw.Close()
+
+	pc := gw.DNSPacketConn()
+	if pc == nil {
+		t.Fatal("DNSPacketConn() = nil, want a bound net.PacketConn")
+	}
+	if pc.LocalAddr() == nil {
+		t.Fatal("DNSPacketConn().LocalAddr() is nil")
+	}
+
+	want := "10.78.0.1:53"
+	if got := pc.LocalAddr().String(); got != want {
+		t.Errorf("DNSPacketConn().LocalAddr() = %q, want %q", got, want)
+	}
+
+	// A forward gateway has no tnet-backed netstack, so DNSPacketConn is nil
+	// there (DNS is answered via forwardStack's own dnsResolve callback).
+	fwdGw, err := NewForwardGateway(Config{MTU: 1420}, dnsvip.NewRegistry(), nil)
+	if err != nil {
+		t.Fatalf("NewForwardGateway: %v", err)
+	}
+	defer fwdGw.Close()
+	if got := fwdGw.DNSPacketConn(); got != nil {
+		t.Errorf("forward gateway DNSPacketConn() = %v, want nil", got)
 	}
 }
 
