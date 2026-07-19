@@ -76,38 +76,44 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	target := ParseHostTarget(host)
 	host = target.Host
 
-	// Step 1: get or generate a host cert signed by the CA.
-	hostCert := h.certCache.get(host)
-	if hostCert == nil {
-		var err error
-		hostCert, err = SignHostCert(h.CACert, h.CAKey, host)
-		if err != nil {
-			h.Logger.Error("sign host cert failed", "host", host, "err", err)
-			return
-		}
-		h.certCache.put(host, hostCert)
-	}
-
-	// Step 2: wrap client conn with TLS server using the host cert.
+	// Step 1+2: serve a leaf cert matching the client's SNI and complete the
+	// TLS handshake.
 	//
-	// NextProtos states what we actually serve. It was unset, so the handshake
-	// settled on HTTP/1.1 by omission: curl quietly downgraded, and clients
-	// that cannot (gRPC, anything pinning h2) just failed. Saying "http/1.1"
-	// out loud is the honest version of the same limitation. ADR 0077 (D4),
-	// AGE-222; serving h2 for real is AGE-223.
+	// The leaf name is chosen from the ClientHello's SNI, not the caller's
+	// `host`. SNI is the name the client actually verifies the cert against and
+	// is present whenever the agent connects by hostname — even when the agent's
+	// DNS did NOT go through the tunnel. On macOS the system resolver runs
+	// out-of-band (a different process than the sandboxed agent), so the agent
+	// dials the REAL IP and `host` here is that raw IP; signing the leaf for the
+	// IP would fail the client's hostname check. Falling back to `host` covers
+	// the SNI-less case (agent dialed by IP) and the DNS-VIP path (host is
+	// already the hostname). See ADR 0088-mitm-sni-cert-selection.
+	//
+	// NextProtos advertises http/1.1 only: we serve HTTP/1.1, so saying so is
+	// the honest form of the same limitation (ADR 0077 D4, AGE-222). offersH2 is
+	// noticed here — the ClientHello is the only place the client's real offer
+	// is visible once we pin http/1.1.
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{*hostCert},
-		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
-		// GetConfigForClient is the only place the offer is visible. Once we
-		// advertise http/1.1 only, ConnectionState().NegotiatedProtocol can
-		// never report that the client wanted h2 -- it reports what was agreed,
-		// which is always ours.
-		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-			if offersH2(hello.SupportedProtos) {
-				h.noteH2Downgrade(host, hello.SupportedProtos)
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"},
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			name := host
+			if hello.ServerName != "" {
+				name = hello.ServerName
 			}
-			return nil, nil // nil => keep the base config
+			if offersH2(hello.SupportedProtos) {
+				h.noteH2Downgrade(name, hello.SupportedProtos)
+			}
+			if cert := h.certCache.get(name); cert != nil {
+				return cert, nil
+			}
+			cert, err := SignHostCert(h.CACert, h.CAKey, name)
+			if err != nil {
+				h.Logger.Error("sign host cert failed", "host", name, "err", err)
+				return nil, err
+			}
+			h.certCache.put(name, cert)
+			return cert, nil
 		},
 	}
 	clientTLS := tls.Server(clientConn, tlsConfig)
@@ -116,6 +122,15 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		return
 	}
 	defer clientTLS.Close()
+
+	// Adopt the SNI as the canonical host for upstream verification, dialing and
+	// logging: it is the real destination name even when `host` arrived as a raw
+	// IP (no VIP mapping). An empty SNI (agent dialed by IP) keeps the original.
+	// See ADR 0088-mitm-sni-cert-selection.
+	if sni := clientTLS.ConnectionState().ServerName; sni != "" && sni != host {
+		host = sni
+		target = ParseHostTarget(sni)
+	}
 
 	// Step 3: dial upstream with real TLS (verify against system roots).
 	//
