@@ -2,6 +2,28 @@
 
 Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## Unreleased (network-visibility)
+
+#### TL;DR
+
+- **HTTP/2 and gRPC through the tunnel** (Linux): the transparent-tunnel MITM now negotiates ALPN and serves `h2` for real, so gRPC and h2-only clients work — not just HTTP/1.1. gRPC status/trailers are preserved and client-streaming RPCs no longer stall.
+- **Network visibility UI**: a Network tab with per-session request timelines, column filters, and a body viewer, driven by an on-disk capture store.
+
+### Added
+
+- **HTTP/2 in the tunnel MITM** (ADR 0102): advertises `h2, http/1.1`, serves h2 via `http2.Server.ServeConn` with an `http2.Transport` upstream, full parity with the HTTP/1.1 path (body capture, policy/deny, recording). gRPC unary works with `grpc-status` through trailers; hop-by-hop headers are stripped on both legs. Proven end-to-end over the real TUN.
+- Streaming/bidi h2 request bodies are forwarded without pre-draining, so a long-lived stream never deadlocks; host/path/method policy still applies (body-content scan is bounded-body only — ADR 0102).
+- **Encrypted body capture** with keychain/file KEK tiers so `doctor` never overstates protection (ADR 0095/0097).
+- **`agentjail ui --trusted-host`**: reach the local UI behind a same-host reverse proxy without disabling the anti-rebinding guard (ADR 0099).
+- **`agentjail-daemon --retention-interval`**: retention + WAL checkpoint re-run periodically, not just at startup (ADR 0101).
+- Network session "active" state reflects the owning shield PID's liveness, matching `agentjail sessions list --active` (ADR 0100).
+
+### Fixed
+
+- Dev builds (`make dev-deploy`/`dev-install`) reported version `dev` — the `-ldflags` targeted a nonexistent `main.version` instead of `internal/buildinfo.Version` (AGE-247).
+- Retention enforced its window only once at daemon startup, so a long-lived daemon's DB grew unbounded (AGE-225).
+- h2 request trailers were dropped on streamed bodies (`.Clone()` froze an all-nil map before net/http2 filled it).
+
 ## v0.9.0 - 2026-07-16
 
 #### TL;DR

@@ -532,6 +532,16 @@ prints which posture it is in
 ✓ transparent tunnel active (userns) · TLS interception ON — decrypting this agent's HTTPS
 ```
 
+**Speaks HTTP/1.1 and HTTP/2.** The interceptor advertises `h2, http/1.1` over
+ALPN and serves the agent over whichever it negotiates — so h2-only clients
+(gRPC, and runtimes that pin h2) work, not just HTTP/1.1. gRPC calls are
+decrypted and policy-evaluated like any other request, with status codes and
+trailers (`grpc-status`) preserved end to end. Streaming and bidirectional RPCs
+are forwarded without buffering the body, so a long-lived stream never stalls;
+body-content policy applies to bounded request bodies, while host/path/method
+policy applies to everything including streams
+([ADR 0102](./docs/adr/0102-mitm-serves-h2.md)).
+
 To keep the tunnel but relay TLS opaquely — for cert-pinned endpoints, or if you
 will not accept decryption — use `--no-mitm`, or set `network.tunnel_mitm: false`
 in `policy.yaml` for a standing opt-out. The trade is real: without interception
