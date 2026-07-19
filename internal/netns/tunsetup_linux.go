@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 
@@ -289,7 +290,24 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 		Pdeathsig: syscall.SIGKILL,
 	}
 
-	if err := cmd.Start(); err != nil {
+	// Fork on a LOCKED OS thread that we keep alive for the holder's lifetime.
+	// Pdeathsig fires when the cloning thread exits, not the process; if Go
+	// retires this thread after Start() returns, the holder is SIGKILLed
+	// mid-session and a later nsenter fails with "cannot open /proc/PID/ns/user"
+	// (seen on a slower guest, not the fast host). See ADR 0103-shield-reexec-argv0.
+	holderDone := make(chan struct{})
+	startErr := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread() // deliberately never unlocked: on return the
+		// runtime destroys this thread; we want it alive until Close().
+		err := cmd.Start()
+		startErr <- err
+		if err != nil {
+			return
+		}
+		<-holderDone
+	}()
+	if err := <-startErr; err != nil {
 		if isClonePermError(err) {
 			return nil, nil, fmt.Errorf(
 				"%w: unprivileged user namespaces disabled "+
@@ -309,12 +327,13 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	tunFD, err := RecvFD(parentUC)
 	if err != nil {
 		_ = cmd.Process.Kill()
+		close(holderDone) // release the locked cloning thread
 		go func() { _ = cmd.Wait() }()
 		return nil, nil, fmt.Errorf("netns: receive tun fd from holder: %w", err)
 	}
 	tun = os.NewFile(uintptr(tunFD), "/dev/net/tun:"+ifName)
 
-	ns = &Namespace{pid: cmd.Process.Pid}
+	ns = &Namespace{pid: cmd.Process.Pid, holderDone: holderDone}
 	go func() { _ = cmd.Wait() }() // reap when Close SIGKILLs the holder
 
 	return ns, tun, nil

@@ -49,6 +49,12 @@ type Namespace struct {
 	// pid of the "holder" child that keeps the namespace alive.
 	pid int
 
+	// holderDone, when non-nil, releases the goroutine that forked the holder on
+	// a locked OS thread. Pdeathsig is delivered when the *cloning thread* exits,
+	// so that thread must live as long as the holder (else the holder is SIGKILLed
+	// mid-session). Closed by Close(). See ADR 0103-shield-reexec-argv0.
+	holderDone chan struct{}
+
 	// cleanup state
 	mu     sync.Mutex
 	closed bool
@@ -279,6 +285,11 @@ func (ns *Namespace) Close() error {
 	}
 	// SIGKILL the holder -- it is just `sleep infinity`.
 	_ = proc.Signal(syscall.SIGKILL)
+	// Release the locked cloning thread (CreateWithTUN); nil for the sleep-based
+	// Create path.
+	if ns.holderDone != nil {
+		close(ns.holderDone)
+	}
 	return nil
 }
 
