@@ -58,7 +58,7 @@ func classifyKeyErr(err error) keyState {
 }
 
 // cause states what is actually true of this host's keychain, and advice says
-// what the user can do about it -- different per state. See AGE-254.
+// what the user can do about it - different per state. See AGE-254.
 func (s keyState) cause() string {
 	switch s {
 	case keysLocked:
