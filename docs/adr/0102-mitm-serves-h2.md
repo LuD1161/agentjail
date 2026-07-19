@@ -73,3 +73,35 @@ check against `NegotiatedProtocol` happens after `Handshake()` returns.
   directly and did not need to change — only the caller moved. New tests in
   `internal/mitm/h2_test.go` cover the h2 round trip, the "no downgrade notice
   for an honored h2 offer" case, and h2 policy deny.
+
+## Streaming request bodies are not scanned for policy (AGE-223 follow-up)
+
+`h2RecordingHandler.ServeHTTP`'s original body-buffering step
+(`io.ReadAll(io.LimitReader(r.Body, maxBodyScan+1))`) assumed every request
+body ends on its own. A unary request does — the client sends `END_STREAM`
+right after its one DATA frame — but a client-streaming or bidirectional RPC
+keeps the request stream open while it waits on a response, so `r.Body` never
+reaches EOF and that `ReadAll` blocks forever. The request never reaches
+upstream: a deadlock, not a slow scan.
+
+**Decision:** `isStreamingRequest` (`internal/mitm/h2.go`) detects a request
+that might not end on its own — `Content-Type` starting with
+`application/grpc` (gRPC is always potentially streaming, unary included, so
+every gRPC request is treated this way regardless of `Content-Length`), or
+`r.ContentLength < 0` (no bounded length declared at all). For those, the
+handler never buffers the body: it streams `r.Body` straight through the
+existing tee-capture path (the same mechanism the `>maxBodyScan` case already
+used) and calls `netpolicy.RecognizeHTTP` with a nil body slice, so
+header/method/path-keyed policy (including deny) still evaluates and still
+fires. A bounded body (`ContentLength >= 0`, `<= maxBodyScan`) keeps the
+original pre-read-for-policy behavior unchanged.
+
+**Consequence — stated non-coverage:** body-*content* policy (a template
+matching on request body bytes) does not apply to a streaming request. This
+is deliberate: the alternative is buffering an unbounded stream to scan it,
+which is exactly the deadlock above with a size cap instead of none. No
+deadlock beats a full body scan on a body that may never end. The body is
+still captured to disk via the tee path (so it shows up in `network.db` after
+the fact) — only the synchronous policy-eval-before-forward step is skipped.
+See `internal/mitm/h2_streaming_test.go` (`TestH2StreamingRequestDoesNotDeadlock`,
+`TestH2StreamingRequestHeaderPolicyDenyStillFires`).

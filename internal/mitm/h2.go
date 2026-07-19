@@ -46,6 +46,28 @@ func (h *MITMHandler) serveH2(clientTLS *tls.Conn, host string, target HostTarge
 	srv.ServeConn(clientTLS, &http2.ServeConnOpts{Handler: rh, Context: context.Background()})
 }
 
+// isStreamingRequest reports whether the request body may stay open past
+// the point a unary request would already have hit EOF, so pre-draining it
+// with io.ReadAll would risk blocking forever: a client-streaming/bidi RPC
+// keeps sending, or waits on a response, before it half-closes. Two signals,
+// either sufficient on its own:
+//
+//   - Content-Type starts with "application/grpc": gRPC is always
+//     potentially streaming (client-streaming and bidi use the same framing
+//     as unary), so treat every gRPC request this way regardless of
+//     Content-Length.
+//   - r.ContentLength < 0: the client did not declare a bounded length, so
+//     there is no way to know the body will ever end on its own.
+//
+// Body-content policy is not evaluated for these; header/method/path policy
+// still runs. See ADR 0102-mitm-serves-h2 (AGE-223).
+func isStreamingRequest(r *http.Request) bool {
+	if ct := r.Header.Get("Content-Type"); strings.HasPrefix(ct, "application/grpc") {
+		return true
+	}
+	return r.ContentLength < 0
+}
+
 // hopByHopHeaders are connection-specific (RFC 9113 §8.2.2 forbids them on
 // h2 entirely). golang.org/x/net/http2 strips Connection and rewrites
 // Transfer-Encoding on the outgoing leg to upstream, but leaves the rest
@@ -104,37 +126,53 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Buffer request body for policy evaluation (up to maxBodyScan), exactly
 	// like the h1 loop. h2 has no Expect:100-continue wrinkle: net/http2
 	// answers interim responses itself before the handler runs.
+	//
+	// Streaming requests (see isStreamingRequest) are the exception: a
+	// client-streaming/bidi caller holds the request stream open until it
+	// has seen a response, so io.ReadAll on r.Body would block forever and
+	// the request would never reach upstream. Never pre-drain those; stream
+	// them upstream through the tee-capture path with an empty body slice
+	// for policy instead. See ADR 0102-mitm-serves-h2 (AGE-223).
 	var bodyBuf []byte
 	var fullBody io.Reader
 	var bodyCount *countingReader
 	if r.Body != nil {
-		limited := io.LimitReader(r.Body, maxBodyScan+1)
-		var err error
-		bodyBuf, err = io.ReadAll(limited)
-		if err != nil {
-			reqLog.Error = fmt.Sprintf("read request body: %v", err)
-			reqLog.ElapsedMs = time.Since(start).Milliseconds()
-			w.WriteHeader(http.StatusBadGateway)
-			emitLog()
-			return
-		}
 		reqCapture = h.startCapture(SideRequest, r.Header.Get("Content-Encoding"))
-		reqLog.RequestSize = int64(len(bodyBuf))
-		if len(bodyBuf) > maxBodyScan {
-			// Body exceeds scan cap: chain the buffered portion with the
-			// remaining stream, same as h1.
-			var src io.Reader = io.MultiReader(bytes.NewReader(bodyBuf), r.Body)
+		if isStreamingRequest(r) {
+			var src io.Reader = r.Body
 			if reqCapture != nil {
 				src = io.TeeReader(src, reqCapture)
 			}
 			bodyCount = &countingReader{r: src}
 			fullBody = bodyCount
-			bodyBuf = bodyBuf[:maxBodyScan]
 		} else {
-			if reqCapture != nil {
-				_, _ = reqCapture.Write(bodyBuf)
+			limited := io.LimitReader(r.Body, maxBodyScan+1)
+			var err error
+			bodyBuf, err = io.ReadAll(limited)
+			if err != nil {
+				reqLog.Error = fmt.Sprintf("read request body: %v", err)
+				reqLog.ElapsedMs = time.Since(start).Milliseconds()
+				w.WriteHeader(http.StatusBadGateway)
+				emitLog()
+				return
 			}
-			fullBody = bytes.NewReader(bodyBuf)
+			reqLog.RequestSize = int64(len(bodyBuf))
+			if len(bodyBuf) > maxBodyScan {
+				// Body exceeds scan cap: chain the buffered portion with the
+				// remaining stream, same as h1.
+				var src io.Reader = io.MultiReader(bytes.NewReader(bodyBuf), r.Body)
+				if reqCapture != nil {
+					src = io.TeeReader(src, reqCapture)
+				}
+				bodyCount = &countingReader{r: src}
+				fullBody = bodyCount
+				bodyBuf = bodyBuf[:maxBodyScan]
+			} else {
+				if reqCapture != nil {
+					_, _ = reqCapture.Write(bodyBuf)
+				}
+				fullBody = bytes.NewReader(bodyBuf)
+			}
 		}
 	}
 
