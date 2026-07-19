@@ -46,7 +46,7 @@ VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || t
 echo "==> building 5 binaries from $REPO_ROOT (version: ${VERSION:-unset})"
 mkdir -p "$SRC"
 for b in $ALL_BINARIES; do
-	go build -ldflags="-X main.version=$VERSION -s -w" -o "$SRC/$b" "$REPO_ROOT/cmd/$b"
+	go build -ldflags="-X github.com/LuD1161/agentjail/internal/buildinfo.Version=$VERSION -s -w" -o "$SRC/$b" "$REPO_ROOT/cmd/$b"
 	echo "    built $b"
 done
 

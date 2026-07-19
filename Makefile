@@ -2,6 +2,13 @@
 
 BIN ?= bin/agentjail
 
+# Single source of truth for the version stamped into every binary. The symbol
+# path MUST match internal/buildinfo.Version — a wrong path is a silent no-op
+# (the linker ignores -X against a missing symbol). See AGE-247. dist-tarball
+# stamps the same symbol via DIST_VERSION.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X github.com/LuD1161/agentjail/internal/buildinfo.Version=$(VERSION)
+
 ## help        : list available targets
 help:
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -9,7 +16,7 @@ help:
 build: $(BIN)  ## build the laptop binary
 
 $(BIN):
-	go build -o $(BIN) ./cmd/agentjail
+	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/agentjail
 
 INSTALL_DIR ?= $(HOME)/.agentjail/bin
 # Only the 2 real binaries are ever copied into INSTALL_DIR as files. The
@@ -54,7 +61,7 @@ dev-deploy:  ## build all 5 binaries from the working tree + hot-swap the local 
 	./scripts/dev-deploy.sh
 
 bin/agentjail-hook:
-	go build -o bin/agentjail-hook ./cmd/agentjail-hook
+	go build -ldflags "$(LDFLAGS)" -o bin/agentjail-hook ./cmd/agentjail-hook
 
 bin/agentjail-daemon:  ## dev-only compile-check artifact; never installed as a real file (see DEV_BINS above)
 	go build -o bin/agentjail-daemon ./cmd/agentjail-daemon
