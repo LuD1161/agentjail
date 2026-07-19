@@ -41,13 +41,15 @@ State: todo | claimed | in-review | done. Manual = needs human/credentials/hardw
 ### Phase 1 - darwin MITM orchestration (internal/shieldapp)
 | id | task | acceptance | state | claimant | commit |
 |----|------|------------|-------|----------|--------|
-| T1.1 | Port runTunnelDarwin -> internal/shieldapp/tunnel_shield_darwin.go | //go:build darwin; app install/start/stop exec; in-process NewGateway + dnsvip; builds | todo | - | - |
-| T1.2 | runShield (darwin) reads tunnelMode + mitmMode | flag no longer a no-op; calls darwin startTunnel | todo | - | - |
-| T1.3 | Wire setupTunnelCADarwin + extend TunnelCAEnv (CURL/GIT) + in-memory CA | env has SSL_CERT_FILE/NODE_EXTRA_CA_CERTS/REQUESTS/CURL/GIT; root.key absent on disk; no key path in env or sbpl (grep empty) | todo | - | - |
-| T1.4 | Signature adaptation: ctlauth.Load, AppendShieldedEnv, resolveMITM, audit/open-before-sandbox, grant cleanup | compiles against current signatures; grants revoked at exit | todo | - | - |
+| T1.1 | Port runTunnelDarwin -> internal/shieldapp/tunnel_shield_darwin.go | //go:build darwin; app install/start/stop exec; in-process NewGateway + dnsvip; builds | done | macmitm-8b72ecfc | 9d60883f |
+| T1.2 | runShield (darwin) reads tunnelMode + mitmMode | flag no longer a no-op; calls darwin startTunnel | done | macmitm-8b72ecfc | 9d60883f |
+| T1.3 | Wire CA + extend TunnelCAEnv (CURL/GIT) + in-memory CA | env has all 5 keys; root.key absent; no key path in env or sbpl (verified grep empty; test TestTunnelCAEnvFullKeySet) | done | macmitm-8b72ecfc | d6679eb3,9d60883f |
+| T1.4 | Signature adaptation: ctlauth.Load, AppendShieldedEnv, resolveMITM, audit/open-before-sandbox, grant cleanup | compiles against current signatures; grants revoked at exit | done | macmitm-8b72ecfc | 9d60883f |
 | T1.5 | Audit events: extension start/stop + session register | additive constants in internal/audit; details mode/mitm/app_path/failure_reason; no secrets/keys in details | todo | - | - |
-| T1.6 | mitm store + dnsvip write network.db on darwin | a request produces a RequestLog row + body file | todo | - | - |
+| T1.6 | Wire body capture (newBodyRecording) on darwin | MITMHandler.Bodies was left nil by T1.1; wire encrypted BodyStore + keychain KEK like Linux; a request produces a RequestLog row + body file | todo | - | - |
 | T1.7 | Failure-path tests | child-spawn fail, SIGINT/SIGTERM, ext-start fail, stale /tmp/agentjail.sock all clean up | todo | - | - |
+
+**Phase 1a verifier notes:** T1.1-T1.4 verified by orchestrator (darwin build+vet green, tunnelMode read at shield_darwin.go:742, in-memory CA only, 5-key TunnelCAEnv test passes). Executor introduced 27 double-dash separators in new files; fixed in 5b0d2bd8. DNS-VIP risk RESOLVED: agent stub resolver queries the gateway's own addr (DNS=10.78.0.1), VIPs are only answers, so DNSPacketConn own-addr bind suffices; promiscuous serverNetstack not needed for darwin WG-over-UDP path. Body capture (Bodies) deferred to T1.6.
 
 ### Phase 2 - Swift extension + host app
 | id | task | acceptance | state | claimant | commit |
