@@ -23,22 +23,38 @@ h2 + gRPC TUN-interception e2e is green. Docs (Round 5) start only after that.
 - [x] h1 path untouched; `TestE2ETUNInterception` green — done
 - ADR 0102-mitm-serves-h2. Verified: independent tests + mutation probe + codex.
 
-## Round 2 — additive (parallel) — status: in-progress
-Worker A (`feat/net-h2-hardening`, internal/mitm) owns R2.1–R2.6.
-- [ ] **R2.1** gRPC over h2: trailers end-to-end, `grpc-status`/`application/grpc`, unary — STATUS: in-progress — OWNER: feat/net-h2-hardening
-- [ ] **R2.2** hop-by-hop header stripping (Connection, Transfer-Encoding, Keep-Alive, TE, Upgrade) on both legs — STATUS: in-progress — OWNER: feat/net-h2-hardening
-- [ ] **R2.3** h2 body capture soak: gzip decode + redaction over h2 (req+resp), large (>maxBodyScan) bodies — STATUS: in-progress — OWNER: feat/net-h2-hardening
-- [ ] **R2.4** streaming: server-streaming / SSE over h2 flows incrementally, no unbounded buffering (assert flush) — STATUS: in-progress — OWNER: feat/net-h2-hardening
-- [ ] **R2.5** request trailers forwarded + covered by a test — STATUS: in-progress — OWNER: feat/net-h2-hardening
-- [ ] **R2.6** upstream transport lifecycle: reuse across streams of one tunnel without per-CONNECT thrash — STATUS: in-progress — OWNER: feat/net-h2-hardening
+## Round 2 — additive — ✅ DONE (merged `a2fd26c`..HEAD, worker `feat/net-h2-hardening`)
+- [x] **R2.1** gRPC unary over h2 (raw application/grpc, `grpc-status`/`grpc-message` trailers) — done, e2e-proven
+- [x] **R2.2** hop-by-hop stripping (Connection/Proxy-Connection/Keep-Alive/Transfer-Encoding/TE/Upgrade/Trailer + Connection-by-value) both legs — done, mutation-probed
+- [x] **R2.3** gzip decode + redaction over h2 + >maxBodyScan RequestSize — done
+- [x] **R2.4** streaming/flush over h2 — done (already streamed; test added)
+- [x] **R2.5** request trailers on streamed bodies — **real bug fixed** (`.Clone()` froze an all-nil map before net/http2 filled it) — done, mutation-probed
+- [x] **R2.6** transport reuse (1 conn / 20 reqs) + no goroutine leak on exit — done, mutation-probed
 
-## Round 3 — integration + e2e — status: in-progress (parallel with R2)
-Worker B (`feat/net-h2-e2e`, internal/tunnel) owns R3.2–R3.4. Tests validate
-once R2 merges; B builds scaffolding in parallel on disjoint files.
-- [x] **R3.1** h2 already flows through the tunnel: the gateway calls `MITMHandler.Handle`, which now branches to `serveH2` (landed Round 1). No separate wiring needed — STATUS: done (Round 1)
-- [ ] **R3.2** `TestE2ETUNInterceptionH2` — real TUN, unprivileged, h2 decrypt+record — STATUS: in-progress — OWNER: feat/net-h2-e2e
-- [ ] **R3.3** gRPC-over-TUN e2e — STATUS: in-progress — OWNER: feat/net-h2-e2e
-- [ ] **R3.4** ALPN edge cases: h2-only pinned, h1-only, both offered — STATUS: in-progress — OWNER: feat/net-h2-e2e
+## READY GATE — ✅ GREEN (this box, `unshare -rn` + lo up)
+- mitm suite 76/76 · `TestE2ETUNInterceptionH2/GRPC/ALPN` 3/3 PASS over the real TUN.
+- **Known non-coverage (Round 3):** the request body is pre-drained up to maxBodyScan
+  for body-policy — fine for unary + server-streaming (Claude/Node's real traffic),
+  but would **deadlock client-streaming / bidi gRPC**. AGE-223 requires this be fixed
+  or explicitly stated. Round 3 addresses it before "completely done".
+
+## Round 3 — integration + e2e — ✅ DONE (merged `a2fd26c`)
+Core h2/gRPC interception already passes the real-TUN e2e against the Round-1
+core — no hardening needed for these scenarios.
+- [x] **R3.1** h2 flows through the tunnel by construction: gateway → `Handle` → `serveH2` (Round 1)
+- [x] **R3.2** `TestE2ETUNInterceptionH2` — PASS (h2 decrypt over TUN, upstream ProtoMajor=2)
+- [x] **R3.3** gRPC-over-TUN — PASS (unary, `grpc-status=0` through the trailer)
+- [x] **R3.4** ALPN edge cases (h2-only / h1-only / both) — PASS (3/3 subtests)
+
+### How to actually RUN the TUN e2e (don't lose this)
+These tests bind literal `127.0.0.1:443`, which needs privilege. On a plain host
+they `t.Skip` cleanly. To run for real without root, use a user+net namespace and
+bring loopback up (else the MITM→upstream dial fails 502):
+```
+unshare -rn bash -c 'ip link set lo up; go test -timeout 300s -count=1 -v \
+  -run "TestE2ETUNInterception" ./internal/tunnel/'
+```
+Verified 3/3 green on this box. CI running as root satisfies the bind directly.
 
 ## Round 4 — ready-to-use gate (Opus orchestrator) — status: blocked
 - [ ] Full `go build/vet/test` + h2/gRPC TUN e2e green
