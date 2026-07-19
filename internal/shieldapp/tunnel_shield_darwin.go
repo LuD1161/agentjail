@@ -248,14 +248,17 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		h.OwnerPID = os.Getpid()
 		h.Matcher = gateway.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter
-		// Bodies (request/response transcript persistence) is left nil here:
-		// wiring an encrypted BodyStore + keychain KEK is tracked separately
-		// (AGE-149 Phase 1 T1.6), matching Linux's newBodyRecording. Nil is
-		// always safe - it means the hop is not recorded, never a reason to
-		// fail the request.
+		// Bodies: same encrypted BodyStore + keychain-KEK path as Linux
+		// (newBodyRecording, tunnel_body.go) - darwin's keyring backend
+		// (internal/keyring/store_darwin.go) is the per-OS KEK source, the
+		// rest of the contract is shared. Fail-open: a missing/locked
+		// keychain degrades to unencrypted-with-a-loud-warning, never drops
+		// interception. See AGE-149 T1.6, ADR 0092-persist-request-bodies.
+		rec := newBodyRecording(ctx, sessionID, logger, emitter)
+		h.Bodies = rec.store
 		gateway.SetMITM(h)
-		logger.Info("tunnel TLS interception ON - agentjail is decrypting this agent's HTTPS via a per-session in-memory CA",
-			"db", mitm.DefaultDBPath(), "session", sessionID)
+		logger.Info("tunnel TLS interception ON - agentjail is decrypting this agent's HTTPS via a per-session in-memory CA; "+rec.notice(),
+			"db", mitm.DefaultDBPath(), "bodies", mitm.DefaultBodyDir(), "session", sessionID)
 	}
 
 	// --- 4. WG-CONF: the frozen contract. Written to a 0600 temp file
