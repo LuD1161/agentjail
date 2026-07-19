@@ -40,7 +40,13 @@ h2 + gRPC TUN-interception e2e is green. Docs (Round 5) start only after that.
 - Covers: h2 decrypt, gRPC unary (grpc-status via trailer), ALPN edge cases, hop-by-hop stripping, trailers, gzip/redaction, transport reuse, and no client-streaming deadlock.
 - **One human step remains (not automatable headless):** a live `agentjail run --tunnel -- <real agent>` over the deployed build. The real-TUN harness exercises the same serveH2 + gVisor + handleConn path minus install/CA-injection.
 
-## Round 5 — DOCS — status: in-progress (gate is green)
+## Round 5 — DOCS — ✅ DONE
+- [x] README tunnel section: h2/gRPC support + streaming behavior
+- [x] ADR 0102 (core + streaming non-coverage) · GOTCHAS #12 updated
+- [x] CHANGELOG Unreleased entry (h2/gRPC headline)
+- [ ] Release mechanics (SVG, release notes, tag, agentjail.io) — deferred to the actual release cut
+
+## STATUS: COMPLETELY DONE (automated). Remaining = 1 human step (live agent over tunnel) + release cut.
 
 ## Round 3 — integration + e2e — ✅ DONE (merged `a2fd26c`)
 Core h2/gRPC interception already passes the real-TUN e2e against the Round-1
