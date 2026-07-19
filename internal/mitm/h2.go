@@ -27,6 +27,14 @@ func (h *MITMHandler) serveH2(clientTLS *tls.Conn, host string, target HostTarge
 	// dial: same host verification, same target normalization (AGE-220), but
 	// negotiated over ALPN so an upstream that cannot do h2 is served h1
 	// transparently by the transport itself.
+	//
+	// One Transport per tunnel, not per stream or process-global: h2 streams
+	// on the same tunnel share dialAddr, so pooling here (the Transport's own
+	// h2 conn pool) gets connection reuse across streams for free. Scoping it
+	// to the tunnel means CloseIdleConnections on return actually tears the
+	// pool down instead of leaking it into a shared pool that outlives the
+	// session -- srv.ServeConn blocks until the client conn closes, so the
+	// defer fires exactly once, when this tunnel is really done.
 	transport := &http.Transport{
 		TLSClientConfig:   upstreamTLS,
 		ForceAttemptHTTP2: true,
@@ -36,6 +44,30 @@ func (h *MITMHandler) serveH2(clientTLS *tls.Conn, host string, target HostTarge
 	rh := &h2RecordingHandler{h: h, host: host, dialAddr: dialAddr, transport: transport}
 	srv := &http2.Server{}
 	srv.ServeConn(clientTLS, &http2.ServeConnOpts{Handler: rh, Context: context.Background()})
+}
+
+// hopByHopHeaders are connection-specific (RFC 9113 §8.2.2 forbids them on
+// h2 entirely). golang.org/x/net/http2 strips Connection and rewrites
+// Transfer-Encoding on the outgoing leg to upstream, but leaves the rest
+// (and never touches the response leg back to the client) for the caller.
+var hopByHopHeaders = []string{
+	"Connection", "Proxy-Connection", "Keep-Alive", "Transfer-Encoding",
+	"TE", "Upgrade", "Trailer",
+}
+
+// stripHopByHop removes hop-by-hop headers in place, including any header
+// named by a Connection field value (RFC 7230 §6.1), so neither the request
+// forwarded upstream nor the response copied to the client carries framing
+// headers that don't mean anything on h2.
+func stripHopByHop(h http.Header) {
+	if conn := h.Get("Connection"); conn != "" {
+		for _, name := range strings.Split(conn, ",") {
+			h.Del(strings.TrimSpace(name))
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		h.Del(name)
+	}
 }
 
 // h2RecordingHandler is the http.Handler http2.Server.ServeConn dispatches
@@ -184,10 +216,8 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		sink = io.MultiWriter(counter, respCapture)
 	}
 
+	stripHopByHop(resp.Header)
 	for k, vs := range resp.Header {
-		if k == "Trailer" {
-			continue // re-declared below from resp.Trailer, once its names are known
-		}
 		w.Header()[k] = vs
 	}
 	// Pre-declare trailer field names so the h2 responseWriter accepts values
@@ -254,7 +284,14 @@ func (rh *h2RecordingHandler) buildUpstreamRequest(r *http.Request) (*http.Reque
 	}
 	outReq.Host = rh.host
 	outReq.Header = r.Header.Clone()
+	stripHopByHop(outReq.Header)
 	outReq.ContentLength = r.ContentLength
-	outReq.Trailer = r.Trailer.Clone()
+	// Share r.Trailer rather than cloning it: net/http2's server fills the
+	// map in place once the client's request body reaches EOF (see
+	// stream.copyTrailersToHandlerRequest), which for a body past
+	// maxBodyScan happens mid-RoundTrip, after buildUpstreamRequest already
+	// returned. A Clone taken here would freeze the pre-fill, all-nil state
+	// and drop every trailer on a streamed body.
+	outReq.Trailer = r.Trailer
 	return outReq, nil
 }
