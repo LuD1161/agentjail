@@ -31,12 +31,16 @@ h2 + gRPC TUN-interception e2e is green. Docs (Round 5) start only after that.
 - [x] **R2.5** request trailers on streamed bodies — **real bug fixed** (`.Clone()` froze an all-nil map before net/http2 filled it) — done, mutation-probed
 - [x] **R2.6** transport reuse (1 conn / 20 reqs) + no goroutine leak on exit — done, mutation-probed
 
-## READY GATE — ✅ GREEN (this box, `unshare -rn` + lo up)
-- mitm suite 76/76 · `TestE2ETUNInterceptionH2/GRPC/ALPN` 3/3 PASS over the real TUN.
-- **Known non-coverage (Round 3):** the request body is pre-drained up to maxBodyScan
-  for body-policy — fine for unary + server-streaming (Claude/Node's real traffic),
-  but would **deadlock client-streaming / bidi gRPC**. AGE-223 requires this be fixed
-  or explicitly stated. Round 3 addresses it before "completely done".
+## Round 3 — streaming pre-drain — ✅ DONE (worker `feat/net-h2-streaming`)
+- [x] `isStreamingRequest` (application/grpc or ContentLength<0) → stream body upstream, no pre-drain; header/path policy still fires; body-scan non-coverage stated in ADR 0102. No-deadlock test mutation-probed.
+- Caveat (in ADR): any chunked h2 POST without Content-Length also skips body-content scan — broader than gRPC-only, intentional (no-deadlock > full scan on an unbounded body).
+
+## READY GATE — ✅ GREEN, COMPLETELY DONE (automated)
+- mitm suite (~90 tests) · `TestE2ETUNInterception` (baseline) + `…H2` + `…GRPC` + `…ALPN` — **4/4 PASS** over the real TUN (`unshare -rn` + lo up).
+- Covers: h2 decrypt, gRPC unary (grpc-status via trailer), ALPN edge cases, hop-by-hop stripping, trailers, gzip/redaction, transport reuse, and no client-streaming deadlock.
+- **One human step remains (not automatable headless):** a live `agentjail run --tunnel -- <real agent>` over the deployed build. The real-TUN harness exercises the same serveH2 + gVisor + handleConn path minus install/CA-injection.
+
+## Round 5 — DOCS — status: in-progress (gate is green)
 
 ## Round 3 — integration + e2e — ✅ DONE (merged `a2fd26c`)
 Core h2/gRPC interception already passes the real-TUN e2e against the Round-1
