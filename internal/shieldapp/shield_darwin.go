@@ -733,6 +733,41 @@ func isControlSocketPath(p, home string) bool {
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
 func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+	// --tunnel dispatches entirely to the NETransparentProxyProvider path
+	// (tunnel_shield_darwin.go). profilePrint is handled specially: rather
+	// than stand up the sysext + gateway just to print a profile, print the
+	// broad-allow tunnel profile (see generateSBProfileTunnel's doc comment
+	// for why it differs from the non-tunnel profile) and exit, matching the
+	// non-tunnel path's early profile-print exit below.
+	if tunnelMode {
+		if profilePrint {
+			home, herr := os.UserHomeDir()
+			if herr != nil {
+				home = "/Users/unknown"
+			}
+			fmt.Fprintf(os.Stderr, "=== agentjail-shield: generated sbpl profile (tunnel mode) ===\n")
+			fmt.Fprint(os.Stderr, generateSBProfileTunnel(cfg, home))
+			fmt.Fprintf(os.Stderr, "=================================================\n")
+			os.Exit(0)
+		}
+		ctx := context.Background()
+		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, emitter, func() {
+			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, policyPath, startTime, emitter)
+		})
+		// startTunnelDarwin either os.Exit's on success/fatal-error, or (on a
+		// fail-open setup failure) invokes fallback above, which itself never
+		// returns. Reachable only if that contract is violated; see
+		// startTunnelDarwin's doc comment.
+		return
+	}
+	runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, policyPath, startTime, emitter)
+}
+
+// runShieldNoTunnel is the non-tunnel (default) macOS launch path: sbpl +
+// optional netproxy. Split out of runShield so --tunnel can dispatch to
+// startTunnelDarwin instead, and so a fail-open tunnel setup failure can fall
+// back into exactly this path. See runShield's doc comment above.
+func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	ctx := context.Background()
 	_ = startTime // TODO: add startup timing + session summary to macOS shield
 	home, err := os.UserHomeDir()
