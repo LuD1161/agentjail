@@ -532,6 +532,16 @@ prints which posture it is in
 ✓ transparent tunnel active (userns) · TLS interception ON — decrypting this agent's HTTPS
 ```
 
+**Speaks HTTP/1.1 and HTTP/2.** The interceptor advertises `h2, http/1.1` over
+ALPN and serves the agent over whichever it negotiates — so h2-only clients
+(gRPC, and runtimes that pin h2) work, not just HTTP/1.1. gRPC calls are
+decrypted and policy-evaluated like any other request, with status codes and
+trailers (`grpc-status`) preserved end to end. Streaming and bidirectional RPCs
+are forwarded without buffering the body, so a long-lived stream never stalls;
+body-content policy applies to bounded request bodies, while host/path/method
+policy applies to everything including streams
+([ADR 0102](./docs/adr/0102-mitm-serves-h2.md)).
+
 To keep the tunnel but relay TLS opaquely — for cert-pinned endpoints, or if you
 will not accept decryption — use `--no-mitm`, or set `network.tunnel_mitm: false`
 in `policy.yaml` for a standing opt-out. The trade is real: without interception
@@ -540,6 +550,24 @@ templates cannot match** (database and SSH rules still apply).
 
 Run `agentjail doctor` to see the current posture without launching an agent.
 macOS uses a different backend and does not have this yet.
+
+**Requirement: unprivileged user namespaces.** The tunnel builds its namespaces
+without root, so the kernel must allow *unprivileged* userns. Most distros allow
+this out of the box. **Ubuntu 23.10+ (including 24.04) ships it AppArmor-gated
+off** (`kernel.apparmor_restrict_unprivileged_userns=1`). When userns is
+unavailable the tunnel is not silently broken — it **fails open to netproxy**, so
+the agent keeps working and host/SNI-level egress policy still applies; only the
+HTTP(S) decryption layer is unavailable. `agentjail doctor` detects this and, on
+Ubuntu, prints the exact one-time command to enable it:
+
+```sh
+printf 'kernel.apparmor_restrict_unprivileged_userns=0\n' \
+  | sudo tee /etc/sysctl.d/99-agentjail-userns.conf && sudo sysctl --system
+```
+
+We deliberately do **not** run this for you at install: flipping a system sysctl
+needs root, and agentjail's install never asks for a password. Enabling the full
+tunnel on such hosts is a conscious, one-line opt-in — or you stay on netproxy.
 
 ## When the daemon is unreachable
 

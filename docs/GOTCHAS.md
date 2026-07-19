@@ -190,17 +190,24 @@ rather than our cert.
 ## 12. Advertise what you serve
 
 The MITM's `tls.Config` set no `NextProtos`, so ALPN settled on HTTP/1.1 by
-omission. curl downgrades quietly; gRPC fails. Now we say `http/1.1` explicitly
-and report an h2 offer once per session.
+omission. curl downgrades quietly; gRPC fails. AGE-222 made this honest by
+saying `http/1.1` explicitly and auditing an h2 offer once per session; AGE-223
+then made it real — the MITM now offers `["h2", "http/1.1"]` and serves h2 for
+real when a client negotiates it ([ADR 0102](./adr/0102-mitm-serves-h2.md)).
 
 - **Trap:** `ConnectionState().NegotiatedProtocol` **cannot** tell you what the
-  client wanted once you advertise one protocol — it reports what was agreed,
-  which is always yours. The offer is only visible in `GetConfigForClient`
-  (`ClientHelloInfo.SupportedProtos`).
+  client wanted from inside the handshake callback — it reports what was
+  agreed, which is only known *after* `Handshake()` returns. The offer itself
+  is only visible in `GetConfigForClient` (`ClientHelloInfo.SupportedProtos`),
+  so recording "what was offered" and checking "what got negotiated" are two
+  different points in the code, joined by a captured local, not a field on the
+  config.
 - **Once per session, not per connection.** An agent opens many connections;
   per-connection notices become noise, and noise is filtered out and stops being
-  a notice at all.
-- AGE-222 (honest), AGE-223 (actually serve h2).
+  a notice at all. This survived AGE-223: the notice now fires only when the
+  TLS stack picks something other than h2 despite an h2 offer and our
+  server-preference h2-first list — a real anomaly, not the common path.
+- AGE-222 (honest), AGE-223 (actually serve h2, done).
 
 ## 13. curl is not an agent
 

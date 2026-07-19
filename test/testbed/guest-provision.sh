@@ -12,6 +12,22 @@ set -euo pipefail
 
 log() { echo "==> [guest] $*"; }
 
+# ---- 0a. transparent-tunnel prerequisite ------------------------------------
+# The --tunnel datapath (and the h2 MITM) needs an unprivileged user namespace.
+# Ubuntu 23.10+ (incl. 24.04 noble, this template's image) ships
+# kernel.apparmor_restrict_unprivileged_userns=1, which makes the shield's
+# userns TUN clone fail with EPERM and silently fall back to netproxy — so the
+# tunnel is never exercised. Enabling it here mirrors the documented host setup
+# step a real user follows to use the tunnel on modern Ubuntu.
+if [ "$(uname -s)" = "Linux" ]; then
+    if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
+        log "enabling unprivileged user namespaces (tunnel prerequisite)"
+        echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-agentjail-tunnel.conf >/dev/null
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
+            || log "could not relax userns restriction (tunnel may fall back to netproxy)"
+    fi
+fi
+
 # ---- 0. recording niceties --------------------------------------------------
 # Each CLI recording opens with a system-info banner for context (mirrors the
 # macOS suite, which uses fastfetch). Ubuntu's apt ships neofetch, not
@@ -20,6 +36,11 @@ if [ "$(uname -s)" = "Linux" ] && ! command -v neofetch >/dev/null 2>&1; then
     log "installing neofetch (recording banner)"
     sudo apt-get install -y -q neofetch >/dev/null 2>&1 || log "neofetch install failed (non-fatal)"
 fi
+
+# A git identity so a real agent task ("build X and commit it") doesn't stall
+# asking for user.name/user.email inside the sandboxed session.
+git config --global user.name  "Testbed Agent" 2>/dev/null || true
+git config --global user.email "agent@testbed.local" 2>/dev/null || true
 
 # ---- 1. Claude Code ---------------------------------------------------------
 

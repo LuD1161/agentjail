@@ -36,6 +36,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -53,6 +54,14 @@ const (
 	// reexecHardenArg marks a re-exec that hardens the process (ApplyHardening)
 	// then execve's the agent. Used by AgentCommand via nsenter.
 	reexecHardenArg = "__agentjail_harden_exec"
+
+	// shieldRoleName is the argv[0] basename the multicall binary dispatches on
+	// to reach the shield role (see cmd/agentjail main.go). A re-exec MUST
+	// present this name; os.Executable() resolves the installed agentjail-shield
+	// SYMLINK to `agentjail`, which routes to the CLI so the TUN helper/harden
+	// shim never runs and the tunnel silently falls back to netproxy.
+	// See ADR 0103-shield-reexec-argv0.
+	shieldRoleName = "agentjail-shield"
 
 	// hardenLandlockFDFlag precedes the fd number of an inherited Landlock
 	// ruleset in the harden shim's args. When present, the shim applies that
@@ -155,6 +164,17 @@ func runTUNHelper(args []string) {
 		os.Exit(1)
 	}
 
+	// Point the agent's resolver at the in-tunnel DNS server. On systemd-resolved
+	// hosts /etc/resolv.conf is 127.0.0.53 (loopback), unreachable inside the
+	// netns, so name resolution would fail (the agent sees ENOTIMP/ENOTFOUND). We
+	// own this (now-private) mount namespace, so bind-mount a resolv.conf naming
+	// the gateway over it — invisible to the host. Non-fatal: a host whose
+	// resolv.conf already points at a routable nameserver still resolves via the
+	// TUN. See ADR 0103-shield-reexec-argv0.
+	if err := setNamespaceResolvConf(dnsvip.GatewayV4().String()); err != nil {
+		fmt.Fprintf(os.Stderr, "netns tun-helper: resolv.conf (non-fatal): %v\n", err)
+	}
+
 	// Hand the fd to the parent. This doubles as the success signal: if any
 	// step above failed we exited before this, so the parent's RecvFD returns
 	// an error and the shield falls back to netproxy.
@@ -163,10 +183,47 @@ func runTUNHelper(args []string) {
 		os.Exit(1)
 	}
 
-	// Keep the TUN fd open and block forever so the interface and namespaces
-	// persist for the session. Pdeathsig (set by the parent) kills us if the
-	// shield dies; cleanup also SIGKILLs us via Namespace.Close.
-	select {}
+	// Keep the TUN fd open and block until the shield (holding the other end of
+	// the handoff socket) closes it. A normal Namespace.Close() and an abnormal
+	// shield crash both close that end, so the holder always exits and the kernel
+	// tears the namespaces down. This replaces Pdeathsig, whose thread-lifetime
+	// semantics are unreliable under Go's runtime — the holder was SIGKILLed
+	// mid-session on a slower guest, breaking the follow-on nsenter.
+	// See ADR 0103-shield-reexec-argv0.
+	var b [1]byte
+	_, _ = uc.Read(b[:]) // unblocks on EOF (parent gone) or a stray byte
+	os.Exit(0)
+}
+
+// setNamespaceResolvConf bind-mounts a resolv.conf naming dnsIP over
+// /etc/resolv.conf inside the holder's private mount namespace, so the agent
+// (which joins this mount ns via nsenter --mount) resolves names through the
+// in-tunnel DNS server. The remount-private guard keeps the bind mount from
+// propagating to the host. See ADR 0103-shield-reexec-argv0.
+func setNamespaceResolvConf(dnsIP string) error {
+	// Detach mount propagation so the bind below never reaches the host mounts.
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make mount ns private: %w", err)
+	}
+	f, err := os.CreateTemp("", "agentjail-resolv-*.conf")
+	if err != nil {
+		return fmt.Errorf("temp resolv.conf: %w", err)
+	}
+	defer os.Remove(f.Name()) // the bind mount keeps the inode alive after unlink
+	if _, err := f.WriteString("nameserver " + dnsIP + "\n"); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write resolv.conf: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close resolv.conf: %w", err)
+	}
+	// Bind over /etc/resolv.conf. If it is a systemd-resolved symlink, mount
+	// follows it and binds over the (existing) target file, which is what the
+	// resolver reads — so the override still takes effect.
+	if err := unix.Mount(f.Name(), "/etc/resolv.conf", "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind /etc/resolv.conf: %w", err)
+	}
+	return nil
 }
 
 // configureTUNInterface brings up loopback and the TUN device, assigns the
@@ -250,9 +307,13 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	if err != nil {
 		return nil, nil, fmt.Errorf("netns: handoff parent conn: %w", err)
 	}
-	defer parentConn.Close()
+	// parentConn stays open for the namespace lifetime: closing it (in
+	// Namespace.Close, or implicitly when the shield process dies) is what makes
+	// the holder's blocking Read return EOF so it exits. Error paths below close
+	// it explicitly; on success the Namespace owns it.
 	parentUC, ok := parentConn.(*net.UnixConn)
 	if !ok {
+		_ = parentConn.Close()
 		return nil, nil, fmt.Errorf("netns: handoff conn is not unix")
 	}
 
@@ -261,6 +322,9 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 		exe = "/proc/self/exe"
 	}
 	cmd := exec.Command(exe, reexecTUNArg, ifName, addrCIDR)
+	// Path (exe) execs the real file; argv[0] drives multicall dispatch. Force
+	// the shield role so the holder reaches runTUNHelper. See shieldRoleName.
+	cmd.Args[0] = shieldRoleName
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{childSock} // => fd 3 in the holder
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -272,12 +336,14 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 			{ContainerID: 0, HostID: gid, Size: 1},
 		},
 		GidMappingsEnableSetgroups: false,
-		// Tie the holder's lifetime to ours: if the shield dies, the kernel
-		// SIGKILLs the holder, tearing down the namespaces (no leak).
-		Pdeathsig: syscall.SIGKILL,
+		// No Pdeathsig: it fires when the cloning THREAD exits, not the process,
+		// so Go retiring that thread SIGKILLed the holder mid-session (breaking
+		// the follow-on nsenter on a slower guest). Liveness is the handoff
+		// socket instead. See ADR 0103-shield-reexec-argv0.
 	}
 
 	if err := cmd.Start(); err != nil {
+		_ = parentConn.Close()
 		if isClonePermError(err) {
 			return nil, nil, fmt.Errorf(
 				"%w: unprivileged user namespaces disabled "+
@@ -296,14 +362,15 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	// TUN it exits before SendFD, so RecvFD returns an error here.
 	tunFD, err := RecvFD(parentUC)
 	if err != nil {
+		_ = parentConn.Close()
 		_ = cmd.Process.Kill()
 		go func() { _ = cmd.Wait() }()
 		return nil, nil, fmt.Errorf("netns: receive tun fd from holder: %w", err)
 	}
 	tun = os.NewFile(uintptr(tunFD), "/dev/net/tun:"+ifName)
 
-	ns = &Namespace{pid: cmd.Process.Pid}
-	go func() { _ = cmd.Wait() }() // reap when Close SIGKILLs the holder
+	ns = &Namespace{pid: cmd.Process.Pid, holderConn: parentConn}
+	go func() { _ = cmd.Wait() }() // reap after Close() closes the socket / SIGKILLs
 
 	return ns, tun, nil
 }
@@ -324,11 +391,33 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 // and the shim calls landlock_restrict_self AFTER nsenter, so the agent is
 // FS-sandboxed without breaking namespace entry. Pass -1 to skip Landlock (e.g.
 // unsupported kernel / fail-open).
-func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlockFD int) *exec.Cmd {
+// shieldReexecPath returns a path to this binary whose basename is
+// shieldRoleName, so a re-exec that cannot set argv[0] independently (nsenter
+// execs its target with argv[0]=path) still dispatches back to the shield role.
+// It prefers the invocation path (which keeps the installed agentjail-shield
+// symlink); os.Executable() resolves that symlink to `agentjail` and would
+// misdispatch. The resolved exe is the correct fallback for the standalone
+// agentjail-shield dev binary, whose basename already names the role.
+func shieldReexecPath() string {
+	if a0 := os.Args[0]; filepath.Base(a0) == shieldRoleName {
+		if filepath.IsAbs(a0) {
+			return a0
+		}
+		if p, err := exec.LookPath(a0); err == nil {
+			return p
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		exe = "/proc/self/exe"
+		return "/proc/self/exe"
 	}
+	return exe
+}
+
+func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlockFD int) *exec.Cmd {
+	// nsenter execs `exe` with argv[0]=exe, so exe's basename must name the
+	// shield role for multicall dispatch to reach runHardenExec.
+	exe := shieldReexecPath()
 	args := []string{
 		"--target", strconv.Itoa(ns.pid),
 		"--user", "--preserve-credentials",

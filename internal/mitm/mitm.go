@@ -89,20 +89,23 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	// the SNI-less case (agent dialed by IP) and the DNS-VIP path (host is
 	// already the hostname). See ADR 0088-mitm-sni-cert-selection.
 	//
-	// NextProtos advertises http/1.1 only: we serve HTTP/1.1, so saying so is
-	// the honest form of the same limitation (ADR 0077 D4, AGE-222). offersH2 is
-	// noticed here — the ClientHello is the only place the client's real offer
-	// is visible once we pin http/1.1.
+	// NextProtos advertises h2 first, then http/1.1, in server-preference order
+	// (Go picks by server preference, RFC 7301 §3.2), so a client that offers
+	// both gets real h2. ADR 0077 (D4), AGE-222; serving h2 for real is AGE-223.
+	var clientOfferedH2 bool
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"http/1.1"},
+		NextProtos: []string{"h2", "http/1.1"},
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			name := host
 			if hello.ServerName != "" {
 				name = hello.ServerName
 			}
+			// The ClientHello is the only place the client's raw ALPN offer is
+			// visible; ConnectionState().NegotiatedProtocol reports what was
+			// agreed. Record here, check the downgrade after Handshake below.
 			if offersH2(hello.SupportedProtos) {
-				h.noteH2Downgrade(name, hello.SupportedProtos)
+				clientOfferedH2 = true
 			}
 			if cert := h.certCache.get(name); cert != nil {
 				return cert, nil
@@ -132,7 +135,16 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		target = ParseHostTarget(sni)
 	}
 
-	// Step 3: dial upstream with real TLS (verify against system roots).
+	negotiated := clientTLS.ConnectionState().NegotiatedProtocol
+	// A client that offered h2 and did NOT get it is the only real downgrade
+	// left: we advertise h2 first, so this means the handshake itself
+	// overrode our preference, not that we chose not to serve it. See
+	// alpn.go and AGE-223.
+	if clientOfferedH2 && negotiated != "h2" {
+		h.noteH2Downgrade(host, []string{"h2"})
+	}
+
+	// Step 3: prepare upstream TLS (verify against system roots).
 	//
 	// ServerName is set even for an IP: Go omits an IP from the SNI extension
 	// itself, and uses ServerName to verify the cert's IP SAN. Clearing it
@@ -145,6 +157,15 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		upstreamTLS = h.UpstreamTLSConfig.Clone()
 		upstreamTLS.ServerName = host
 	}
+
+	// h2 takes over the connection entirely: http2.Server multiplexes streams
+	// and http.Transport dials/pools upstream h2 connections per request, so
+	// there is no single upstream conn to set up here the way h1 needs one.
+	if negotiated == "h2" {
+		h.serveH2(clientTLS, host, target, port, upstreamTLS)
+		return
+	}
+
 	upstream, err := tls.Dial("tcp", target.DialAddr(port), upstreamTLS)
 	if err != nil {
 		h.Logger.Error("upstream TLS dial failed", "host", host, "port", port, "err", err)

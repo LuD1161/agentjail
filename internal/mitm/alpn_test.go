@@ -51,6 +51,14 @@ func (c *countingEmitter) count() int {
 	return len(c.events)
 }
 
+// These tests exercise noteH2Downgrade directly, not through Handle, so they
+// still pass unchanged after AGE-223: the function's once-per-session
+// bookkeeping didn't move, only its caller did (mitm.go now calls it after
+// Handshake, when negotiation genuinely didn't land on h2, instead of before
+// Handshake on a mere h2 offer). See TestHandleServesH2WithoutDowngradeNotice
+// below for the case that DID change: an h2 offer that succeeds must NOT
+// fire this notice anymore.
+//
 // An agent opens many connections; the downgrade is a property of the session,
 // so it is stated once. Per-connection it would be noise, and noise gets
 // filtered out and stops being a notice at all. AGE-222.
