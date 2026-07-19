@@ -44,6 +44,10 @@ type MITMHandler struct {
 	// SessionID groups every row of one shield launch. It must match Bodies'
 	// session, which is the directory the bodies land in.
 	SessionID string
+	// OwnerPID is the shield process that owns this session; stamped onto every
+	// row so the UI can decide "active" by liveness. See
+	// ADR 0100-network-active-pid.
+	OwnerPID int
 
 	UpstreamTLSConfig *tls.Config // optional: override for upstream TLS (tests only)
 	certCache         *hostCertCache
@@ -142,6 +146,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 			Ts:        time.Now(),
 			Host:      host,
 			SessionID: h.SessionID,
+			OwnerPID:  h.OwnerPID,
 		}
 		start := time.Now()
 

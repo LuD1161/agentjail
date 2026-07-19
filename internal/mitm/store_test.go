@@ -327,3 +327,32 @@ func TestRequestStoreMigrationIdempotent(t *testing.T) {
 		store.Close()
 	}
 }
+
+// TestRequestStoreOwnerPIDRoundTrip guards that the owning shield PID persists
+// and reads back as an integer (INTEGER affinity, not "12345" text). The UI
+// keys "active" on it. See ADR 0100-network-active-pid.
+func TestRequestStoreOwnerPIDRoundTrip(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "network.db")
+	store, err := NewRequestStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewRequestStore: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Log(&RequestLog{
+		Ts: time.Now().UTC(), Host: "h", Method: "GET", Path: "/", URL: "https://h/",
+		SessionID: "sess-pid", OwnerPID: 424242,
+	}); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	results, err := store.Query(context.Background(), RequestFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].OwnerPID != 424242 {
+		t.Errorf("owner_pid: got %d, want 424242", results[0].OwnerPID)
+	}
+}

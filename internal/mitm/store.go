@@ -44,6 +44,11 @@ type RequestLog struct {
 	EncodingRaw      EncodingRawSides `json:"encoding_raw,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	SessionID        string           `json:"session_id,omitempty"`
+	// OwnerPID is the shield process that owns this network session. Every row
+	// of one session shares it, so the UI can decide "active" by process
+	// liveness instead of joining on the id-space mismatch between the network
+	// session id and the daemon session id. See ADR 0100-network-active-pid.
+	OwnerPID         int              `json:"owner_pid,omitempty"`
 	ToolName         string           `json:"tool_name,omitempty"`
 	PolicyAction     string           `json:"policy_action,omitempty"`
 	PolicyTemplate   string           `json:"policy_template,omitempty"`
@@ -193,6 +198,7 @@ func (s *RequestStore) migrate() error {
 			encoding_raw TEXT,
 			error TEXT,
 			session_id TEXT,
+			owner_pid INTEGER,
 			tool_name TEXT,
 			policy_action TEXT,
 			policy_template TEXT,
@@ -215,6 +221,10 @@ func (s *RequestStore) migrate() error {
 		"request_body_path", "response_body_path", "encoding_raw"} {
 		s.db.Exec(fmt.Sprintf("ALTER TABLE network_requests ADD COLUMN %s TEXT", col))
 	}
+	// owner_pid is INTEGER (not TEXT like the block above) so an existing DB
+	// keeps integer affinity and PIDs round-trip as numbers, not "12345" text.
+	// See ADR 0100-network-active-pid.
+	s.db.Exec("ALTER TABLE network_requests ADD COLUMN owner_pid INTEGER")
 	return nil
 }
 
@@ -284,9 +294,9 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 		(ts, host, method, path, url, status_code, request_size, response_size,
 		 elapsed_ms, request_headers, response_headers,
 		 request_body_path, response_body_path, encoding_raw,
-		 error, session_id, tool_name,
+		 error, session_id, owner_pid, tool_name,
 		 policy_action, policy_template, policy_reason, service, verb, resource_type)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ts, entry.Host, entry.Method, entry.Path, entry.URL,
 		nullInt(entry.StatusCode), nullInt64(entry.RequestSize), nullInt64(entry.ResponseSize),
 		nullInt64(entry.ElapsedMs),
@@ -294,7 +304,7 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 		nullStr(entry.RequestBodyPath), nullStr(entry.ResponseBodyPath),
 		nullStr(string(entry.EncodingRaw)),
 		nullStr(entry.Error),
-		nullStr(entry.SessionID), nullStr(entry.ToolName),
+		nullStr(entry.SessionID), nullInt(entry.OwnerPID), nullStr(entry.ToolName),
 		nullStr(entry.PolicyAction), nullStr(entry.PolicyTemplate),
 		nullStr(entry.PolicyReason), nullStr(entry.Service),
 		nullStr(entry.Verb), nullStr(entry.ResourceType),
@@ -348,7 +358,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 	q := `SELECT id, ts, host, method, path, url, status_code, request_size, response_size,
 		elapsed_ms, request_headers, response_headers,
 		request_body_path, response_body_path, encoding_raw,
-		error, session_id, tool_name,
+		error, session_id, owner_pid, tool_name,
 		policy_action, policy_template, policy_reason, service, verb, resource_type
 		FROM network_requests`
 	if len(conds) > 0 {
@@ -383,6 +393,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			encodingRaw  sql.NullString
 			errStr       sql.NullString
 			sessionID    sql.NullString
+			ownerPID     sql.NullInt64
 			toolName     sql.NullString
 			policyAction sql.NullString
 			policyTmpl   sql.NullString
@@ -394,7 +405,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 		if err := rows.Scan(&id, &tsStr, &host, &method, &path, &url,
 			&statusCode, &reqSize, &respSize, &elapsedMs,
 			&reqH, &respH, &reqBodyPath, &respBodyPath, &encodingRaw,
-			&errStr, &sessionID, &toolName,
+			&errStr, &sessionID, &ownerPID, &toolName,
 			&policyAction, &policyTmpl, &policyReason,
 			&service, &verb, &resourceType); err != nil {
 			return nil, fmt.Errorf("mitm/store: scan: %w", err)
@@ -418,6 +429,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			EncodingRaw:      EncodingRawSides(encodingRaw.String),
 			Error:            errStr.String,
 			SessionID:        sessionID.String,
+			OwnerPID:         int(ownerPID.Int64),
 			ToolName:         toolName.String,
 			PolicyAction:     policyAction.String,
 			PolicyTemplate:   policyTmpl.String,
