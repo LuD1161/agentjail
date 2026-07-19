@@ -272,6 +272,9 @@ func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (
 			}
 		})
 		h.SessionID = sessionID
+		// This shield process owns the session; the UI reads its liveness back
+		// to decide "active". See ADR 0100-network-active-pid.
+		h.OwnerPID = os.Getpid()
 		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter        // session-level notices, e.g. the ALPN downgrade (AGE-222)
 		rec := newBodyRecording(ctx, sessionID, logger, emitter)
