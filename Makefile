@@ -143,6 +143,9 @@ tunnel-lib:  ## build the cgo c-archive linked into the macOS network extension 
 macos-app:  ## build + ad-hoc sign build/AgentjailTunnel.app (set NOTARIZE=1 for Developer ID + notarization)
 	./scripts/build-macos-app.sh
 
+macos-dmg: macos-app  ## package build/AgentjailTunnel.app into build/AgentjailTunnel.dmg
+	./scripts/package-macos-dmg.sh
+
 # dist-tarball builds the two real binaries for a target platform and packs
 # them in the flat layout install.sh expects (binaries at tarball top level).
 # The four role names (agentjail-daemon, agentjail-shield, agentjail-netproxy,
