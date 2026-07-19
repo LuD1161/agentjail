@@ -278,6 +278,12 @@ func (rh *h2RecordingHandler) buildUpstreamRequest(r *http.Request) (*http.Reque
 	outReq.Header = r.Header.Clone()
 	stripHopByHop(outReq.Header)
 	outReq.ContentLength = r.ContentLength
-	outReq.Trailer = r.Trailer.Clone()
+	// Share r.Trailer rather than cloning it: net/http2's server fills the
+	// map in place once the client's request body reaches EOF (see
+	// stream.copyTrailersToHandlerRequest), which for a body past
+	// maxBodyScan happens mid-RoundTrip, after buildUpstreamRequest already
+	// returned. A Clone taken here would freeze the pre-fill, all-nil state
+	// and drop every trailer on a streamed body.
+	outReq.Trailer = r.Trailer
 	return outReq, nil
 }
