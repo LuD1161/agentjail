@@ -1312,6 +1312,50 @@ type SessionInfo struct {
 	FirstSeen    string `json:"first_seen"`
 	LastSeen     string `json:"last_seen"`
 	RequestCount int64  `json:"request_count"`
+	// OwnerPID is the shield process that logged this session's rows; Active is
+	// its liveness. The network session id and the daemon session id are
+	// different identities, so "active" is keyed on the PID, not a join.
+	// See ADR 0100-network-active-pid.
+	OwnerPID int  `json:"owner_pid,omitempty"`
+	Active   bool `json:"active"`
+}
+
+// aggregateSessions groups request rows into per-session summaries and marks
+// each active by the liveness of its owning shield PID (procutil.Alive), not a
+// network-recency window. All rows of one session share the PID; the last
+// non-zero one wins. See ADR 0100-network-active-pid.
+func aggregateSessions(rows []mitm.RequestLog) []SessionInfo {
+	byID := map[string]*SessionInfo{}
+	order := []string{}
+	for _, rl := range rows {
+		if rl.SessionID == "" {
+			continue
+		}
+		ts := rl.Ts.UTC().Format(time.RFC3339)
+		si, ok := byID[rl.SessionID]
+		if !ok {
+			si = &SessionInfo{SessionID: rl.SessionID, FirstSeen: ts, LastSeen: ts}
+			byID[rl.SessionID] = si
+			order = append(order, rl.SessionID)
+		}
+		si.RequestCount++
+		if rl.OwnerPID > 0 {
+			si.OwnerPID = rl.OwnerPID
+		}
+		if ts < si.FirstSeen {
+			si.FirstSeen = ts
+		}
+		if ts > si.LastSeen {
+			si.LastSeen = ts
+		}
+	}
+	out := make([]SessionInfo, 0, len(order))
+	for _, id := range order {
+		si := byID[id]
+		si.Active = procutil.Alive(si.OwnerPID)
+		out = append(out, *si)
+	}
+	return out
 }
 
 // networkRows returns rows matching the SQL-expressible filters. Status,
@@ -1501,31 +1545,7 @@ func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
-	byID := map[string]*SessionInfo{}
-	order := []string{}
-	for _, rl := range rows {
-		if rl.SessionID == "" {
-			continue
-		}
-		ts := rl.Ts.UTC().Format(time.RFC3339)
-		si, ok := byID[rl.SessionID]
-		if !ok {
-			si = &SessionInfo{SessionID: rl.SessionID, FirstSeen: ts, LastSeen: ts}
-			byID[rl.SessionID] = si
-			order = append(order, rl.SessionID)
-		}
-		si.RequestCount++
-		if ts < si.FirstSeen {
-			si.FirstSeen = ts
-		}
-		if ts > si.LastSeen {
-			si.LastSeen = ts
-		}
-	}
-	out := make([]SessionInfo, 0, len(order))
-	for _, id := range order {
-		out = append(out, *byID[id])
-	}
+	out := aggregateSessions(rows)
 	writeJSON(w, map[string]any{"sessions": out, "count": len(out)})
 }
 
