@@ -72,8 +72,8 @@ State: todo | claimed | in-review | done. Manual = needs human/credentials/hardw
 | id | task | acceptance | state | claimant | commit |
 |----|------|------------|-------|----------|--------|
 | T3.1 | Restore scripts/build-macos-app.sh + Makefile tunnel-lib | `make macos-app` builds .app ad-hoc-signed; codesign valid; plutil OK; verified by orchestrator | done | macmitm-8b72ecfc | dd431cf9,4befb097 |
-| T3.2 | Sign extension+app (Developer ID + entitlements + profile) | codesign -d --entitlements :- ok; systemextensionsctl list; bundle IDs match profile | todo (Manual) | - | - |
-| T3.3 | Notarize + staple | xcrun notarytool log clean; spctl -a -vvv accepts | todo (Manual) | - | - |
+| T3.2 | Sign extension+app (Developer ID) | DONE - Developer ID Application: Aseem Shrey (Q98Z3744J2); codesign valid | done | macmitm-8b72ecfc | creds from .env |
+| T3.3 | Notarize + staple (app + DMG) | DONE - notarytool Accepted, stapled; spctl accepted, source=Notarized Developer ID; DMG stapler validate ok | done | macmitm-8b72ecfc | creds from .env |
 
 ### Phase 4 - package + verify
 | id | task | acceptance | state | claimant | commit |
@@ -83,23 +83,30 @@ State: todo | claimed | in-review | done. Manual = needs human/credentials/hardw
 | T4.2 | Verify e2e on build Mac | install+approve; agentjail-shield --tunnel -- claude; network.db rows; no DNS black hole | todo (Manual) | - | - |
 | T4.3 | Verify clean-Mac notarized install | non-build Mac: Gatekeeper ok, ext approves, Claude session captured | todo (Manual) | - | - |
 
-## MANUAL HANDOFF - the loop stops here (needs human / Apple creds / hardware)
+## MANUAL HANDOFF - only the human-gated steps remain
 
-All code + build tooling is done and verified locally. The app builds and ad-hoc
-signs. Remaining steps cannot be automated:
+DONE by the loop (creds were in repo-root .env): build/AgentjailTunnel.app and
+build/AgentjailTunnel.dmg are Developer-ID signed, NOTARIZED, and stapled
+(spctl: accepted, source=Notarized Developer ID). build/agentjail-shield built
+with the new darwin --tunnel path.
 
-1. **Notarize (T3.2/T3.3):** `NOTARIZE=1 APPLE_ID=... TEAM_ID=... APP_PASSWORD=... make macos-app`
-   then `make macos-dmg` (the notarize/staple commands are printed by the scripts).
-   Needs your Developer ID cert + notarytool app-specific password.
-2. **Install + approve (T4.2):** `build/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel install`,
-   then click Allow in System Settings > Login Items & Extensions. Un-automatable dialog.
-3. **Run e2e (T4.2):** `agentjail-shield --tunnel -- claude`, then
-   `bash test/tunnel-e2e/smoke_darwin.sh` - expect A8/A11/A12 to PASS (not SKIP) and
-   rows in `~/.agentjail/network.db`.
-4. **Clean-Mac check (T4.3):** install the notarized DMG on a second Mac, confirm
+Remaining (need a human at the keyboard / a 2nd Mac):
+1. **Install + approve (T4.2):** `build/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel install`,
+   then click Allow in System Settings > General > Login Items & Extensions > Network
+   Extensions. Un-automatable dialog. NOTE: an OLDER extension bundle
+   `com.blinkerlm.agentjail.extension (0.0.5)` is currently activated; the new build is
+   `com.blinkerlm.agentjail.app.extension`, so it registers fresh and needs its own approval.
+2. **Run e2e (T4.2):** `build/agentjail-shield --tunnel -- claude` (the installed
+   ~/.agentjail/bin/agentjail-shield predates this code - use the freshly built one, or
+   cp it into ~/.agentjail/bin), then `bash test/tunnel-e2e/smoke_darwin.sh` - expect
+   A8/A11/A12 to PASS and rows in ~/.agentjail/network.db.
+3. **Clean-Mac check (T4.3):** install build/AgentjailTunnel.dmg on a second Mac, confirm
    Gatekeeper + approval + capture.
 
-Only after step 3 PASSes: do the prose docs pass (TD.4) per the user's "docs last".
+Known small fix for the docs pass: `agentjail-shield --help` still says `--tunnel (Linux)`;
+darwin is now supported - update the help text.
+
+Only after step 2 PASSes: do the prose docs pass (TD.4) per the user's "docs last".
 
 ### Docs / ADR (decision records land WITH their code commit; prose pass last)
 | id | task | acceptance | state | claimant | commit |
