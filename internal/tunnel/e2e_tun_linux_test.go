@@ -45,7 +45,16 @@ import (
 // test runner starts. netns.CreateWithTUN launches /proc/self/exe (this binary)
 // with a marker first arg; MaybeRunReexec runs that role and never returns. In
 // the normal case it returns immediately and the suite runs.
+//
+// It also intercepts h2HelperArg the same way: the h2/gRPC e2e tests
+// (h2client_helper_linux_test.go) re-exec this same test binary INSIDE the
+// netns to drive a real TLS+ALPN client, since bash's /dev/tcp cannot do a
+// TLS handshake. Checked first for the same reason MaybeRunReexec must run
+// before flag parsing / m.Run().
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == h2HelperArg {
+		h2HelperMain(os.Args[2:]) // never returns
+	}
 	netns.MaybeRunReexec()
 	os.Exit(m.Run())
 }
