@@ -164,6 +164,17 @@ func runTUNHelper(args []string) {
 		os.Exit(1)
 	}
 
+	// Point the agent's resolver at the in-tunnel DNS server. On systemd-resolved
+	// hosts /etc/resolv.conf is 127.0.0.53 (loopback), unreachable inside the
+	// netns, so name resolution would fail (the agent sees ENOTIMP/ENOTFOUND). We
+	// own this (now-private) mount namespace, so bind-mount a resolv.conf naming
+	// the gateway over it — invisible to the host. Non-fatal: a host whose
+	// resolv.conf already points at a routable nameserver still resolves via the
+	// TUN. See ADR 0103-shield-reexec-argv0.
+	if err := setNamespaceResolvConf(dnsvip.GatewayV4().String()); err != nil {
+		fmt.Fprintf(os.Stderr, "netns tun-helper: resolv.conf (non-fatal): %v\n", err)
+	}
+
 	// Hand the fd to the parent. This doubles as the success signal: if any
 	// step above failed we exited before this, so the parent's RecvFD returns
 	// an error and the shield falls back to netproxy.
@@ -182,6 +193,37 @@ func runTUNHelper(args []string) {
 	var b [1]byte
 	_, _ = uc.Read(b[:]) // unblocks on EOF (parent gone) or a stray byte
 	os.Exit(0)
+}
+
+// setNamespaceResolvConf bind-mounts a resolv.conf naming dnsIP over
+// /etc/resolv.conf inside the holder's private mount namespace, so the agent
+// (which joins this mount ns via nsenter --mount) resolves names through the
+// in-tunnel DNS server. The remount-private guard keeps the bind mount from
+// propagating to the host. See ADR 0103-shield-reexec-argv0.
+func setNamespaceResolvConf(dnsIP string) error {
+	// Detach mount propagation so the bind below never reaches the host mounts.
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make mount ns private: %w", err)
+	}
+	f, err := os.CreateTemp("", "agentjail-resolv-*.conf")
+	if err != nil {
+		return fmt.Errorf("temp resolv.conf: %w", err)
+	}
+	defer os.Remove(f.Name()) // the bind mount keeps the inode alive after unlink
+	if _, err := f.WriteString("nameserver " + dnsIP + "\n"); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write resolv.conf: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close resolv.conf: %w", err)
+	}
+	// Bind over /etc/resolv.conf. If it is a systemd-resolved symlink, mount
+	// follows it and binds over the (existing) target file, which is what the
+	// resolver reads — so the override still takes effect.
+	if err := unix.Mount(f.Name(), "/etc/resolv.conf", "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind /etc/resolv.conf: %w", err)
+	}
+	return nil
 }
 
 // configureTUNInterface brings up loopback and the TUN device, assigns the
