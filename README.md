@@ -551,6 +551,24 @@ templates cannot match** (database and SSH rules still apply).
 Run `agentjail doctor` to see the current posture without launching an agent.
 macOS uses a different backend and does not have this yet.
 
+**Requirement: unprivileged user namespaces.** The tunnel builds its namespaces
+without root, so the kernel must allow *unprivileged* userns. Most distros allow
+this out of the box. **Ubuntu 23.10+ (including 24.04) ships it AppArmor-gated
+off** (`kernel.apparmor_restrict_unprivileged_userns=1`). When userns is
+unavailable the tunnel is not silently broken — it **fails open to netproxy**, so
+the agent keeps working and host/SNI-level egress policy still applies; only the
+HTTP(S) decryption layer is unavailable. `agentjail doctor` detects this and, on
+Ubuntu, prints the exact one-time command to enable it:
+
+```sh
+printf 'kernel.apparmor_restrict_unprivileged_userns=0\n' \
+  | sudo tee /etc/sysctl.d/99-agentjail-userns.conf && sudo sysctl --system
+```
+
+We deliberately do **not** run this for you at install: flipping a system sysctl
+needs root, and agentjail's install never asks for a password. Enabling the full
+tunnel on such hosts is a conscious, one-line opt-in — or you stay on netproxy.
+
 ## When the daemon is unreachable
 
 `agentjail-hook` is stdlib-only and dials the daemon with a 30 ms budget. If

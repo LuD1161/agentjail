@@ -55,7 +55,12 @@ func checkUnprivilegedUserns() doctorCheck {
 		}
 	}
 
-	detail := "disabled — transparent tunnel unavailable, shield falls back to netproxy; check sysctls kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor kernel.apparmor_restrict_unprivileged_userns"
+	detail := "disabled — transparent tunnel unavailable, shield falls back to netproxy (host/SNI-level policy still applies)"
+	if fix := usernsRemediation(); fix != "" {
+		detail += ". " + fix
+	} else {
+		detail += "; check sysctls kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor kernel.apparmor_restrict_unprivileged_userns"
+	}
 	if hint := unprivilegedUsernsSysctlHint(); hint != "" {
 		detail += " (" + hint + ")"
 	}
@@ -64,6 +69,21 @@ func checkUnprivilegedUserns() doctorCheck {
 		status: "fail",
 		detail: detail,
 	}
+}
+
+// usernsRemediation returns the one-time host command to re-enable unprivileged
+// user namespaces when the block is Ubuntu 23.10+'s AppArmor restriction (the
+// common case on a modern desktop/server). Empty otherwise. agentjail never sets
+// this itself: it needs root, and silently escalating privilege would violate
+// the no-install-password principle — so doctor advises and the user decides.
+func usernsRemediation() string {
+	b, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+	if err != nil || strings.TrimSpace(string(b)) != "1" {
+		return ""
+	}
+	return "To enable the full tunnel (one-time, needs sudo): " +
+		"printf 'kernel.apparmor_restrict_unprivileged_userns=0\\n' | " +
+		"sudo tee /etc/sysctl.d/99-agentjail-userns.conf && sudo sysctl --system"
 }
 
 // unprivilegedUsernsSysctlHint reads the relevant sysctls best-effort to enrich
