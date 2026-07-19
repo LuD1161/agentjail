@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
@@ -137,10 +138,12 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// are active. `install` is idempotent - safe to call on every launch.
 	appPath := resolveTunnelAppPath()
 	if _, statErr := os.Stat(appPath); statErr != nil {
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, false, "app_not_found")
 		fail("AgentjailTunnel app not found at %s (set AGENTJAIL_TUNNEL_APP, or build/install it - see macos/README.md): %v", appPath, statErr)
 		return
 	}
 	if out, err := exec.Command(appPath, "install").CombinedOutput(); err != nil {
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, false, "install_failed")
 		fail("%s install failed: %v: %s", appPath, err, string(out))
 		return
 	}
@@ -189,6 +192,10 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 
 	var caCleanup func()
 	var caEnvVars map[string]string
+	// mitmActive is the posture ACHIEVED, not the one requested (ADR 0077 D6);
+	// it feeds the tunnel.extension_started audit detail so a fail-open MITM
+	// step never gets reported as "mitm: true". See AGE-149 T1.5.
+	var mitmActive bool
 	cleanupGateway := func() {
 		gwCancel()
 		_ = gateway.Close()
@@ -256,6 +263,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		// interception. See AGE-149 T1.6, ADR 0092-persist-request-bodies.
 		rec := newBodyRecording(ctx, sessionID, logger, emitter)
 		h.Bodies = rec.store
+		mitmActive = true
 		gateway.SetMITM(h)
 		logger.Info("tunnel TLS interception ON - agentjail is decrypting this agent's HTTPS via a per-session in-memory CA; "+rec.notice(),
 			"db", mitm.DefaultDBPath(), "bodies", mitm.DefaultBodyDir(), "session", sessionID)
@@ -294,6 +302,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	os.Remove(confPath) // secret material; remove regardless of start outcome
 	if startErr != nil {
 		cleanupGateway()
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "app_start_failed")
 		fail("%s start failed: %v: %s", appPath, startErr, string(startOut))
 		return
 	}
@@ -311,6 +320,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		if time.Now().After(regDeadline) {
 			cleanupGateway()
 			_, _ = exec.Command(appPath, "stop").CombinedOutput()
+			emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "session_socket_timeout")
 			fail("sysext session socket %s not ready in 15s: %v", tunnelSessionSockPath, dialErr)
 			return
 		}
@@ -318,6 +328,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	}
 
 	logger.Info("NETransparentProxyProvider tunnel active", "port", port)
+	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "")
 
 	// --- 6. SEATBELT + SPAWN CHILD (no syscall.Exec - see doc comment).
 	home, homeErr := os.UserHomeDir()
@@ -361,6 +372,9 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	//     not tunneled. No loop.
 	if regErr := tunnelSessionIPC(fmt.Sprintf("register %d\n", os.Getpid())); regErr != nil {
 		logger.Warn("failed to register shield PID with extension", "pid", os.Getpid(), "err", regErr)
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "register_ipc_failed")
+	} else {
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "")
 	}
 
 	exitCode := 0
@@ -383,11 +397,37 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// syscall.Exec'd. Best-effort: none of these should mask the agent's own
 	// exit code.
 	_ = tunnelSessionIPC(fmt.Sprintf("unregister %d\n", os.Getpid()))
+	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionUnregistered, sessionID, appPath, mitmActive, "")
 	cleanupGateway()
 	_, _ = exec.Command(appPath, "stop").CombinedOutput()
+	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, "")
 	revokeSecretGrants(activeGrants, ctlToken)
 
 	os.Exit(exitCode)
+}
+
+// emitTunnelExtensionEvent audits one step of the darwin tunnel's lifecycle
+// (extension start/stop, session register/unregister). Detail carries fixed
+// keys only - mode, mitm posture, and the app path - plus failureReason when
+// the step failed; never a key path or token. See AGE-149 T1.5.
+func emitTunnelExtensionEvent(ctx context.Context, emitter audit.Emitter, eventType, sessionID, appPath string, mitmActive bool, failureReason string) {
+	if emitter == nil {
+		return
+	}
+	detail := map[string]string{
+		"mode":     "tunnel",
+		"mitm":     strconv.FormatBool(mitmActive),
+		"app_path": appPath,
+	}
+	if failureReason != "" {
+		detail["failure_reason"] = failureReason
+	}
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: eventType,
+		SessionID: sessionID,
+		Detail:    detail,
+		Actor:     "shield",
+	})
 }
 
 // tunnelSessionIPC dials the extension's session socket at
