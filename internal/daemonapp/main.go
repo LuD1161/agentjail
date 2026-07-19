@@ -207,6 +207,41 @@ func (s *server) flushDroppedDecisions(ctx context.Context) {
 	}
 }
 
+// retentionSweep runs one retention pass: store cleanup (retention window + WAL
+// checkpoint, ADR 0071) and the captured-body sweep (ADR 0092 D2). Both
+// failures are non-fatal. Shared by the startup pass and retentionLoop so they
+// cannot diverge. See ADR 0101-periodic-retention.
+func (s *server) retentionSweep(ctx context.Context, dur time.Duration) {
+	if s.eventStore != nil {
+		if cerr := s.eventStore.Cleanup(ctx, dur); cerr != nil {
+			slog.Warn("store retention cleanup failed (non-fatal)", "err", cerr)
+		}
+	}
+	if n, berr := mitm.SweepBodies(mitm.DefaultBodyDir(), dur, time.Now()); berr != nil {
+		slog.Warn("body retention sweep failed (non-fatal)", "err", berr, "removed", n)
+	} else if n > 0 {
+		slog.Info("body retention sweep", "removed", n, "retention", dur)
+	}
+}
+
+// retentionLoop re-runs run on a ticker until ctx is cancelled. interval<=0
+// disables it (startup-only). See ADR 0101-periodic-retention (AGE-225).
+func retentionLoop(ctx context.Context, interval time.Duration, run func()) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			run()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // drainDecisions consumes the decision channel and writes to the store. It
 // runs until ctx is cancelled, then drains any remaining records and exits
 // so graceful shutdown flushes pending writes.
@@ -854,6 +889,7 @@ func Run(args []string) int {
 	logPath := fs.String("log", defaultLogPath(), "path to structured log file (rotated internally)")
 	dbPath := fs.String("db", defaultDBPath(), "path to SQLite event store (~/.agentjail/agentjail.db)")
 	retentionDur := fs.Duration("retention", 30*24*time.Hour, "max age to retain decisions/audit events in the store (e.g. 720h)")
+	retentionInterval := fs.Duration("retention-interval", 6*time.Hour, "how often to re-run retention cleanup + body sweep on a long-lived daemon (0 = startup only). See ADR 0101-periodic-retention")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -975,9 +1011,6 @@ func Run(args []string) int {
 		srv.eventStore = st
 		srv.decCh = make(chan store.DecisionRecord, 1024)
 		migrateDaemonLog(ctx, st, *logPath)
-		if cerr := st.Cleanup(ctx, *retentionDur); cerr != nil {
-			slog.Warn("store retention cleanup failed (non-fatal)", "err", cerr)
-		}
 		srv.decWg.Add(1)
 		go srv.drainDecisions(ctx)
 		slog.Info("sqlite event store opened", "db", *dbPath, "retention", *retentionDur)
@@ -985,13 +1018,11 @@ func Run(args []string) int {
 		slog.Warn("sqlite event store open failed; continuing without persistence (fail-open on logging)", "db", *dbPath, "err", serr)
 	}
 
-	// One retention window governs both the store and the captured body files.
-	// A sweep failure is non-fatal. See ADR 0092-persist-request-bodies (D2).
-	if n, berr := mitm.SweepBodies(mitm.DefaultBodyDir(), *retentionDur, time.Now()); berr != nil {
-		slog.Warn("body retention sweep failed (non-fatal)", "err", berr, "removed", n)
-	} else if n > 0 {
-		slog.Info("body retention sweep", "removed", n, "retention", *retentionDur)
-	}
+	// Enforce retention now, then on a ticker: Cleanup runs exactly once at
+	// startup otherwise, so a long-lived daemon (Restart=always, ADR 0070) would
+	// stop enforcing its window after the first second. See ADR 0101-periodic-retention (AGE-225).
+	srv.retentionSweep(ctx, *retentionDur)
+	go retentionLoop(ctx, *retentionInterval, func() { srv.retentionSweep(ctx, *retentionDur) })
 
 	// After the store is wired, so the mode-changed audit event has somewhere to
 	// land. The zero value is false (enforce), so a monitor-mode config emits the
