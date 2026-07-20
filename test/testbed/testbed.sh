@@ -188,11 +188,16 @@ do_exec() {
 # through a scenario. Any failure -> non-zero exit, so it can gate `git tag`.
 # The gate testbed is left at rest afterward (reset next run) for speed.
 do_gate() {
-    local worktree="$REPO_ROOT" name="release-gate" scenario="e2e-smoke"
+    local worktree="$REPO_ROOT" name="release-gate"
+    # Default gate set: clean-box install/enforcement (e2e-smoke) plus the
+    # real-agent tunnel check (tunnel-agent). The latter SKIPs itself when no
+    # Claude token is seeded, so it is safe to always include. --scenario runs
+    # exactly one instead.
+    local scenarios=("e2e-smoke" "tunnel-agent")
     while [ $# -gt 0 ]; do
         case "$1" in
             --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;
-            --scenario) scenario="$2"; shift 2 ;;
+            --scenario) scenarios=("$2"); shift 2 ;;
             *) die "unknown gate flag: $1" ;;
         esac
     done
@@ -217,13 +222,13 @@ do_gate() {
         do_create "$name"
     fi
     do_provision "$name" --worktree "$worktree"
-    log "RELEASE GATE: running scenario '$scenario' on a clean box"
-    if do_test "$name" "$scenario"; then
-        log "RELEASE GATE ✓ PASS — safe to tag"
-        return 0
-    else
-        die "RELEASE GATE ✗ FAIL — do NOT release"
-    fi
+    local s
+    for s in "${scenarios[@]}"; do
+        log "RELEASE GATE: running scenario '$s' on a clean box"
+        do_test "$name" "$s" || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+    done
+    log "RELEASE GATE ✓ PASS — safe to tag"
+    return 0
 }
 
 do_test() {
