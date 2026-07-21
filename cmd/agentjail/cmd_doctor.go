@@ -775,9 +775,10 @@ func bodyEncryptionTierCheck(label string, p bodyKEKPosture) doctorCheck {
 type repairID string
 
 const (
-	repairDaemon     repairID = "daemon"
-	repairPathShim   repairID = "path-shim"
-	repairServiceDef repairID = "service-definition"
+	repairDaemon         repairID = "daemon"
+	repairPathShim       repairID = "path-shim"
+	repairServiceDef     repairID = "service-definition"
+	repairApparmorUserns repairID = "apparmor-userns"
 )
 
 // repairAction is one finding's fix plus its independent re-check. recheck must
@@ -807,6 +808,14 @@ var repairRegistry = map[repairID]repairAction{
 		label:   "rewriting the daemon's supervisor definition so it restarts after a clean exit",
 		apply:   repairDaemonServiceDefinition,
 		recheck: serviceRestartPolicyCheck,
+	},
+	// The scoped AppArmor profile is the ONLY mechanism to enable the tunnel on
+	// a userns-restricted host — no global sysctl flip. Consent-gated; needs
+	// root once. See ADR 0104-shield-apparmor-userns.
+	repairApparmorUserns: {
+		label:   "installing the scoped AppArmor profile that enables the tunnel for agentjail's binary only",
+		apply:   repairApparmorUsernsApply,
+		recheck: repairApparmorUsernsRecheck,
 	},
 }
 

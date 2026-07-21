@@ -16,7 +16,7 @@ import (
 // new entry must be a deliberate edit here too. Shield, hooks, and the
 // Protection attestation are absent on purpose.
 func TestOnlyDiagnosedRepairsAreRegistered(t *testing.T) {
-	want := map[repairID]bool{repairDaemon: true, repairPathShim: true, repairServiceDef: true}
+	want := map[repairID]bool{repairDaemon: true, repairPathShim: true, repairServiceDef: true, repairApparmorUserns: true}
 	for id := range repairRegistry {
 		if !want[id] {
 			t.Errorf("unexpected repair %q registered — every repair needs an ADR entry naming why it is safe", id)
@@ -211,6 +211,15 @@ func TestPathShimRepairIsGatedOnRecordedConsent(t *testing.T) {
 	}
 	if err := restorePathShim(home); err == nil {
 		t.Error("restorePathShim installed a shim with no recorded opt-in")
+	}
+}
+
+// The scoped AppArmor profile needs root once, so doctor --fix must refuse to
+// load it unless the user recorded consent. See ADR 0104-shield-apparmor-userns.
+func TestApparmorUsernsRepairIsGatedOnRecordedConsent(t *testing.T) {
+	home := t.TempDir()
+	if err := repairApparmorUsernsApply(home); err == nil {
+		t.Error("repairApparmorUsernsApply loaded the profile with no recorded opt-in")
 	}
 }
 

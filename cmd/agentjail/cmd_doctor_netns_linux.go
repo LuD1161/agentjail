@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/LuD1161/agentjail/internal/apparmor"
 )
 
 // checkNetworkInterception probes the two kernel capabilities the transparent
@@ -55,12 +58,22 @@ func checkUnprivilegedUserns() doctorCheck {
 		}
 	}
 
-	detail := "disabled — transparent tunnel unavailable, shield falls back to netproxy (host/SNI-level policy still applies)"
+	// The AppArmor restriction is the one block agentjail can lift for its own
+	// binary — the scoped profile — with no system-wide weakening. That single
+	// remediation is the whole story; there is no netproxy fallback to mention.
+	// See ADR 0104-shield-apparmor-userns.
 	if fix := usernsRemediation(); fix != "" {
-		detail += ". " + fix
-	} else {
-		detail += "; check sysctls kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor kernel.apparmor_restrict_unprivileged_userns"
+		return doctorCheck{
+			label:  "Network interception",
+			status: "fail",
+			repair: repairApparmorUserns,
+			detail: "OFF — " + fix,
+		}
 	}
+
+	detail := "disabled — transparent tunnel unavailable; check sysctls " +
+		"kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor " +
+		"kernel.apparmor_restrict_unprivileged_userns"
 	if hint := unprivilegedUsernsSysctlHint(); hint != "" {
 		detail += " (" + hint + ")"
 	}
@@ -71,19 +84,61 @@ func checkUnprivilegedUserns() doctorCheck {
 	}
 }
 
-// usernsRemediation returns the one-time host command to re-enable unprivileged
-// user namespaces when the block is Ubuntu 23.10+'s AppArmor restriction (the
-// common case on a modern desktop/server). Empty otherwise. agentjail never sets
-// this itself: it needs root, and silently escalating privilege would violate
-// the no-install-password principle — so doctor advises and the user decides.
+// usernsRemediation returns the single ADR 0104 remediation when the userns
+// block is Ubuntu 23.10+'s AppArmor restriction: install the scoped per-binary
+// profile. Empty otherwise. NO global sysctl flip — weakening userns for every
+// binary on the machine to enable one is the wrong trade for a security tool.
+// See ADR 0104-shield-apparmor-userns.
 func usernsRemediation() string {
-	b, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-	if err != nil || strings.TrimSpace(string(b)) != "1" {
+	if !apparmorUsernsRestricted() {
 		return ""
 	}
-	return "To enable the full tunnel (one-time, needs sudo): " +
-		"printf 'kernel.apparmor_restrict_unprivileged_userns=0\\n' | " +
-		"sudo tee /etc/sysctl.d/99-agentjail-userns.conf && sudo sysctl --system"
+	return "The transparent tunnel needs an unprivileged user namespace, which\n" +
+		"  this host restricts (kernel.apparmor_restrict_unprivileged_userns=1).\n" +
+		"  agentjail enables it for its OWN binary only — it will not weaken this\n" +
+		"  setting for anything else on your machine.\n\n" +
+		"  Turn it on (one-time sudo):  agentjail install --with-apparmor\n\n" +
+		"  Core protection — commands, files, MCP, sandbox — is active and needs\n" +
+		"  no sudo. This only adds network visibility."
+}
+
+// apparmorUsernsRestricted reports whether Ubuntu's AppArmor userns restriction
+// is the active block (kernel.apparmor_restrict_unprivileged_userns=1).
+func apparmorUsernsRestricted() bool {
+	b, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+	return err == nil && strings.TrimSpace(string(b)) == "1"
+}
+
+// repairApparmorUsernsApply installs the scoped AppArmor userns profile. Gated
+// on recorded consent — a repair the user never consented to must not run, and
+// this one needs root once. Mirrors restorePathShim's consent gate.
+// See ADR 0104-shield-apparmor-userns.
+func repairApparmorUsernsApply(home string) error {
+	if !apparmorConsentRecorded(home) {
+		return fmt.Errorf("no recorded opt-in for the AppArmor userns profile — run `agentjail install --with-apparmor`")
+	}
+	installDir := filepath.Join(home, ".agentjail", "bin")
+	return apparmor.New().Install(installDir)
+}
+
+// repairApparmorUsernsRecheck re-runs the live CLONE_NEWUSER probe, so the
+// reported state is observed, not the repair's return value (ADR 0086).
+func repairApparmorUsernsRecheck(home string) doctorCheck {
+	return checkUnprivilegedUserns()
+}
+
+// apparmorConsentMarker is the recorded opt-in for loading the scoped AppArmor
+// profile, written by `agentjail install --with-apparmor`. Its presence is the
+// only thing that lets `doctor --fix` load the profile (needs root once).
+func apparmorConsentMarker(home string) string {
+	return filepath.Join(home, ".agentjail", "apparmor-consent")
+}
+
+// apparmorConsentRecorded reports whether the user opted into the AppArmor
+// profile. See ADR 0104-shield-apparmor-userns.
+func apparmorConsentRecorded(home string) bool {
+	_, err := os.Stat(apparmorConsentMarker(home))
+	return err == nil
 }
 
 // unprivilegedUsernsSysctlHint reads the relevant sysctls best-effort to enrich
