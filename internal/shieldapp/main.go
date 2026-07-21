@@ -95,6 +95,9 @@ func Run(args []string) int {
 	// ADR 0077 (D1, D2).
 	mitmMode := fs.Bool("mitm", false, "force TLS interception on for this launch, overriding a network.tunnel_mitm: false opt-out (interception is already the default)")
 	noMITM := fs.Bool("no-mitm", false, "transparent-only: relay the agent's TLS opaquely instead of decrypting it. Keeps netns isolation and IP/SNI visibility, but HTTP(S) policy templates cannot match (ADR 0077)")
+	// Opt out of the base-URL capture gateway (on by default for a detected
+	// provider agent under --tunnel). See ADR 0109-baseurl-capture-gateway.
+	noProviderGateway := fs.Bool("no-provider-gateway", false, "do not route a detected provider agent (e.g. Claude Code) through the local capture gateway; the agent talks to its provider directly and its LLM API bodies are not captured (ADR 0109)")
 	auditJSON := fs.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := fs.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	fs.Usage = func() {
@@ -107,6 +110,7 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "  --tunnel            (Linux) route the agent's traffic through the transparent tunnel so HTTP(S) policy applies. Decrypts HTTPS by default — see --no-mitm")
 		fmt.Fprintln(os.Stderr, "  --mitm              force TLS interception on, overriding a network.tunnel_mitm: false opt-out (already the default)")
 		fmt.Fprintln(os.Stderr, "  --no-mitm           transparent-only: relay the agent's TLS opaquely. HTTP(S) policy templates cannot match (ADR 0077)")
+		fmt.Fprintln(os.Stderr, "  --no-provider-gateway  do not route a detected provider agent through the local capture gateway (ADR 0109)")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
 		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings, or if IMDS is reachable in port-only mode")
 		fmt.Fprintln(os.Stderr, "")
@@ -172,6 +176,12 @@ func Run(args []string) int {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: policy file %s exists but could not be loaded: %v\n", *policyPath, err)
 		fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch the agent with a malformed policy file -- fix the file or remove it to use built-in defaults")
 		return 1
+	}
+
+	// --no-provider-gateway is a per-launch override that beats any config
+	// opt-in, mirroring --no-mitm. See ADR 0109-baseurl-capture-gateway.
+	if *noProviderGateway {
+		cfg.Network.CaptureGateway = new(bool) // *bool -> false
 	}
 
 	// Same reasoning as the policy file above, applied to the L7 templates: a
@@ -368,6 +378,7 @@ func resolveMITM(mitmFlag, noMITMFlag bool, cfgTunnelMITM *bool) bool {
 		return true
 	}
 }
+
 // resolveNoNetproxy computes the effective "netproxy disabled" value from the
 // two flags. Egress enforcement is OPT-IN (ADR 0046): it is on only when
 // --netproxy is passed and --no-netproxy is not. The default (both false) is

@@ -245,6 +245,12 @@ type NetworkConfig struct {
 	// opt-out, true = explicit opt-in. --mitm / --no-mitm override it per
 	// launch. See ADR 0077 (D2, D3).
 	TunnelMITM *bool `yaml:"tunnel_mitm"`
+
+	// CaptureGateway routes a detected provider agent's LLM API traffic through a
+	// local capture gateway (base-URL injection) instead of transparent MITM.
+	// Tri-state: absent = on (default), false = opt-out, true = explicit opt-in.
+	// See ADR 0109-baseurl-capture-gateway (AGE-259).
+	CaptureGateway *bool `yaml:"capture_gateway"`
 }
 
 // EssentialAllowedHosts returns the minimal, non-removable set of hosts an
@@ -814,6 +820,14 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Network.TunnelMITM = overlay.Network.TunnelMITM
 	} else {
 		result.Network.TunnelMITM = base.Network.TunnelMITM
+	}
+
+	// Network.CaptureGateway -- tri-state pointer, same contract as
+	// TunnelMITM. See ADR 0109-baseurl-capture-gateway.
+	if overlay.Network.CaptureGateway != nil {
+		result.Network.CaptureGateway = overlay.Network.CaptureGateway
+	} else {
+		result.Network.CaptureGateway = base.Network.CaptureGateway
 	}
 
 	// Web.Blocked

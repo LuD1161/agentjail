@@ -556,7 +556,29 @@ agentjail sees only destination IP, SNI, and byte counts, and **HTTP(S) policy
 templates cannot match** (database and SSH rules still apply).
 
 Run `agentjail doctor` to see the current posture without launching an agent.
-macOS uses a different backend and does not have this yet.
+
+**macOS** reaches the same place by a different road: instead of network
+namespaces (which macOS lacks) the tunnel runs as a NETransparentProxy system
+extension that funnels the agent's traffic through the same in-process gVisor
+gateway and `internal/mitm` interceptor. HTTP(S) decryption, h2, and the policy
+templates work identically; the one endpoint MITM cannot reach on macOS (Claude
+Code's Bun inference client) is handled by the capture gateway below.
+
+### Capture gateway for LLM providers
+
+On **macOS today** (Linux parity is planned), some agents refuse a MITM
+certificate for their model API no matter how the CA is trusted — current Claude
+Code runs on Bun, and its inference client (`POST /v1/messages`) ignores every CA
+store, so transparent MITM cannot capture it. Under `--tunnel`, agentjail instead
+routes a detected provider agent through a
+local **capture gateway**: it points the agent's own supported base-URL override
+(`ANTHROPIC_BASE_URL`) at a loopback proxy, records the full request and response
+(bodies included, encrypted at rest), and forwards to the real provider over TLS.
+The agent keeps working; you see the traffic. A base URL you already set is
+preserved (the gateway forwards to it), and a target that is neither the provider
+nor an allowed host is refused. Opt out with `--no-provider-gateway` or
+`network.capture_gateway: false`. See
+[ADR 0109](./docs/adr/0109-baseurl-capture-gateway.md).
 
 **Requirement: unprivileged user namespaces.** The tunnel builds its namespaces
 without root, so the kernel must allow *unprivileged* userns. Most distros allow

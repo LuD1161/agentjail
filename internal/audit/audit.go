@@ -101,6 +101,13 @@ const (
 	TunnelExtensionStopped    = "tunnel.extension_stopped"
 	TunnelSessionRegistered   = "tunnel.session_registered"
 	TunnelSessionUnregistered = "tunnel.session_unregistered"
+	// Base-URL capture gateway lifecycle (AGE-259 / ADR 0109-baseurl-capture-gateway).
+	// ProviderRouted: a registered provider agent's base URL was pointed at the local
+	// capture gateway. StartFailed: the gateway could not bind/start/open its store and
+	// launch was refused (fail-closed). Detail carries host/agent/provider only --
+	// never a token, never the gateway nonce.
+	GatewayProviderRouted = "gateway.provider_routed"
+	GatewayStartFailed    = "gateway.start_failed"
 )
 
 // Event is one audit log entry.

@@ -4,7 +4,9 @@ package shieldapp
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -21,6 +23,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/dnsvip"
+	capturegw "github.com/LuD1161/agentjail/internal/gateway"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
@@ -57,13 +60,27 @@ func resolveTunnelAppPath() string {
 }
 
 // generateSessionID returns a shield session identifier of the form
-// "shield-<unix_timestamp>-<8 hex chars>", used to tag every intercepted
-// request (see mitm.RequestLog.SessionID) with the shield session that
-// produced it.
+// "shield<unix_timestamp><8 hex chars>", used to tag every intercepted request
+// (see mitm.RequestLog.SessionID). It MUST stay alphanumeric (no dashes): the id
+// is the per-session bodystore group key and mitm.NewBodyStore rejects any
+// non-alnum component, which silently disabled body persistence. See ADR
+// 0092-persist-request-bodies (D1), AGE-259.
 func generateSessionID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
-	return fmt.Sprintf("shield-%d-%s", time.Now().Unix(), hex.EncodeToString(b))
+	return fmt.Sprintf("shield%d%s", time.Now().Unix(), hex.EncodeToString(b))
+}
+
+// tunnelCADir returns a fresh temp dir to hold the tunnel MITM CA for the
+// life of this session.
+func tunnelCADir() (dir string, err error) {
+	return os.MkdirTemp("", "agentjail-tunnel-ca-*")
+}
+
+// loadOrGenTunnelCA returns an in-memory per-session CA whose key never
+// touches disk (S-C1).
+func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
+	return mitm.GenerateCAInMemory()
 }
 
 // startTunnelDarwin drives the sanctioned macOS path for --tunnel: the
@@ -236,9 +253,9 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// opaquely - it does NOT invoke fallback.
 	if !mitmEnabled {
 		logger.Info("tunnel TLS interception OFF (transparent-only) - HTTP(S) policy templates will NOT match; visibility is destination IP, SNI and byte counts only")
-	} else if caDir, mkErr := os.MkdirTemp("", "agentjail-tunnel-ca-*"); mkErr != nil {
+	} else if caDir, mkErr := tunnelCADir(); mkErr != nil {
 		logger.Warn("tunnel TLS interception UNAVAILABLE (temp CA dir failed); relaying HTTPS opaque", "err", mkErr)
-	} else if caCert, caKey, certPEM, genErr := mitm.GenerateCAInMemory(); genErr != nil {
+	} else if caCert, caKey, certPEM, genErr := loadOrGenTunnelCA(); genErr != nil {
 		os.RemoveAll(caDir)
 		logger.Warn("tunnel TLS interception UNAVAILABLE (CA generation failed); relaying HTTPS opaque", "err", genErr)
 	} else if writeErr := os.WriteFile(filepath.Join(caDir, TunnelCACertName), certPEM, 0o644); writeErr != nil {
@@ -252,7 +269,10 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		logger.Warn("tunnel TLS interception UNAVAILABLE (network.db open failed); relaying HTTPS opaque", "err", storeErr)
 	} else {
 		caEnvVars = envVars
-		caCleanup = func() { os.RemoveAll(caDir); _ = store.Close() }
+		caCleanup = func() {
+			os.RemoveAll(caDir)
+			_ = store.Close()
+		}
 		h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
 			if lerr := store.Log(rl); lerr != nil {
 				logger.Debug("network.db log failed", "err", lerr)
@@ -272,8 +292,45 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		h.Bodies = rec.store
 		mitmActive = true
 		gateway.SetMITM(h)
-		logger.Info("tunnel TLS interception ON - agentjail is decrypting this agent's HTTPS via a per-session in-memory CA; "+rec.notice(),
+		notice := rec.notice()
+		logger.Info("tunnel TLS interception ON - agentjail is decrypting this agent's HTTPS via a per-session in-memory CA; "+notice,
 			"db", mitm.DefaultDBPath(), "bodies", mitm.DefaultBodyDir(), "session", sessionID)
+
+		// Provider capture gateway: point the agent's LLM API at a local plaintext
+		// capture gateway so we record bodies the Bun inference client refuses under
+		// MITM (fail-closed). See ADR 0109-baseurl-capture-gateway (AGE-259).
+		if captureGatewayEnabled(cfg) {
+			if prov, ok := capturegw.Lookup(filepath.Base(agentPath)); ok && prov.Caps.Verified && prov.Caps.BaseURLEnv {
+				inherited := os.Getenv(prov.BaseURLEnvVar)
+				target, terr := capturegw.ResolveForwardTarget(inherited, prov, cfg.Network.AllowedHosts)
+				if terr != nil {
+					cleanupGateway()
+					emitGatewayStartFailed(ctx, emitter, sessionID, prov, "target_rejected")
+					fail("capture gateway target rejected for %s: %v", prov.Name, terr)
+					return
+				}
+				gw := capturegw.New(target, store, capturegw.Options{
+					SessionID: sessionID, OwnerPID: os.Getpid(), Logger: logger, Bodies: rec.store,
+				})
+				baseURL, gerr := gw.Start(ctx)
+				if gerr != nil {
+					_ = gw.Close()
+					cleanupGateway()
+					emitGatewayStartFailed(ctx, emitter, sessionID, prov, "start")
+					fail("capture gateway failed to start for %s: %v", prov.Name, gerr)
+					return
+				}
+				caEnvVars[prov.BaseURLEnvVar] = baseURL
+				if inherited != "" {
+					caEnvVars["AGENTJAIL_ORIGINAL_"+prov.BaseURLEnvVar] = inherited
+				}
+				// Close the gateway when the session's CA/store are torn down (before store.Close()).
+				prevCleanup := caCleanup
+				caCleanup = func() { _ = gw.Close(); prevCleanup() }
+				emitGatewayProviderRouted(ctx, emitter, sessionID, prov)
+				logger.Info("capture gateway ON - "+prov.Name+" LLM API routed through local plaintext capture", "upstream", prov.UpstreamHost, "session", sessionID)
+			}
+		}
 	}
 
 	// --- 4. WG-CONF: the frozen contract. Written to a 0600 temp file
@@ -476,6 +533,52 @@ func armSignalDrain(sigs ...os.Signal) (stop func()) {
 		signal.Stop(sigCh)
 		close(done)
 	}
+}
+
+// captureGatewayEnabled: tri-state opt-out, default on. See ADR 0109-baseurl-capture-gateway.
+func captureGatewayEnabled(cfg *config.PolicyConfig) bool {
+	if cfg != nil && cfg.Network.CaptureGateway != nil {
+		return *cfg.Network.CaptureGateway
+	}
+	return true
+}
+
+// emitGatewayProviderRouted audits that a provider agent's LLM API traffic was
+// routed through the local capture gateway. Detail never carries the gateway's
+// baseURL/nonce - only the provider name and its upstream host. See ADR
+// 0109-baseurl-capture-gateway.
+func emitGatewayProviderRouted(ctx context.Context, emitter audit.Emitter, sessionID string, prov capturegw.Provider) {
+	if emitter == nil {
+		return
+	}
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.GatewayProviderRouted,
+		SessionID: sessionID,
+		Detail: map[string]string{
+			"agent":         prov.Name,
+			"provider_host": prov.UpstreamHost,
+		},
+		Actor: "shield",
+	})
+}
+
+// emitGatewayStartFailed audits a capture-gateway setup failure. reason is a
+// short fixed string, never the raw error (which may embed the target URL) -
+// see ADR 0109-baseurl-capture-gateway.
+func emitGatewayStartFailed(ctx context.Context, emitter audit.Emitter, sessionID string, prov capturegw.Provider, reason string) {
+	if emitter == nil {
+		return
+	}
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.GatewayStartFailed,
+		SessionID: sessionID,
+		Detail: map[string]string{
+			"agent":         prov.Name,
+			"provider_host": prov.UpstreamHost,
+			"reason":        reason,
+		},
+		Actor: "shield",
+	})
 }
 
 // emitTunnelExtensionEvent audits one step of the darwin tunnel's lifecycle
