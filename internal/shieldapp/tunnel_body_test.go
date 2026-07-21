@@ -1,6 +1,7 @@
-//go:build linux
-
 package shieldapp
+
+// Body-transcript recording is OS-agnostic (see tunnel_body.go's doc
+// comment); this test file carries no build tag so it runs on every host.
 
 import (
 	"bufio"

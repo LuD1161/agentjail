@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release chaos
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release chaos tunnel-lib macos-app
 
 BIN ?= bin/agentjail
 
@@ -132,6 +132,19 @@ ifeq ($(shell uname),Darwin)
 else
 	@echo "skip: codesign is macOS only"
 endif
+
+tunnel-lib:  ## build the cgo c-archive linked into the macOS network extension (build/libagentjail_tunnel.a)
+	@mkdir -p build
+	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+		go build -buildmode=c-archive \
+		-o build/libagentjail_tunnel.a \
+		./internal/tunnel/cbridge/
+
+macos-app:  ## build + ad-hoc sign build/AgentjailTunnel.app (set NOTARIZE=1 for Developer ID + notarization)
+	./scripts/build-macos-app.sh
+
+macos-dmg: macos-app  ## package build/AgentjailTunnel.app into build/AgentjailTunnel.dmg
+	./scripts/package-macos-dmg.sh
 
 # dist-tarball builds the two real binaries for a target platform and packs
 # them in the flat layout install.sh expects (binaries at tarball top level).

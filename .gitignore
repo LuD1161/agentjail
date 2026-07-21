@@ -71,3 +71,6 @@ screenshots/
 
 # testbed recordings (generated)
 /test/testbed/reports/
+
+# local signing secrets: ASC API key (.p8) + Developer ID provisioning profiles
+.secrets/

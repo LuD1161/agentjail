@@ -54,8 +54,8 @@ func TestAccept_GatewayInitialization(t *testing.T) {
 	if gw.dev == nil {
 		t.Error("gateway.dev is nil — WireGuard device was not created")
 	}
-	if gw.tnet == nil {
-		t.Error("gateway.tnet is nil — gVisor netstack was not initialized")
+	if gw.serverNS == nil {
+		t.Error("gateway.serverNS is nil — promiscuous gVisor netstack was not initialized")
 	}
 	if gw.registry == nil {
 		t.Error("gateway.registry is nil")

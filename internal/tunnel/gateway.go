@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strconv"
+	"strings"
 	"sync"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -39,6 +41,14 @@ type Gateway struct {
 	kernelTun tun.Device // non-nil only in utun mode (NewGatewayUTun)
 	logger    *slog.Logger
 
+	// serverNS, when non-nil, is the promiscuous gVisor stack backing the
+	// WireGuard device (the macOS NE loopback path). Unlike CreateNetTUN's
+	// stack it accepts SYNs to ANY destination IP (spoofing+promiscuous), so
+	// the agent's real-IP connections are delivered to handleConn instead of
+	// dropped. serveTCP is push-based like fwd; ListenAndServe installs it and
+	// blocks. See ADR 0107-tunnel-promiscuous-gateway and servernetstack.go.
+	serverNS *serverNetstack
+
 	// fwd is non-nil only for a transparent forward gateway
 	// (NewForwardGateway). When set, the serve path is push-based: accepted
 	// conns arrive via the forwardStack's accept callback (g.handleConn), not
@@ -52,6 +62,13 @@ type Gateway struct {
 	// not exist; the concrete *fdPump is only referenced in attach_linux.go.
 	// Guarded by mu. Close/detachTUN stops it.
 	pump io.Closer
+
+	// dnsConn, when non-nil, is a UDP PacketConn bound to localAddr:53 inside
+	// tnet. A dnsvip.Server serves DNS on it instead of a host socket, which
+	// fails for a VIP-range address the host kernel doesn't own. See
+	// DNSPacketConn. nil on a forward gateway (fwd != nil), which answers DNS
+	// via forwardStack's own dnsResolve callback instead.
+	dnsConn net.PacketConn
 
 	mu       sync.Mutex
 	closed   bool
@@ -86,16 +103,19 @@ func NewGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Ga
 	}
 	localAddr := prefix.Addr()
 
-	// Create the gVisor netstack TUN device. This runs entirely in
-	// userspace; no /dev/net/tun or kernel module needed.
-	tunDev, tnet, err := netstack.CreateNetTUN(
-		[]netip.Addr{localAddr},
-		nil, // no DNS servers (we handle DNS via the VIP registry)
-		cfg.mtu(),
-	)
+	// Create the promiscuous gVisor server netstack. Unlike CreateNetTUN
+	// (which adds only localAddr and drops SYNs to any other destination), this
+	// stack has SetPromiscuousMode/SetSpoofing enabled, so it accepts the
+	// agent's connections to ANY destination IP — the real IPs the agent dials
+	// when it did NOT resolve through the tunnel's DNS-VIP, as well as VIPs.
+	// Without this the macOS NE loopback path completed the WireGuard handshake
+	// but the gateway never answered the tunneled TCP SYN. See ADR
+	// 0087-macos-tunnel-promiscuous-gateway.
+	serverNS, err := newServerNetstack(localAddr, cfg.mtu())
 	if err != nil {
-		return nil, fmt.Errorf("tunnel: creating netstack TUN: %w", err)
+		return nil, fmt.Errorf("tunnel: creating server netstack: %w", err)
 	}
+	var tunDev tun.Device = serverNS
 
 	// Bridge wireguard-go logging to slog.
 	wgLogger := &device.Logger{
@@ -137,16 +157,37 @@ func NewGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Ga
 		logger.Info("loaded policy templates", "dir", cfg.PacksDir)
 	}
 
+	// Bind the DNS-VIP server's UDP socket INSIDE the netstack, on the
+	// gateway's own tunnel address. A host socket can't bind a VIP-range
+	// address the kernel doesn't own; binding inside the stack works because
+	// localAddr is the stack's own protocol address (added in newServerNetstack).
+	dnsConn, err := serverNS.dnsPacketConn(localAddr, 53)
+	if err != nil {
+		dev.Close()
+		return nil, fmt.Errorf("tunnel: creating DNS packet conn: %w", err)
+	}
+
 	g := &Gateway{
 		cfg:      cfg,
 		registry: registry,
 		matcher:  matcher,
-		tnet:     tnet,
+		serverNS: serverNS,
 		dev:      dev,
+		dnsConn:  dnsConn,
 		logger:   logger,
 	}
 
 	return g, nil
+}
+
+// bindStackDNSConn binds a UDP PacketConn to addr:53 inside tnet, for a
+// dnsvip.Server to serve DNS on. See DNSPacketConn.
+func bindStackDNSConn(tnet *netstack.Net, addr netip.Addr) (net.PacketConn, error) {
+	conn, err := tnet.ListenUDP(&net.UDPAddr{IP: addr.AsSlice(), Port: 53})
+	if err != nil {
+		return nil, fmt.Errorf("bind %s:53: %w", addr, err)
+	}
+	return conn, nil
 }
 
 // NewForwardGateway creates a transparent forward gateway. Unlike NewGateway it
@@ -211,6 +252,42 @@ func NewForwardGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logge
 // HTTPS is evaluated against the same templates.
 func (g *Gateway) Matcher() *netpolicy.Matcher { return g.matcher }
 
+// ListenPort returns the actual UDP port the WireGuard device is bound to. If
+// cfg.ListenPort was set explicitly (non-zero), it is returned directly. If it
+// was 0 (OS-assigned ephemeral port), the actual bound port is read back from
+// the device's UAPI IPC state. Returns 0 if it cannot be determined (e.g. no
+// WireGuard device, as in utun mode, or the device isn't up).
+func (g *Gateway) ListenPort() int {
+	if g.cfg.ListenPort != 0 {
+		return g.cfg.ListenPort
+	}
+	if g.dev == nil {
+		return 0
+	}
+	ipc, err := g.dev.IpcGet()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(ipc, "\n") {
+		portStr, ok := strings.CutPrefix(line, "listen_port=")
+		if !ok {
+			continue
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return 0
+		}
+		return port
+	}
+	return 0
+}
+
+// DNSPacketConn returns the netstack-bound UDP packet conn a dnsvip.Server
+// should serve DNS on, instead of binding a host socket (which fails for a VIP
+// the host kernel doesn't own). Returns nil on a forward gateway (fwd != nil),
+// which answers DNS via forwardStack's own dnsResolve callback instead.
+func (g *Gateway) DNSPacketConn() net.PacketConn { return g.dnsConn }
+
 // SetMITM enables TLS interception on the transparent forward path. When set,
 // handleConn routes :443 connections through the MITM handler (TLS terminate +
 // policy + logging to network.db) instead of a plain relay. Leaving it nil (the
@@ -230,6 +307,13 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 	// the context is cancelled, then tear the stack down.
 	if g.fwd != nil {
 		return g.serveForward(ctx)
+	}
+
+	// The promiscuous serverNetstack path is also push-based: serveTCP installs
+	// a tcp.NewForwarder that delivers every accepted connection (to any dest)
+	// straight to handleConn. See ADR 0107-tunnel-promiscuous-gateway.
+	if g.serverNS != nil {
+		return g.serveServerNS(ctx)
 	}
 
 	// Listen on all addresses, port 0 means accept connections to any port.
@@ -272,6 +356,21 @@ func (g *Gateway) ListenAndServe(ctx context.Context) error {
 		}
 		go g.handleConn(c)
 	}
+}
+
+// serveServerNS is the serve path for the promiscuous serverNetstack gateway
+// (the macOS NE loopback path). serveTCP installs a TCP forwarder that pushes
+// every accepted conn (to any destination) into g.handleConn on its own
+// goroutine, so like serveForward this simply blocks until ctx is cancelled and
+// then tears the stack down. See ADR 0107-tunnel-promiscuous-gateway.
+func (g *Gateway) serveServerNS(ctx context.Context) error {
+	g.serverNS.serveTCP(g.handleConn)
+	g.logger.Info("tunnel gateway listening", "addr", g.cfg.TunnelAddr)
+	<-ctx.Done()
+	if err := g.Close(); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // serveForward is the serve path for a transparent forward gateway. The
@@ -328,11 +427,17 @@ func (g *Gateway) Close() error {
 	if g.listener != nil {
 		g.listener.Close()
 	}
+	if g.dnsConn != nil {
+		g.dnsConn.Close()
+	}
 	if g.fwd != nil {
 		g.fwd.Close()
 	}
 	if g.dev != nil {
 		g.dev.Close()
+	}
+	if g.serverNS != nil {
+		g.serverNS.Close()
 	}
 	if g.kernelTun != nil {
 		g.kernelTun.Close()

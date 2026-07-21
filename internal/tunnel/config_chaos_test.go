@@ -40,7 +40,7 @@ func TestChaosPortBoundaries(t *testing.T) {
 		desc    string
 	}
 	cases := []portCase{
-		{0, true, "port 0 (zero)"},
+		{0, false, "port 0 (zero, OS-assigned)"},
 		{65535, false, "port 65535 (max valid)"},
 		{65536, true, "port 65536 (one above max)"},
 		{-1, true, "port -1 (negative)"},
@@ -244,12 +244,12 @@ func TestChaosEmptyFields(t *testing.T) {
 		}
 	})
 
-	// ListenPort zero (int zero-value == 0 which is invalid)
-	t.Run("zero ListenPort", func(t *testing.T) {
+	// ListenPort zero (int zero-value == 0) means OS-assigned, not invalid.
+	t.Run("zero ListenPort is OS-assigned", func(t *testing.T) {
 		cfg := base
 		cfg.ListenPort = 0
-		if err := cfg.Validate(); err == nil {
-			t.Error("expected error for zero ListenPort, got nil")
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected no error for zero ListenPort (OS-assigned), got: %v", err)
 		}
 	})
 
@@ -383,7 +383,8 @@ func TestChaosCorruptOneFieldAtATime(t *testing.T) {
 		{"corrupt PeerPublicKey to garbage", func(c *Config) { c.PeerPublicKey = "!!!not-base64!!!" }},
 		{"corrupt PeerPublicKey to wrong-length", func(c *Config) { c.PeerPublicKey = makeKeyBytes(1) }},
 		{"corrupt PeerPublicKey to empty", func(c *Config) { c.PeerPublicKey = "" }},
-		{"corrupt ListenPort to 0", func(c *Config) { c.ListenPort = 0 }},
+		// ListenPort 0 is deliberately excluded here: it means OS-assigned,
+		// not corrupt (see TestChaosPortBoundaries's "port 0" case).
 		{"corrupt ListenPort to -1", func(c *Config) { c.ListenPort = -1 }},
 		{"corrupt ListenPort to 65536", func(c *Config) { c.ListenPort = 65536 }},
 		{"corrupt ListenPort to MaxInt", func(c *Config) { c.ListenPort = math.MaxInt }},

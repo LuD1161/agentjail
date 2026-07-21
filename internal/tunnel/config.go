@@ -43,8 +43,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("tunnel: invalid private key: %w", err)
 	}
 
-	if c.ListenPort < 1 || c.ListenPort > 65535 {
-		return errors.New("tunnel: listen port must be 1-65535")
+	// 0 is valid: it asks the OS for an ephemeral port. Gateway.ListenPort()
+	// reads the actual bound port back from the WireGuard device after Up().
+	if c.ListenPort < 0 || c.ListenPort > 65535 {
+		return errors.New("tunnel: listen port must be 0-65535")
 	}
 
 	if c.PeerPublicKey == "" {
