@@ -83,6 +83,26 @@ func ApplyCapHardening() error {
 	return nil
 }
 
+// ApplyUnprivilegedHardening applies the hardening steps that need NO
+// capabilities and so work for a non-root process: no_new_privs, ambient-cap
+// clear, and the dumpable guard. It omits the securebits lockdown on purpose
+// (PR_SET_SECUREBITS needs CAP_SETPCAP). In the nested-userns tunnel path
+// (AGE-261) the agent is genuinely non-root, and creating the nested userns
+// RESETS securebits and the bounding set anyway (verified: the nested agent
+// reports Securebits 0x0), so securebits cannot be delivered there. no_new_privs
+// -- which IS irreversible and survives the nested clone+execve -- is what
+// carries the escalation-prevention: with it set and an empty permitted set, the
+// full bounding set is unreachable (no file-cap execve can add to permitted).
+func ApplyUnprivilegedHardening() error {
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return fmt.Errorf("harden: PR_SET_NO_NEW_PRIVS: %w", err)
+	}
+	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
+		return fmt.Errorf("harden: PR_CAP_AMBIENT_CLEAR_ALL: %w", err)
+	}
+	return ApplyDumpableGuard()
+}
+
 // ApplyDumpableGuard makes the process non-dumpable so a same-uid process cannot
 // ptrace or read its memory during the pre-exec window. DUMPABLE resets to 1 on
 // the next execve unless re-applied, so this is defense-in-depth for the window

@@ -491,23 +491,24 @@ func runHardenExec(args []string) {
 	// this nested map is the only place non-root can come from. Guarded so a
 	// shield that did not pass a uid, or one already non-root, falls through.
 	if uid >= 0 && os.Getuid() == 0 {
-		// Cap-hardening (securebits) must run HERE while we still hold caps in
-		// the holder userns -- after the nested execve drops to the real uid,
-		// CAP_SETPCAP is gone. no_new_privs + securebits preserve into the nested
-		// agent; the dumpable guard is deferred to it (resets on execve). AGE-261.
-		if err := ApplyCapHardening(); err != nil {
-			fmt.Fprintf(os.Stderr, "netns harden-exec: %v\n", err)
-			os.Exit(1)
-		}
+		// Nest a child userns so the agent runs non-root. Creating that userns
+		// RESETS securebits and the bounding set (verified: the nested agent
+		// reports Securebits 0x0, full bounding set), so cap-based hardening
+		// cannot carry across it -- only no_new_privs survives. The nested
+		// process therefore applies the no-cap hardening + Landlock itself. It is
+		// safe: non-root + no_new_privs + empty permitted set makes the bounding
+		// set unreachable. See AGE-261.
 		nestUsernsAndReexec(uid, gid, workdir, landlockFD, rest) // never returns
 	}
 	hardenAndExec(workdir, landlockFD, rest) // never returns
 }
 
 // runUsernsNest is the nested-userns entrypoint (reexecNestArg). It runs as the
-// agent's real uid inside a child userns that still shares the holder's net+mount
-// namespaces. Cap-hardening was applied in the shim and inherited; here it only
-// adds the execve-resetting dumpable guard, then Landlock + exec. See AGE-261.
+// agent's real (non-root) uid inside a child userns that still shares the
+// holder's net+mount namespaces. The nested userns reset the cap posture, so it
+// applies the no-capability hardening (no_new_privs + ambient-clear + dumpable)
+// here, then Landlock, then execs the agent. Securebits are deliberately not
+// attempted (need caps this process lacks). See AGE-261.
 func runUsernsNest(args []string) {
 	landlockFD, workdir, _, _, rest := parseHardenArgs(args)
 	if len(rest) == 0 {
@@ -515,7 +516,7 @@ func runUsernsNest(args []string) {
 		os.Exit(2)
 	}
 	chdirInto(workdir)
-	if err := ApplyDumpableGuard(); err != nil {
+	if err := ApplyUnprivilegedHardening(); err != nil {
 		fmt.Fprintf(os.Stderr, "netns userns-nest: %v\n", err)
 		os.Exit(1)
 	}
@@ -542,10 +543,22 @@ func parseHardenArgs(args []string) (landlockFD int, workdir string, uid, gid in
 			workdir = args[1]
 			args = args[2:]
 		case hardenUIDFlag:
-			uid, _ = strconv.Atoi(args[1])
+			// Fail closed: a bad uid must not silently become 0, which would take
+			// the nested branch and map the agent back to root. See AGE-261.
+			v, err := strconv.Atoi(args[1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "netns shim: bad %s value %q: %v\n", hardenUIDFlag, args[1], err)
+				os.Exit(2)
+			}
+			uid = v
 			args = args[2:]
 		case hardenGIDFlag:
-			gid, _ = strconv.Atoi(args[1])
+			v, err := strconv.Atoi(args[1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "netns shim: bad %s value %q: %v\n", hardenGIDFlag, args[1], err)
+				os.Exit(2)
+			}
+			gid = v
 			args = args[2:]
 		default:
 			goto done
@@ -602,6 +615,10 @@ func nestUsernsAndReexec(uid, gid int, workdir string, landlockFD int, agentArgs
 	}
 	if err := cmd.Wait(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
+			// Preserve signal deaths as 128+signo rather than ExitCode()'s -1->255.
+			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				os.Exit(128 + int(ws.Signal()))
+			}
 			os.Exit(ee.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "netns userns-nest: wait: %v\n", err)
