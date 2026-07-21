@@ -65,6 +65,7 @@ type serverNetstack struct {
 	stk            *stack.Stack
 	events         chan wgtun.Event
 	incomingPacket chan []byte
+	done           chan struct{}
 	mtu            int
 	closed         bool
 }
@@ -85,11 +86,34 @@ func (n *serverNSNotify) WriteNotify() {
 		b := v.AsSlice()
 		cp := make([]byte, len(b))
 		copy(cp, b)
+		// Block, do NOT drop, when the buffer is full: dropping silently loses
+		// TCP segments the peer expects delivered. Guarded by done so Close
+		// can unwedge a blocked send. See ADR 0108-servernetstack-tcp-tuning.
 		select {
 		case n.dev.incomingPacket <- cp:
 		default:
+			select {
+			case n.dev.incomingPacket <- cp:
+			case <-n.dev.done:
+				return
+			}
 		}
 	}
+}
+
+// tuneServerNetstackTCP enables TCP SACK on the stack, matching the upstream
+// wireguard-go tun/netstack reference (which flips it too: gVisor disables SACK
+// by default). SACK is a strict improvement for loss recovery. NOTE: SACK +
+// buffer-size tuning was investigated as the AGE-259 streaming-hang fix and
+// RULED OUT -- on-host loss/latency reproduction showed the hang is not a
+// transport window/SACK problem (the transport streams multi-MB SSE cleanly at
+// 200ms RTT). SACK stays only as parity with the reference. See ADR 0108.
+func tuneServerNetstackTCP(stk *stack.Stack) error {
+	sack := tcpip.TCPSACKEnabled(true)
+	if e := stk.SetTransportProtocolOption(tcp.ProtocolNumber, &sack); e != nil {
+		return fmt.Errorf("serverNetstack: enable TCP SACK: %v", e)
+	}
+	return nil
 }
 
 // newServerNetstack builds a gVisor netstack bound to gwAddr and enables
@@ -112,7 +136,11 @@ func newServerNetstack(gwAddr netip.Addr, mtu int) (*serverNetstack, error) {
 		}),
 		events:         make(chan wgtun.Event, 10),
 		incomingPacket: make(chan []byte, serverNetstackQueueSize),
+		done:           make(chan struct{}),
 		mtu:            mtu,
+	}
+	if err := tuneServerNetstackTCP(t.stk); err != nil {
+		return nil, err
 	}
 	t.ep.AddNotify(&serverNSNotify{dev: t})
 	if e := t.stk.CreateNIC(serverNetstackNIC, t.ep); e != nil {
@@ -155,8 +183,14 @@ func (t *serverNetstack) Events() <-chan wgtun.Event { return t.events }
 func (t *serverNetstack) BatchSize() int             { return serverNetstackBatchSize }
 
 func (t *serverNetstack) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
-	pkt, ok := <-t.incomingPacket
-	if !ok {
+	var pkt []byte
+	select {
+	case p, ok := <-t.incomingPacket:
+		if !ok {
+			return 0, os.ErrClosed
+		}
+		pkt = p
+	case <-t.done:
 		return 0, os.ErrClosed
 	}
 	sizes[0] = copy(bufs[0][offset:], pkt)
@@ -202,10 +236,14 @@ func (t *serverNetstack) Close() error {
 		return nil
 	}
 	t.closed = true
+	// Signal done BEFORE tearing the stack down so a WriteNotify blocked on a
+	// full incomingPacket unwedges via its done-guard. Do NOT close
+	// incomingPacket: WriteNotify may still be mid-send, and a send on a closed
+	// channel panics. Readers observe closure via the done channel instead.
+	close(t.done)
 	t.stk.RemoveNIC(serverNetstackNIC)
 	t.stk.Close()
 	close(t.events)
-	close(t.incomingPacket)
 	return nil
 }
 
