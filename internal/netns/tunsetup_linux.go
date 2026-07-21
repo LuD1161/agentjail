@@ -329,6 +329,11 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	cmd.ExtraFiles = []*os.File{childSock} // => fd 3 in the holder
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
+		// Map to 0: the holder must be root-in-userns to create the TUN. An
+		// identity map (uid->uid) was tried and empirically fails TUNSETIFF with
+		// EPERM even under the AppArmor userns grant -- root-in-userns is
+		// load-bearing here. Making the agent non-root therefore needs it to join
+		// the netns+mntns WITHOUT the userns, not a map change. See AGE-261.
 		UidMappings: []syscall.SysProcIDMap{
 			{ContainerID: 0, HostID: uid, Size: 1},
 		},
