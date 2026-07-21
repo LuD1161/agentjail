@@ -170,6 +170,18 @@ func runInstallCmd(args []string) {
 			}
 			return
 		}
+
+		// --with-apparmor is a standalone, consent-gated action: load the scoped
+		// userns profile (needs root once). --yes/AGENTJAIL_ASSUME_YES or a
+		// non-interactive stdin proceed without prompting. See ADR 0104-shield-apparmor-userns.
+		if hasFlag(args, "--with-apparmor") && forAgent == "" {
+			assumeYes := yes || os.Getenv("AGENTJAIL_ASSUME_YES") == "1"
+			if err := installWithApparmor(home, assumeYes); err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: %v", err)))
+				os.Exit(1)
+			}
+			return
+		}
 	}
 
 	// ── --allow-unsupported is deprecated ────────────────────────────────
@@ -484,6 +496,13 @@ func printInstallSummary(w io.Writer, results []installResult) bool {
 	lines = append(lines, "")
 	lines = append(lines, u.Badge("info", "daemon ready — see 'agentjail status' for daemon and plist state"))
 	lines = append(lines, u.Badge("dim", "harden further: 'agentjail policy list' to enable optional rules"))
+
+	// Network visibility (AGE-258): report ON when the scoped profile is active,
+	// or nudge with the OFF hint only on hosts where userns is actually
+	// restricted. See ADR 0104-shield-apparmor-userns.
+	if nv, ok := networkVisibilityStatusLine(); ok {
+		lines = append(lines, nv)
+	}
 
 	body := strings.Join(lines, "\n")
 	fmt.Fprintln(w)
@@ -2144,6 +2163,8 @@ func parseInstallFlags(args []string) (forAgent string, all, yes, allowUnsupport
 			allowUnsupported = true
 		case a == "--with-path-shim":
 			// Handled in runInstallCmd via hasFlag.
+		case a == "--with-apparmor":
+			// Handled in runInstallCmd via hasFlag (ADR 0104-shield-apparmor-userns).
 		case a == "--chain":
 			// Handled in runInstallCmd via hasFlag.
 		case a == "--replace":
