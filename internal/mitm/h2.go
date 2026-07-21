@@ -112,7 +112,7 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		OwnerPID:  h.OwnerPID,
 	}
 
-	var reqCapture, respCapture *bodyCapture
+	var reqCapture, respCapture *BodyCapture
 	emitLog := func() {
 		h.finishCaptures(reqLog, reqCapture, respCapture)
 		h.emit(reqLog)

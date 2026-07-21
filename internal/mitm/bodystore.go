@@ -328,11 +328,11 @@ func (s *plainSink) Close() error {
 	return err
 }
 
-// bodyCapture streams a body to a file and counts every byte that passes.
+// BodyCapture streams a body to a file and counts every byte that passes.
 // Write never fails the caller: it is teed off a live proxy hop, and a
 // recording failure must not break the request.
 // See ADR 0092-persist-request-bodies (D1).
-type bodyCapture struct {
+type BodyCapture struct {
 	rel   string
 	side  Side
 	enc   contentEnc
@@ -345,7 +345,7 @@ type bodyCapture struct {
 // the body streams to disk before the INSERT that would assign a row id.
 // contentEncoding is taken now because it picks the sink's stage-1 identity.
 // See ADR 0092-persist-request-bodies (D1), ADR 0095-chunked-body-envelope.
-func (b *BodyStore) Create(side Side, contentEncoding string) (*bodyCapture, error) {
+func (b *BodyStore) Create(side Side, contentEncoding string) (*BodyCapture, error) {
 	if b == nil {
 		return nil, nil
 	}
@@ -355,7 +355,7 @@ func (b *BodyStore) Create(side Side, contentEncoding string) (*bodyCapture, err
 	if err != nil {
 		return nil, err
 	}
-	return &bodyCapture{rel: rel, side: side, enc: enc, sink: sink}, nil
+	return &BodyCapture{rel: rel, side: side, enc: enc, sink: sink}, nil
 }
 
 // path maps a stored relative path to this store's filesystem path. Stored
@@ -421,7 +421,7 @@ func (b *BodyStore) createFile(ext string) (string, *os.File, error) {
 	return rel, f, nil
 }
 
-func (c *bodyCapture) Write(p []byte) (int, error) {
+func (c *BodyCapture) Write(p []byte) (int, error) {
 	if c == nil {
 		return len(p), nil
 	}
@@ -436,14 +436,14 @@ func (c *bodyCapture) Write(p []byte) (int, error) {
 
 // Size returns the bytes that passed through the capture, whether or not they
 // reached the disk.
-func (c *bodyCapture) Size() int64 {
+func (c *BodyCapture) Size() int64 {
 	if c == nil {
 		return 0
 	}
 	return c.total
 }
 
-func (c *bodyCapture) close() error {
+func (c *BodyCapture) close() error {
 	if err := c.sink.Close(); err != nil && c.err == nil {
 		c.err = err
 	}
@@ -454,7 +454,7 @@ func (c *bodyCapture) close() error {
 // stored path and whether the file holds raw encoded bytes. A decode failure
 // keeps stage 1's file: decoding is best-effort, the bytes are not.
 // See ADR 0092-persist-request-bodies (D1), ADR 0095-chunked-body-envelope.
-func (b *BodyStore) Finish(c *bodyCapture) (rel string, raw bool, err error) {
+func (b *BodyStore) Finish(c *BodyCapture) (rel string, raw bool, err error) {
 	if b == nil || c == nil {
 		return "", false, nil
 	}
@@ -478,7 +478,7 @@ func (b *BodyStore) Finish(c *bodyCapture) (rel string, raw bool, err error) {
 // chunk at a time, so peak memory stays bounded and no plaintext byte is ever
 // written. Any failure leaves stage 1's file for the raw fallback.
 // See ADR 0095-chunked-body-envelope.
-func (b *BodyStore) decodeGzip(c *bodyCapture) (string, error) {
+func (b *BodyStore) decodeGzip(c *BodyCapture) (string, error) {
 	src, err := b.openStored(c.rel)
 	if err != nil {
 		return "", err

@@ -339,7 +339,7 @@ func TestDiskFullMidCaptureLeavesNoPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newBodyWriter: %v", err)
 	}
-	c := &bodyCapture{rel: rel, side: SideResponse, enc: encIdentity, sink: w}
+	c := &BodyCapture{rel: rel, side: SideResponse, enc: encIdentity, sink: w}
 	c.Write(markerBody(10 << 20))
 	if _, _, err := b.Finish(c); err == nil {
 		t.Error("a capture whose sink ran out of space reported success")
