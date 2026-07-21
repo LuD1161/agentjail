@@ -13,20 +13,12 @@ set -euo pipefail
 log() { echo "==> [guest] $*"; }
 
 # ---- 0a. transparent-tunnel prerequisite ------------------------------------
-# The --tunnel datapath (and the h2 MITM) needs an unprivileged user namespace.
 # Ubuntu 23.10+ (incl. 24.04 noble, this template's image) ships
-# kernel.apparmor_restrict_unprivileged_userns=1, which makes the shield's
-# userns TUN clone fail with EPERM and silently fall back to netproxy — so the
-# tunnel is never exercised. Enabling it here mirrors the documented host setup
-# step a real user follows to use the tunnel on modern Ubuntu.
-if [ "$(uname -s)" = "Linux" ]; then
-    if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
-        log "enabling unprivileged user namespaces (tunnel prerequisite)"
-        echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-agentjail-tunnel.conf >/dev/null
-        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
-            || log "could not relax userns restriction (tunnel may fall back to netproxy)"
-    fi
-fi
+# kernel.apparmor_restrict_unprivileged_userns=1. We deliberately DO NOT relax
+# it globally — that would weaken userns for every binary. The tunnel is enabled
+# instead via a scoped AppArmor profile for agentjail-shield alone, loaded AFTER
+# agentjail is installed (step 3a below), with the restriction LEFT ON. That is
+# the real user path on modern Ubuntu. See ADR 0104-shield-apparmor-userns.
 
 # ---- 0. recording niceties --------------------------------------------------
 # Each CLI recording opens with a system-info banner for context (mirrors the
@@ -112,6 +104,20 @@ fi
 # agents). Re-run explicitly for claude-code to be deterministic + idempotent.
 log "agentjail install --for claude-code"
 "$HOME/.agentjail/bin/agentjail" install --for claude-code || true
+
+# ---- 3a. scoped AppArmor userns profile (modern Ubuntu, restriction LEFT ON) --
+# Load the per-binary profile so --tunnel works without weakening the machine.
+# Non-restricted hosts (Debian/Fedora/older Ubuntu) skip this entirely. Consent
+# is pre-granted for the unattended testbed via AGENTJAIL_ASSUME_YES. The global
+# restriction stays ON — the profile is what makes the tunnel work, and the
+# tunnel-agent gate must go green with it on. See ADR 0104-shield-apparmor-userns.
+if [ "$(uname -s)" = "Linux" ] \
+    && [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
+    log "installing scoped AppArmor userns profile (restriction left ON)"
+    command -v apparmor_parser >/dev/null 2>&1 || sudo apt-get install -y -q apparmor-utils >/dev/null 2>&1 || true
+    sudo env AGENTJAIL_ASSUME_YES=1 "$HOME/.agentjail/bin/agentjail" install --with-apparmor \
+        || log "install --with-apparmor failed — tunnel will be unavailable on this host"
+fi
 
 # ---- 4. Seed project ----------------------------------------------------------
 
