@@ -194,13 +194,22 @@ type tunnelSession struct {
 // is wired. See docs/reviews/2026-07-08-network-visibility-review.md (W1).
 // mitmEnabled selects the posture: false relays TLS opaquely, true terminates
 // it via a per-session namespace-scoped CA. ADR 0077.
-// usernsRestrictedByAppArmor reports whether Ubuntu's AppArmor userns
-// restriction is the active block (kernel.apparmor_restrict_unprivileged_userns=1),
-// distinguishing it from other tunnel-setup errors so only that case fails loud
-// with the scoped-profile remediation. See ADR 0104-shield-apparmor-userns.
-func usernsRestrictedByAppArmor() bool {
+// tunnelBlockedByUsernsRestriction reports whether the tunnel just failed
+// because Ubuntu's AppArmor userns restriction is active and our scoped profile
+// is NOT. The restriction does not block the userns clone -- it strips
+// CAP_NET_ADMIN inside the userns, so the failure surfaces downstream as a
+// TUNSETIFF EPERM (seen by the parent as a lost helper fd). Keying on a
+// clone-perm error class therefore misses it. Instead: restriction on AND this
+// process is not confined by the agentjail-shield profile (read from our own
+// AppArmor label) -- with the profile attached, CreateWithTUN would have
+// succeeded, so a failure here means it is the fix. See ADR 0104-shield-apparmor-userns.
+func tunnelBlockedByUsernsRestriction() bool {
 	b, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-	return err == nil && strings.TrimSpace(string(b)) == "1"
+	if err != nil || strings.TrimSpace(string(b)) != "1" {
+		return false
+	}
+	label, _ := os.ReadFile("/proc/self/attr/current")
+	return !strings.Contains(string(label), "agentjail-shield")
 }
 
 func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (*tunnelSession, bool) {
@@ -214,7 +223,7 @@ func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (
 		// AppArmor restriction. A tunnel that silently becomes netproxy is the
 		// AGE-212 failure shape applied to network capture, so --tunnel fails
 		// loud with the single remediation. See ADR 0104-shield-apparmor-userns.
-		if errors.Is(err, netns.ErrUnsupported) && usernsRestrictedByAppArmor() {
+		if tunnelBlockedByUsernsRestriction() {
 			fmt.Fprintf(os.Stderr,
 				"agentjail-shield ERROR: --tunnel requires an unprivileged user namespace,\n"+
 					"  which this host restricts (kernel.apparmor_restrict_unprivileged_userns=1).\n"+
