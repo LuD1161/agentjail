@@ -55,6 +55,13 @@ const (
 	// then execve's the agent. Used by AgentCommand via nsenter.
 	reexecHardenArg = "__agentjail_harden_exec"
 
+	// reexecNestArg marks a re-exec that nests a child user namespace mapping the
+	// holder-userns root (uid 0) to the agent's real uid, so the agent runs
+	// non-root while keeping the holder's net+mount namespaces (TUN + MITM CA).
+	// The holder must stay root-in-userns to create the TUN, so non-root cannot
+	// come from the outer map -- it comes from this nested map. See AGE-261.
+	reexecNestArg = "__agentjail_userns_nest"
+
 	// shieldRoleName is the argv[0] basename the multicall binary dispatches on
 	// to reach the shield role (see cmd/agentjail main.go). A re-exec MUST
 	// present this name; os.Executable() resolves the installed agentjail-shield
@@ -73,6 +80,13 @@ const (
 	// hardenWorkdirFlag precedes the directory the shim chdirs into, inside the
 	// namespaces. Without it the agent inherits the holder's cwd. See AGE-231.
 	hardenWorkdirFlag = "--workdir"
+
+	// hardenUIDFlag / hardenGIDFlag precede the agent's real (host) uid/gid,
+	// captured by the shield before nsenter (inside the holder userns getuid()
+	// reads 0). The shim nests a userns mapping 0 -> these so the agent runs
+	// non-root. See AGE-261.
+	hardenUIDFlag = "--uid"
+	hardenGIDFlag = "--gid"
 
 	// tunHandoffFD is the fd number the inherited handoff socket lands on in the
 	// re-exec'd holder (ExtraFiles[0] => fd 3).
@@ -115,6 +129,8 @@ func MaybeRunReexec() {
 		runTUNHelper(os.Args[2:]) // never returns
 	case reexecHardenArg:
 		runHardenExec(os.Args[2:]) // never returns
+	case reexecNestArg:
+		runUsernsNest(os.Args[2:]) // never returns
 	}
 }
 
@@ -443,6 +459,10 @@ func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlock
 	if landlockFD >= 0 {
 		args = append(args, hardenLandlockFDFlag, strconv.Itoa(landlockHandoffFD))
 	}
+	// AGE-261: pass the real uid/gid so the shim can nest a userns and run the
+	// agent non-root. Read here (shield is in the host userns) -- inside the
+	// holder userns getuid() would read 0.
+	args = append(args, hardenUIDFlag, strconv.Itoa(os.Getuid()), hardenGIDFlag, strconv.Itoa(os.Getgid()))
 	args = append(args, "--", agentPath)
 	args = append(args, agentArgs...)
 	cmd := exec.Command("nsenter", args...)
@@ -460,16 +480,60 @@ func (ns *Namespace) AgentCommand(agentPath string, agentArgs []string, landlock
 // process, applies the inherited Landlock ruleset (if any) now that nsenter is
 // done, then execve's the agent.
 func runHardenExec(args []string) {
-	// Order-independent: this and AgentCommand are edited apart, and a
-	// positional parser turns a reordered append into an exec of the flag.
-	landlockFD := -1
-	workdir := ""
+	landlockFD, workdir, uid, gid, rest := parseHardenArgs(args)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "netns harden-exec: no agent command given")
+		os.Exit(2)
+	}
+	// AGE-261: nest a child userns mapping our current holder-userns uid 0 -> the
+	// real uid, so the agent runs non-root while still sharing the holder's
+	// net+mount namespaces. The holder must stay root-in-userns for the TUN, so
+	// this nested map is the only place non-root can come from. Guarded so a
+	// shield that did not pass a uid, or one already non-root, falls through.
+	if uid >= 0 && os.Getuid() == 0 {
+		// Cap-hardening (securebits) must run HERE while we still hold caps in
+		// the holder userns -- after the nested execve drops to the real uid,
+		// CAP_SETPCAP is gone. no_new_privs + securebits preserve into the nested
+		// agent; the dumpable guard is deferred to it (resets on execve). AGE-261.
+		if err := ApplyCapHardening(); err != nil {
+			fmt.Fprintf(os.Stderr, "netns harden-exec: %v\n", err)
+			os.Exit(1)
+		}
+		nestUsernsAndReexec(uid, gid, workdir, landlockFD, rest) // never returns
+	}
+	hardenAndExec(workdir, landlockFD, rest) // never returns
+}
+
+// runUsernsNest is the nested-userns entrypoint (reexecNestArg). It runs as the
+// agent's real uid inside a child userns that still shares the holder's net+mount
+// namespaces. Cap-hardening was applied in the shim and inherited; here it only
+// adds the execve-resetting dumpable guard, then Landlock + exec. See AGE-261.
+func runUsernsNest(args []string) {
+	landlockFD, workdir, _, _, rest := parseHardenArgs(args)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "netns userns-nest: no agent command given")
+		os.Exit(2)
+	}
+	chdirInto(workdir)
+	if err := ApplyDumpableGuard(); err != nil {
+		fmt.Fprintf(os.Stderr, "netns userns-nest: %v\n", err)
+		os.Exit(1)
+	}
+	landlockAndExec(landlockFD, rest) // never returns
+}
+
+// parseHardenArgs pulls the shared shim flags off the front of args and returns
+// the remaining agent argv (leading "--" stripped). Order-independent: this and
+// AgentCommand are edited apart, so a reordered append must not exec a flag.
+// landlockFD/uid/gid default to -1 when absent.
+func parseHardenArgs(args []string) (landlockFD int, workdir string, uid, gid int, rest []string) {
+	landlockFD, uid, gid = -1, -1, -1
 	for len(args) >= 2 {
 		switch args[0] {
 		case hardenLandlockFDFlag:
 			fd, err := strconv.Atoi(args[1])
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "netns harden-exec: bad %s value %q: %v\n", hardenLandlockFDFlag, args[1], err)
+				fmt.Fprintf(os.Stderr, "netns shim: bad %s value %q: %v\n", hardenLandlockFDFlag, args[1], err)
 				os.Exit(2)
 			}
 			landlockFD = fd
@@ -477,49 +541,110 @@ func runHardenExec(args []string) {
 		case hardenWorkdirFlag:
 			workdir = args[1]
 			args = args[2:]
+		case hardenUIDFlag:
+			uid, _ = strconv.Atoi(args[1])
+			args = args[2:]
+		case hardenGIDFlag:
+			gid, _ = strconv.Atoi(args[1])
+			args = args[2:]
 		default:
-			goto flagsDone
+			goto done
 		}
 	}
-flagsDone:
-
-	// Strip the leading "--" separator that AgentCommand inserts.
+done:
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
+	return landlockFD, workdir, uid, gid, args
+}
 
-	// After nsenter, before Landlock. See AGE-231.
+// nestUsernsAndReexec re-execs this binary as reexecNestArg inside a fresh child
+// user namespace whose single-uid map sends the current holder-userns uid 0 to
+// the real uid/gid -- so the re-exec'd process (and the agent it execs) is
+// non-root while still in the holder's net+mount namespaces. The clone is done at
+// fork (CLONE_NEWUSER) rather than an in-process unshare, which EINVALs on the
+// multithreaded Go runtime. Waits for the child and propagates its exit code.
+// The nested userns creation is itself AppArmor-gated on Ubuntu 23.10+, so the
+// shim must be under the agentjail-shield profile here. See AGE-261, ADR 0104.
+func nestUsernsAndReexec(uid, gid int, workdir string, landlockFD int, agentArgs []string) {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "/proc/self/exe"
+	}
+	childArgs := []string{reexecNestArg}
 	if workdir != "" {
-		if err := os.Chdir(workdir); err != nil {
-			// Non-fatal: degrade to the holder's "/", but say so.
-			fmt.Fprintf(os.Stderr, "netns harden-exec: could not enter working directory %s: %v\n"+
-				"  the agent will start in / instead\n", workdir, err)
-		}
+		childArgs = append(childArgs, hardenWorkdirFlag, workdir)
 	}
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "netns harden-exec: no agent command given")
-		os.Exit(2)
+	if landlockFD >= 0 {
+		// Re-inherited on fd landlockHandoffFD via ExtraFiles below.
+		childArgs = append(childArgs, hardenLandlockFDFlag, strconv.Itoa(landlockHandoffFD))
 	}
+	childArgs = append(childArgs, "--")
+	childArgs = append(childArgs, agentArgs...)
 
-	if err := ApplyHardening(); err != nil {
-		fmt.Fprintf(os.Stderr, "netns harden-exec: hardening failed: %v\n", err)
+	cmd := exec.Command(exe, childArgs...)
+	cmd.Args[0] = shieldRoleName // multicall dispatch -> shield -> MaybeRunReexec
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUSER,
+		// Map our own uid (0 in the holder userns) to the real uid -- the
+		// unprivileged single-uid case, same shape as the outer holder map.
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: uid, HostID: 0, Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: gid, HostID: 0, Size: 1}},
+		GidMappingsEnableSetgroups: false,
+	}
+	if landlockFD >= 0 {
+		cmd.ExtraFiles = []*os.File{os.NewFile(uintptr(landlockFD), "landlock-ruleset")}
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "netns userns-nest: start: %v\n", err)
 		os.Exit(1)
 	}
+	if err := cmd.Wait(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "netns userns-nest: wait: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
 
-	// Apply the Landlock ruleset the shield built, now that we are inside the
-	// namespaces (so nsenter's nsfs ns-file open is not blocked; AGE-166).
-	// ApplyHardening already set PR_SET_NO_NEW_PRIVS (a restrict_self
-	// precondition). This is irreversible; the agent inherits it across execve.
+// hardenAndExec is the non-nested (fallback / non-tunnel) path: chdir, full
+// ApplyHardening in this one process, Landlock, exec. See AGE-231.
+func hardenAndExec(workdir string, landlockFD int, args []string) {
+	chdirInto(workdir)
+	if err := ApplyHardening(); err != nil {
+		fmt.Fprintf(os.Stderr, "netns shim: hardening failed: %v\n", err)
+		os.Exit(1)
+	}
+	landlockAndExec(landlockFD, args) // never returns
+}
+
+// chdirInto enters workdir (best-effort; degrades to the holder's "/"). AGE-231.
+func chdirInto(workdir string) {
+	if workdir == "" {
+		return
+	}
+	if err := os.Chdir(workdir); err != nil {
+		fmt.Fprintf(os.Stderr, "netns shim: could not enter working directory %s: %v\n"+
+			"  the agent will start in / instead\n", workdir, err)
+	}
+}
+
+// landlockAndExec applies the inherited Landlock ruleset (if any), now that
+// nsenter is done (nsfs open; AGE-166) and no_new_privs is set, then execve's the
+// agent. Irreversible; the agent inherits the ruleset across execve.
+func landlockAndExec(landlockFD int, args []string) {
 	if landlockFD >= 0 {
 		if _, _, errno := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, uintptr(landlockFD), 0, 0); errno != 0 {
-			fmt.Fprintf(os.Stderr, "netns harden-exec: landlock_restrict_self(fd %d): %v\n", landlockFD, errno)
+			fmt.Fprintf(os.Stderr, "netns shim: landlock_restrict_self(fd %d): %v\n", landlockFD, errno)
 			os.Exit(1)
 		}
 		_ = unix.Close(landlockFD)
 	}
-
 	if err := syscall.Exec(args[0], args, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "netns harden-exec: exec %s: %v\n", args[0], err)
+		fmt.Fprintf(os.Stderr, "netns shim: exec %s: %v\n", args[0], err)
 		os.Exit(127)
 	}
 }

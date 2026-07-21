@@ -41,7 +41,25 @@ const (
 // (where the caller is mapped to uid 0). It is the ClawPatrol cap-drop/secbits
 // lifecycle: after this returns, the process (and everything it execs) cannot
 // regain privileges via setuid binaries, ambient capabilities, or ptrace.
+//
+// The two halves are separable for the nested-userns tunnel path (AGE-261):
+// ApplyCapHardening MUST run while the process still holds caps (securebits need
+// CAP_SETPCAP), and ApplyDumpableGuard MUST run in the process that will execve
+// the agent (DUMPABLE resets on execve). On the non-nested path both run here in
+// one process, preserving the original behavior.
 func ApplyHardening() error {
+	if err := ApplyCapHardening(); err != nil {
+		return err
+	}
+	return ApplyDumpableGuard()
+}
+
+// ApplyCapHardening applies the steps that require capabilities and/or must
+// precede a privilege-dropping execve: no_new_privs, ambient-clear, and the
+// securebits lockdown. All three preserve across clone(2) and execve(2), so for
+// the nested-userns tunnel path this runs in the shim (still uid 0 with caps in
+// the holder userns) and is inherited by the non-root agent. See AGE-261.
+func ApplyCapHardening() error {
 	// 1. No new privileges: setuid/setgid bits and file capabilities are
 	//    ignored across execve, and this is a precondition for the securebits
 	//    lockdown below. Once set it cannot be unset.
@@ -62,14 +80,17 @@ func ApplyHardening() error {
 	if err := unix.Prctl(unix.PR_SET_SECUREBITS, uintptr(hardenSecurebits), 0, 0, 0); err != nil {
 		return fmt.Errorf("harden: PR_SET_SECUREBITS(0x%x): %w", hardenSecurebits, err)
 	}
+	return nil
+}
 
-	// 4. Make the process non-dumpable so a same-uid process cannot ptrace or
-	//    read its memory during the pre-exec window. Note: DUMPABLE resets to 1
-	//    on the next execve unless re-applied, so this is defense-in-depth for
-	//    the window before we exec the untrusted agent, not a permanent state.
+// ApplyDumpableGuard makes the process non-dumpable so a same-uid process cannot
+// ptrace or read its memory during the pre-exec window. DUMPABLE resets to 1 on
+// the next execve unless re-applied, so this is defense-in-depth for the window
+// before exec of the untrusted agent, and must run in the process that execs it
+// (not an earlier ancestor). Needs no capabilities.
+func ApplyDumpableGuard() error {
 	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
 		return fmt.Errorf("harden: PR_SET_DUMPABLE: %w", err)
 	}
-
 	return nil
 }
