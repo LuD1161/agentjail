@@ -247,6 +247,13 @@ The shim **fails open**. If the shield binary is missing (interrupted upgrade, p
 
 It only covers profile-sourcing interactive shells. VS Code/Cursor use the process wrapper (`agentjail install --for vscode`); cron, non-interactive shells, and absolute-path invocations are not covered.
 
+**Network visibility on Ubuntu 23.10+ (opt-in):**
+```sh
+agentjail install --with-apparmor    # one-time sudo; scoped AppArmor profile
+```
+
+The transparent tunnel needs an unprivileged user namespace. Ubuntu 23.10+ ships `kernel.apparmor_restrict_unprivileged_userns=1`, which blocks that for unconfined binaries. Rather than flip the sysctl off system-wide, `--with-apparmor` loads a scoped AppArmor profile that grants the namespace to the `agentjail-shield` binary **only** — nothing else on the machine changes. It needs root once (it prints the exact `tee` + `apparmor_parser` commands and the profile before running), records your consent so `agentjail doctor --fix` can re-apply it, and no-ops on hosts that don't need it (non-Ubuntu, or AppArmor < 4.x). `agentjail install` reports `Network visibility: ON/OFF` in its summary on restricted hosts. See [ADR 0104](./docs/adr/0104-shield-apparmor-userns.md).
+
 **From source:**
 ```sh
 git clone https://github.com/LuD1161/agentjail.git && cd agentjail
