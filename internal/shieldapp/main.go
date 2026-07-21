@@ -116,6 +116,15 @@ func Run(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 64 // EX_USAGE
 	}
+	// The transparent tunnel is the supported network path; netproxy is
+	// deprecated and survives only as this explicit, non-default mode.
+	// See ADR 0104-shield-apparmor-userns.
+	if *netproxyEnable {
+		fmt.Fprintln(os.Stderr,
+			"⚠ --netproxy is deprecated and will be removed in a future release. The\n"+
+				"  transparent tunnel (agentjail install --with-apparmor) is the supported\n"+
+				"  path and will become the default.")
+	}
 	startTime := time.Now()
 
 	// Open the audit emitter BEFORE sandbox activation. After Landlock/
