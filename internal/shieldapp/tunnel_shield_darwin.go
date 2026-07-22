@@ -49,12 +49,6 @@ const (
 	tunnelDNSAddr    = "10.78.0.1"    // DNS server address, written into wg-conf
 )
 
-// tunnelIPv6EnvVar flag-gates Phase 1 IPv6 (AGE-262): v6 literal remote
-// endpoints only (DNS stays out-of-band/v4 on macOS; cbridge and
-// Provider.swift are unchanged). Off by default so the v4 wg-conf and
-// gateway stay byte-identical to pre-AGE-262 behavior.
-const tunnelIPv6EnvVar = "AGENTJAIL_TUNNEL_IPV6"
-
 // v6 datapath addresses, derived from dnsvip (the single source of truth for
 // the tunnel's reserved addresses) with the prefix lengths mirroring the v4
 // server/agent split: server gets the /64 the agent's /128 lives inside.
@@ -63,11 +57,6 @@ var (
 	tunnelServerAddr6 = dnsvip.GatewayV6().String() + "/64"
 	tunnelAgentAddr6  = dnsvip.AgentV6().String() + "/128"
 )
-
-// tunnelIPv6Enabled reports whether AGE-262 Phase 1 IPv6 is flag-gated on.
-func tunnelIPv6Enabled() bool {
-	return os.Getenv(tunnelIPv6EnvVar) == "1"
-}
 
 // resolveTunnelAppPath resolves the AgentjailTunnel.app helper binary:
 // AGENTJAIL_TUNNEL_APP overrides for local dev/CI; otherwise the standard
@@ -163,7 +152,7 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 // returns, so this is dead code reachable only if that contract is violated;
 // the explicit return keeps that violation a compile error away from a
 // fallthrough double-launch rather than a silent one.
-func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, emitter audit.Emitter, fallback func()) {
+func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, ipv6Enabled bool, emitter audit.Emitter, fallback func()) {
 	logger := slog.Default()
 	sessionID := generateSessionID()
 	logger.Info("tunnel session started", "session_id", sessionID)
@@ -208,11 +197,12 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		TunnelAddr:    tunnelServerAddr,
 		PacksDir:      packsDir,
 	}
-	// v6 provisioning is flag-gated (AGE-262 Phase 1): only attempt it when
-	// AGENTJAIL_TUNNEL_IPV6=1, and only trust it once NewGateway actually
-	// succeeds with the v6 address provisioned. A v6 failure falls back to
-	// v4-only below — it never fails the launch.
-	ipv6Requested := tunnelIPv6Enabled()
+	// v6 provisioning is flag-gated (AGE-262 Phase 1): only attempt it when the
+	// resolved on/off decision (resolveTunnelIPv6 in main.go — CLI flag > env
+	// > config > default off) says so, and only trust it once NewGateway
+	// actually succeeds with the v6 address provisioned. A v6 failure falls
+	// back to v4-only below — it never fails the launch.
+	ipv6Requested := ipv6Enabled
 	ipv6Provisioned := false
 	if ipv6Requested {
 		gwCfg.TunnelAddr6 = tunnelServerAddr6

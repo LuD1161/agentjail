@@ -251,6 +251,13 @@ type NetworkConfig struct {
 	// Tri-state: absent = on (default), false = opt-out, true = explicit opt-in.
 	// See ADR 0109-baseurl-capture-gateway (AGE-259).
 	CaptureGateway *bool `yaml:"capture_gateway"`
+
+	// TunnelIPv6 enables the flag-gated IPv6 datapath for the macOS tunnel.
+	// Tri-state: absent = off (the default), false = standing opt-out, true =
+	// explicit opt-in. --tunnel-ipv6 / --no-tunnel-ipv6 override it per launch;
+	// the AGENTJAIL_TUNNEL_IPV6 env var is a transitional override, one release.
+	// See ADR 0110-network-flag-consolidation (AGE-262).
+	TunnelIPv6 *bool `yaml:"tunnel_ipv6"`
 }
 
 // EssentialAllowedHosts returns the minimal, non-removable set of hosts an
@@ -828,6 +835,14 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Network.CaptureGateway = overlay.Network.CaptureGateway
 	} else {
 		result.Network.CaptureGateway = base.Network.CaptureGateway
+	}
+
+	// Network.TunnelIPv6 -- tri-state pointer, same contract as TunnelMITM.
+	// See ADR 0110-network-flag-consolidation.
+	if overlay.Network.TunnelIPv6 != nil {
+		result.Network.TunnelIPv6 = overlay.Network.TunnelIPv6
+	} else {
+		result.Network.TunnelIPv6 = base.Network.TunnelIPv6
 	}
 
 	// Web.Blocked

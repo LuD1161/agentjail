@@ -734,7 +734,7 @@ func isControlSocketPath(p, home string) bool {
 //
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	// --tunnel dispatches entirely to the NETransparentProxyProvider path
 	// (tunnel_shield_darwin.go). profilePrint is handled specially: rather
 	// than stand up the sysext + gateway just to print a profile, print the
@@ -753,7 +753,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			os.Exit(0)
 		}
 		ctx := context.Background()
-		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, emitter, func() {
+		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, ipv6Mode, emitter, func() {
 			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, policyPath, startTime, emitter)
 		})
 		// startTunnelDarwin either os.Exit's on success/fatal-error, or (on a

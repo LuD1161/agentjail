@@ -87,7 +87,8 @@ func doctorSections() []doctorSection {
 		{name: "Shield", run: checkShield, gatesExit: true},
 		// Does not gate exit: an absent tunnel is a posture, not a fault.
 		{name: "Network Interception", run: func(string) []doctorCheck {
-			return append(checkNetworkInterception(), checkTLSInterceptionPosture(), checkBodyEncryption())
+			checks := append(checkNetworkInterception(), checkTLSInterceptionPosture(), checkBodyEncryption())
+			return append(checks, checkNetworkKnobSources()...)
 		}},
 		{name: "Daemon", run: checkDaemon, gatesExit: true},
 		// Everything above reports what is configured RIGHT NOW; this reports
@@ -679,6 +680,54 @@ func checkTLSInterceptionPosture() doctorCheck {
 		label:  label,
 		status: "ok",
 		detail: "on — under --tunnel, agentjail decrypts the agent's HTTPS via a per-session CA scoped to that agent's namespace (never the host), so policy templates apply. Pass --no-mitm, or set network.tunnel_mitm: false, to relay TLS opaquely instead",
+	}
+}
+
+// tunnelIPv6EnvVar mirrors internal/shieldapp's transitional override name
+// (AGE-262). Doctor reads it directly rather than importing shieldapp, since
+// shieldapp is a leaf binary package, not a library other commands import.
+const tunnelIPv6EnvVar = "AGENTJAIL_TUNNEL_IPV6"
+
+// checkNetworkKnobSources reports, for each of the three network knobs
+// (tunnel_mitm, capture_gateway, tunnel_ipv6), the value doctor sees from
+// policy.yaml/env RIGHT NOW and which layer decided it -- config, env, or
+// default. It cannot see a per-launch CLI flag (doctor does not launch
+// anything), so "cli" never appears here; it is documented as the highest
+// layer so users know a flag on their next `agentjail-shield` invocation can
+// still override what is shown. Precedence for all three, highest first:
+// cli > env > config > default. See ADR 0110-network-flag-consolidation.
+func checkNetworkKnobSources() []doctorCheck {
+	path, err := policyConfigPath()
+	if err != nil {
+		return []doctorCheck{{label: "Network knobs", status: "skip", detail: "cannot locate policy.yaml: " + err.Error()}}
+	}
+	cfg, err := config.LoadOrDefault(path)
+	if err != nil {
+		return []doctorCheck{{label: "Network knobs", status: "skip", detail: "cannot read policy.yaml: " + err.Error()}}
+	}
+
+	describe := func(label string, val *bool, defaultVal bool, envVar string) doctorCheck {
+		effective := defaultVal
+		source := "default"
+		switch {
+		case envVar != "" && os.Getenv(envVar) == "1":
+			effective = true
+			source = "env (" + envVar + ", transitional)"
+		case val != nil:
+			effective = *val
+			source = "config"
+		}
+		return doctorCheck{
+			label:  label,
+			status: "ok",
+			detail: fmt.Sprintf("%t (source: %s; a CLI flag on the next launch takes precedence over all of this — cli > env > config > default)", effective, source),
+		}
+	}
+
+	return []doctorCheck{
+		describe("tunnel_mitm (effective)", cfg.Network.TunnelMITM, true, ""),
+		describe("capture_gateway (effective)", cfg.Network.CaptureGateway, true, ""),
+		describe("tunnel_ipv6 (effective)", cfg.Network.TunnelIPv6, false, tunnelIPv6EnvVar),
 	}
 }
 

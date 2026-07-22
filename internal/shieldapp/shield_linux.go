@@ -157,7 +157,10 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+	// ipv6Mode gates the macOS tunnel's IPv6 datapath only (AGE-262); Linux
+	// has no equivalent knob yet, so the resolved value is a no-op here.
+	_ = ipv6Mode
 	ctx := context.Background()
 	noColor := os.Getenv("NO_COLOR") != ""
 	if noColor {

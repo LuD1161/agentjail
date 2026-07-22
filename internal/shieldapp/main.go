@@ -98,6 +98,11 @@ func Run(args []string) int {
 	// Opt out of the base-URL capture gateway (on by default for a detected
 	// provider agent under --tunnel). See ADR 0109-baseurl-capture-gateway.
 	noProviderGateway := fs.Bool("no-provider-gateway", false, "do not route a detected provider agent (e.g. Claude Code) through the local capture gateway; the agent talks to its provider directly and its LLM API bodies are not captured (ADR 0109)")
+	// IPv6 datapath for the macOS tunnel (AGE-262), off by default. Mirrors
+	// --mitm/--no-mitm: a per-launch override over network.tunnel_ipv6 and the
+	// transitional AGENTJAIL_TUNNEL_IPV6 env var. See ADR 0110.
+	tunnelIPv6Flag := fs.Bool("tunnel-ipv6", false, "enable the IPv6 datapath for the macOS tunnel (AGE-262), overriding a network.tunnel_ipv6/env opt-out")
+	noTunnelIPv6 := fs.Bool("no-tunnel-ipv6", false, "explicitly disable the IPv6 tunnel datapath (default), overriding network.tunnel_ipv6/env opt-in")
 	auditJSON := fs.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := fs.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	fs.Usage = func() {
@@ -111,6 +116,8 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "  --mitm              force TLS interception on, overriding a network.tunnel_mitm: false opt-out (already the default)")
 		fmt.Fprintln(os.Stderr, "  --no-mitm           transparent-only: relay the agent's TLS opaquely. HTTP(S) policy templates cannot match (ADR 0077)")
 		fmt.Fprintln(os.Stderr, "  --no-provider-gateway  do not route a detected provider agent through the local capture gateway (ADR 0109)")
+		fmt.Fprintln(os.Stderr, "  --tunnel-ipv6       enable the IPv6 datapath for the macOS tunnel (AGE-262)")
+		fmt.Fprintln(os.Stderr, "  --no-tunnel-ipv6    (default) disable the IPv6 tunnel datapath")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
 		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings, or if IMDS is reachable in port-only mode")
 		fmt.Fprintln(os.Stderr, "")
@@ -289,7 +296,9 @@ func Run(args []string) int {
 	// or calls os.Exit itself on a fatal setup error. The return 0 below is
 	// unreachable in practice but keeps this function's signature honest.
 	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode,
-		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM), *policyPath, startTime, emitter)
+		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM),
+		resolveTunnelIPv6(*tunnelIPv6Flag, *noTunnelIPv6, os.Getenv(tunnelIPv6EnvVar) == "1", cfg.Network.TunnelIPv6),
+		*policyPath, startTime, emitter)
 	return 0
 }
 
@@ -360,6 +369,31 @@ func markShieldUnrecorded(stateDir string, reason error) {
 		return
 	}
 	_ = os.WriteFile(filepath.Join(stateDir, unrecordedMarkerName), append(b, '\n'), 0o600)
+}
+
+// tunnelIPv6EnvVar is the transitional override for the macOS tunnel's IPv6
+// datapath (AGE-262). Superseded by --tunnel-ipv6/--no-tunnel-ipv6 and
+// network.tunnel_ipv6 (ADR 0110); kept working for one release, then removed.
+const tunnelIPv6EnvVar = "AGENTJAIL_TUNNEL_IPV6"
+
+// resolveTunnelIPv6 decides whether this launch enables the macOS tunnel's
+// IPv6 datapath (AGE-262). Off by default. Precedence, highest first:
+// --no-tunnel-ipv6 > --tunnel-ipv6 > AGENTJAIL_TUNNEL_IPV6 env (transitional,
+// see tunnelIPv6EnvVar) > network.tunnel_ipv6 (config) > default (off).
+// ADR 0110-network-flag-consolidation.
+func resolveTunnelIPv6(ipv6Flag, noIPv6Flag bool, envSet bool, cfgTunnelIPv6 *bool) bool {
+	switch {
+	case noIPv6Flag:
+		return false
+	case ipv6Flag:
+		return true
+	case envSet:
+		return true
+	case cfgTunnelIPv6 != nil:
+		return *cfgTunnelIPv6
+	default:
+		return false
+	}
 }
 
 // resolveMITM decides whether this launch decrypts TLS. On by default -- it is

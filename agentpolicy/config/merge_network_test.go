@@ -47,6 +47,44 @@ func TestMergePreservesTunnelMITM(t *testing.T) {
 	}
 }
 
+// Mirrors TestMergePreservesTunnelMITM for tunnel_ipv6 (ADR 0110, AGE-262):
+// same tri-state contract, so the same drop bug is possible here too.
+func TestMergePreservesTunnelIPv6(t *testing.T) {
+	no := false
+	yes := true
+
+	for _, tc := range []struct {
+		name    string
+		overlay *bool
+		base    *bool
+		want    *bool
+	}{
+		{"overlay false wins over absent base", &no, nil, &no},
+		{"overlay true wins over absent base", &yes, nil, &yes},
+		{"absent overlay keeps base", nil, &no, &no},
+		{"both absent stays absent", nil, nil, nil},
+		{"overlay true overrides base false", &yes, &no, &yes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := Default()
+			base.Network.TunnelIPv6 = tc.base
+			overlay := &PolicyConfig{}
+			overlay.Network.TunnelIPv6 = tc.overlay
+
+			got := Merge(base, overlay).Network.TunnelIPv6
+
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("TunnelIPv6 = %v, want nil (absent)", *got)
+			case tc.want != nil && got == nil:
+				t.Fatalf("TunnelIPv6 = nil, want %v — Merge dropped the field", *tc.want)
+			case tc.want != nil && *got != *tc.want:
+				t.Fatalf("TunnelIPv6 = %v, want %v", *got, *tc.want)
+			}
+		})
+	}
+}
+
 // The path a real launch takes: policy.yaml -> LoadPolicyForEnforcement -> the
 // value resolveMITM reads. The unit test above can pass while this one fails,
 // because enforcement loads through Merge(Default(), cfg).
