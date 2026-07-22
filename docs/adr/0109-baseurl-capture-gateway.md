@@ -66,6 +66,35 @@ non-tunnel `syscall.Exec` paths cannot host an in-process gateway and are
 explicitly inert in Phase 1 (Phase 2 converts them to spawn-and-wait). Codex/Gemini
 entries, netpolicy enforcement, and Linux parity are Phase 2+.
 
+Phase 2 decouples the gateway from `--tunnel` entirely:
+
+- **Two run modes, one contract.** The capture gateway runs whenever a
+  registered provider agent is detected AND the gateway is enabled, in both
+  plain (no `--tunnel`) and tunnel modes. It is independent of the MITM/tunnel
+  - it does not require the macOS system extension. In plain mode it is the
+  sole capture path for LLM provider traffic; the tunnel MITM, when present,
+  captures other hosts and reuses the same `RequestStore`. This is what lets
+  the CLI-only build capture `/v1/messages` before the desktop-app system
+  extension ships.
+- **Gateway decoupled from MITM.** Previously the gateway was nested inside
+  the tunnel's MITM-setup success branch, so `--no-mitm` or a MITM CA-setup
+  failure silently skipped gateway capture. Now the capture store
+  (`RequestStore` + encrypted body recorder) is created once, when a provider
+  is detected and the gateway is enabled, and the gateway runs off it
+  regardless of MITM state.
+- **Fail-closed uniformly.** For a detected provider with the gateway
+  enabled, failure to start the gateway/store refuses launch (emits
+  `gateway.start_failed`) in both plain and tunnel modes, matching the
+  Phase 1 tunnel-only behavior. The only way to run uncaptured is the
+  explicit opt-out `--no-provider-gateway` / `network.capture_gateway: false`.
+- **Process model.** In plain mode, the darwin non-tunnel path (and the
+  sandbox-exec-absent fail-open path) changes from `syscall.Exec` (process
+  replacement) to spawn-and-wait, so the in-process gateway survives past
+  launch; exit-code and signal parity with the old `syscall.Exec` behavior are
+  preserved (ordinary exit -> child code; signal death -> 128+signal). The
+  no-provider / gateway-disabled path is unchanged and still uses
+  `syscall.Exec`.
+
 ## Consequences
 
 - `/v1/messages` is fully captured (headers + body + streamed response) on current
@@ -80,3 +109,16 @@ entries, netpolicy enforcement, and Linux parity are Phase 2+.
 - New surface to maintain: a per-provider base-URL contract. Providers that route
   through a proprietary backend (Cursor) or need a config file rather than an env
   var (opencode, aider) are out of the Phase 1 env-var path.
+- Capture no longer implies `--tunnel`: a plain-shield run (no system
+  extension, no MITM) still captures registered-provider LLM traffic, closing
+  the gap where CLI-only installs had zero visibility until the desktop app's
+  tunnel shipped.
+- The loopback plaintext hop, nonce gate, no-log/no-persist/no-surface
+  handling, and ADR 0032/0084 redaction are unchanged in Phase 2 and now
+  apply uniformly in both run modes. macOS Seatbelt already permits loopback
+  traffic, so plain mode requires no sandbox-profile broadening - verified by
+  test rather than by inspection alone.
+- The non-tunnel darwin path's move from `syscall.Exec` to spawn-and-wait is a
+  process-model change confined to the provider-detected-and-enabled case; it
+  adds a wait/signal-relay layer to a path that previously replaced itself,
+  so exit/signal-parity regressions are the main risk to watch for there.

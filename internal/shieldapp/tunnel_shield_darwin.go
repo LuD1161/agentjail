@@ -251,17 +251,29 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// it feeds the tunnel.extension_started audit detail so a fail-open MITM
 	// step never gets reported as "mitm: true". See AGE-149 T1.5.
 	var mitmActive bool
+	// providerGatewayCloseFn / sharedStoreCleanup are assigned once the
+	// capture gateway is known to be wanted (below); declared here, ahead of
+	// cleanupGateway, so the closure captures them by reference. See A0.
+	var providerGatewayCloseFn func() error
+	var sharedStoreCleanup func()
 	// Order matters: cancel the context first (stops the ListenAndServe
-	// goroutines below), then close the gateway/DNS server, then the CA temp
-	// dir last (nothing after this point still needs it). Delegated to
-	// runCleanupSteps so the ordering is unit-testable without a live
-	// gateway; see tunnel_shield_darwin_test.go. AGE-149 T1.7.
+	// goroutines below), then close the gateway/DNS server, then the
+	// provider capture gateway, then MITM's own CA/store cleanup, then the
+	// shared RequestStore last (nothing after this point still needs it).
+	// Delegated to runCleanupSteps so the ordering is unit-testable without
+	// a live gateway; see tunnel_shield_darwin_test.go. AGE-149 T1.7, A0.
 	cleanupGateway := func() {
 		runCleanupSteps(
 			gwCancel,
 			func() { _ = gateway.Close() },
 			func() { _ = dnsServer.Close() },
+			func() {
+				if providerGatewayCloseFn != nil {
+					_ = providerGatewayCloseFn()
+				}
+			},
 			caCleanup,
+			sharedStoreCleanup,
 		)
 	}
 
@@ -283,6 +295,27 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		return
 	}
 
+	// --- Shared capture prerequisite (A0): open the RequestStore + body
+	// recorder ONCE, before MITM decides its own posture, so the base-URL
+	// gateway (LLM /v1/messages capture, ADR 0109) never depends on MITM CA
+	// setup succeeding. MITM below reuses this SAME store when enabled; when
+	// MITM is off or its own CA setup fails, the gateway still runs off it.
+	gwProv, gwWanted := providerGatewayWanted(cfg, agentPath)
+	var sharedStore *mitm.RequestStore
+	var sharedRec bodyRecording
+	if gwWanted {
+		st, storeErr := mitm.NewRequestStore(mitm.DefaultDBPath())
+		if storeErr != nil {
+			cleanupGateway()
+			emitGatewayStartFailed(ctx, emitter, sessionID, gwProv, "store")
+			fail("capture gateway store open failed for %s: %v", gwProv.Name, storeErr)
+			return
+		}
+		sharedStore = st
+		sharedStoreCleanup = func() { _ = st.Close() }
+		sharedRec = newBodyRecording(ctx, sessionID, logger, emitter)
+	}
+
 	// --- 3. MITM: in-memory CA + network.db + mitm.MITMHandler wired into
 	// the gateway. Fail-open for this step only (ADR 0077): any failure here
 	// disables interception but keeps the tunnel running, relaying TLS
@@ -300,14 +333,21 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	} else if envVars, _, envErr := setupTunnelCADarwin(caDir); envErr != nil {
 		os.RemoveAll(caDir)
 		logger.Warn("tunnel TLS interception UNAVAILABLE (CA env setup failed); relaying HTTPS opaque", "err", envErr)
-	} else if store, storeErr := mitm.NewRequestStore(mitm.DefaultDBPath()); storeErr != nil {
+	} else if store, storeOwned, storeErr := acquireMITMStore(sharedStore); storeErr != nil {
 		os.RemoveAll(caDir)
 		logger.Warn("tunnel TLS interception UNAVAILABLE (network.db open failed); relaying HTTPS opaque", "err", storeErr)
 	} else {
 		caEnvVars = envVars
-		caCleanup = func() {
-			os.RemoveAll(caDir)
-			_ = store.Close()
+		if storeOwned {
+			caCleanup = func() {
+				os.RemoveAll(caDir)
+				_ = store.Close()
+			}
+		} else {
+			// store is the shared RequestStore (A0), owned by
+			// sharedStoreCleanup and closed last by cleanupGateway -- MITM's
+			// own cleanup here only removes its CA temp dir.
+			caCleanup = func() { os.RemoveAll(caDir) }
 		}
 		h := mitm.NewMITMHandler(caCert, caKey, logger, func(rl *mitm.RequestLog) {
 			if lerr := store.Log(rl); lerr != nil {
@@ -324,47 +364,40 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		// rest of the contract is shared. Fail-open: a missing/locked
 		// keychain degrades to unencrypted-with-a-loud-warning, never drops
 		// interception. See AGE-149 T1.6, ADR 0092-persist-request-bodies.
-		rec := newBodyRecording(ctx, sessionID, logger, emitter)
+		var rec bodyRecording
+		if storeOwned {
+			rec = newBodyRecording(ctx, sessionID, logger, emitter)
+		} else {
+			// Reuse the shared recorder (A0) instead of minting a second one
+			// under the same sessionID: mitm.NewBodyStore rejects a duplicate
+			// per-session group key.
+			rec = sharedRec
+		}
 		h.Bodies = rec.store
 		mitmActive = true
 		gateway.SetMITM(h)
 		notice := rec.notice()
 		logger.Info("tunnel TLS interception ON - agentjail is decrypting this agent's HTTPS via a per-session in-memory CA; "+notice,
 			"db", mitm.DefaultDBPath(), "bodies", mitm.DefaultBodyDir(), "session", sessionID)
+	}
 
-		// Provider capture gateway: point the agent's LLM API at a local plaintext
-		// capture gateway so we record bodies the Bun inference client refuses under
-		// MITM (fail-closed). See ADR 0109-baseurl-capture-gateway (AGE-259).
-		if captureGatewayEnabled(cfg) {
-			if prov, ok := capturegw.Lookup(filepath.Base(agentPath)); ok && prov.Caps.Verified && prov.Caps.BaseURLEnv {
-				inherited := os.Getenv(prov.BaseURLEnvVar)
-				target, terr := capturegw.ResolveForwardTarget(inherited, prov, cfg.Network.AllowedHosts)
-				if terr != nil {
-					cleanupGateway()
-					emitGatewayStartFailed(ctx, emitter, sessionID, prov, "target_rejected")
-					fail("capture gateway target rejected for %s: %v", prov.Name, terr)
-					return
-				}
-				gw := capturegw.New(target, store, capturegw.Options{
-					SessionID: sessionID, OwnerPID: os.Getpid(), Logger: logger, Bodies: rec.store,
-				})
-				baseURL, gerr := gw.Start(ctx)
-				if gerr != nil {
-					_ = gw.Close()
-					cleanupGateway()
-					emitGatewayStartFailed(ctx, emitter, sessionID, prov, "start")
-					fail("capture gateway failed to start for %s: %v", prov.Name, gerr)
-					return
-				}
-				caEnvVars[prov.BaseURLEnvVar] = baseURL
-				if inherited != "" {
-					caEnvVars["AGENTJAIL_ORIGINAL_"+prov.BaseURLEnvVar] = inherited
-				}
-				// Close the gateway when the session's CA/store are torn down (before store.Close()).
-				prevCleanup := caCleanup
-				caCleanup = func() { _ = gw.Close(); prevCleanup() }
-				emitGatewayProviderRouted(ctx, emitter, sessionID, prov)
-				logger.Info("capture gateway ON - "+prov.Name+" LLM API routed through local plaintext capture", "upstream", prov.UpstreamHost, "session", sessionID)
+	// --- Provider capture gateway (A0/A1): independent of MITM's outcome
+	// above -- runs whenever a provider is detected + gateway enabled,
+	// whether MITM is on, off, or degraded. See ADR 0109-baseurl-capture-gateway.
+	if gwWanted {
+		envVars, closeFn, started, gerr := startProviderGateway(ctx, cfg, agentPath, sharedStore, sharedRec.store, sessionID, logger, emitter)
+		if gerr != nil {
+			cleanupGateway()
+			fail("%v", gerr)
+			return
+		}
+		if started {
+			providerGatewayCloseFn = closeFn
+			if caEnvVars == nil {
+				caEnvVars = map[string]string{}
+			}
+			for k, v := range envVars {
+				caEnvVars[k] = v
 			}
 		}
 	}
@@ -496,19 +529,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// os/exec (non-tunnel) signal handling. See AGE-149 T1.7.
 	stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
 
-	exitCode := 0
-	runErr := child.Start()
-	if runErr == nil {
-		runErr = child.Wait()
-	}
-	if runErr != nil {
-		if exitErr, ok := runErr.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			logger.Error("spawning agent under sandbox-exec failed", "err", runErr)
-			exitCode = 1
-		}
-	}
+	exitCode := startAndWaitChild(child, logger)
 
 	// --- 7. CLEANUP: ordinary code, not a defer - this function's job is to
 	// be main.go's terminal step, so running cleanup inline (rather than via
@@ -524,6 +545,18 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	revokeSecretGrants(activeGrants, ctlToken)
 
 	os.Exit(exitCode)
+}
+
+// acquireMITMStore returns the shared RequestStore (A0) when the capture
+// gateway already opened one, else opens a fresh RequestStore that MITM owns
+// outright. owned reports which -- callers must only Close what they opened;
+// the shared store is closed once, last, by sharedStoreCleanup.
+func acquireMITMStore(shared *mitm.RequestStore) (store *mitm.RequestStore, owned bool, err error) {
+	if shared != nil {
+		return shared, false, nil
+	}
+	st, err := mitm.NewRequestStore(mitm.DefaultDBPath())
+	return st, true, err
 }
 
 // runCleanupSteps runs each step in order, skipping nils. Extracted so the

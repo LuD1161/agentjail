@@ -5,6 +5,7 @@ package shieldapp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
@@ -850,17 +852,9 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 			Detail:    map[string]string{"error": "sandbox-exec not found"},
 			Actor:     "shield",
 		})
-		execAgent(cfg, agentPath, agentArgs, withNetproxy, sessionToken)
+		execAgent(ctx, cfg, agentPath, agentArgs, withNetproxy, sessionToken, emitter)
 		return
 	}
-
-	// Build the argv for sandbox-exec:
-	//   /usr/bin/sandbox-exec -p <profile> <agent-path> [agent-args...]
-	argv := make([]string, 0, 3+1+len(agentArgs))
-	argv = append(argv, sandboxExecPath)
-	argv = append(argv, "-p", profile)
-	argv = append(argv, agentPath)
-	argv = append(argv, agentArgs...)
 
 	// Build the environment: clean allowlist + strip defence-in-depth + proxy
 	// vars + granted secrets.
@@ -879,6 +873,80 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	grantEnvVars, _ := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
 
+	// --- Provider capture gateway (A2): a registered provider agent with the
+	// gateway enabled can no longer syscall.Exec -- an in-process gateway
+	// needs a live parent -- so this spawns the agent as a child and waits,
+	// mirroring --tunnel's process model exactly (same armSignalDrain, same
+	// exit/signal mapping via startAndWaitChild). Fail-closed: a gateway/store
+	// failure here refuses launch rather than falling back to uncaptured; the
+	// only opt-out is --no-provider-gateway / network.capture_gateway:false.
+	// See ADR 0109-baseurl-capture-gateway, A0-A2.
+	sessionID := generateSessionID()
+	prov, gwWanted := providerGatewayWanted(cfg, agentPath)
+	if gwWanted {
+		logger := slog.Default()
+		store, storeErr := mitm.NewRequestStore(mitm.DefaultDBPath())
+		if storeErr != nil {
+			emitGatewayStartFailed(ctx, emitter, sessionID, prov, "store")
+			fmt.Fprintf(os.Stderr, "agentjail-shield: capture gateway store open failed for %s: %v -- refusing to launch uncaptured (opt out with --no-provider-gateway)\n", prov.Name, storeErr)
+			os.Exit(1)
+		}
+		rec := newBodyRecording(ctx, sessionID, logger, emitter)
+		gwEnv, gwClose, started, gerr := startProviderGateway(ctx, cfg, agentPath, store, rec.store, sessionID, logger, emitter)
+		if gerr != nil {
+			_ = store.Close()
+			fmt.Fprintf(os.Stderr, "agentjail-shield: %v -- refusing to launch uncaptured (opt out with --no-provider-gateway)\n", gerr)
+			os.Exit(1)
+		}
+		if !started {
+			// Defensive: providerGatewayWanted said yes but startProviderGateway
+			// said no-op -- the two checks must never disagree silently.
+			_ = store.Close()
+			fmt.Fprintf(os.Stderr, "agentjail-shield: capture gateway unexpectedly did not start for %s -- refusing to launch uncaptured\n", prov.Name)
+			os.Exit(1)
+		}
+		for k, v := range gwEnv {
+			env = append(env, k+"="+v)
+		}
+
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ShieldActivated,
+			Actor:     "shield",
+		})
+
+		argv := append([]string{"-p", profile, agentPath}, agentArgs...)
+		child := exec.Command(sandboxExecPath, argv...)
+		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+		child.Env = env
+
+		stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
+		exitCode := startAndWaitChild(child, logger)
+
+		// CLEANUP: explicit + inline (NOT deferred -- defers are LIFO and do
+		// not run under os.Exit), ordered: (1) stop the signal drain, (2)
+		// close the provider gateway, (3) close the RequestStore, (4) signal
+		// the netproxy child if one is running, (5) exit with the mapped
+		// child status. See A2.
+		stopSignalDrain()
+		if gwClose != nil {
+			_ = gwClose()
+		}
+		_ = store.Close()
+		if netproxyCmd != nil {
+			_ = netproxyCmd.Process.Signal(syscall.SIGTERM)
+		}
+		os.Exit(exitCode)
+	}
+
+	// --- No provider / gateway disabled: byte-identical to the pre-A2 path.
+	// Build the argv for sandbox-exec:
+	//   /usr/bin/sandbox-exec -p <profile> <agent-path> [agent-args...]
+	argv := make([]string, 0, 3+1+len(agentArgs))
+	argv = append(argv, sandboxExecPath)
+	argv = append(argv, "-p", profile)
+	argv = append(argv, agentPath)
+	argv = append(argv, agentArgs...)
+
 	// Emit activation before exec — syscall.Exec replaces this process, so
 	// this is the last chance to write to the audit log.
 	_ = emitter.Emit(ctx, audit.Event{
@@ -895,7 +963,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
 // is absent (fail-open path).  Env stripping still applies.
-func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token) {
+func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token, emitter audit.Emitter) {
 	// FIX1 (ADR 0039): same clean-then-strip ordering as runShield's sandbox
 	// path -- the fail-open fallback must not leak a broader environment
 	// than the sandboxed path does.
@@ -912,6 +980,53 @@ func execAgent(cfg *config.PolicyConfig, agentPath string, agentArgs []string, w
 	darwinCtlToken, _ := ctlauth.Load()
 	grantEnvVars, _ := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
+
+	// --- Provider capture gateway (A5): same treatment as the sandboxed
+	// spawn-and-wait path (A2), applied here too so capture is not silently
+	// lost just because sandbox-exec is unavailable (fail-open path). See
+	// ADR 0109-baseurl-capture-gateway.
+	sessionID := generateSessionID()
+	prov, gwWanted := providerGatewayWanted(cfg, agentPath)
+	if gwWanted {
+		logger := slog.Default()
+		store, storeErr := mitm.NewRequestStore(mitm.DefaultDBPath())
+		if storeErr != nil {
+			emitGatewayStartFailed(ctx, emitter, sessionID, prov, "store")
+			fmt.Fprintf(os.Stderr, "agentjail-shield: capture gateway store open failed for %s: %v -- refusing to launch uncaptured (opt out with --no-provider-gateway)\n", prov.Name, storeErr)
+			os.Exit(1)
+		}
+		rec := newBodyRecording(ctx, sessionID, logger, emitter)
+		gwEnv, gwClose, started, gerr := startProviderGateway(ctx, cfg, agentPath, store, rec.store, sessionID, logger, emitter)
+		if gerr != nil {
+			_ = store.Close()
+			fmt.Fprintf(os.Stderr, "agentjail-shield: %v -- refusing to launch uncaptured (opt out with --no-provider-gateway)\n", gerr)
+			os.Exit(1)
+		}
+		if !started {
+			_ = store.Close()
+			fmt.Fprintf(os.Stderr, "agentjail-shield: capture gateway unexpectedly did not start for %s -- refusing to launch uncaptured\n", prov.Name)
+			os.Exit(1)
+		}
+		for k, v := range gwEnv {
+			env = append(env, k+"="+v)
+		}
+
+		child := exec.Command(agentPath, agentArgs...)
+		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+		child.Env = env
+
+		stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
+		exitCode := startAndWaitChild(child, logger)
+
+		// CLEANUP: explicit + inline, same order as the sandboxed path. See A2/A5.
+		stopSignalDrain()
+		if gwClose != nil {
+			_ = gwClose()
+		}
+		_ = store.Close()
+		os.Exit(exitCode)
+	}
+
 	argv := append([]string{agentPath}, agentArgs...)
 	if err := syscall.Exec(agentPath, argv, env); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: exec agent failed: %v\n", err)
