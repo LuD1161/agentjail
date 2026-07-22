@@ -1,17 +1,22 @@
 # Changelog
 
-Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
+`main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
-## v0.10.0 - 2026-07-19
+## v1.0.0 - 2026-07-21
 
 #### TL;DR
 
+- **Capture your agent's LLM traffic on macOS with no system extension.** A base-URL capture gateway points the agent's own provider override (`ANTHROPIC_BASE_URL`) at a local proxy, so a plain `agentjail-shield -- claude` records the full `POST /v1/messages` request+response (bodies encrypted at rest) and forwards to the real API over TLS. This works where a transparent MITM can't — current Claude Code runs on Bun and its inference client rejects every custom CA — and needs no privileged extension, so the CLI captures the traffic that matters out of the box (AGE-259, ADR 0109).
+- **macOS transparent tunnel** for everything else: a NETransparentProxy system extension funnels the agent's traffic through the same gVisor + MITM engine as Linux, now with an opt-in IPv6 datapath so IPv6 egress is intercepted+captured instead of leaking (AGE-262).
 - **HTTP/2 and gRPC through the tunnel** (Linux): the transparent-tunnel MITM now negotiates ALPN and serves `h2` for real, so gRPC and h2-only clients work — not just HTTP/1.1. gRPC status/trailers are preserved and client-streaming RPCs no longer stall.
 - **The tunnel now works with a real agent on the *installed* build**: a live Claude Code session is decrypted and captured end-to-end (validated by a golden-VM gate). Three defects that only the shipped symlinked binary + a real agent could hit are fixed (ADR 0103).
 - **Network visibility UI**: a Network tab with per-session request timelines, column filters, and a body viewer, driven by an on-disk capture store.
 
 ### Added
 
+- **Base-URL capture gateway for LLM providers** (AGE-259, ADR 0109): current Claude Code runs on Bun and its inference client ignores every CA trust store, so a transparent MITM cannot decrypt `POST /v1/messages` (and in fact breaks it). Instead the shield points the agent's own `ANTHROPIC_BASE_URL` at a per-session loopback proxy — nonce-gated, egress-guarded, a user-set base URL is preserved — that records the full request/response (bodies encrypted at rest) and forwards to the real provider over TLS. Runs in **both plain and `--tunnel` modes, independent of the system extension**; fail-closed for a detected provider with an explicit `--no-provider-gateway` / `network.capture_gateway: false` opt-out. The darwin non-tunnel path became spawn-and-wait (from `syscall.Exec`) so the in-process gateway survives, preserving exit-code and signal parity.
+- **IPv6 datapath for the macOS tunnel** (AGE-262, opt-in): IPv6 egress was grabbed by the extension but had no v6 datapath, so it reset (`SSL_ERROR_SYSCALL`) and evaded capture while IPv4 worked. The gateway now provisions a v6 address (`fd79::`, outside the DNS-VIP pool) end to end; enable with `--tunnel-ipv6` / `network.tunnel_ipv6` (default off until the installed app is attested dual-stack).
+- **Network flag precedence + `doctor` sourcing** (ADR 0110): one canonical order for every network knob — CLI flag > env var > `policy.yaml` > default — and `agentjail doctor` now prints each knob's effective value AND where it came from (cli/env/config/default). `--netproxy` is documented as deprecated.
 - **HTTP/2 in the tunnel MITM** (ADR 0102): advertises `h2, http/1.1`, serves h2 via `http2.Server.ServeConn` with an `http2.Transport` upstream, full parity with the HTTP/1.1 path (body capture, policy/deny, recording). gRPC unary works with `grpc-status` through trailers; hop-by-hop headers are stripped on both legs. Proven end-to-end over the real TUN.
 - Streaming/bidi h2 request bodies are forwarded without pre-draining, so a long-lived stream never deadlocks; host/path/method policy still applies (body-content scan is bounded-body only — ADR 0102).
 - **Encrypted body capture** with keychain/file KEK tiers so `doctor` never overstates protection (ADR 0095/0097).
@@ -21,6 +26,8 @@ Pre-1.0; `main` is the live branch. Significant ships only — see `git log` for
 
 ### Fixed
 
+- **Streaming responses stalled on the macOS tunnel** (ADR 0108): the gVisor `serverNetstack` pump dropped outbound packets when its queue was full, silently losing TCP segments on a lossless carrier and hanging long SSE streams. It now applies backpressure (blocks, never drops).
+- **Decrypted bodies were not persisted on the darwin tunnel** (AGE-259): the session id was `shield-<ts>-<hex>`, which `mitm.NewBodyStore` rejected (non-alnum), silently disabling body storage. The id is now alphanumeric, so request/response bodies actually land.
 - Dev builds (`make dev-deploy`/`dev-install`) reported version `dev` — the `-ldflags` targeted a nonexistent `main.version` instead of `internal/buildinfo.Version` (AGE-247).
 - Retention enforced its window only once at daemon startup, so a long-lived daemon's DB grew unbounded (AGE-225).
 - h2 request trailers were dropped on streamed bodies (`.Clone()` froze an all-nil map before net/http2 filled it).

@@ -13,7 +13,7 @@ A safety rail for Claude Code, Codex, and Cursor. <br>
 Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v0.8.2](https://img.shields.io/badge/v0.8.2-released-orange)
+&nbsp;![v1.0.0](https://img.shields.io/badge/v1.0.0-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v1.0.0** | Jul 21, 2026 | Network visibility ships. macOS: capture your agent's LLM traffic (Claude `/v1/messages`, bodies) with **no system extension** via a base-URL capture gateway; transparent tunnel + opt-in IPv6 for everything else. HTTP/2 + gRPC through the tunnel. Real-agent capture on the installed build. Network UI. Consolidated network flag precedence + `doctor` sourcing. |
 | **v0.8.0** | Jul 14, 2026 | Multicall binary consolidation: 6 shipped binaries become 2 (`agentjail` + `agentjail-hook`), role names kept as symlinks. Release version-stamp fix. |
 | **v0.7.0** | Jul 14, 2026 | Clean-VM testbed engine (`make e2e-release` gate) + recorded CLI suite. On-demand secrets-broker auto-start. Linux shield `$HOME` read-leak fix. |
 | **v0.6.0** | Jul 8, 2026 | Credential broker + secrets vault. Env-stripping in the shield. Fail-open sidecar and daemon-unreachable policy. |
