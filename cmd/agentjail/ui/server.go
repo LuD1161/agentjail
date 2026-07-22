@@ -377,12 +377,30 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	f := parseFilterParams(r)
 	if snap, err := s.sqliteSnapshot(r.Context(), f); err == nil {
 		snap.Source = s.sqliteSourceStatus()
+		enrichSessions(snap.Sessions)
 		writeJSON(w, snap)
 		return
 	}
 	snap := s.store.Snapshot()
 	snap.Source = s.logSourceStatus()
+	enrichSessions(snap.Sessions)
 	writeJSON(w, snap)
+}
+
+// enrichSessions joins daemon sessions against Claude's per-process session
+// metadata: Name comes from the user's /rename, Active from that process's
+// liveness. Agents without such metadata (codex, cursor) fall back to a
+// recency window so a currently-deciding session never renders inactive.
+func enrichSessions(sessions []*SessionState) {
+	byID := claudeMetaBySessionID(loadClaudeSessionMeta())
+	for _, ss := range sessions {
+		if m, ok := byID[ss.ID]; ok {
+			ss.Name = m.Name
+			ss.Active = procutil.Alive(m.PID)
+			continue
+		}
+		ss.Active = time.Since(ss.LastSeen) < 2*time.Minute
+	}
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1324,6 +1342,9 @@ type SessionInfo struct {
 	// that existed fall back to a User-Agent sniff in aggregateSessions.
 	Agent string `json:"agent,omitempty"`
 	Cwd   string `json:"cwd,omitempty"`
+	// Name is the user-assigned Claude session name, resolved through the
+	// owning shield pid's descendants (see handleNetworkSessions).
+	Name string `json:"name,omitempty"`
 }
 
 // agentFromUserAgent maps a captured User-Agent header to an agent label for
@@ -1575,6 +1596,16 @@ func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := aggregateSessions(rows)
+	// The network store only knows the shield pid, so a live session's
+	// user-assigned name resolves through process ancestry (the claude
+	// process is the shield's descendant). Dead sessions keep their
+	// directory-derived label.
+	metas := loadClaudeSessionMeta()
+	for i := range out {
+		if out[i].Active {
+			out[i].Name = sessionNameByAncestor(metas, out[i].OwnerPID)
+		}
+	}
 	writeJSON(w, map[string]any{"sessions": out, "count": len(out)})
 }
 

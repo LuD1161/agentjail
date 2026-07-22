@@ -50,6 +50,8 @@ export interface SessionInfo {
    * by the shield; older rows fall back to a server-side User-Agent sniff. */
   agent?: string
   cwd?: string
+  /** User-assigned Claude session name, resolved server-side. */
+  name?: string
 }
 
 /** Mirrors cmd/agentjail/ui.EvalLine (GET /api/state, SSE /events). */
@@ -76,6 +78,8 @@ export interface TimelineEvent {
 export interface DaemonSessionState {
   id: string
   agent?: string
+  /** User-assigned Claude session name, joined server-side. */
+  name?: string
   cwd?: string
   branch?: string
   repo_name?: string

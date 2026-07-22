@@ -39,8 +39,13 @@ type EvalLine struct {
 
 // SessionState tracks per-session aggregated stats.
 type SessionState struct {
-	ID        string    `json:"id"`
-	Agent     string    `json:"agent,omitempty"`
+	ID    string `json:"id"`
+	Agent string `json:"agent,omitempty"`
+	// Name is the user-assigned session name from ~/.claude/sessions, joined
+	// in handleState. Active is that process's liveness, with a recency
+	// fallback for agents that keep no such metadata.
+	Name      string    `json:"name,omitempty"`
+	Active    bool      `json:"active"`
 	CWD       string    `json:"cwd,omitempty"`
 	Branch    string    `json:"branch,omitempty"`
 	RepoName  string    `json:"repo_name,omitempty"`

@@ -122,13 +122,14 @@ body {
   border-radius: 3px;
 }
 
+/* Solid, not pulsing: a steady green reads "alive" without drawing the eye
+   every 1.4s. */
 .live-dot {
   display: inline-block;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--aj-green);
-  animation: aj-pulse 1.4s ease-in-out infinite;
 }
 
 @keyframes aj-pulse {

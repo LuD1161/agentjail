@@ -236,6 +236,7 @@ export function NetworkPage() {
       .map((s) => ({
         id: s.session_id,
         agent: s.agent,
+        name: s.name,
         cwd: s.cwd,
         active: s.active,
         requestCount: s.request_count,

@@ -8,6 +8,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 export interface SidebarSession {
   id: string
   agent?: string
+  /** User-assigned session name; wins over any directory-derived label. */
+  name?: string
   cwd?: string
   repoName?: string
   active: boolean
@@ -75,6 +77,7 @@ function relativeTime(iso: string): string {
 }
 
 function sessionLabel(s: SidebarSession): string {
+  if (s.name) return s.name
   if (s.repoName) return s.repoName
   if (s.cwd) {
     const parts = s.cwd.split('/')

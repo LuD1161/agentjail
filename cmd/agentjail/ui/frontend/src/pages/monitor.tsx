@@ -132,6 +132,7 @@ export function MonitorPage() {
     .map((s) => ({
       id: s.id,
       agent: s.agent,
+      name: s.name,
       cwd: s.cwd,
       repoName: s.repo_name,
       active: s.active,
