@@ -170,6 +170,8 @@ func startTunnel(ctx context.Context, agentPath string, mitmEnabled bool, emitte
 		// to decide "active". See ADR 0100-network-active-pid.
 		h.OwnerPID = os.Getpid()
 		h.Agent, h.Cwd = sessionMeta(agentPath)
+		h.ClaudeSession = &mitm.ClaudeSessionRef{}
+		watchClaudeSession(ctx, store, sessionID, h.ClaudeSession)
 		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter        // session-level notices, e.g. the ALPN downgrade (AGE-222)
 		rec := newBodyRecording(ctx, sessionID, logger, emitter)

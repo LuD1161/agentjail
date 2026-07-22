@@ -106,12 +106,13 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	h := rh.h
 	start := time.Now()
 	reqLog := &RequestLog{
-		Ts:        start,
-		Host:      rh.host,
-		SessionID: h.SessionID,
-		OwnerPID:  h.OwnerPID,
-		Agent:     h.Agent,
-		Cwd:       h.Cwd,
+		Ts:              start,
+		Host:            rh.host,
+		SessionID:       h.SessionID,
+		ClaudeSessionID: h.ClaudeSession.Get(),
+		OwnerPID:        h.OwnerPID,
+		Agent:           h.Agent,
+		Cwd:             h.Cwd,
 	}
 
 	var reqCapture, respCapture *BodyCapture

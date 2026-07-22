@@ -53,6 +53,8 @@ type MITMHandler struct {
 	// session name instead of the opaque session id.
 	Agent string
 	Cwd   string
+	// ClaudeSession resolves late (see ClaudeSessionRef); nil is valid.
+	ClaudeSession *ClaudeSessionRef
 
 	UpstreamTLSConfig *tls.Config // optional: override for upstream TLS (tests only)
 	certCache         *hostCertCache
@@ -184,12 +186,13 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 	// Step 4-9: loop for HTTP/1.1 keep-alive.
 	for {
 		reqLog := &RequestLog{
-			Ts:        time.Now(),
-			Host:      host,
-			SessionID: h.SessionID,
-			OwnerPID:  h.OwnerPID,
-			Agent:     h.Agent,
-			Cwd:       h.Cwd,
+			Ts:              time.Now(),
+			Host:            host,
+			SessionID:       h.SessionID,
+			ClaudeSessionID: h.ClaudeSession.Get(),
+			OwnerPID:        h.OwnerPID,
+			Agent:           h.Agent,
+			Cwd:             h.Cwd,
 		}
 		start := time.Now()
 

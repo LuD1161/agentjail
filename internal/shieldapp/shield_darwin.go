@@ -917,7 +917,8 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 			os.Exit(1)
 		}
 		rec := newBodyRecording(ctx, sessionID, logger, emitter)
-		gwEnv, gwClose, started, gerr := startProviderGateway(ctx, cfg, agentPath, store, rec.store, sessionID, logger, emitter)
+		claudeRef := &mitm.ClaudeSessionRef{}
+		gwEnv, gwClose, started, gerr := startProviderGateway(ctx, cfg, agentPath, store, rec.store, sessionID, claudeRef, logger, emitter)
 		if gerr != nil {
 			_ = store.Close()
 			fmt.Fprintf(os.Stderr, "agentjail-shield: %v -- refusing to launch uncaptured (opt out with --no-provider-gateway)\n", gerr)
@@ -930,6 +931,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 			fmt.Fprintf(os.Stderr, "agentjail-shield: capture gateway unexpectedly did not start for %s -- refusing to launch uncaptured\n", prov.Name)
 			os.Exit(1)
 		}
+		watchClaudeSession(ctx, store, sessionID, claudeRef)
 		for k, v := range gwEnv {
 			env = append(env, k+"="+v)
 		}
@@ -1021,7 +1023,8 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 			os.Exit(1)
 		}
 		rec := newBodyRecording(ctx, sessionID, logger, emitter)
-		gwEnv, gwClose, started, gerr := startProviderGateway(ctx, cfg, agentPath, store, rec.store, sessionID, logger, emitter)
+		claudeRef := &mitm.ClaudeSessionRef{}
+		gwEnv, gwClose, started, gerr := startProviderGateway(ctx, cfg, agentPath, store, rec.store, sessionID, claudeRef, logger, emitter)
 		if gerr != nil {
 			_ = store.Close()
 			fmt.Fprintf(os.Stderr, "agentjail-shield: %v -- refusing to launch uncaptured (opt out with --no-provider-gateway)\n", gerr)
@@ -1032,6 +1035,7 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 			fmt.Fprintf(os.Stderr, "agentjail-shield: capture gateway unexpectedly did not start for %s -- refusing to launch uncaptured\n", prov.Name)
 			os.Exit(1)
 		}
+		watchClaudeSession(ctx, store, sessionID, claudeRef)
 		for k, v := range gwEnv {
 			env = append(env, k+"="+v)
 		}

@@ -44,6 +44,12 @@ type RequestLog struct {
 	EncodingRaw      EncodingRawSides `json:"encoding_raw,omitempty"`
 	Error            string           `json:"error,omitempty"`
 	SessionID        string           `json:"session_id,omitempty"`
+	// ClaudeSessionID is the Claude session this capture belongs to — the
+	// same identity the daemon's decisions are keyed on, so one coding
+	// session has one id across the whole UI (AGE-111). The shield resolves
+	// it a few seconds after launch (the agent must exist first) and
+	// backfills earlier rows.
+	ClaudeSessionID string `json:"claude_session_id,omitempty"`
 	// OwnerPID is the shield process that owns this network session. Every row
 	// of one session shares it, so the UI can decide "active" by process
 	// liveness instead of joining on the id-space mismatch between the network
@@ -204,6 +210,7 @@ func (s *RequestStore) migrate() error {
 			encoding_raw TEXT,
 			error TEXT,
 			session_id TEXT,
+			claude_session_id TEXT,
 			owner_pid INTEGER,
 			agent TEXT,
 			cwd TEXT,
@@ -226,13 +233,42 @@ func (s *RequestStore) migrate() error {
 	}
 	// Idempotent column additions for policy decision tracking and body paths.
 	for _, col := range []string{"policy_action", "policy_template", "policy_reason", "service", "verb", "resource_type",
-		"request_body_path", "response_body_path", "encoding_raw", "agent", "cwd"} {
+		"request_body_path", "response_body_path", "encoding_raw", "agent", "cwd",
+		"claude_session_id"} {
 		s.db.Exec(fmt.Sprintf("ALTER TABLE network_requests ADD COLUMN %s TEXT", col))
 	}
 	// owner_pid is INTEGER (not TEXT like the block above) so an existing DB
 	// keeps integer affinity and PIDs round-trip as numbers, not "12345" text.
 	// See ADR 0100-network-active-pid.
 	s.db.Exec("ALTER TABLE network_requests ADD COLUMN owner_pid INTEGER")
+
+	// One-time cleanup for the unified-session-id upgrade (AGE-111): rows
+	// written before claude_session_id existed can never join the daemon's
+	// sessions, so they would sit in the UI as permanently-anonymous groups.
+	// Deliberately dropped rather than carried. Versioned via user_version so
+	// this never touches rows written after the upgrade (a live session's
+	// first rows are legitimately NULL until the shield backfills them).
+	var version int
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err == nil && version < 1 {
+		s.db.Exec("DELETE FROM network_requests WHERE claude_session_id IS NULL")
+		s.db.Exec("PRAGMA user_version = 1")
+	}
+	return nil
+}
+
+// BackfillClaudeSession stamps the resolved Claude session id onto every row
+// of one capture session that predates the resolution. Called once by the
+// shield when its descendant claude process appears.
+func (s *RequestStore) BackfillClaudeSession(ctx context.Context, sessionID, claudeSessionID string) error {
+	if sessionID == "" || claudeSessionID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE network_requests SET claude_session_id = ? WHERE session_id = ? AND claude_session_id IS NULL",
+		claudeSessionID, sessionID)
+	if err != nil {
+		return fmt.Errorf("mitm/store: backfill claude session: %w", err)
+	}
 	return nil
 }
 
@@ -302,9 +338,9 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 		(ts, host, method, path, url, status_code, request_size, response_size,
 		 elapsed_ms, request_headers, response_headers,
 		 request_body_path, response_body_path, encoding_raw,
-		 error, session_id, owner_pid, agent, cwd, tool_name,
+		 error, session_id, claude_session_id, owner_pid, agent, cwd, tool_name,
 		 policy_action, policy_template, policy_reason, service, verb, resource_type)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ts, entry.Host, entry.Method, entry.Path, entry.URL,
 		nullInt(entry.StatusCode), nullInt64(entry.RequestSize), nullInt64(entry.ResponseSize),
 		nullInt64(entry.ElapsedMs),
@@ -312,7 +348,7 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 		nullStr(entry.RequestBodyPath), nullStr(entry.ResponseBodyPath),
 		nullStr(string(entry.EncodingRaw)),
 		nullStr(entry.Error),
-		nullStr(entry.SessionID), nullInt(entry.OwnerPID),
+		nullStr(entry.SessionID), nullStr(entry.ClaudeSessionID), nullInt(entry.OwnerPID),
 		nullStr(entry.Agent), nullStr(entry.Cwd), nullStr(entry.ToolName),
 		nullStr(entry.PolicyAction), nullStr(entry.PolicyTemplate),
 		nullStr(entry.PolicyReason), nullStr(entry.Service),
@@ -394,14 +430,14 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 	// agent/cwd exist only after a writer has migrated the DB; the UI opens
 	// read-only (ADR 0092 D3) and may be newer than every writer, so select
 	// empty literals instead of failing on the missing columns.
-	agentCols := "agent, cwd"
-	if !s.hasColumn(ctx, "agent") {
-		agentCols = "'' AS agent, '' AS cwd"
+	agentCols := "claude_session_id, agent, cwd"
+	if !s.hasColumn(ctx, "agent") || !s.hasColumn(ctx, "claude_session_id") {
+		agentCols = "'' AS claude_session_id, '' AS agent, '' AS cwd"
 	}
 	q := `SELECT id, ts, host, method, path, url, status_code, request_size, response_size,
 		elapsed_ms, request_headers, response_headers,
 		request_body_path, response_body_path, encoding_raw,
-		error, session_id, owner_pid, ` + agentCols + `, tool_name,
+		error, session_id, ` + agentCols + `, owner_pid, tool_name,
 		policy_action, policy_template, policy_reason, service, verb, resource_type
 		FROM network_requests`
 	if len(conds) > 0 {
@@ -436,6 +472,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			encodingRaw  sql.NullString
 			errStr       sql.NullString
 			sessionID    sql.NullString
+			claudeSID    sql.NullString
 			ownerPID     sql.NullInt64
 			agent        sql.NullString
 			cwd          sql.NullString
@@ -450,7 +487,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 		if err := rows.Scan(&id, &tsStr, &host, &method, &path, &url,
 			&statusCode, &reqSize, &respSize, &elapsedMs,
 			&reqH, &respH, &reqBodyPath, &respBodyPath, &encodingRaw,
-			&errStr, &sessionID, &ownerPID, &agent, &cwd, &toolName,
+			&errStr, &sessionID, &claudeSID, &agent, &cwd, &ownerPID, &toolName,
 			&policyAction, &policyTmpl, &policyReason,
 			&service, &verb, &resourceType); err != nil {
 			return nil, fmt.Errorf("mitm/store: scan: %w", err)
@@ -474,6 +511,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			EncodingRaw:      EncodingRawSides(encodingRaw.String),
 			Error:            errStr.String,
 			SessionID:        sessionID.String,
+			ClaudeSessionID:  claudeSID.String,
 			OwnerPID:         int(ownerPID.Int64),
 			Agent:            agent.String,
 			Cwd:              cwd.String,

@@ -41,7 +41,7 @@ func providerGatewayWanted(cfg *config.PolicyConfig, agentPath string) (capturep
 // is disabled) -- not a failure. A non-nil err means the gateway was wanted
 // but could not be started; callers must fail closed (refuse launch), never
 // silently continue uncaptured.
-func startProviderGateway(ctx context.Context, cfg *config.PolicyConfig, agentPath string, rec captureproxy.Recorder, bodies *mitm.BodyStore, sessionID string, logger *slog.Logger, emitter audit.Emitter) (env map[string]string, closeFn func() error, started bool, err error) {
+func startProviderGateway(ctx context.Context, cfg *config.PolicyConfig, agentPath string, rec captureproxy.Recorder, bodies *mitm.BodyStore, sessionID string, claudeRef *mitm.ClaudeSessionRef, logger *slog.Logger, emitter audit.Emitter) (env map[string]string, closeFn func() error, started bool, err error) {
 	prov, wanted := providerGatewayWanted(cfg, agentPath)
 	if !wanted {
 		return nil, nil, false, nil
@@ -62,12 +62,13 @@ func startProviderGateway(ctx context.Context, cfg *config.PolicyConfig, agentPa
 
 	agent, cwd := sessionMeta(agentPath)
 	gw := captureproxy.New(target, rec, captureproxy.Options{
-		SessionID: sessionID,
-		OwnerPID:  os.Getpid(),
-		Agent:     agent,
-		Cwd:       cwd,
-		Logger:    logger,
-		Bodies:    bodies,
+		SessionID:     sessionID,
+		OwnerPID:      os.Getpid(),
+		Agent:         agent,
+		Cwd:           cwd,
+		ClaudeSession: claudeRef,
+		Logger:        logger,
+		Bodies:        bodies,
 	})
 	baseURL, gerr := gw.Start(ctx)
 	if gerr != nil {

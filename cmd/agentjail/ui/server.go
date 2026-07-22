@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/claudesess"
 	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
 	"github.com/LuD1161/agentjail/internal/mitm"
@@ -392,7 +393,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 // liveness. Agents without such metadata (codex, cursor) fall back to a
 // recency window so a currently-deciding session never renders inactive.
 func enrichSessions(sessions []*SessionState) {
-	byID := claudeMetaBySessionID(loadClaudeSessionMeta())
+	byID := claudesess.BySessionID(claudesess.Load())
 	for _, ss := range sessions {
 		if m, ok := byID[ss.ID]; ok {
 			ss.Name = m.Name
@@ -1411,6 +1412,19 @@ func aggregateSessions(rows []mitm.RequestLog) []SessionInfo {
 // networkRows returns rows matching the SQL-expressible filters. Status,
 // policy and session are filtered in Go: RequestFilter cannot express them and
 // internal/mitm is not this package's to change.
+// unifySessionIDs collapses the two session identities into one: rows the
+// shield stamped with their Claude session id are re-keyed to it, so the
+// network tab groups, filters, and links on the SAME identifier the monitor
+// tab uses (AGE-111). Unstamped rows (a session's first seconds) keep the
+// capture id and merge on the next poll.
+func unifySessionIDs(rows []mitm.RequestLog) {
+	for i := range rows {
+		if rows[i].ClaudeSessionID != "" {
+			rows[i].SessionID = rows[i].ClaudeSessionID
+		}
+	}
+}
+
 func (s *Server) networkRows(r *http.Request, limit int) ([]mitm.RequestLog, error) {
 	st, err := s.openNetworkStore()
 	if err != nil {
@@ -1425,6 +1439,7 @@ func (s *Server) networkRows(r *http.Request, limit int) ([]mitm.RequestLog, err
 	if err != nil {
 		return nil, err
 	}
+	unifySessionIDs(rows)
 	status, policy, session := q.Get("status"), q.Get("policy"), q.Get("session")
 	if status == "" && policy == "" && session == "" {
 		return rows, nil
@@ -1511,6 +1526,7 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
 	}
+	unifySessionIDs(rows)
 	for _, rl := range rows {
 		if rl.ID == id {
 			writeJSON(w, rl)
@@ -1561,6 +1577,7 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
+			unifySessionIDs(rows)
 			for i := len(rows) - 1; i >= 0; i-- { // Query is newest-first; emit oldest-first.
 				if rows[i].ID <= lastID {
 					continue
@@ -1600,8 +1617,15 @@ func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
 	// user-assigned name resolves through process ancestry (the claude
 	// process is the shield's descendant). Dead sessions keep their
 	// directory-derived label.
-	metas := loadClaudeSessionMeta()
+	metas := claudesess.Load()
+	byID := claudesess.BySessionID(metas)
 	for i := range out {
+		// Unified id first (the shield stamped the claude session id onto the
+		// rows), ancestry as the pre-stamp fallback for a just-started session.
+		if m, ok := byID[out[i].SessionID]; ok {
+			out[i].Name = m.Name
+			continue
+		}
 		if out[i].Active {
 			out[i].Name = sessionNameByAncestor(metas, out[i].OwnerPID)
 		}

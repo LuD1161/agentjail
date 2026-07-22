@@ -306,6 +306,11 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		sharedRec = newBodyRecording(ctx, sessionID, logger, emitter)
 	}
 
+	// One ref for both writers (MITM handler + provider gateway): the shield
+	// resolves its claude descendant's session id once and every row after
+	// carries it; watchClaudeSession also backfills the rows before.
+	claudeRef := &mitm.ClaudeSessionRef{}
+
 	// --- 3. MITM: in-memory CA + network.db + mitm.MITMHandler wired into
 	// the gateway. Fail-open for this step only (ADR 0077): any failure here
 	// disables interception but keeps the tunnel running, relaying TLS
@@ -347,6 +352,12 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		h.SessionID = sessionID
 		h.OwnerPID = os.Getpid()
 		h.Agent, h.Cwd = sessionMeta(agentPath)
+		h.ClaudeSession = claudeRef
+		if !gwWanted {
+			// Gateway-less MITM owns the store; with a gateway the shared
+			// store's watcher starts after the gateway block below.
+			watchClaudeSession(ctx, store, sessionID, claudeRef)
+		}
 		h.Matcher = gateway.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter
 		// Bodies: same encrypted BodyStore + keychain-KEK path as Linux
@@ -376,12 +387,13 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// above -- runs whenever a provider is detected + gateway enabled,
 	// whether MITM is on, off, or degraded. See ADR 0109-baseurl-capture-gateway.
 	if gwWanted {
-		envVars, closeFn, started, gerr := startProviderGateway(ctx, cfg, agentPath, sharedStore, sharedRec.store, sessionID, logger, emitter)
+		envVars, closeFn, started, gerr := startProviderGateway(ctx, cfg, agentPath, sharedStore, sharedRec.store, sessionID, claudeRef, logger, emitter)
 		if gerr != nil {
 			cleanupGateway()
 			fail("%v", gerr)
 			return
 		}
+		watchClaudeSession(ctx, sharedStore, sessionID, claudeRef)
 		if started {
 			providerGatewayCloseFn = closeFn
 			if caEnvVars == nil {
