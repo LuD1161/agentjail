@@ -1,4 +1,4 @@
-package gateway
+package captureproxy
 
 import (
 	"bytes"

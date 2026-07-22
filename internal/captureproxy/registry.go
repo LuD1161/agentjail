@@ -3,7 +3,7 @@
 // to the real upstream over TLS and records traffic. Works where a
 // transparent MITM can't (Claude Code's Bun/undici trusts the keychain, not
 // env-injected CAs). See ADR 0109-baseurl-capture-gateway.
-package gateway
+package captureproxy
 
 // Caps describes what a provider integration supports. Data, not a class
 // enum: a new provider is a new registry row, not a new switch arm. See

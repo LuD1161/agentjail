@@ -21,9 +21,9 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/captureproxy"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/dnsvip"
-	capturegw "github.com/LuD1161/agentjail/internal/gateway"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
@@ -620,7 +620,7 @@ func captureGatewayEnabled(cfg *config.PolicyConfig) bool {
 // routed through the local capture gateway. Detail never carries the gateway's
 // baseURL/nonce - only the provider name and its upstream host. See ADR
 // 0109-baseurl-capture-gateway.
-func emitGatewayProviderRouted(ctx context.Context, emitter audit.Emitter, sessionID string, prov capturegw.Provider) {
+func emitGatewayProviderRouted(ctx context.Context, emitter audit.Emitter, sessionID string, prov captureproxy.Provider) {
 	if emitter == nil {
 		return
 	}
@@ -638,7 +638,7 @@ func emitGatewayProviderRouted(ctx context.Context, emitter audit.Emitter, sessi
 // emitGatewayStartFailed audits a capture-gateway setup failure. reason is a
 // short fixed string, never the raw error (which may embed the target URL) -
 // see ADR 0109-baseurl-capture-gateway.
-func emitGatewayStartFailed(ctx context.Context, emitter audit.Emitter, sessionID string, prov capturegw.Provider, reason string) {
+func emitGatewayStartFailed(ctx context.Context, emitter audit.Emitter, sessionID string, prov captureproxy.Provider, reason string) {
 	if emitter == nil {
 		return
 	}
