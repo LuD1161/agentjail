@@ -33,7 +33,11 @@ type Recorder interface {
 type Options struct {
 	SessionID string
 	OwnerPID  int
-	Logger    *slog.Logger
+	// Agent and Cwd label the session on every row, mirroring the
+	// mitm.MITMHandler fields of the same names.
+	Agent  string
+	Cwd    string
+	Logger *slog.Logger
 	// Matcher is optional. Phase 1 leaves it nil (record-only); Phase 2 wires
 	// policy evaluation at the call site marked in handle(). See AGE-81.
 	Matcher *netpolicy.Matcher
@@ -159,6 +163,8 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request) {
 		Path:      stripped,
 		SessionID: g.opts.SessionID,
 		OwnerPID:  g.opts.OwnerPID,
+		Agent:     g.opts.Agent,
+		Cwd:       g.opts.Cwd,
 	}
 
 	upstreamURL := *g.target

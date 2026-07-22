@@ -346,6 +346,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		})
 		h.SessionID = sessionID
 		h.OwnerPID = os.Getpid()
+		h.Agent, h.Cwd = sessionMeta(agentPath)
 		h.Matcher = gateway.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter
 		// Bodies: same encrypted BodyStore + keychain-KEK path as Linux

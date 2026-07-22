@@ -1318,6 +1318,27 @@ type SessionInfo struct {
 	// See ADR 0100-network-active-pid.
 	OwnerPID int  `json:"owner_pid,omitempty"`
 	Active   bool `json:"active"`
+	// Agent and Cwd label the session (agent binary name, launch directory) so
+	// the sidebar can show the agent's logo and repo name instead of the
+	// opaque session id. Stamped per-row by the shield; rows written before
+	// that existed fall back to a User-Agent sniff in aggregateSessions.
+	Agent string `json:"agent,omitempty"`
+	Cwd   string `json:"cwd,omitempty"`
+}
+
+// agentFromUserAgent maps a captured User-Agent header to an agent label for
+// rows that predate the per-row agent column. Best-effort, empty on no match.
+func agentFromUserAgent(ua string) string {
+	l := strings.ToLower(ua)
+	switch {
+	case strings.Contains(l, "claude"):
+		return "claude"
+	case strings.Contains(l, "codex") || strings.Contains(l, "openai"):
+		return "codex"
+	case strings.Contains(l, "cursor"):
+		return "cursor"
+	}
+	return ""
 }
 
 // aggregateSessions groups request rows into per-session summaries and marks
@@ -1341,6 +1362,14 @@ func aggregateSessions(rows []mitm.RequestLog) []SessionInfo {
 		si.RequestCount++
 		if rl.OwnerPID > 0 {
 			si.OwnerPID = rl.OwnerPID
+		}
+		if rl.Agent != "" {
+			si.Agent = rl.Agent
+		} else if si.Agent == "" {
+			si.Agent = agentFromUserAgent(rl.RequestHeaders["User-Agent"])
+		}
+		if rl.Cwd != "" {
+			si.Cwd = rl.Cwd
 		}
 		if ts < si.FirstSeen {
 			si.FirstSeen = ts

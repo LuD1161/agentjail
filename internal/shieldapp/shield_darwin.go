@@ -44,6 +44,12 @@ func buildBaseEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
 	env := sandbox.BuildCleanEnv(hostEnv, cfg)
 	env = sandbox.StripEnv(env, cfg)
 	env = sandbox.RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
+	// A shielded launch starts a NEW agent session, never a child of the
+	// Claude session the user happened to launch it from. The inherited
+	// marker would put Claude Code into child-session mode (transcripts off,
+	// no compaction), so it must not survive even though CLAUDE_CODE_* is
+	// allowlisted.
+	env = sandbox.RemoveEnvKeys(env, "CLAUDE_CODE_CHILD_SESSION")
 	env = append(env, sandbox.AgentGitSSHEnv(os.Getenv)...)
 	return env
 }
@@ -452,6 +458,17 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	}
 	sb.WriteString("\n")
 
+	// --- daemon.sock carve-out (read/stat only) ---
+	// The blanket ~/.agentjail read deny above (ADR 0092 D3, store deny) also
+	// swallows the DECISION socket, so probeDaemon's stat EPERMs and every
+	// hook inside the shield fails open: the session runs shield-only with
+	// the statusline honestly reporting POLICY OFF. Mirror Linux semantics
+	// (connect is not the boundary; the read-denied control token is, ADR
+	// 0067): stat + connect on exactly this literal, nothing else under
+	// ~/.agentjail. The connect allow is with the network rules below.
+	fmt.Fprintf(&sb, "(allow file-read*\n    (literal %q))\n", home+"/.agentjail/daemon.sock")
+	sb.WriteString("\n")
+
 	// AgentPaths.HomeRO / AgentPaths.Runtimes are consumed here only to keep
 	// them wired against future drift protection (a future capability test
 	// could assert their consumption). They are currently no-ops on darwin:
@@ -628,6 +645,14 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	for _, dir := range darwinUserTempDirs() {
 		fmt.Fprintf(&sb, "(allow network-outbound\n    (subpath %q))\n", dir)
 	}
+	sb.WriteString("\n")
+
+	// Decision-socket connect. The hook and statusline run inside this
+	// sandbox and must reach the daemon or the session silently runs
+	// unenforced (fail-open). The control sockets below stay denied; the
+	// decision socket's boundary is the read-denied control token, exactly
+	// as on Linux. See ADR 0067-control-plane-token-auth.
+	fmt.Fprintf(&sb, "(allow network-outbound\n    (literal %q))\n", home+"/.agentjail/daemon.sock")
 	sb.WriteString("\n")
 
 	// Control-plane socket denies. MUST stay last: sbpl is last-match-wins among

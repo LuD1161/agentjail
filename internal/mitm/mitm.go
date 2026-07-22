@@ -48,6 +48,11 @@ type MITMHandler struct {
 	// row so the UI can decide "active" by liveness. See
 	// ADR 0100-network-active-pid.
 	OwnerPID int
+	// Agent and Cwd label this session (agent binary name, launch directory);
+	// stamped onto every row like OwnerPID so the UI can render a friendly
+	// session name instead of the opaque session id.
+	Agent string
+	Cwd   string
 
 	UpstreamTLSConfig *tls.Config // optional: override for upstream TLS (tests only)
 	certCache         *hostCertCache
@@ -183,6 +188,8 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 			Host:      host,
 			SessionID: h.SessionID,
 			OwnerPID:  h.OwnerPID,
+			Agent:     h.Agent,
+			Cwd:       h.Cwd,
 		}
 		start := time.Now()
 

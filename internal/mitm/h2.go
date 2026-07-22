@@ -110,6 +110,8 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		Host:      rh.host,
 		SessionID: h.SessionID,
 		OwnerPID:  h.OwnerPID,
+		Agent:     h.Agent,
+		Cwd:       h.Cwd,
 	}
 
 	var reqCapture, respCapture *BodyCapture

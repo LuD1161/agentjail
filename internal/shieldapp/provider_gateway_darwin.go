@@ -60,9 +60,12 @@ func startProviderGateway(ctx context.Context, cfg *config.PolicyConfig, agentPa
 		return nil, nil, false, fmt.Errorf("capture gateway target rejected for %s: %w", prov.Name, terr)
 	}
 
+	agent, cwd := sessionMeta(agentPath)
 	gw := captureproxy.New(target, rec, captureproxy.Options{
 		SessionID: sessionID,
 		OwnerPID:  os.Getpid(),
+		Agent:     agent,
+		Cwd:       cwd,
 		Logger:    logger,
 		Bodies:    bodies,
 	})

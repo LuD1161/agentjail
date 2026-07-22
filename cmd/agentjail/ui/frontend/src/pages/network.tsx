@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Layout } from '@/components/layout'
@@ -148,9 +149,22 @@ export function NetworkPage() {
   const [selectedSession, setSelectedSession] = React.useState<string | null>(
     null,
   )
-  const [selectedRequestId, setSelectedRequestId] = React.useState<
-    number | null
-  >(null)
+  // The selected request lives in the URL (?req=), not component state, so
+  // every open detail pane is a shareable perma-link.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const reqParam = searchParams.get('req')
+  const selectedRequestId = reqParam ? Number(reqParam) : null
+  const setSelectedRequestId = React.useCallback(
+    (id: number | null) => {
+      setSearchParams((prev) => {
+        const p = new URLSearchParams(prev)
+        if (id == null) p.delete('req')
+        else p.set('req', String(id))
+        return p
+      })
+    },
+    [setSearchParams],
+  )
   const queryClient = useQueryClient()
 
   // Sidebar sessions must come from the network store: its rows carry a
@@ -221,6 +235,8 @@ export function NetworkPage() {
     return netSessions
       .map((s) => ({
         id: s.session_id,
+        agent: s.agent,
+        cwd: s.cwd,
         active: s.active,
         requestCount: s.request_count,
         networkCount: s.request_count,
@@ -248,7 +264,7 @@ export function NetworkPage() {
             getRowId={(row) => row.id}
             selectedRowId={selectedRequestId}
             onRowClick={(row) =>
-              setSelectedRequestId((cur) => (cur === row.id ? null : row.id))
+              setSelectedRequestId(selectedRequestId === row.id ? null : row.id)
             }
             emptyMessage={
               requestsQuery.data?.unavailable

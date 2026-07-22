@@ -46,6 +46,10 @@ export interface SessionInfo {
   /** Set server-side from the owning shield PID's liveness, not a recency window. */
   active: boolean
   owner_pid?: number
+  /** Agent binary name (e.g. "claude") and launch directory, stamped per-row
+   * by the shield; older rows fall back to a server-side User-Agent sniff. */
+  agent?: string
+  cwd?: string
 }
 
 /** Mirrors cmd/agentjail/ui.EvalLine (GET /api/state, SSE /events). */

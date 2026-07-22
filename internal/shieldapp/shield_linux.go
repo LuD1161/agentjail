@@ -175,7 +175,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// skipped. On ANY failure we fall back to netproxy (fail-open).
 	var tunnelSess *tunnelSession
 	if tunnelMode {
-		if s, ready := startTunnel(ctx, mitmMode, emitter); ready {
+		if s, ready := startTunnel(ctx, agentPath, mitmMode, emitter); ready {
 			tunnelSess = s
 			noNetproxy = true
 			defer tunnelSess.cleanup()
@@ -339,6 +339,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
 	env = sandbox.StripEnv(env, cfg)
 	env = sandbox.RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
+	// A shielded launch starts a NEW agent session, never a child of the
+	// Claude session the user happened to launch it from. The inherited
+	// marker would put Claude Code into child-session mode (transcripts off,
+	// no compaction), so it must not survive even though CLAUDE_CODE_* is
+	// allowlisted.
+	env = sandbox.RemoveEnvKeys(env, "CLAUDE_CODE_CHILD_SESSION")
 	gitSSHEnv := sandbox.AgentGitSSHEnv(os.Getenv)
 	env = append(env, gitSSHEnv...)
 	if sshOverrideInjected(gitSSHEnv) {

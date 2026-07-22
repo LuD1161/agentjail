@@ -72,7 +72,7 @@ func tunnelBlockedByUsernsRestriction() bool {
 	return !strings.Contains(string(label), "agentjail-shield")
 }
 
-func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (*tunnelSession, bool) {
+func startTunnel(ctx context.Context, agentPath string, mitmEnabled bool, emitter audit.Emitter) (*tunnelSession, bool) {
 	logger := slog.Default()
 
 	// Create the owned user+net+mount namespaces and the in-namespace TUN,
@@ -169,6 +169,7 @@ func startTunnel(ctx context.Context, mitmEnabled bool, emitter audit.Emitter) (
 		// This shield process owns the session; the UI reads its liveness back
 		// to decide "active". See ADR 0100-network-active-pid.
 		h.OwnerPID = os.Getpid()
+		h.Agent, h.Cwd = sessionMeta(agentPath)
 		h.Matcher = gw.Matcher() // nil => observe/log only (no PacksDir configured)
 		h.Audit = emitter        // session-level notices, e.g. the ALPN downgrade (AGE-222)
 		rec := newBodyRecording(ctx, sessionID, logger, emitter)
