@@ -49,6 +49,26 @@ const (
 	tunnelDNSAddr    = "10.78.0.1"    // DNS server address, written into wg-conf
 )
 
+// tunnelIPv6EnvVar flag-gates Phase 1 IPv6 (AGE-262): v6 literal remote
+// endpoints only (DNS stays out-of-band/v4 on macOS; cbridge and
+// Provider.swift are unchanged). Off by default so the v4 wg-conf and
+// gateway stay byte-identical to pre-AGE-262 behavior.
+const tunnelIPv6EnvVar = "AGENTJAIL_TUNNEL_IPV6"
+
+// v6 datapath addresses, derived from dnsvip (the single source of truth for
+// the tunnel's reserved addresses) with the prefix lengths mirroring the v4
+// server/agent split: server gets the /64 the agent's /128 lives inside.
+// AGE-262.
+var (
+	tunnelServerAddr6 = dnsvip.GatewayV6().String() + "/64"
+	tunnelAgentAddr6  = dnsvip.AgentV6().String() + "/128"
+)
+
+// tunnelIPv6Enabled reports whether AGE-262 Phase 1 IPv6 is flag-gated on.
+func tunnelIPv6Enabled() bool {
+	return os.Getenv(tunnelIPv6EnvVar) == "1"
+}
+
 // resolveTunnelAppPath resolves the AgentjailTunnel.app helper binary:
 // AGENTJAIL_TUNNEL_APP overrides for local dev/CI; otherwise the standard
 // /Applications install path.
@@ -188,7 +208,23 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		TunnelAddr:    tunnelServerAddr,
 		PacksDir:      packsDir,
 	}
+	// v6 provisioning is flag-gated (AGE-262 Phase 1): only attempt it when
+	// AGENTJAIL_TUNNEL_IPV6=1, and only trust it once NewGateway actually
+	// succeeds with the v6 address provisioned. A v6 failure falls back to
+	// v4-only below — it never fails the launch.
+	ipv6Requested := tunnelIPv6Enabled()
+	ipv6Provisioned := false
+	if ipv6Requested {
+		gwCfg.TunnelAddr6 = tunnelServerAddr6
+	}
 	gateway, err := tunnel.NewGateway(gwCfg, registry, logger)
+	if err != nil && ipv6Requested {
+		logger.Warn("tunnel IPv6 provisioning failed; falling back to v4-only", "err", err)
+		gwCfg.TunnelAddr6 = ""
+		gateway, err = tunnel.NewGateway(gwCfg, registry, logger)
+	} else if err == nil && ipv6Requested {
+		ipv6Provisioned = true
+	}
 	if err != nil {
 		fail("creating tunnel gateway: %v", err)
 		return
@@ -335,10 +371,24 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 
 	// --- 4. WG-CONF: the frozen contract. Written to a 0600 temp file
 	// (it holds the agent's private key), handed to the app, then removed.
-	conf := fmt.Sprintf(
-		"[Interface]\nPrivateKey = %s\nAddress    = %s\nDNS        = %s\n[Peer]\nPublicKey  = %s\nEndpoint   = 127.0.0.1:%d\nAllowedIPs = 0.0.0.0/0\n",
-		agentPriv, tunnelAgentAddr, tunnelDNSAddr, serverPub, port,
-	)
+	//
+	// v4-only (flag unset or v6 provisioning failed) emits the EXACT
+	// pre-AGE-262 conf — no behavior change. The v6 arm is a single,
+	// comma-separated Address line: cbridge owns one Address key and splits
+	// on commas, so a second "Address =" line would overwrite v4 and break
+	// startup. Never emit two Address lines. AGE-262 Phase 1.
+	var conf string
+	if ipv6Provisioned {
+		conf = fmt.Sprintf(
+			"[Interface]\nPrivateKey = %s\nAddress    = %s, %s\nDNS        = %s\n[Peer]\nPublicKey  = %s\nEndpoint   = 127.0.0.1:%d\nAllowedIPs = 0.0.0.0/0, ::/0\n",
+			agentPriv, tunnelAgentAddr, tunnelAgentAddr6, tunnelDNSAddr, serverPub, port,
+		)
+	} else {
+		conf = fmt.Sprintf(
+			"[Interface]\nPrivateKey = %s\nAddress    = %s\nDNS        = %s\n[Peer]\nPublicKey  = %s\nEndpoint   = 127.0.0.1:%d\nAllowedIPs = 0.0.0.0/0\n",
+			agentPriv, tunnelAgentAddr, tunnelDNSAddr, serverPub, port,
+		)
+	}
 	confFile, err := os.CreateTemp("", "agentjail-wg-*.conf")
 	if err != nil {
 		cleanupGateway()

@@ -103,6 +103,18 @@ func NewGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Ga
 	}
 	localAddr := prefix.Addr()
 
+	// Parse the optional v6 tunnel address (AGE-262 Phase 1, flag-gated by the
+	// caller). Zero value means v6 disabled; newServerNetstack treats an
+	// invalid Addr as "no v6" and stays v4-only.
+	var localAddr6 netip.Addr
+	if cfg.TunnelAddr6 != "" {
+		prefix6, perr := netip.ParsePrefix(cfg.TunnelAddr6)
+		if perr != nil {
+			return nil, fmt.Errorf("tunnel: parsing tunnel v6 address: %w", perr)
+		}
+		localAddr6 = prefix6.Addr()
+	}
+
 	// Create the promiscuous gVisor server netstack. Unlike CreateNetTUN
 	// (which adds only localAddr and drops SYNs to any other destination), this
 	// stack has SetPromiscuousMode/SetSpoofing enabled, so it accepts the
@@ -111,7 +123,7 @@ func NewGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Ga
 	// Without this the macOS NE loopback path completed the WireGuard handshake
 	// but the gateway never answered the tunneled TCP SYN. See ADR
 	// 0087-macos-tunnel-promiscuous-gateway.
-	serverNS, err := newServerNetstack(localAddr, cfg.mtu())
+	serverNS, err := newServerNetstack(localAddr, localAddr6, cfg.mtu())
 	if err != nil {
 		return nil, fmt.Errorf("tunnel: creating server netstack: %w", err)
 	}

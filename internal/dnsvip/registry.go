@@ -34,14 +34,28 @@ const (
 	ipv4HostPoolSize = ipv4PoolSize - (firstHostOffsetV4 - 1)
 )
 
-// The v6 pool reserves nothing: the tunnel datapath is v4-only, so no fd78::
-// address is claimed by the gateway or the TUN.
+// The v6 datapath lives in fd79::/... , outside the fd78::/112 VIP pool
+// (poolV6) below, so GatewayV6/AgentV6 are never IsVIP. Phase 1 IPv6 (AGE-262)
+// provisions these on the tunnel's v6 protocol address when
+// AGENTJAIL_TUNNEL_IPV6=1; the v4 pool/datapath above are unaffected.
+const (
+	gatewayAddrV6 = "fd79::1" // v6 gateway's in-tunnel address
+	agentAddrV6   = "fd79::2" // v6 agent TUN address
+)
 
 // GatewayV4 returns the gateway's in-tunnel address (also the DNS server's).
 func GatewayV4() net.IP { return offsetToV4(gatewayOffsetV4) }
 
 // AgentV4 returns the agent-side TUN address inside the tunnel.
 func AgentV4() net.IP { return offsetToV4(agentOffsetV4) }
+
+// GatewayV6 returns the gateway's v6 in-tunnel address (fd79::1). Outside
+// poolV6 (fd78::/112) by construction, so it is never IsVIP. AGE-262.
+func GatewayV6() net.IP { return net.ParseIP(gatewayAddrV6) }
+
+// AgentV6 returns the agent-side v6 TUN address (fd79::2). Outside poolV6
+// (fd78::/112) by construction, so it is never IsVIP. AGE-262.
+func AgentV6() net.IP { return net.ParseIP(agentAddrV6) }
 
 var (
 	// ErrPoolExhausted is returned when no more VIPs are available.

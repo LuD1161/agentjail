@@ -20,7 +20,7 @@ import (
 // macOS NE loopback path needs from a wgtun.Device.
 func TestServerNetstack_AcceptsArbitraryDestinationSYN(t *testing.T) {
 	gwAddr := netip.MustParseAddr("10.78.0.1")
-	ns, err := newServerNetstack(gwAddr, 1420)
+	ns, err := newServerNetstack(gwAddr, netip.Addr{}, 1420)
 	if err != nil {
 		t.Fatalf("newServerNetstack: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestServerNetstack_AcceptsArbitraryDestinationSYN(t *testing.T) {
 // address (from inside the stack) is readable off the conn.
 func TestServerNetstack_DNSPacketConn(t *testing.T) {
 	gwAddr := netip.MustParseAddr("10.78.0.1")
-	ns, err := newServerNetstack(gwAddr, 1420)
+	ns, err := newServerNetstack(gwAddr, netip.Addr{}, 1420)
 	if err != nil {
 		t.Fatalf("newServerNetstack: %v", err)
 	}

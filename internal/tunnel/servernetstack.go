@@ -121,7 +121,14 @@ func tuneServerNetstackTCP(stk *stack.Stack) error {
 // packets destined for any IP, not just gwAddr. Without this, the stack
 // silently drops all DNS-VIP and real-destination traffic — the interception
 // gap this type fixes. See the package-level doc comment above.
-func newServerNetstack(gwAddr netip.Addr, mtu int) (*serverNetstack, error) {
+//
+// gwAddr6 is optional (AGE-262 Phase 1, flag-gated by the caller): the zero
+// netip.Addr means v6 is disabled and the stack stays v4-only, byte-identical
+// to pre-AGE-262 behavior. When valid, it adds a second protocol address for
+// ipv6.ProtocolNumber so v6 flows (IPv6 literal remotes only — DNS is
+// out-of-band on macOS, so hostname->AAAA is not provisioned here) are
+// delivered instead of reset. dnsPacketConn stays v4-only regardless.
+func newServerNetstack(gwAddr, gwAddr6 netip.Addr, mtu int) (*serverNetstack, error) {
 	t := &serverNetstack{
 		ep: channel.New(serverNetstackQueueSize, uint32(mtu), ""),
 		stk: stack.New(stack.Options{
@@ -156,6 +163,22 @@ func newServerNetstack(gwAddr netip.Addr, mtu int) (*serverNetstack, error) {
 	}
 	if e := t.stk.AddProtocolAddress(serverNetstackNIC, pa4, stack.AddressProperties{}); e != nil {
 		return nil, fmt.Errorf("AddProtocolAddress v4: %v", e)
+	}
+
+	// v6 is optional (AGE-262 Phase 1). gwAddr6.IsValid() is false for the
+	// zero netip.Addr, so an unset caller gets exactly the v4-only behavior
+	// above — no branch taken, no route/address added.
+	if gwAddr6.IsValid() {
+		if !gwAddr6.Is6() {
+			return nil, fmt.Errorf("newServerNetstack: gateway v6 address %s is not IPv6", gwAddr6)
+		}
+		pa6 := tcpip.ProtocolAddress{
+			Protocol:          ipv6.ProtocolNumber,
+			AddressWithPrefix: tcpip.AddrFromSlice(gwAddr6.AsSlice()).WithPrefix(),
+		}
+		if e := t.stk.AddProtocolAddress(serverNetstackNIC, pa6, stack.AddressProperties{}); e != nil {
+			return nil, fmt.Errorf("AddProtocolAddress v6: %v", e)
+		}
 	}
 
 	t.stk.AddRoute(tcpip.Route{Destination: header.IPv4EmptySubnet, NIC: serverNetstackNIC})

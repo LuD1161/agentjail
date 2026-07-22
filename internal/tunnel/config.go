@@ -27,6 +27,11 @@ type Config struct {
 	// TunnelAddr is the gateway's address inside the tunnel, e.g. "10.78.0.1/16".
 	TunnelAddr string
 
+	// TunnelAddr6 is the gateway's optional v6 address inside the tunnel,
+	// e.g. "fd79::1/64". Empty disables v6 provisioning (default): the
+	// datapath stays v4-only, byte-identical to pre-AGE-262 behavior.
+	TunnelAddr6 string
+
 	// PacksDir is the directory containing policy template YAML files.
 	PacksDir string
 
@@ -61,6 +66,14 @@ func (c *Config) Validate() error {
 	}
 	if _, err := netip.ParsePrefix(c.TunnelAddr); err != nil {
 		return fmt.Errorf("tunnel: invalid tunnel address: %w", err)
+	}
+
+	// TunnelAddr6 is optional (AGE-262 Phase 1, flag-gated); only validate it
+	// when the caller set one.
+	if c.TunnelAddr6 != "" {
+		if _, err := netip.ParsePrefix(c.TunnelAddr6); err != nil {
+			return fmt.Errorf("tunnel: invalid tunnel v6 address: %w", err)
+		}
 	}
 
 	return nil
