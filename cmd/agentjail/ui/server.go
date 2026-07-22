@@ -1269,6 +1269,7 @@ func (s *Server) handleNetworkRecent(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
 	}
+	unifySessionIDs(results)
 	if results == nil {
 		results = []mitm.RequestLog{}
 	}
