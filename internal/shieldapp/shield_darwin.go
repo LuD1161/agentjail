@@ -958,6 +958,11 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		if gwClose != nil {
 			_ = gwClose()
 		}
+		// A short session can exit before the watcher's async backfill lands;
+		// one synchronous pass here leaves no row un-unified (AGE-111).
+		if cid := claudeRef.Get(); cid != "" {
+			_ = store.BackfillClaudeSession(ctx, sessionID, cid)
+		}
 		_ = store.Close()
 		if netproxyCmd != nil {
 			_ = netproxyCmd.Process.Signal(syscall.SIGTERM)
@@ -1051,6 +1056,10 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 		stopSignalDrain()
 		if gwClose != nil {
 			_ = gwClose()
+		}
+		// Same short-session backfill as the sandboxed path (A2) above.
+		if cid := claudeRef.Get(); cid != "" {
+			_ = store.BackfillClaudeSession(ctx, sessionID, cid)
 		}
 		_ = store.Close()
 		os.Exit(exitCode)
