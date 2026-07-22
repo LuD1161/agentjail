@@ -13,6 +13,10 @@ function ScrollArea({
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
+      // "always": the default "hover" type renders no scrollbar until the
+      // pointer is already inside, so long request/response bodies look
+      // unscrollable. Callers can still override via props.
+      type="always"
       className={cn("relative", className)}
       {...props}
     >
@@ -46,7 +50,7 @@ function ScrollBar({
     >
       <ScrollAreaPrimitive.ScrollAreaThumb
         data-slot="scroll-area-thumb"
-        className="relative flex-1 rounded-full bg-border"
+        className="relative flex-1 rounded-full bg-[#3a4150] hover:bg-[#4b5563]"
       />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   )
