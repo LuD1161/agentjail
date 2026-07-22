@@ -3,9 +3,11 @@ package dnsvip
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"net"
 	"runtime"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -93,7 +95,7 @@ func TestChaos2_TruncatedDNSPacket(t *testing.T) {
 	full := m.Data
 
 	// Test several truncation lengths.
-	for _, cut := range []int{0, 1, 6, 12, 13, len(full)/2, len(full) - 1} {
+	for _, cut := range []int{0, 1, 6, 12, 13, len(full) / 2, len(full) - 1} {
 		if cut > len(full) {
 			cut = len(full) - 1
 		}
@@ -129,6 +131,14 @@ func TestChaos3_OversizedPackets(t *testing.T) {
 		_, _ = rand.Read(pkt[12:])
 
 		if err := sendRawUDP(addr, pkt); err != nil {
+			// A max-size UDP datagram exceeds the loopback datagram limit on
+			// some platforms (macOS returns EMSGSIZE). That is a client-side
+			// send limit, not the server behaviour under test, so skip the
+			// sizes the OS refuses to send rather than failing.
+			if errors.Is(err, syscall.EMSGSIZE) {
+				t.Logf("skipping size=%d: OS refused the datagram (%v)", size, err)
+				continue
+			}
 			t.Fatalf("sendRawUDP (size=%d) error: %v", size, err)
 		}
 	}
