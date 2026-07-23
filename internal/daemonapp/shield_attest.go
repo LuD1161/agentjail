@@ -1,6 +1,7 @@
 package daemonapp
 
 import (
+	"regexp"
 	"sync"
 	"time"
 
@@ -68,11 +69,26 @@ func (t *shieldAttestTracker) isShielded(agentPID int, now time.Time) bool {
 	return false
 }
 
-// maybeDowngrade parks a sandbox-redundant deny in WouldAction and returns
-// allow, but only for a shield-attested agent; other verdicts pass through.
+// escalatesPrivilege reports whether cmd invokes a privilege-escalation tool.
+// The file sandbox governs the agent's own UID, so an escalating command can
+// read root-only files in allow-default dirs (e.g. /etc) that the downgraded
+// rule would otherwise have blocked — so such a command is never downgraded.
 // See ADR 0111.
-func (t *shieldAttestTracker) maybeDowngrade(action, ruleID string, agentPID int, now time.Time) (newAction, wouldAction string, downgraded bool) {
-	if action != "" && action != actionAllow && downgradableRules[ruleID] && t.isShielded(agentPID, now) {
+func escalatesPrivilege(cmd string) bool {
+	return privEscToken.MatchString(cmd)
+}
+
+// privEscToken matches sudo/doas/su/run0 as whole command tokens (start, or
+// after a shell separator/pipe), so a path like ./sudoku or a --user=sudo flag
+// does not trip it.
+var privEscToken = regexp.MustCompile(`(^|[\s;&|(])(sudo|doas|run0|su)(\s|$)`)
+
+// maybeDowngrade parks a sandbox-redundant deny in WouldAction and returns
+// allow, but only for a shield-attested agent whose command does not escalate
+// privilege; other verdicts pass through. See ADR 0111.
+func (t *shieldAttestTracker) maybeDowngrade(action, ruleID, cmd string, agentPID int, now time.Time) (newAction, wouldAction string, downgraded bool) {
+	if action != "" && action != actionAllow && downgradableRules[ruleID] &&
+		!escalatesPrivilege(cmd) && t.isShielded(agentPID, now) {
 		return actionAllow, action, true
 	}
 	return action, "", false

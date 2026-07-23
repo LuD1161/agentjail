@@ -543,7 +543,8 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			// Shield-attested downgrade of sandbox-redundant filesystem denies
 			// (ADR 0111). Skips rows monitor mode already downgraded.
 			if s.shieldAttest != nil && resp.WouldAction == "" {
-				if na, wa, ok := s.shieldAttest.maybeDowngrade(resp.Action, resp.RuleID, req.AgentPID, time.Now()); ok {
+				cmd, _ := req.ToolInput["command"].(string)
+				if na, wa, ok := s.shieldAttest.maybeDowngrade(resp.Action, resp.RuleID, cmd, req.AgentPID, time.Now()); ok {
 					resp.Action, resp.WouldAction = na, wa
 					slog.Info("shield-attested downgrade", "req_id", req.ID, "rule_id", resp.RuleID, "would_action", wa, "agent_pid", req.AgentPID)
 				}

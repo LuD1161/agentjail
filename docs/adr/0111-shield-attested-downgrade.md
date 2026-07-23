@@ -44,8 +44,18 @@ verdict in `WouldAction`, exactly like monitor mode — ADR 0091) **iff both**:
 
 1. `resp.RuleID` is in a fixed allowlist of **filesystem-scoped** rules the OS
    sandbox already enforces, AND
-2. `req.AgentPID` descends from a live attested shield PID
+2. the command does **not** escalate privilege (`sudo`/`doas`/`su`/`run0` as a
+   whole token), AND
+3. `req.AgentPID` descends from a live attested shield PID
    (`procutil.FindAncestorPID`).
+
+The privilege-escalation guard is load-bearing, not hygiene. The file sandbox
+governs the *agent's* UID; `/etc` is read-allowed by default (only writes are
+denied). Because `no-bash-touch-sensitive-path` outranks `no-sudo` in the
+resolver, a command like `sudo cat /etc/master.passwd` resolves to the
+downgradable rule — so without the guard the downgrade would let `sudo` read a
+root-only file the sandbox does not protect. Escalating commands therefore
+never downgrade, regardless of which rule matched.
 
 Ancestry — not the session id — is the correlation key: the agent is always
 the shield's descendant (spawned child) or the shield process itself
