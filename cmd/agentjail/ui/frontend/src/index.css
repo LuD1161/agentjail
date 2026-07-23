@@ -122,6 +122,25 @@ body {
   border-radius: 3px;
 }
 
+/* Always-visible scrollbar for the request/response detail panes. Native
+   macOS overlay scrollbars auto-hide; a styled webkit scrollbar forces the
+   classic always-on kind. */
+.detail-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.detail-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.detail-scroll::-webkit-scrollbar-thumb {
+  background: #3a4150;
+  border-radius: 5px;
+  border: 2px solid #0d1117;
+}
+.detail-scroll::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
+}
+
 /* Solid, not pulsing: a steady green reads "alive" without drawing the eye
    every 1.4s. */
 .live-dot {

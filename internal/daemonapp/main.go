@@ -543,6 +543,12 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		// `agentjail logs -v` formatter shows on the same row as the verdict.
 		summary := policyeval.SummarizeToolInput(req.ToolName, req.ToolInput)
 
+		// Full redacted input for the log line, same redactor + 4096 cap the
+		// store persists (ADR 0019). The UI's live SSE feed is parsed from
+		// this log; with only the 200-char summary, the monitor's detail
+		// pane showed live events cut mid-command.
+		redactedInput := store.RedactToolInput(req.ToolInput)
+
 		// Write the response to the client BEFORE logging. This ensures that
 		// log rotation (which holds a mutex and may do file I/O) does not add
 		// latency to the hook response. The client is unblocked first; the log
@@ -574,7 +580,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
 		} else {
-			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "action", resp.Action, "would_action", resp.WouldAction, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
+			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "tool_input_redacted", redactedInput, "action", resp.Action, "would_action", resp.WouldAction, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
 			// Persist the decision to SQLite (async, fail-open). The full
 			// tool_input is redacted at the store boundary (ADR 0019).
 			s.enqueueDecision(store.DecisionRecord{

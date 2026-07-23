@@ -4,7 +4,6 @@ import { Braces, ChevronDown, ChevronUp, Search, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   ResizableHandle,
   ResizablePanel,
@@ -494,7 +493,7 @@ export function RequestDetail({
               <div className="flex-none border-b border-[#2a3040] bg-[#1a1f2e] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
                 Request
               </div>
-              <ScrollArea className="min-h-0 flex-1">
+              <div className="detail-scroll min-h-0 flex-1 overflow-y-auto">
                 <div className="p-3 text-xs">
                   <div className="mb-3">
                     <div className="mb-1 text-[10px] font-semibold uppercase text-[#6b7280]">
@@ -509,7 +508,7 @@ export function RequestDetail({
                     {requestBody}
                   </div>
                 </div>
-              </ScrollArea>
+              </div>
             </div>
           </ResizablePanel>
           <ResizableHandle withHandle />
@@ -518,7 +517,7 @@ export function RequestDetail({
               <div className="flex-none border-b border-[#2a3040] bg-[#1a1f2e] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#9ca3af]">
                 Response
               </div>
-              <ScrollArea className="min-h-0 flex-1">
+              <div className="detail-scroll min-h-0 flex-1 overflow-y-auto">
                 <div className="p-3 text-xs">
                   <div className="mb-3">
                     <div className="mb-1 text-[10px] font-semibold uppercase text-[#6b7280]">
@@ -536,7 +535,7 @@ export function RequestDetail({
                     <div className="mt-3 text-[#ff7b72]">Error: {req.error}</div>
                   )}
                 </div>
-              </ScrollArea>
+              </div>
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
