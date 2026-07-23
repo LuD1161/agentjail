@@ -1190,7 +1190,11 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 	for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
 		recent[i], recent[j] = recent[j], recent[i]
 	}
-	snap.RecentEvents = decisionsToEvalLines(recent, false)
+	// includeToolInput=true: the Monitor detail pane renders the full redacted
+	// tool_input; without it the frontend falls back to the 200-char summary and
+	// shows a truncated command (…). The live SSE path (processLine → Ingest)
+	// already carries this field, so this keeps snapshot rows consistent.
+	snap.RecentEvents = decisionsToEvalLines(recent, true)
 	snap.FilteredCount = len(recent)
 
 	// Populate CWD and last event time from recent events for sessions that

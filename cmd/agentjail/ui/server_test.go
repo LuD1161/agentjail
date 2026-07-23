@@ -356,6 +356,62 @@ func TestSQLiteStateEndpoint(t *testing.T) {
 	}
 }
 
+// TestSQLiteStateEndpointCarriesToolInput guards the Monitor detail pane: the
+// /api/state snapshot must include the full (redacted) tool_input for each
+// recent event, otherwise the frontend falls back to the 200-char summary and
+// the detail pane shows a truncated command with a trailing ellipsis.
+func TestSQLiteStateEndpointCarriesToolInput(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "agentjail.db")
+	st, err := localstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	// A command longer than the 200-char summary cap, so a summary fallback
+	// would be visibly truncated.
+	longCmd := "python3 - <<'PY'\nimport re\n" + strings.Repeat("# padding comment to exceed the summary length cap ", 6) + "\nprint('done')\nPY"
+
+	if err := st.RecordDecision(rContext(), localstore.DecisionRecord{
+		Ts:        time.Now().UTC(),
+		SessionID: "sess-ti",
+		Agent:     "claude",
+		ToolName:  "Bash",
+		Action:    "allow",
+		RuleID:    "command_policy/default-allow",
+		Summary:   "python3 - <<'PY' ...",
+		ToolInput: map[string]interface{}{"command": longCmd},
+	}); err != nil {
+		t.Fatalf("record decision: %v", err)
+	}
+
+	srv := NewServer("127.0.0.1:0", "/dev/null", dbPath, false, NewStore(), "")
+	// Call the handler directly (no httptest.NewServer): a shielded session
+	// cannot bind a local TCP listener, so drive it via a recorder instead.
+	rec := httptest.NewRecorder()
+	srv.handleState(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var snap StateSnapshot
+	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if len(snap.RecentEvents) != 1 {
+		t.Fatalf("recent events = %d, want 1", len(snap.RecentEvents))
+	}
+	got := snap.RecentEvents[0].ToolInputRedacted
+	if got == "" {
+		t.Fatalf("recent event tool_input_redacted is empty; detail pane would fall back to the truncated summary")
+	}
+	if strings.Contains(got, "…") {
+		t.Fatalf("tool_input_redacted is ellipsis-truncated: %q", got)
+	}
+	if !strings.Contains(got, "print('done')") {
+		t.Fatalf("tool_input_redacted missing tail of the command: %q", got)
+	}
+}
+
 func TestSQLiteSessionEndpoint(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "agentjail.db")
 	st, err := localstore.Open(dbPath)
