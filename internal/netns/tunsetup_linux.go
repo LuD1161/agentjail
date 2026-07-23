@@ -32,12 +32,15 @@
 package netns
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/vishvananda/netlink"
@@ -341,7 +344,11 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	// Path (exe) execs the real file; argv[0] drives multicall dispatch. Force
 	// the shield role so the holder reaches runTUNHelper. See shieldRoleName.
 	cmd.Args[0] = shieldRoleName
-	cmd.Stderr = os.Stderr
+	// Tee the holder's stderr: it still streams to our stderr for live logs, and
+	// is captured so a setup failure (which makes the holder exit before SendFD,
+	// leaving RecvFD with only an EOF) can be surfaced in the returned error.
+	var holderStderr bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &holderStderr)
 	cmd.ExtraFiles = []*os.File{childSock} // => fd 3 in the holder
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
@@ -385,7 +392,14 @@ func CreateWithTUN(ifName, addrCIDR string) (ns *Namespace, tun *os.File, err er
 	if err != nil {
 		_ = parentConn.Close()
 		_ = cmd.Process.Kill()
-		go func() { _ = cmd.Wait() }()
+		_ = cmd.Wait() // reap the holder AND flush the stderr copier before reading it
+		// The holder logs its real failure (e.g. TUNSETIFF EPERM on a host/runner
+		// without CAP_NET_ADMIN in the userns) to stderr, then exits before
+		// SendFD, so RecvFD only sees EOF. Fold that stderr into the error so
+		// callers can tell "unsupported environment" (skip) from a real bug.
+		if detail := strings.TrimSpace(holderStderr.String()); detail != "" {
+			return nil, nil, fmt.Errorf("netns: receive tun fd from holder: %w (holder: %s)", err, detail)
+		}
 		return nil, nil, fmt.Errorf("netns: receive tun fd from holder: %w", err)
 	}
 	tun = os.NewFile(uintptr(tunFD), "/dev/net/tun:"+ifName)
