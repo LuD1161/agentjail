@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
 import { cn } from '@/lib/utils'
 import { Layout } from '@/components/layout'
-import { SessionSidebar } from '@/components/session-sidebar'
+import { SessionSidebar, AgentIcon } from '@/components/session-sidebar'
 import { SplitPane } from '@/components/split-pane'
 import { DataTable } from '@/components/data-table'
 import { DataTableColumnHeader } from '@/components/data-table-column-header'
@@ -79,14 +79,25 @@ const columns: ColumnDef<TimelineEvent>[] = [
   {
     accessorKey: 'session_id',
     header: ({ column }) => <DataTableColumnHeader column={column} title="Session" />,
-    cell: ({ row }) => (
-      <span className="text-[#6b7280]" title={row.original.session_id}>
-        {row.original.session_id?.slice(0, 10) ?? '-'}
-      </span>
-    ),
-    size: 90,
+    cell: ({ row, table }) => {
+      const labels = (table.options.meta as {
+        sessionLabels?: Record<string, { name?: string; agent?: string }>
+      })?.sessionLabels
+      const id = row.original.session_id
+      const info = (id && labels?.[id]) || {}
+      return (
+        <span
+          className="flex min-w-0 items-center gap-1.5 text-[#9ca3af]"
+          title={id}
+        >
+          <AgentIcon agent={info.agent ?? row.original.agent} />
+          <span className="truncate">{info.name ?? id?.slice(0, 10) ?? '-'}</span>
+        </span>
+      )
+    },
+    size: 160,
     minSize: 60,
-    maxSize: 200,
+    maxSize: 400,
   },
 ]
 
@@ -190,6 +201,15 @@ export function MonitorPage() {
                 deny: snapshot?.total_deny ?? 0,
                 ask: snapshot?.total_ask ?? 0,
               },
+              // Session column labels: user-assigned name + agent per id, so
+              // rows show "check-agentjail-version" with the agent's logo
+              // instead of a UUID prefix.
+              sessionLabels: Object.fromEntries(
+                (snapshot?.sessions ?? []).map((s) => [
+                  s.id,
+                  { name: s.name, agent: s.agent },
+                ]),
+              ),
             }}
             getRowId={(row, index) => `${row.time}-${index}`}
             selectedRowId={

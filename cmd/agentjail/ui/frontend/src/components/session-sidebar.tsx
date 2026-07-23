@@ -53,7 +53,7 @@ function DefaultAgentIcon() {
   )
 }
 
-function AgentIcon({ agent }: { agent?: string }) {
+export function AgentIcon({ agent }: { agent?: string }) {
   const a = (agent || '').toLowerCase()
   if (a.includes('claude')) return <ClaudeIcon />
   if (a.includes('cursor')) return <CursorIcon />
