@@ -1,9 +1,21 @@
 # ADR 0111 — Shield-attested downgrade of sandbox-redundant deny rules
 
 ## Status
-Accepted
+Superseded — reverted before release.
 
-## Context
+The downgrade traded truthfulness for friction reduction: it made policy
+return `allow` for a command the sandbox then blocked, which reads as "the
+secret was read" when it was not. The friction it targeted comes from a
+best-effort regex that is bypassable anyway (aliases, variable indirection,
+`eval`), so the regex is not a security boundary — the OS sandbox is. The
+resolution is simpler and truthful: `deny` stays `deny` (the rule is
+best-effort defense + the only protection in hook-only mode), and the sandbox
+is the boundary, made the default via `agentjail claude` (opt out with
+`--no-sandbox`). The final-outcome layer (ADR 0112) is kept: it still
+truthfully surfaces the rare case where policy allows something the sandbox
+blocks. The attestation + downgrade code was removed.
+
+## Context (historical)
 
 The daemon's Bash text-heuristic deny rules (e.g.
 `command_policy/no-bash-touch-sensitive-path`, `no-rm-rf-absolute`) match on

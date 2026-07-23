@@ -76,9 +76,6 @@ type grantServer struct {
 	// without a durable audit record (ADR 0044 / 0047).
 	durableAudit   bool
 	activeSessions *activeTracker
-	// shieldAttest records attested shield PIDs (ADR 0111). ReqShieldAttest
-	// writes to it after the ctlToken check; the eval path reads it. Nil-safe.
-	shieldAttest *shieldAttestTracker
 	// reload reloads policy.yaml + the Rego bundle in place, returning the
 	// compile error when the new rules are rejected. Injected by the daemon
 	// (server.reloadPolicy) rather than reached through a back-pointer, so the
@@ -143,7 +140,7 @@ func acquireGrantCtlSocket(sockPath string) (*net.UnixListener, *os.File, error)
 // decision and tests do not touch the real ~/.agentjail. An empty ctlToken is
 // refused: ctlauth.Valid would reject every caller, which would present as a
 // dead control socket rather than as the misconfiguration it is (ADR 0069).
-func newGrantServer(sockPath, ctlToken string, registry *grantctl.Registry, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, shieldAttest *shieldAttestTracker, reload func(context.Context) error) (*grantServer, error) {
+func newGrantServer(sockPath, ctlToken string, registry *grantctl.Registry, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, reload func(context.Context) error) (*grantServer, error) {
 	if ctlToken == "" {
 		return nil, errors.New("refusing to serve the grant control socket without a control token")
 	}
@@ -159,7 +156,6 @@ func newGrantServer(sockPath, ctlToken string, registry *grantctl.Registry, emit
 		emitter:        emitter,
 		durableAudit:   durableAudit,
 		activeSessions: activeSessions,
-		shieldAttest:   shieldAttest,
 		reload:         reload,
 		ctlToken:       ctlToken,
 	}, nil
@@ -168,12 +164,12 @@ func newGrantServer(sockPath, ctlToken string, registry *grantctl.Registry, emit
 // startGrantServer mints the control token and hands it to newGrantServer. It
 // is the daemon's single entry point for standing the control socket up, so the
 // token is never read in one place and forgotten in another.
-func startGrantServer(sockPath string, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, shieldAttest *shieldAttestTracker, reload func(context.Context) error) (*grantServer, error) {
+func startGrantServer(sockPath string, emitter audit.Emitter, durableAudit bool, activeSessions *activeTracker, reload func(context.Context) error) (*grantServer, error) {
 	ctlToken, err := ctlauth.Ensure()
 	if err != nil {
 		return nil, fmt.Errorf("control token unavailable: %w", err)
 	}
-	return newGrantServer(sockPath, ctlToken, grantctl.NewRegistry(), emitter, durableAudit, activeSessions, shieldAttest, reload)
+	return newGrantServer(sockPath, ctlToken, grantctl.NewRegistry(), emitter, durableAudit, activeSessions, reload)
 }
 
 // close stops serving, removes the socket, and releases the lock.
@@ -289,21 +285,6 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 			RefID:     req.GrantID,
 		})
 		gs.reply(conn, grantctl.Response{OK: true, GrantID: req.GrantID})
-
-	case grantctl.ReqShieldAttest:
-		// ctlToken (checked above) proves the caller is outside the sandbox.
-		// See ADR 0111.
-		if req.ShieldPID <= 1 {
-			gs.reply(conn, grantctl.Response{OK: false, Error: "shield_attest requires shield_pid"})
-			return
-		}
-		if gs.shieldAttest == nil {
-			gs.reply(conn, grantctl.Response{OK: false, Error: "shield attestation unavailable"})
-			return
-		}
-		gs.shieldAttest.attest(req.ShieldPID, time.Now())
-		slog.Debug("shield attested", "shield_pid", req.ShieldPID)
-		gs.reply(conn, grantctl.Response{OK: true})
 
 	case grantctl.ReqDaemonReload:
 		// Lives here, not on the agent-reachable daemon.sock: a Rego recompile

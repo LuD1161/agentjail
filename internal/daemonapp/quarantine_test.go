@@ -2,11 +2,11 @@
 //
 // These are unit tests around the loadModules function. They write temp .rego
 // files directly into a temp directory and verify that:
-//   1. With only valid custom files, all modules are returned.
-//   2. With one valid + one bundle-breaking custom file, the good file is kept
-//      and the bad one is silently skipped (WARN logged).
-//   3. Core/library files are never quarantined — they are always included in
-//      the baseline (a bad core file would be a bug, not a custom-rule issue).
+//  1. With only valid custom files, all modules are returned.
+//  2. With one valid + one bundle-breaking custom file, the good file is kept
+//     and the bad one is silently skipped (WARN logged).
+//  3. Core/library files are never quarantined — they are always included in
+//     the baseline (a bad core file would be a bug, not a custom-rule issue).
 //
 // NOTE: loadModules is also tested indirectly by the full daemon integration
 // tests in main_test.go.

@@ -253,7 +253,7 @@ func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 				_ = selfupdate.AtomicReplaceBinary(backup, dst)
 			}
 		}
-		selfupdate.RestartDaemon(uc.PlistPath) //nolint:errcheck
+		selfupdate.RestartDaemon(uc.PlistPath)                                             //nolint:errcheck
 		uc.Notifier.Send(ctx, "agentjail", fmt.Sprintf("Auto-update failed: %v", swapErr)) //nolint:errcheck
 		return
 	}

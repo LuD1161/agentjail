@@ -102,12 +102,6 @@ type server struct {
 	// activeSessions tracks which session IDs have open connections.
 	activeSessions *activeTracker
 
-	// shieldAttest records PIDs attested as running agentjail-shield, so
-	// decisions for their descendant agents can have sandbox-redundant
-	// filesystem deny rules downgraded (ADR 0111). Nil-safe: a nil tracker
-	// means no session is ever treated as shielded (bare server{} in tests).
-	shieldAttest *shieldAttestTracker
-
 	// grantSrv handles runtime host grant requests. Nil-safe.
 	grantSrv *grantServer
 
@@ -554,15 +548,6 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			// every downstream consumer records what actually happened rather
 			// than what policy wanted. See ADR 0091-monitor-mode-tools.
 			resp = applyMonitorMode(resp, s.monitoring.Load())
-			// Shield-attested downgrade of sandbox-redundant filesystem denies
-			// (ADR 0111). Skips rows monitor mode already downgraded.
-			if s.shieldAttest != nil && resp.WouldAction == "" {
-				cmd, _ := req.ToolInput["command"].(string)
-				if na, wa, ok := s.shieldAttest.maybeDowngrade(resp.Action, resp.RuleID, cmd, req.AgentPID, time.Now()); ok {
-					resp.Action, resp.WouldAction = na, wa
-					slog.Info("shield-attested downgrade", "req_id", req.ID, "rule_id", resp.RuleID, "would_action", wa, "agent_pid", req.AgentPID)
-				}
-			}
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
 
@@ -1053,7 +1038,6 @@ func Run(args []string) int {
 	srv := &server{
 		evaluator:      policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), initModules, cfg),
 		activeSessions: newActiveTracker(filepath.Dir(*policyPath)),
-		shieldAttest:   newShieldAttestTracker(),
 		connSem:        make(chan struct{}, maxAgentConns),
 		rulesDir:       *rulesDir,
 		policyPath:     *policyPath,
@@ -1159,7 +1143,7 @@ func Run(args []string) int {
 		}
 		// Mint before binding. On failure the control socket is not served at
 		// all, which is the fail-closed outcome: no approvals, no reload (ADR 0069).
-		gs, gerr := startGrantServer(ctlSockPath, grantEmitter, durableAudit, srv.activeSessions, srv.shieldAttest, srv.reloadPolicy)
+		gs, gerr := startGrantServer(ctlSockPath, grantEmitter, durableAudit, srv.activeSessions, srv.reloadPolicy)
 		if gerr != nil {
 			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
 		} else {

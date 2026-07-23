@@ -42,9 +42,13 @@ var claudeCmd = &cobra.Command{
 
 This is equivalent to: agentjail run -- claude [args...]
 
-The session is protected by Landlock (Linux) or Seatbelt (macOS).
-Credential paths, host processes, and unrestricted network access
-are blocked at the kernel level.`,
+The session is protected by Landlock (Linux) or Seatbelt (macOS) by default:
+credential paths, host processes, and unrestricted network access are blocked
+at the kernel level.
+
+  agentjail claude                Sandboxed (default).
+  agentjail claude --no-sandbox   Hook-only policy, no OS sandbox (for hosts
+                                  that cannot sandbox, or an explicit opt-out).`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
@@ -60,7 +64,16 @@ func init() {
 }
 
 func runClaudeCmd(args []string) int {
-	return runRunCmd(append([]string{"claude"}, args...))
+	// Run-level flags may lead the claude alias: `agentjail claude --no-sandbox`.
+	// Lift them ahead of the "claude" command name so runRunCmd's leading-flag
+	// loop sees them the same way it does for `agentjail run --no-sandbox -- ...`.
+	var lead []string
+	for len(args) > 0 && (args[0] == "--no-sandbox" || args[0] == "--tunnel") {
+		lead = append(lead, args[0])
+		args = args[1:]
+	}
+	full := append(lead, append([]string{"claude"}, args...)...)
+	return runRunCmd(full)
 }
 
 func runRunCmd(args []string) int {
@@ -68,10 +81,27 @@ func runRunCmd(args []string) int {
 	// (e.g. `agentjail run --tunnel -- grok`). It routes the agent through the
 	// transparent L7 tunnel (TLS-terminating MITM + network policy packs) instead
 	// of the host-level netproxy. Opt-in: the default remains netproxy.
-	tunnelMode := false
-	if len(args) > 0 && args[0] == "--tunnel" {
-		tunnelMode = true
-		args = args[1:]
+	// Consume leading run-level flags. --no-sandbox runs the agent WITHOUT the
+	// OS sandbox (hook-only policy) — for hosts that can't sandbox or explicit
+	// opt-out; the sandbox is the default. --tunnel routes egress through the L7
+	// tunnel and requires the sandbox.
+	tunnelMode, noSandbox := false, false
+	for len(args) > 0 {
+		if args[0] == "--tunnel" {
+			tunnelMode = true
+			args = args[1:]
+			continue
+		}
+		if args[0] == "--no-sandbox" {
+			noSandbox = true
+			args = args[1:]
+			continue
+		}
+		break
+	}
+	if noSandbox && tunnelMode {
+		fmt.Fprintln(os.Stderr, "agentjail run: --no-sandbox cannot be combined with --tunnel (the tunnel needs the sandbox)")
+		return 2
 	}
 
 	// Strip leading "--" if present (cobra passes it through with DisableFlagParsing).
@@ -93,14 +123,17 @@ func runRunCmd(args []string) int {
 		return 1
 	}
 
-	// 1. Locate the shield binary.
-	shieldBin, err := findShieldBinary(home)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Run: agentjail install")
-		fmt.Fprintln(os.Stderr, "  to install the shield binary.")
-		return 1
+	// 1. Locate the shield binary (skipped under --no-sandbox).
+	var shieldBin string
+	if !noSandbox {
+		shieldBin, err = findShieldBinary(home)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "  Run: agentjail install")
+			fmt.Fprintln(os.Stderr, "  to install the shield binary, or pass --no-sandbox to run hook-only.")
+			return 1
+		}
 	}
 
 	// 2. Ensure the daemon is running.
@@ -129,7 +162,20 @@ func runRunCmd(args []string) int {
 		return 127
 	}
 
-	// 5. Exec through shield. This replaces the current process.
+	// 5a. --no-sandbox: exec the agent directly. Policy is still enforced by the
+	// installed hook; there is no OS sandbox. This is the honest fallback for
+	// hosts that cannot sandbox and an explicit opt-out.
+	if noSandbox {
+		fmt.Fprintf(os.Stderr, "agentjail: starting UNSANDBOXED session for %s — hook-only policy, no OS sandbox\n", agentName)
+		execArgs := append([]string{agentPath}, args[1:]...)
+		if err := syscall.Exec(agentPath, execArgs, os.Environ()); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: failed to exec %s: %v\n", agentName, err)
+			return 1
+		}
+		return 0 // unreachable after exec
+	}
+
+	// 5b. Exec through shield (default). This replaces the current process.
 	shieldArgs := []string{shieldBin}
 	if tunnelMode {
 		shieldArgs = append(shieldArgs, "--tunnel")

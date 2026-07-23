@@ -72,7 +72,7 @@ func serveCtlFor(t *testing.T, srv *server) string {
 	t.Helper()
 
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
-	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil, srv.reloadPolicy)
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, srv.reloadPolicy)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}

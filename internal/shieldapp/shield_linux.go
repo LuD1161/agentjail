@@ -162,11 +162,6 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// has no equivalent knob yet, so the resolved value is a no-op here.
 	_ = ipv6Mode
 	ctx := context.Background()
-	// Attest this shield to the daemon before launching, so the agent's
-	// filesystem deny rules downgrade (ADR 0111). Skipped for --profile-print.
-	if !profilePrint {
-		attestShieldSession()
-	}
 	noColor := os.Getenv("NO_COLOR") != ""
 	if noColor {
 		fmt.Fprintln(os.Stderr, "  agentjail — setting up sandbox...")

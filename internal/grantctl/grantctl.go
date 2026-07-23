@@ -64,10 +64,6 @@ const (
 	// here is necessary but not sufficient: on Linux the agent can reach this
 	// socket too, so CtlToken is what actually gates it (ADR 0069).
 	ReqDaemonReload RequestType = "daemon_reload"
-	// ReqShieldAttest registers ShieldPID as a running shield so its descendant
-	// agents get sandbox-redundant deny rules downgraded. Control-socket ONLY;
-	// CtlToken required. See ADR 0111.
-	ReqShieldAttest RequestType = "shield_attest"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
@@ -83,8 +79,6 @@ type Request struct {
 	TTLMs     int64  `json:"ttl_ms,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	GrantID   string `json:"grant_id,omitempty"`
-	// ShieldPID carries the attesting shield's PID for ReqShieldAttest.
-	ShieldPID int `json:"shield_pid,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).
