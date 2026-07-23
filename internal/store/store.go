@@ -48,6 +48,14 @@ type DecisionRecord struct {
 	// of this row has no other way to tell (AGE-212).
 	// See ADR 0091-monitor-mode-tools.
 	WouldAction string
+
+	// ToolUseID ties this decision to its PostToolUse outcome. FinalAction and
+	// Enforcer are the combined per-action outcome and the layer responsible
+	// for it (policy or sandbox), filled at PreToolUse and updated by the
+	// outcome. See ADR 0112-final-action-outcome.
+	ToolUseID   string
+	FinalAction string
+	Enforcer    string
 }
 
 // AuditRecord is one policy-mutation audit event (replaces audit.log).
@@ -144,6 +152,9 @@ type AuditFilter struct {
 // SQLite store; tests may substitute an in-memory or fake store.
 type EventStore interface {
 	RecordDecision(ctx context.Context, d DecisionRecord) error
+	// UpdateOutcome records a completed tool call's final outcome + enforcer
+	// against the PreToolUse row sharing toolUseID (ADR 0112).
+	UpdateOutcome(ctx context.Context, toolUseID, finalAction, enforcer string) error
 	RecordAuditEvent(ctx context.Context, a AuditRecord) error
 	DecisionCount(ctx context.Context) (int64, error)
 	ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error)

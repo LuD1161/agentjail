@@ -59,6 +59,14 @@ type hookInput struct {
 	ToolInput     map[string]interface{} `json:"tool_input"`
 	SessionID     string                 `json:"session_id"`
 	CWD           string                 `json:"cwd"`
+	// ToolUseID is Claude Code's per-tool-call id (ADR 0112). Present on both
+	// PreToolUse and PostToolUse invocations; empty on Codex/Cursor, which
+	// fall back to correlationID's hash.
+	ToolUseID string `json:"tool_use_id"`
+	// ToolResponse is Claude Code's PostToolUse-only payload carrying the
+	// tool's result (shape varies by tool — ADR 0112). Left as raw JSON since
+	// the hook only needs to scan it for the sandbox's denial signature.
+	ToolResponse json.RawMessage `json:"tool_response,omitempty"`
 }
 
 // cursorShellInput is the Cursor stdin payload for beforeShellExecution.
@@ -593,6 +601,15 @@ func runClaude(agent string) {
 		return
 	}
 
+	// ADR 0112: PostToolUse is a distinct, non-blocking path — the tool
+	// already ran, so it reports the observed outcome and always exits 0
+	// rather than falling through to the PreToolUse allow/ask/deny handling
+	// below.
+	if input.HookEventName == "PostToolUse" {
+		handlePostToolUse(agent, input)
+		return
+	}
+
 	// 2. Determine socket path. AGENTJAIL_SOCKET can override the default for
 	// tests/tooling, but only when it resolves under the trusted ~/.agentjail
 	// directory (see isTrustedSocketOverride) — otherwise it is ignored.
@@ -616,6 +633,8 @@ func runClaude(agent string) {
 		CWD:       input.CWD,
 		Agent:     agent,
 		AgentPID:  findAgentPID(),
+		// ADR 0112: correlation id PostToolUse will report the outcome under.
+		ToolUseID: correlationID(input.ToolUseID, input.SessionID, input.ToolName, input.ToolInput),
 	}
 
 	evalStart := time.Now()

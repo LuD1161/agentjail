@@ -23,3 +23,31 @@ export function actionClass(action?: string): string {
       return 'text-[#9ca3af]'
   }
 }
+
+// ADR 0112: the policy `action` ("allow"/"deny"/"ask") and the observed
+// `final_action` ("allowed"/"blocked"/"ask") use different vocabularies --
+// this maps final_action onto action's color-class keys so both can share
+// actionClass().
+const FINAL_ACTION_TO_ACTION: Record<string, string> = {
+  allowed: 'allow',
+  blocked: 'deny',
+  ask: 'ask',
+}
+
+/** The truthful verdict to display: the observed outcome if we have one, else the raw policy action. */
+export function displayVerdict(action?: string, finalAction?: string): string | undefined {
+  if (finalAction) return FINAL_ACTION_TO_ACTION[finalAction] ?? finalAction
+  return action
+}
+
+/** True when the OS sandbox is the layer that produced a "blocked" final outcome. */
+export function isSandboxBlock(finalAction?: string, enforcer?: string): boolean {
+  return enforcer === 'sandbox' && finalAction === 'blocked'
+}
+
+/** Human note when the final outcome diverges from the raw policy action, e.g. "policy: allow → sandbox: blocked". Undefined when they agree or we lack outcome data. */
+export function finalOutcomeNote(action?: string, finalAction?: string, enforcer?: string): string | undefined {
+  if (!finalAction || !enforcer) return undefined
+  if ((FINAL_ACTION_TO_ACTION[finalAction] ?? finalAction) === action) return undefined
+  return `policy: ${action ?? '-'} → ${enforcer}: ${finalAction}`
+}

@@ -10,7 +10,7 @@ import { DataTableColumnHeader } from '@/components/data-table-column-header'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useEventSource } from '@/hooks/use-event-source'
 import { fetchState } from '@/lib/api'
-import { formatTime, actionClass } from '@/lib/format'
+import { formatTime, actionClass, displayVerdict, isSandboxBlock, finalOutcomeNote } from '@/lib/format'
 import type { TimelineEvent } from '@/types'
 
 function truncate(s: string | undefined, n = 80) {
@@ -45,11 +45,22 @@ const columns: ColumnDef<TimelineEvent>[] = [
       const fc = (table.options.meta as { actionFacets?: Record<string, number> })?.actionFacets
       return <DataTableColumnHeader column={column} title="Action" facetCounts={fc} />
     },
-    cell: ({ row }) => (
-      <span className={actionClass(row.original.action)}>
-        {row.original.action ?? '-'}
-      </span>
-    ),
+    cell: ({ row }) => {
+      const { action, final_action, enforcer } = row.original
+      const verdict = displayVerdict(action, final_action)
+      const sandboxBlock = isSandboxBlock(final_action, enforcer)
+      return (
+        <span
+          className={actionClass(verdict)}
+          title={sandboxBlock ? `blocked by OS sandbox (policy: ${action ?? '-'})` : undefined}
+        >
+          {verdict ?? '-'}
+          {sandboxBlock && (
+            <span className="ml-1 font-normal text-[#9ca3af]">· sandbox</span>
+          )}
+        </span>
+      )
+    },
     size: 70,
     minSize: 50,
     maxSize: 120,
@@ -226,13 +237,20 @@ export function MonitorPage() {
                 <span className="text-xs font-semibold text-[#f0f3f6]">
                   {selectedEvent.tool ?? 'Unknown'}
                 </span>
-                <span className={cn(
-                  'text-xs font-semibold',
-                  selectedEvent.action === 'allow' ? 'text-[#56d364]' :
-                  selectedEvent.action === 'deny' ? 'text-[#ff7b72]' :
-                  selectedEvent.action === 'ask' ? 'text-[#e3b341]' : 'text-[#9ca3af]'
-                )}>
-                  {selectedEvent.action ?? '-'}
+                <span
+                  className={cn('text-xs font-semibold', actionClass(
+                    displayVerdict(selectedEvent.action, selectedEvent.final_action),
+                  ))}
+                  title={
+                    isSandboxBlock(selectedEvent.final_action, selectedEvent.enforcer)
+                      ? `blocked by OS sandbox (policy: ${selectedEvent.action ?? '-'})`
+                      : undefined
+                  }
+                >
+                  {displayVerdict(selectedEvent.action, selectedEvent.final_action) ?? '-'}
+                  {isSandboxBlock(selectedEvent.final_action, selectedEvent.enforcer) && (
+                    <span className="ml-1 font-normal text-[#9ca3af]">· sandbox</span>
+                  )}
                 </span>
                 <span className="text-xs text-[#6b7280]">{selectedEvent.rule_id ?? ''}</span>
                 <span className="flex-1" />
@@ -247,7 +265,24 @@ export function MonitorPage() {
                     <div className="mb-2 text-[10px] font-semibold uppercase text-[#6b7280]">Details</div>
                     <div className="space-y-1.5 text-xs">
                       <div><span className="text-[#58a6ff]">Tool:</span> <span className="text-[#c9d1d9]">{selectedEvent.tool ?? '-'}</span></div>
-                      <div><span className="text-[#58a6ff]">Action:</span> <span className={actionClass(selectedEvent.action)}>{selectedEvent.action ?? '-'}</span></div>
+                      <div>
+                        <span className="text-[#58a6ff]">Action:</span>{' '}
+                        <span
+                          className={actionClass(
+                            displayVerdict(selectedEvent.action, selectedEvent.final_action),
+                          )}
+                        >
+                          {displayVerdict(selectedEvent.action, selectedEvent.final_action) ?? '-'}
+                        </span>
+                        {isSandboxBlock(selectedEvent.final_action, selectedEvent.enforcer) && (
+                          <span className="ml-1 text-[#9ca3af]">· sandbox</span>
+                        )}
+                        {finalOutcomeNote(selectedEvent.action, selectedEvent.final_action, selectedEvent.enforcer) && (
+                          <span className="ml-2 text-[#6b7280]">
+                            ({finalOutcomeNote(selectedEvent.action, selectedEvent.final_action, selectedEvent.enforcer)})
+                          </span>
+                        )}
+                      </div>
                       <div><span className="text-[#58a6ff]">Rule:</span> <span className="text-[#c9d1d9]">{selectedEvent.rule_id ?? '-'}</span></div>
                       <div><span className="text-[#58a6ff]">Reason:</span> <span className="text-[#c9d1d9]">{selectedEvent.reason ?? '-'}</span></div>
                       <div><span className="text-[#58a6ff]">Time:</span> <span className="text-[#c9d1d9]">{selectedEvent.time ?? '-'}</span></div>

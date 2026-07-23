@@ -138,23 +138,29 @@ func claudeMergeHookEntry(settings []byte, hookCmd string) ([]byte, bool) {
 		hooks = make(map[string]interface{})
 	}
 
-	preToolUse, _ := hooks["PreToolUse"].([]interface{})
-
-	if claudeHookEntryExists(preToolUse, hookCmd) {
+	// The same hook binary is wired for PreToolUse (policy decision) and
+	// PostToolUse (observed sandbox outcome, ADR 0112). Both are idempotent.
+	changed := false
+	for _, event := range claudeHookEvents {
+		list, _ := hooks[event].([]interface{})
+		if claudeHookEntryExists(list, hookCmd) {
+			continue
+		}
+		list = append(list, map[string]interface{}{
+			"matcher": "*",
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"type":    "command",
+					"command": hookCmd,
+				},
+			},
+		})
+		hooks[event] = list
+		changed = true
+	}
+	if !changed {
 		return settings, false
 	}
-
-	newEntry := map[string]interface{}{
-		"matcher": "*",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": hookCmd,
-			},
-		},
-	}
-	preToolUse = append(preToolUse, newEntry)
-	hooks["PreToolUse"] = preToolUse
 	root["hooks"] = hooks
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -164,6 +170,11 @@ func claudeMergeHookEntry(settings []byte, hookCmd string) ([]byte, bool) {
 	out = append(out, '\n')
 	return out, true
 }
+
+// claudeHookEvents are the Claude Code hook events agentjail wires the same
+// hook binary into: PreToolUse for the policy decision, PostToolUse for the
+// observed outcome (ADR 0112-final-action-outcome).
+var claudeHookEvents = []string{"PreToolUse", "PostToolUse"}
 
 // claudeStatuslineSuffix is appended to the agentjail CLI binary path to form
 // the command agentjail owns in Claude Code's statusLine setting.
@@ -299,29 +310,30 @@ func claudeRemoveHookEntry(settings []byte, hookCmd string) []byte {
 		return settings
 	}
 
-	preToolUse, _ := hooks["PreToolUse"].([]interface{})
-	if preToolUse == nil {
-		return settings
-	}
-
-	filtered := preToolUse[:0]
-	for _, entry := range preToolUse {
-		em, _ := entry.(map[string]interface{})
-		if em == nil {
-			filtered = append(filtered, entry)
+	// Remove the hook from every event it was wired into (ADR 0112 added
+	// PostToolUse alongside PreToolUse).
+	changed := false
+	for _, event := range claudeHookEvents {
+		list, _ := hooks[event].([]interface{})
+		if list == nil {
 			continue
 		}
-		if claudeEntryHasCommand(em, hookCmd) {
-			continue // drop this entry
+		filtered := list[:0]
+		for _, entry := range list {
+			em, _ := entry.(map[string]interface{})
+			if em != nil && claudeEntryHasCommand(em, hookCmd) {
+				continue // drop this entry
+			}
+			filtered = append(filtered, entry)
 		}
-		filtered = append(filtered, entry)
+		if len(filtered) != len(list) {
+			hooks[event] = filtered
+			changed = true
+		}
 	}
-
-	if len(filtered) == len(preToolUse) {
+	if !changed {
 		return settings
 	}
-
-	hooks["PreToolUse"] = filtered
 	root["hooks"] = hooks
 
 	out, err := json.MarshalIndent(root, "", "  ")

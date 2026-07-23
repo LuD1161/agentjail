@@ -35,6 +35,23 @@ type Request struct {
 	CWD       string                 `json:"cwd"`
 	Agent     string                 `json:"agent,omitempty"`
 	AgentPID  int                    `json:"agent_pid,omitempty"`
+	// ToolUseID is the stable per-tool-call identifier that ties the
+	// PreToolUse decision to its PostToolUse outcome (ADR 0112). Claude Code's
+	// tool_use_id when present, else a hook-computed hash.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// Outcome is set only on a PostToolUse request: the observed result of the
+	// tool call, used to record the final outcome and responsible enforcer
+	// (ADR 0112). Nil on PreToolUse.
+	Outcome *Outcome `json:"outcome,omitempty"`
+}
+
+// Outcome is the observed result of a completed tool call, reported by the
+// PostToolUse hook. SandboxDenied is true when the tool result carries the OS
+// sandbox's signature (EPERM / "Operation not permitted"). See ADR 0112.
+type Outcome struct {
+	ExitCode      int    `json:"exit_code,omitempty"`
+	SandboxDenied bool   `json:"sandbox_denied,omitempty"`
+	Detail        string `json:"detail,omitempty"`
 }
 
 // Response is the wire shape the daemon returns over the Unix socket.

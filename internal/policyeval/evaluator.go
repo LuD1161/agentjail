@@ -32,6 +32,17 @@ type Request struct {
 	CWD       string                 `json:"cwd"`
 	Agent     string                 `json:"agent,omitempty"`
 	AgentPID  int                    `json:"agent_pid,omitempty"`
+	// ToolUseID / Outcome mirror wire.Request for the final-outcome path; Eval
+	// ignores them (they matter to the daemon's record layer). See ADR 0112.
+	ToolUseID string   `json:"tool_use_id,omitempty"`
+	Outcome   *Outcome `json:"outcome,omitempty"`
+}
+
+// Outcome mirrors wire.Outcome. See ADR 0112.
+type Outcome struct {
+	ExitCode      int    `json:"exit_code,omitempty"`
+	SandboxDenied bool   `json:"sandbox_denied,omitempty"`
+	Detail        string `json:"detail,omitempty"`
 }
 
 // Response is the canonical eval response shape, mirroring wire.Response.
@@ -356,4 +367,3 @@ func (e *evaluator) resolveRepoRoot(cwd string) string {
 
 	return root
 }
-

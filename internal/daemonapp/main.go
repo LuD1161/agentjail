@@ -527,6 +527,20 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
+		// PostToolUse outcome report (ADR 0112): the hook observed the sandbox's
+		// own EPERM signature after the tool ran and is telling us who actually
+		// enforced the call. This is not a policy decision — route it to the
+		// existing record instead of running Eval / enqueuing a new row.
+		if req.HookEvent == "PostToolUse" || req.Outcome != nil {
+			if s.eventStore != nil && req.Outcome != nil && req.Outcome.SandboxDenied && req.ToolUseID != "" {
+				if err := s.eventStore.UpdateOutcome(ctx, req.ToolUseID, "blocked", "sandbox"); err != nil {
+					slog.Debug("update outcome", "req_id", req.ID, "tool_use_id", req.ToolUseID, "err", err)
+				}
+			}
+			_ = enc.Encode(policyeval.Response{ID: req.ID, Action: "allow"})
+			continue
+		}
+
 		if req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
 			s.activeSessions.update(req.SessionID, req.AgentPID, req.CWD)
 		}
@@ -612,6 +626,12 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 				ElapsedUs:   elapsed.Microseconds(),
 				CWD:         req.CWD,
 				ToolInput:   req.ToolInput,
+				// Seed the final outcome from the enforced policy verdict (ADR
+				// 0112). A policy deny is already final; an allow is provisional
+				// until PostToolUse reports whether the sandbox overrode it.
+				ToolUseID:   req.ToolUseID,
+				FinalAction: finalFromAction(resp.Action),
+				Enforcer:    "policy",
 			})
 		}
 
@@ -705,6 +725,22 @@ func applyMonitorMode(resp policyeval.Response, monitoring bool) policyeval.Resp
 	resp.WouldAction = resp.Action
 	resp.Action = actionAllow
 	return resp
+}
+
+// finalFromAction maps an enforced policy action to the FinalAction stored on
+// the decision record (ADR 0112). PostToolUse may later flip this to
+// "blocked"/"sandbox" if the sandbox denied a policy-allowed call.
+func finalFromAction(action string) string {
+	switch action {
+	case "deny":
+		return "blocked"
+	case actionAllow:
+		return "allowed"
+	case "ask":
+		return "ask"
+	default:
+		return action
+	}
 }
 
 // loadConfig loads ~/.agentjail/policy.yaml, merges it over Default(), and

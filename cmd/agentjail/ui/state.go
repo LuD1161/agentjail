@@ -35,6 +35,13 @@ type EvalLine struct {
 	ElapsedUs         int64     `json:"elapsed_us,omitempty"`
 	ToolInputRedacted string    `json:"tool_input_redacted,omitempty"`
 	Err               string    `json:"err,omitempty"`
+	// FinalAction/Enforcer capture the observed outcome from ADR 0112: the
+	// policy verdict may be overridden by an OS sandbox EPERM at the
+	// syscall, so the UI must show what actually happened, not just the
+	// policy's prediction. ToolUseID correlates PreToolUse and PostToolUse.
+	FinalAction string `json:"final_action,omitempty"`
+	Enforcer    string `json:"enforcer,omitempty"`
+	ToolUseID   string `json:"tool_use_id,omitempty"`
 }
 
 // SessionState tracks per-session aggregated stats.

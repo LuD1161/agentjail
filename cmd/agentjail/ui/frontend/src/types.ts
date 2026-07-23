@@ -72,6 +72,12 @@ export interface TimelineEvent {
   elapsed_us?: number
   tool_input_redacted?: string
   err?: string
+  /** Observed final outcome (ADR 0112): "allowed" | "blocked" | "ask", may
+   * differ from the raw policy `action` when the OS sandbox overrides it. */
+  final_action?: string
+  /** Layer that produced final_action: "policy" | "sandbox". */
+  enforcer?: string
+  tool_use_id?: string
 }
 
 /** Mirrors cmd/agentjail/ui.SessionState (part of GET /api/state). */

@@ -105,7 +105,10 @@ func (s *sqliteStore) migrate() error {
 			elapsed_us      INTEGER,
 			cwd             TEXT,
 			tool_input_redacted TEXT,
-			would_action    TEXT    NOT NULL DEFAULT ''
+			would_action    TEXT    NOT NULL DEFAULT '',
+			tool_use_id     TEXT    NOT NULL DEFAULT '',
+			final_action    TEXT    NOT NULL DEFAULT '',
+			enforcer        TEXT    NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_session_ts ON decisions(session_id, ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_decisions_ts ON decisions(ts)`,
@@ -176,6 +179,17 @@ func (s *sqliteStore) migrate() error {
 		if _, err := s.db.Exec(`ALTER TABLE decisions ADD COLUMN would_action TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("store: migrate: add decisions.would_action: %w", err)
 		}
+	}
+	// Final-outcome columns (ADR 0112): additive, idempotent per column.
+	if tableExists(s.db, "decisions") {
+		for _, col := range []string{"tool_use_id", "final_action", "enforcer"} {
+			if !columnExists(s.db, "decisions", col) {
+				if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE decisions ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, col)); err != nil {
+					return fmt.Errorf("store: migrate: add decisions.%s: %w", col, err)
+				}
+			}
+		}
+		s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_decisions_tool_use_id ON decisions(tool_use_id)`)
 	}
 
 	// Migrate legacy audit_events into audit_log (idempotent).
@@ -270,9 +284,9 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.ExecContext(ctx, `INSERT INTO decisions
-		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction,
+		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, tool_use_id, final_action, enforcer)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction, d.ToolUseID, d.FinalAction, d.Enforcer,
 	); err != nil {
 		return fmt.Errorf("store: insert decision: %w", err)
 	}
@@ -368,7 +382,7 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		}
 		args = append(args, f.AfterID)
 	}
-	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action FROM decisions"
+	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, tool_use_id, final_action, enforcer FROM decisions"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -396,8 +410,11 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			cwd       sql.NullString
 			toolInput sql.NullString
 			wouldAct  sql.NullString
+			toolUseID sql.NullString
+			finalAct  sql.NullString
+			enforcer  sql.NullString
 		)
-		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput, &wouldAct); err != nil {
+		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput, &wouldAct, &toolUseID, &finalAct, &enforcer); err != nil {
 			return nil, fmt.Errorf("store: scan decision: %w", err)
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, tsStr)
@@ -416,9 +433,30 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			CWD:               cwd.String,
 			ToolInputRedacted: toolInput.String,
 			WouldAction:       wouldAct.String,
+			ToolUseID:         toolUseID.String,
+			FinalAction:       finalAct.String,
+			Enforcer:          enforcer.String,
 		})
 	}
 	return out, rows.Err()
+}
+
+// UpdateOutcome records the observed result of a completed tool call against
+// the PreToolUse row that shares toolUseID, setting the final outcome and the
+// responsible enforcer. Matches the most recent such row (a repeated command
+// reuses a hashed id; newest wins). No-op if no row matches. See ADR 0112.
+func (s *sqliteStore) UpdateOutcome(ctx context.Context, toolUseID, finalAction, enforcer string) error {
+	if toolUseID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE decisions SET final_action = ?, enforcer = ?
+		 WHERE id = (SELECT id FROM decisions WHERE tool_use_id = ? ORDER BY id DESC LIMIT 1)`,
+		finalAction, enforcer, toolUseID)
+	if err != nil {
+		return fmt.Errorf("store: update outcome: %w", err)
+	}
+	return nil
 }
 
 // ListAuditEvents returns policy audit events from the unified audit_log,
