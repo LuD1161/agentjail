@@ -18,11 +18,11 @@
 // defined interfaces against these types.
 //
 // Grant lifecycle:
-//   1. Agent calls grant request (via hook)
-//   2. Hook forwards to daemon (which appends to pending queue)
-//   3. Daemon holds pending GrantID until TTL expiry or approval/denial
-//   4. Human calls `agentjail grants approve <id>` (CLI -> daemon-ctl.sock)
-//   5. Daemon applies the grant and returns ClaimedGrant (bound to session's CWD)
+//  1. Agent calls grant request (via hook)
+//  2. Hook forwards to daemon (which appends to pending queue)
+//  3. Daemon holds pending GrantID until TTL expiry or approval/denial
+//  4. Human calls `agentjail grants approve <id>` (CLI -> daemon-ctl.sock)
+//  5. Daemon applies the grant and returns ClaimedGrant (bound to session's CWD)
 //
 // The grant TTL is enforced by the daemon; a grant is active only if still
 // pending or recently approved and not yet expired.
@@ -64,6 +64,10 @@ const (
 	// here is necessary but not sufficient: on Linux the agent can reach this
 	// socket too, so CtlToken is what actually gates it (ADR 0069).
 	ReqDaemonReload RequestType = "daemon_reload"
+	// ReqShieldAttest registers ShieldPID as a running shield so its descendant
+	// agents get sandbox-redundant deny rules downgraded. Control-socket ONLY;
+	// CtlToken required. See ADR 0111.
+	ReqShieldAttest RequestType = "shield_attest"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
@@ -72,21 +76,23 @@ type Request struct {
 	// CtlToken authenticates the caller as a process outside the sandbox. Every
 	// verb served on daemon-ctl.sock requires it (ADR 0069). ReqGrantRequest is
 	// exempt: it is the agent's own verb and is served on daemon.sock.
-	CtlToken  string      `json:"ctl_token,omitempty"`
-	SessionID string      `json:"session_id,omitempty"`
-	CWD       string      `json:"cwd,omitempty"`
-	Host      string      `json:"host,omitempty"`
-	TTLMs     int64       `json:"ttl_ms,omitempty"`
-	Reason    string      `json:"reason,omitempty"`
-	GrantID   string      `json:"grant_id,omitempty"`
+	CtlToken  string `json:"ctl_token,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
+	Host      string `json:"host,omitempty"`
+	TTLMs     int64  `json:"ttl_ms,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	GrantID   string `json:"grant_id,omitempty"`
+	// ShieldPID carries the attesting shield's PID for ReqShieldAttest.
+	ShieldPID int `json:"shield_pid,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).
 type Response struct {
-	OK      bool         `json:"ok"`
-	Error   string       `json:"error,omitempty"`
-	GrantID string       `json:"grant_id,omitempty"`
-	Grants  []GrantInfo  `json:"grants,omitempty"`
+	OK      bool        `json:"ok"`
+	Error   string      `json:"error,omitempty"`
+	GrantID string      `json:"grant_id,omitempty"`
+	Grants  []GrantInfo `json:"grants,omitempty"`
 }
 
 // GrantInfo describes one pending grant request, suitable for display to a

@@ -152,6 +152,26 @@ func DaemonReload(sockPath, ctlToken string, dialTimeout time.Duration) error {
 	return nil
 }
 
+// ShieldAttest tells the daemon that shieldPID is a running agentjail-shield,
+// so agents descending from it get sandbox-redundant filesystem deny rules
+// downgraded (ADR 0111). Best-effort: the caller ignores the error, because a
+// failed attestation just leaves the session fully strict (fail-safe).
+// sockPath must be the privileged control socket, never daemon.sock.
+func ShieldAttest(sockPath, ctlToken string, shieldPID int, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{
+		Type:      ReqShieldAttest,
+		CtlToken:  ctlToken,
+		ShieldPID: shieldPID,
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return &RefusedError{Op: ReqShieldAttest, Reason: resp.Error}
+	}
+	return nil
+}
+
 // IsAvailable probes the socket at sockPath with a short dial timeout and
 // returns true if the socket is connectable, false otherwise. A false result
 // means no daemon is serving that socket (caller decides start-fresh vs.

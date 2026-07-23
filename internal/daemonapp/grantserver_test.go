@@ -37,7 +37,7 @@ func TestGrantServerE2E_RequestListDeny(t *testing.T) {
 	reqSock := filepath.Join(tmpDir, "daemon.sock")
 
 	registry := grantctl.NewRegistry()
-	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, false, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, false, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestGrantServerE2E_ApproveDeniedWithoutAudit(t *testing.T) {
 
 	registry := grantctl.NewRegistry()
 	// durableAudit=false
-	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, false, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, false, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestGrantServerE2E_UnboundGrantApproveRejected(t *testing.T) {
 
 	registry := grantctl.NewRegistry()
 	// durableAudit=true but grant has no BoundCWD
-	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestHandleGrantRequest_CWDMismatchLeavesGrantUnbound(t *testing.T) {
 	// durableAudit=true so the ONLY reason approve can fail is the unbound
 	// grant, isolating the CWD-mismatch behavior from the audit-gate
 	// behavior already covered by TestGrantServerE2E_ApproveDeniedWithoutAudit.
-	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, activeSessions, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, activeSessions, nil, nil)
 	if err != nil {
 		t.Fatalf("newGrantServer: %v", err)
 	}

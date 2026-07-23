@@ -21,7 +21,7 @@ func TestDaemonReload_ServedOnControlSocket(t *testing.T) {
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
 	var called atomic.Int32
-	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil,
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil,
 		func(context.Context) error { called.Add(1); return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestCtlSocket_RequiresCtlToken(t *testing.T) {
 			ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
 			var reloads atomic.Int32
-			gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, true, nil,
+			gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, true, nil, nil,
 				func(context.Context) error { reloads.Add(1); return nil })
 			if err != nil {
 				t.Fatal(err)
@@ -122,7 +122,7 @@ func rawCtlRoundTrip(t *testing.T, sock string, req grantctl.Request) grantctl.R
 func TestDaemonReload_CompileFailureIsRefusedNotTransport(t *testing.T) {
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
-	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil,
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil,
 		func(context.Context) error { return errors.New("reload: compile: rego parse error") })
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestDaemonReload_CompileFailureIsRefusedNotTransport(t *testing.T) {
 func TestDaemonReload_NilReloadIsRefused(t *testing.T) {
 	ctlSock := filepath.Join(shortSockDir(t), "ctl.sock")
 
-	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil)
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), audit.NopEmitter{}, false, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
