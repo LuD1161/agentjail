@@ -32,7 +32,7 @@ body + SSE stream captured with the native Bun binary, agent unaffected.
 
 Design (Codex-approved, 3 rounds):
 
-- **Provider registry** (`internal/gateway`), capability flags not a class enum
+- **Provider registry** (`internal/captureproxy`), capability flags not a class enum
   (`base_url_env`, `config_file`, `tunnel_only`, `supports_oauth`,
   `supports_path_prefix`, `verified`). Phase 1 registers Claude Code (verified).
   Codex (`OPENAI_BASE_URL`) and Gemini (`GOOGLE_GEMINI_BASE_URL`) are inert

@@ -2,6 +2,32 @@
 
 `main` is the live branch. Significant ships only — see `git log` for the full picture. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and dates are ISO-8601.
 
+## Unreleased
+
+#### TL;DR
+
+- **The darwin shield now actually enforces policy while shielded**: a blanket store deny was swallowing the daemon's own decision socket, so every hook silently failed open and `POLICY OFF` showed honestly - now fixed with a scoped carve-out.
+- **Nested Claude Code sessions behave like a real session again**: a shielded launch no longer inherits the parent's child-session marker, so transcripts and compaction work instead of silently degrading.
+- **One session identifier end to end** (AGE-111): the Network tab now groups, filters, names, and perma-links on the same Claude session id the Monitor tab and the policy daemon use, backfilled for rows captured before the id was known.
+- **Shield-attested downgrade of redundant Bash denies** (ADR 0111): inside a shielded session the OS sandbox already blocks the filesystem access, so text-heuristic denies (`rm -rf`, `touch-sensitive-path`, `ssh-keygen`, …) downgrade to monitor-only instead of double-enforcing; unshielded sessions stay fully strict.
+- **Network/Monitor UI polish**: agent + cwd + session-name labels on sessions, always-visible scrollbars in the request/response panes, full tool input on live monitor events, newest-first sort by default, and a fixed column-header clipping bug.
+
+### Added
+
+- **Shield-attested downgrade of sandbox-redundant deny rules** (ADR 0111): the shield attests its PID over the token-gated `daemon-ctl.sock`; the daemon downgrades filesystem-only Bash heuristics (`touch-sensitive-path`, `rm-rf`, recursive/find deletes, `ssh-keygen`) to monitor when the calling agent descends from an attested shield. Non-filesystem rules (privilege, devices, exec, network) never downgrade, and unshielded sessions are unaffected.
+- **One session identifier across monitor + network** (AGE-111): a watcher resolves the live Claude Code session id a few seconds after shield launch (the agent process must exist first) and stamps it onto every capture row going forward, with a synchronous backfill pass at child exit so short-lived sessions aren't left keyed to the old capture id. The Network tab now joins, names, and perma-links sessions on this same identifier, instead of maintaining a separate one from the daemon.
+- **Session labels in both tabs**: sessions show the coding agent's logo, the launch directory, and the user-assigned session name (falling back to an id prefix) instead of an opaque UUID.
+
+### Fixed
+
+- **Darwin shield silently ran unenforced** - the blanket store-access deny (ADR 0092 D3) also blocked reads/connects to the daemon's own decision socket, so `probeDaemon`'s stat call was denied by the sandbox and every hook failed open; the session ran shield-only with no policy enforcement, and the statusline correctly (but silently) showed `POLICY OFF`. The shield now emits a narrow carve-out for exactly that socket literal, mirroring the read-denied/connect-allowed boundary already used on Linux.
+- **Shielded launches inherited child-session mode** - the `CLAUDE_CODE_CHILD_SESSION` marker leaked into a shielded launch's environment whenever the launching shell descended from another Claude Code session, putting the new (and distinct) agent session into child mode: transcripts off, no compaction, context filling in one call. The shield now strips the inherited marker before exec on both darwin and Linux.
+- **Request/response panes looked unscrollable** - long bodies had no visible scrollbar (Radix ScrollArea's hover-only overlay, and an invisible thumb on the dark theme); replaced with native, always-visible scrollbars.
+- **Live monitor events showed truncated tool input** - the SSE feed parsed the daemon's eval log line, which only carried a 200-character summary; the log line now carries the same redacted, 4096-char-capped input the store persists, so the detail pane shows the full call.
+- **Narrow column headers overflowed into the next column** - a column's label/sort/filter cluster could spill past its resize handle, making a filter icon look like it belonged to the neighboring column; header cells now clip to their own width.
+- **Monitor and network tables defaulted to oldest-first** - both now default-sort by timestamp, newest first.
+- **Recent-requests endpoint used the old per-capture session id** - unified onto the same Claude session id as the rest of the Network tab.
+
 ## v1.0.0 - 2026-07-21
 
 #### TL;DR
