@@ -261,6 +261,7 @@ export function NetworkPage() {
           <DataTable
             columns={columns}
             data={requests}
+            defaultSorting={[{ id: 'ts', desc: true }]}
             pageSize={50}
             getRowId={(row) => row.id}
             selectedRowId={selectedRequestId}

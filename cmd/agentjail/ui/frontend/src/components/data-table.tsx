@@ -55,6 +55,8 @@ interface DataTableProps<TData, TValue> {
   getRowId?: (row: TData, index: number) => string | number
   emptyMessage?: string
   meta?: Record<string, unknown>
+  /** Initial sort, e.g. newest-first on the timestamp column. */
+  defaultSorting?: SortingState
 }
 
 export function DataTable<TData, TValue>({
@@ -66,8 +68,11 @@ export function DataTable<TData, TValue>({
   getRowId,
   emptyMessage = 'No results.',
   meta,
+  defaultSorting,
 }: DataTableProps<TData, TValue>) {
-  const [sorting, setSorting] = React.useState<SortingState>([])
+  const [sorting, setSorting] = React.useState<SortingState>(
+    defaultSorting ?? [],
+  )
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
     [],
   )

@@ -182,6 +182,7 @@ export function MonitorPage() {
           <DataTable
             columns={columns}
             data={events}
+            defaultSorting={[{ id: 'time', desc: true }]}
             pageSize={100}
             meta={{
               actionFacets: {
