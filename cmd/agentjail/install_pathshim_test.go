@@ -62,6 +62,49 @@ func TestStripAgentjailPathBlock_BothMarkers(t *testing.T) {
 	}
 }
 
+// TestStripShimRCBlock_PreservesInstallMarker: `uninstall --path-shim-only`
+// removes ONLY the fenced shim block; the bare install.sh PATH marker (and its
+// export) must survive, since the rest of the install stays.
+func TestStripShimRCBlock_PreservesInstallMarker(t *testing.T) {
+	content := strings.Join([]string{
+		"export EDITOR=vim",
+		"",
+		shimRCMarkerStart,
+		`export PATH="/home/u/.agentjail/bin:$PATH"`,
+		shimRCMarkerEnd,
+		"",
+		pathRCMarker,
+		`export PATH="$HOME/.agentjail/bin:$PATH"`,
+		"export LANG=en_US.UTF-8",
+	}, "\n")
+
+	got, changed := stripShimRCBlock(content)
+	if !changed {
+		t.Fatal("expected the fenced shim block to be stripped")
+	}
+	if strings.Contains(got, shimRCMarkerStart) || strings.Contains(got, shimRCMarkerEnd) {
+		t.Errorf("shim fence survived:\n%s", got)
+	}
+	// The install.sh block must be untouched.
+	if !strings.Contains(got, pathRCMarker) || !strings.Contains(got, `export PATH="$HOME/.agentjail/bin:$PATH"`) {
+		t.Errorf("shim-only strip removed the install.sh PATH block:\n%s", got)
+	}
+	for _, keep := range []string{"export EDITOR=vim", "export LANG=en_US.UTF-8"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("stripped unrelated line %q:\n%s", keep, got)
+		}
+	}
+}
+
+// TestStripShimRCBlock_NoShim: content with no shim fence is returned unchanged.
+func TestStripShimRCBlock_NoShim(t *testing.T) {
+	content := "export EDITOR=vim\n" + pathRCMarker + "\nexport PATH=\"$HOME/.agentjail/bin:$PATH\"\n"
+	got, changed := stripShimRCBlock(content)
+	if changed {
+		t.Errorf("expected no change when there is no shim fence:\n%s", got)
+	}
+}
+
 // TestStripAgentjailPathBlock_UnterminatedFence: a hand-edited rc whose closing
 // fence was deleted must not swallow the rest of the file.
 func TestStripAgentjailPathBlock_UnterminatedFence(t *testing.T) {

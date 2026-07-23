@@ -222,7 +222,7 @@ fi
 if [ ! -x "$SHIELD" ]; then
     echo "WARNING: agentjail-shield is missing or not executable at $SHIELD" >&2
     echo "  Running claude UNSHIELDED — policy hooks may still apply." >&2
-    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: rm %s" >&2
+    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: agentjail uninstall --path-shim-only (or rm %s)" >&2
     exec "$REAL_CLAUDE" "$@"
 fi
 
@@ -255,6 +255,17 @@ exec "$SHIELD" -- "$REAL_CLAUDE" "$@"
 func uninstallPathShim(home string) {
 	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
 	os.Remove(shimPath)
+}
+
+// removePathShimOnly removes just the PATH shim — the binary AND its opt-in
+// record — while leaving the rest of the install (hook, daemon, ~/.agentjail)
+// intact. Stripping the fenced rc block is the load-bearing half: without it the
+// recorded opt-in survives, and the next `agentjail install` (reassertPathShim)
+// or `agentjail doctor --fix` (restorePathShim) would put the shim right back.
+// Returns the rc files actually modified so the caller can report them.
+func removePathShimOnly(home string) []string {
+	uninstallPathShim(home)
+	return cleanupShellRCWith(home, stripShimRCBlock)
 }
 
 // shimConsentRecorded reports whether the user opted into the PATH shim, by

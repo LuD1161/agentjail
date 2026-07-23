@@ -529,6 +529,25 @@ func runUninstallCmd(args []string) {
 		os.Exit(1)
 	}
 
+	// ── PATH-shim-only path ───────────────────────────────────────────────
+	// Removes just the shim (binary + opt-in rc block), leaving the hook,
+	// daemon, and ~/.agentjail in place. Closes the gap where a bare
+	// `rm ~/.agentjail/bin/claude` gets resurrected by reassertPathShim.
+	if hasFlag(args, "--path-shim-only") {
+		uout := ui.New(os.Stdout)
+		if !shimConsentRecorded(home) && !fileExists(filepath.Join(home, ".agentjail", "bin", "claude")) {
+			fmt.Fprintln(os.Stdout, uout.Badge("ok", "agentjail: PATH shim is not installed — nothing to remove."))
+			return
+		}
+		cleaned := removePathShimOnly(home)
+		fmt.Fprintln(os.Stdout, uout.Badge("ok", "agentjail: PATH shim removed (binary + shell profile opt-in). Hook and daemon are untouched."))
+		if len(cleaned) > 0 {
+			fmt.Fprintf(os.Stdout, "  cleaned rc: %s\n", strings.Join(cleaned, ", "))
+		}
+		fmt.Fprintln(os.Stdout, "  restart your shell (or open a new terminal) for PATH to take effect.")
+		return
+	}
+
 	// ── Single-agent path ─────────────────────────────────────────────────
 	if target != "" {
 		env := buildAgentsEnv(home)
@@ -849,12 +868,59 @@ func stripAgentjailPathBlock(content string) (string, bool) {
 	return strings.Join(out, "\n"), changed
 }
 
+// stripShimRCBlock removes only the fenced PATH shim block (shimRCMarkerStart
+// .. shimRCMarkerEnd) from shell rc content, leaving the bare install.sh PATH
+// marker alone. It is the shim-only counterpart to stripAgentjailPathBlock, used
+// by `agentjail uninstall --path-shim-only` where the rest of the install stays.
+// Returns the rewritten content and whether anything changed.
+func stripShimRCBlock(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	changed := false
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == shimRCMarkerStart {
+			changed = true
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+				out = out[:len(out)-1] // drop a single preceding blank line
+			}
+			// Find the closing fence before consuming anything: a hand-edited rc
+			// whose end marker was deleted must not swallow the rest of the file.
+			end := -1
+			for j := i + 1; j < len(lines); j++ {
+				if strings.TrimSpace(lines[j]) == shimRCMarkerEnd {
+					end = j
+					break
+				}
+			}
+			if end >= 0 {
+				i = end // drop start..end inclusive
+				continue
+			}
+			// Unterminated: fall back to dropping the next line only when it's our
+			// PATH export, so a dangling marker can't eat unrelated user content.
+			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
+				i++
+			}
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return strings.Join(out, "\n"), changed
+}
+
 // cleanupShellRCPath removes the agentjail PATH block from every candidate shell
 // rc file under home (and $ZDOTDIR/.zshrc when set). Best-effort: files that are
 // absent, unreadable, or unwritable are skipped. Returns the rc files actually
 // modified. Each modified file is rewritten atomically (temp + rename) preserving
 // its original permissions.
 func cleanupShellRCPath(home string) []string {
+	return cleanupShellRCWith(home, stripAgentjailPathBlock)
+}
+
+// cleanupShellRCWith is cleanupShellRCPath parameterized by the strip function,
+// so a full teardown (stripAgentjailPathBlock) and a shim-only removal
+// (stripShimRCBlock) share the same atomic-rewrite machinery.
+func cleanupShellRCWith(home string, strip func(string) (string, bool)) []string {
 	var cleaned []string
 	seen := map[string]bool{}
 	for _, rc := range shellRCCandidates(home) {
@@ -867,7 +933,7 @@ func cleanupShellRCPath(home string) []string {
 		if err != nil {
 			continue // absent or unreadable — nothing to do
 		}
-		newContent, changed := stripAgentjailPathBlock(string(b))
+		newContent, changed := strip(string(b))
 		if !changed {
 			continue
 		}
