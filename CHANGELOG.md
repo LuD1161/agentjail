@@ -10,6 +10,7 @@
 - **Nested Claude Code sessions behave like a real session again**: a shielded launch no longer inherits the parent's child-session marker, so transcripts and compaction work instead of silently degrading.
 - **One session identifier end to end** (AGE-111): the Network tab now groups, filters, names, and perma-links on the same Claude session id the Monitor tab and the policy daemon use, backfilled for rows captured before the id was known.
 - **Shield-attested downgrade of redundant Bash denies** (ADR 0111): inside a shielded session the OS sandbox already blocks the filesystem access, so text-heuristic denies (`rm -rf`, `touch-sensitive-path`, `ssh-keygen`, …) downgrade to monitor-only instead of double-enforcing; unshielded sessions stay fully strict.
+- **Every action shows its true final outcome and who enforced it** (ADR 0112): the Monitor tab now reports the combined policy+sandbox result — a command policy allowed but the OS sandbox blocked (`cat ~/.ssh/id_rsa`) renders as `blocked · sandbox`, never a misleading green allow.
 - **Network/Monitor UI polish**: agent + cwd + session-name labels on sessions, always-visible scrollbars in the request/response panes, full tool input on live monitor events, newest-first sort by default, and a fixed column-header clipping bug.
 
 ### Added
@@ -17,6 +18,7 @@
 - **Shield-attested downgrade of sandbox-redundant deny rules** (ADR 0111): the shield attests its PID over the token-gated `daemon-ctl.sock`; the daemon downgrades filesystem-only Bash heuristics (`touch-sensitive-path`, `rm-rf`, recursive/find deletes, `ssh-keygen`) to monitor when the calling agent descends from an attested shield. Non-filesystem rules (privilege, devices, exec, network) never downgrade, and unshielded sessions are unaffected.
 - **One session identifier across monitor + network** (AGE-111): a watcher resolves the live Claude Code session id a few seconds after shield launch (the agent process must exist first) and stamps it onto every capture row going forward, with a synchronous backfill pass at child exit so short-lived sessions aren't left keyed to the old capture id. The Network tab now joins, names, and perma-links sessions on this same identifier, instead of maintaining a separate one from the daemon.
 - **Session labels in both tabs**: sessions show the coding agent's logo, the launch directory, and the user-assigned session name (falling back to an id prefix) instead of an opaque UUID.
+- **Final per-action outcome with the responsible enforcer** (ADR 0112): the two hook phases correlate by `tool_use_id` (Claude Code's, or a hash fallback); PreToolUse records the policy verdict and a new PostToolUse hook reads the tool result, detects the sandbox's `EPERM` / "Operation not permitted" signature, and reports it so the daemon records the real final outcome (`blocked` by `sandbox`). Cross-platform via EPERM; Claude-Code-first. Registers the PostToolUse hook at install.
 
 ### Fixed
 
