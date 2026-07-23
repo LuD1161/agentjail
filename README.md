@@ -44,6 +44,7 @@ brew install LuD1161/tap/agentjail
 | Version | Date | Highlights |
 |---------|------|------------|
 | **v1.0.0** | Jul 21, 2026 | Network visibility ships. macOS: capture your agent's LLM traffic (Claude `/v1/messages`, bodies) with **no system extension** via a base-URL capture gateway; transparent tunnel + opt-in IPv6 for everything else. HTTP/2 + gRPC through the tunnel. Real-agent capture on the installed build. Network UI. Consolidated network flag precedence + `doctor` sourcing. |
+| **v0.9.0** | Jul 16, 2026 | Monitor mode: see what a policy would allow, deny, or ask before you enforce it. Attestation verifies the policy daemon end to end (UNSECURED when not shielded, degraded when the daemon is down). Control-plane token auth across daemon, netproxy, and broker. `agentjail doctor --fix`. |
 | **v0.8.0** | Jul 14, 2026 | Multicall binary consolidation: 6 shipped binaries become 2 (`agentjail` + `agentjail-hook`), role names kept as symlinks. Release version-stamp fix. |
 | **v0.7.0** | Jul 14, 2026 | Clean-VM testbed engine (`make e2e-release` gate) + recorded CLI suite. On-demand secrets-broker auto-start. Linux shield `$HOME` read-leak fix. |
 | **v0.6.0** | Jul 8, 2026 | Credential broker + secrets vault. Env-stripping in the shield. Fail-open sidecar and daemon-unreachable policy. |
