@@ -83,7 +83,7 @@ export function DataTableColumnHeader<TData, TValue>({
   }
 
   return (
-    <div className={cn('flex items-center gap-1 select-none', className)}>
+    <div className={cn('flex min-w-0 items-center gap-1 select-none', className)}>
       <button
         type="button"
         disabled={!canSort}
@@ -94,11 +94,11 @@ export function DataTableColumnHeader<TData, TValue>({
           else column.toggleSorting(false)
         }}
         className={cn(
-          'flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-[#9ca3af] hover:text-[#f0f3f6]',
+          'flex min-w-0 items-center gap-1 text-xs font-semibold uppercase tracking-wider text-[#9ca3af] hover:text-[#f0f3f6]',
           canSort && 'cursor-pointer',
         )}
       >
-        <span>{title}</span>
+        <span className="truncate">{title}</span>
         {canSort &&
           (sorted === 'asc' ? (
             <ArrowUp className="h-3 w-3" />

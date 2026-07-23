@@ -171,7 +171,10 @@ export function DataTable<TData, TValue>({
                 {headerGroup.headers.map((header) => (
                   <TableHead
                     key={header.id}
-                    className="relative h-11 px-3 text-[#9ca3af]"
+                    /* overflow-hidden: a narrow column must clip its own
+                       label/sort/filter cluster; without it the funnel spills
+                       past the resize handle into the next column's header. */
+                    className="relative h-11 overflow-hidden px-3 text-[#9ca3af]"
                     style={header.getSize() < 10000 ? { width: header.getSize() } : undefined}
                   >
                     {header.isPlaceholder
