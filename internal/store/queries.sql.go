@@ -11,7 +11,19 @@ import (
 )
 
 const countActionsBySession = `-- name: CountActionsBySession :many
-SELECT session_id, action, COUNT(*) AS count FROM decisions GROUP BY session_id, action
+-- Counts the FINAL outcome (ADR 0112): a policy verdict the OS sandbox
+-- overrode is counted as what actually happened, mapped back to the
+-- allow/deny/ask vocabulary the totals use. Rows with no observed final
+-- outcome fall back to the policy action.
+SELECT session_id,
+  CASE lower(final_action)
+    WHEN 'blocked' THEN 'deny'
+    WHEN 'allowed' THEN 'allow'
+    WHEN 'ask'     THEN 'ask'
+    ELSE action
+  END AS action,
+  COUNT(*) AS count
+FROM decisions GROUP BY session_id, 2
 `
 
 type CountActionsBySessionRow struct {

@@ -46,6 +46,8 @@ const columns: ColumnDef<TimelineEvent>[] = [
       return <DataTableColumnHeader column={column} title="Action" facetCounts={fc} />
     },
     cell: ({ row }) => {
+      // First view shows ONLY the final verdict; the policy→sandbox chain and
+      // the responsible enforcer live in the detail pane (ADR 0112).
       const { action, final_action, enforcer } = row.original
       const verdict = displayVerdict(action, final_action)
       const sandboxBlock = isSandboxBlock(final_action, enforcer)
@@ -55,9 +57,6 @@ const columns: ColumnDef<TimelineEvent>[] = [
           title={sandboxBlock ? `blocked by OS sandbox (policy: ${action ?? '-'})` : undefined}
         >
           {verdict ?? '-'}
-          {sandboxBlock && (
-            <span className="ml-1 font-normal text-[#9ca3af]">· sandbox</span>
-          )}
         </span>
       )
     },
