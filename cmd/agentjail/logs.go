@@ -433,11 +433,29 @@ func evalLineFromDecision(d store.DecisionRecord) evalLine {
 		Agent:     d.Agent,
 		CWD:       d.CWD,
 		Summary:   d.Summary,
-		Action:    d.Action,
+		// Show the FINAL outcome, not just the policy verdict: a command
+		// policy allowed but the OS sandbox blocked reads as deny (ADR 0112).
+		Action:    effectiveAction(d),
 		RuleID:    d.RuleID,
 		Reason:    d.Reason,
 		Impact:    d.Impact,
 		ElapsedUs: d.ElapsedUs,
+	}
+}
+
+// effectiveAction maps a decision's observed final outcome back to the
+// allow/deny/ask vocabulary the log renderer keys on, falling back to the
+// policy action when no final outcome was recorded. See ADR 0112.
+func effectiveAction(d store.DecisionRecord) string {
+	switch strings.ToLower(d.FinalAction) {
+	case "blocked":
+		return "deny"
+	case "allowed":
+		return "allow"
+	case "ask":
+		return "ask"
+	default:
+		return d.Action
 	}
 }
 
