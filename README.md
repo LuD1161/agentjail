@@ -43,7 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v1.0.0** | Jul 21, 2026 | Network visibility ships. macOS: capture your agent's LLM traffic (Claude `/v1/messages`, bodies) with **no system extension** via a base-URL capture gateway; transparent tunnel + opt-in IPv6 for everything else. HTTP/2 + gRPC through the tunnel. Real-agent capture on the installed build. Network UI. Consolidated network flag precedence + `doctor` sourcing. |
+| **v1.0.0** | Jul 21, 2026 | Network visibility ships on **Linux and macOS**: capture your agent's LLM traffic (Claude `/v1/messages`, bodies) and enforce per-host network policy through the transparent tunnel (MITM, HTTP/2 + gRPC, opt-in IPv6). On macOS the LLM call is captured with **no system extension** via a base-URL capture gateway. Real-agent capture on the installed build. Network UI tab. Consolidated network flag precedence + `doctor` sourcing. |
 | **v0.9.0** | Jul 16, 2026 | Monitor mode: see what a policy would allow, deny, or ask before you enforce it. Attestation verifies the policy daemon end to end (UNSECURED when not shielded, degraded when the daemon is down). Control-plane token auth across daemon, netproxy, and broker. `agentjail doctor --fix`. |
 | **v0.8.0** | Jul 14, 2026 | Multicall binary consolidation: 6 shipped binaries become 2 (`agentjail` + `agentjail-hook`), role names kept as symlinks. Release version-stamp fix. |
 | **v0.7.0** | Jul 14, 2026 | Clean-VM testbed engine (`make e2e-release` gate) + recorded CLI suite. On-demand secrets-broker auto-start. Linux shield `$HOME` read-leak fix. |
@@ -207,7 +207,7 @@ agentjail replay -session 625d86f1    # interactive TUI replay
 **Is this session actually protected?** In Claude Code, the status line tells you, for the whole life of the session:
 
 ```
-🔒 [secured by agentjail (v0.8.2)]        ← shield active, policy daemon answering
+🔒 [secured by agentjail (v1.0.0)]        ← shield active, policy daemon answering
 ⚠  [POLICY OFF · shield only · agentjail]  ← kernel sandbox on, but policy is NOT enforced
 ⚠  [UNSECURED · agentjail]                 ← hooks may apply, but no kernel sandbox
 ```
@@ -513,7 +513,7 @@ agentjail policy list
 
 ---
 
-## Network tunnel (Linux)
+## Network visibility
 
 By default the shield filters network access by port only. Pass `--tunnel` to
 route the agent's traffic through a transparent forwarder instead, so policy can
@@ -697,7 +697,7 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 | Tier | What | Status |
 |------|------|--------|
 | **1 - Hook** | PreToolUse hook + OPA daemon + core policies | ✅ shipped |
-| **1.5 - Kernel sandbox** | `agentjail-shield` + `agentjail-netproxy` + env-stripping + secrets broker | ✅ shipped |
+| **1.5 - Kernel sandbox** | `agentjail-shield` + network visibility (capture gateway + `--tunnel`) + env-stripping + secrets broker | ✅ shipped |
 | **1.5 - Observability** | SQLite decision store, replay CLI, local web UI with server-side filters | ✅ shipped |
 | **2 - MicroVM** | Microsandbox (laptop, all OSes) + Firecracker (fleet) VM-boundary enforcement | 📋 proposed ([ADR 0016](./docs/adr/0016-tier2-microsandbox-substrate.md)); spikes done |
 | **3 - Kernel module** | eBPF LSM / macOS SystemExtension | 📋 planned |
