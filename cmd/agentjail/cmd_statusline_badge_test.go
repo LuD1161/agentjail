@@ -186,3 +186,16 @@ func TestShieldBadge_OnlyExactValueCounts(t *testing.T) {
 		})
 	}
 }
+
+func TestRunChainedStatuslinePreservesShellCommand(t *testing.T) {
+	got := runChainedStatusline(`read value; printf 'prefix:%s' "$value" | tr a-z A-Z`, []byte("quoted value\n"))
+	if got != "PREFIX:QUOTED VALUE" {
+		t.Fatalf("chained status line = %q", got)
+	}
+}
+
+func TestRunChainedStatuslineFailureIsSilent(t *testing.T) {
+	if got := runChainedStatusline("exit 7", nil); got != "" {
+		t.Fatalf("failed chained status line returned %q", got)
+	}
+}

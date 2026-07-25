@@ -110,6 +110,38 @@ test_subagent_dispatch_allowed if {
 	}
 }
 
+# Every Codex collaboration tool admitted by the exact hook matcher has an
+# explicit allow candidate. Unknown collaboration names remain resolver/default.
+test_known_dotted_collaboration_tools_allowed if {
+	known := {
+		"collaboration.list_agents",
+		"collaboration.wait_agent",
+		"collaboration.spawn_agent",
+		"collaboration.followup_task",
+		"collaboration.send_message",
+		"collaboration.interrupt_agent",
+	}
+	every tool in known {
+		decision.action == "allow" with input as {
+			"hook_event": "PreToolUse",
+			"tool_name": tool,
+			"tool_input": {},
+		}
+	}
+}
+
+test_unknown_dotted_collaboration_tool_falls_through_to_default_ask if {
+	decision == {
+		"action": "ask",
+		"reason": "no policy candidate fired — defaulting to ask",
+		"rule_id": "resolver/default",
+	} with input as {
+		"hook_event": "PreToolUse",
+		"tool_name": "collaboration.unknown",
+		"tool_input": {},
+	}
+}
+
 test_skill_allowed if {
 	# Skill is now governed by skill_policy.rego (not benign_tools).
 	# With an empty skills.allowed list (default), all skills are permitted.

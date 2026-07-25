@@ -1,9 +1,9 @@
 // Package policyeval encapsulates OPA policy evaluation for agentjail.
 //
 // It owns the HookEngine, LRU cache, generation counter, per-project engine
-// map, repo-root cache, AWS profile cache, and ask-promotion tracking — all
-// of which were previously embedded in the daemon's server struct. The daemon
-// now holds an Evaluator and delegates Eval/Reload to it.
+// map, repo-root cache, and AWS profile cache — all of which were previously
+// embedded in the daemon's server struct. The daemon now holds an Evaluator
+// and delegates Eval/Reload to it.
 package policyeval
 
 import (
@@ -24,14 +24,15 @@ import (
 
 // Request is the canonical eval request shape, mirroring wire.Request.
 type Request struct {
-	ID        string                 `json:"id"`
-	HookEvent string                 `json:"hook_event"`
-	ToolName  string                 `json:"tool_name"`
-	ToolInput map[string]interface{} `json:"tool_input"`
-	SessionID string                 `json:"session_id"`
-	CWD       string                 `json:"cwd"`
-	Agent     string                 `json:"agent,omitempty"`
-	AgentPID  int                    `json:"agent_pid,omitempty"`
+	ID             string                 `json:"id"`
+	HookEvent      string                 `json:"hook_event"`
+	ToolName       string                 `json:"tool_name"`
+	ToolInput      map[string]interface{} `json:"tool_input"`
+	SessionID      string                 `json:"session_id"`
+	CWD            string                 `json:"cwd"`
+	Agent          string                 `json:"agent,omitempty"`
+	AgentPID       int                    `json:"agent_pid,omitempty"`
+	PermissionMode string                 `json:"permission_mode,omitempty"`
 	// ToolUseID / Outcome mirror wire.Request for the final-outcome path; Eval
 	// ignores them (they matter to the daemon's record layer). See ADR 0112.
 	ToolUseID string   `json:"tool_use_id,omitempty"`
@@ -58,6 +59,15 @@ type Response struct {
 	// wire.Response's tag -- the hook decodes into that shape.
 	// See ADR 0091-monitor-mode-tools.
 	WouldAction string `json:"would_action,omitempty"`
+
+	// PolicyAction is the immutable policy verdict. EffectiveAction is the
+	// adapter-rendered agent response. These are assigned by the daemon after
+	// Eval, never by the evaluator. See ADR 0115-agent-decision-adapters.
+	PolicyAction            string `json:"policy_action,omitempty"`
+	EffectiveAction         string `json:"effective_action,omitempty"`
+	Adapter                 string `json:"adapter,omitempty"`
+	TranslationReason       string `json:"translation_reason,omitempty"`
+	DeferToNativePermission bool   `json:"defer_to_native_permission,omitempty"`
 }
 
 // Evaluator evaluates policy requests and manages OPA engine lifecycle.
@@ -85,10 +95,6 @@ type evaluator struct {
 	awsCfgMu    sync.Mutex
 	awsProfiles map[string]awsProfileInfo
 
-	// sessionAskSeen tracks (sessionID, ruleID) pairs for ask-promotion.
-	sessionAskMu   sync.RWMutex
-	sessionAskSeen map[string]map[string]bool
-
 	// Per-project policy engine cache keyed by repo root path.
 	projectEngMu   sync.RWMutex
 	projectEngines map[string]*projectEngine
@@ -112,11 +118,11 @@ func (e *evaluator) Eval(ctx context.Context, req Request) (Response, error) {
 	// Normalize cwd and path fields BEFORE eval so all policies see canonical
 	// absolute paths.
 	canonCWD := CanonicalizeCWD(req.CWD)
-	normalizedInput := NormalizeToolInput(req.ToolInput, canonCWD)
+	policyToolName, normalizedInput := NormalizeToolCall(req.ToolName, req.ToolInput, canonCWD)
 
 	input := policy.HookInput{
 		HookEvent: req.HookEvent,
-		ToolName:  req.ToolName,
+		ToolName:  policyToolName,
 		ToolInput: normalizedInput,
 		SessionID: req.SessionID,
 		CWD:       canonCWD,
@@ -179,17 +185,6 @@ func (e *evaluator) Eval(ctx context.Context, req Request) (Response, error) {
 		}, err
 	}
 
-	// For ask verdicts: if this (session, ruleID) was already asked before,
-	// the user approved it. Promote to allow on the second+ occurrence.
-	if d.Action == "ask" && e.checkAndRecordAsk(req.SessionID, d.RuleID) {
-		return Response{
-			ID:     req.ID,
-			Action: "allow",
-			Reason: "approved earlier in this session",
-			RuleID: "session/grant",
-		}, nil
-	}
-
 	// Only cache non-ask decisions.
 	if d.Action != "ask" {
 		if isProjectEng || e.gen.Load() == genAtStart {
@@ -238,28 +233,6 @@ func (e *evaluator) Reload(ctx context.Context, modules [][2]string, cfg *agentc
 	e.projectEngMu.Unlock()
 
 	return nil
-}
-
-// checkAndRecordAsk checks whether this (session, ruleID) has been asked before.
-// If yes, returns true (the user approved last time -> promote to allow).
-// If no, records it and returns false (first time -> ask the user).
-func (e *evaluator) checkAndRecordAsk(sessionID, ruleID string) bool {
-	if sessionID == "" || ruleID == "" {
-		return false
-	}
-	e.sessionAskMu.Lock()
-	defer e.sessionAskMu.Unlock()
-	if e.sessionAskSeen == nil {
-		e.sessionAskSeen = make(map[string]map[string]bool)
-	}
-	if e.sessionAskSeen[sessionID] == nil {
-		e.sessionAskSeen[sessionID] = make(map[string]bool)
-	}
-	if e.sessionAskSeen[sessionID][ruleID] {
-		return true
-	}
-	e.sessionAskSeen[sessionID][ruleID] = true
-	return false
 }
 
 // BuildTempRoots returns the set of temp-dir roots that the Rego policy should

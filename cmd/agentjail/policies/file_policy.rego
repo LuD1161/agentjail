@@ -89,6 +89,18 @@ file_path := input.tool_input.old_path if {
 	input.tool_input.old_path
 }
 
+# apply_patch may touch multiple files in one call. Canonical adapters supply
+# file_paths; single-file tools fall back to the legacy scalar fields above.
+file_paths contains p if {
+	some i
+	p := input.tool_input.file_paths[i]
+}
+
+file_paths contains p if {
+	not input.tool_input.file_paths
+	p := file_path
+}
+
 # ---------------------------------------------------------------------------
 # Boundary predicate: true when p is within the project.
 #
@@ -327,7 +339,7 @@ is_downloads_path(p) if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_downloads_path(p)
 	not is_sensitive_basename(p)
 	not is_agentjail_self(p)
@@ -471,7 +483,7 @@ is_sensitive_basename(p) if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit"}
-	p := file_path
+	p := file_paths[_]
 	is_agentjail_self(p)
 	msg := sprintf("access to ~/.agentjail path %q is denied (agentjail self-protection; rule is permanently locked)", [p])
 	impact_msg := sprintf("would access agentjail configuration path %q", [p])
@@ -494,7 +506,7 @@ candidate contains r if {
 # placed first for readability.
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_agentjail_secrets(p)
 	msg := sprintf("access to the secrets-broker store %q is denied (master key / encrypted secrets; rule is permanently locked)", [p])
 	impact_msg := sprintf("would access the secrets-broker master key or store at %q", [p])
@@ -520,7 +532,7 @@ candidate contains r if {
 # rule's blanket allow from leaking them; do not remove Rule 0a.
 candidate contains r if {
 	input.tool_name == "Read"
-	p := file_path
+	p := file_paths[_]
 	is_agentjail_self(p)
 	r := {
 		"action":  "allow",
@@ -543,7 +555,7 @@ is_hook_config(p) if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit"}
-	p := file_path
+	p := file_paths[_]
 	is_hook_config(p)
 	msg := sprintf("write to agent hook configuration %q requires confirmation - verify agentjail hooks are preserved", [p])
 	r := {
@@ -561,7 +573,7 @@ candidate contains r if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_protected_credential(p)
 	msg := sprintf("access to sensitive path %q is denied by file policy", [p])
 	impact_msg := sprintf("would access sensitive path %q", [p])
@@ -581,7 +593,7 @@ candidate contains r if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_sensitive_basename(p)
 	in_project(p)
 	not is_protected_credential(p)
@@ -604,7 +616,7 @@ candidate contains r if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_sensitive_basename(p)
 	not in_project(p)
 	not is_protected_credential(p)
@@ -625,7 +637,7 @@ candidate contains r if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	in_project(p)
 	not is_protected_credential(p)
 	not is_sensitive_basename(p)
@@ -645,7 +657,7 @@ candidate contains r if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_temp_path(p)
 	r := {
 		"action":  "allow",
@@ -683,7 +695,7 @@ is_agent_harness_path(p) if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	p := file_path
+	p := file_paths[_]
 	is_agent_harness_path(p)
 	not is_agentjail_self(p)
 	r := {
@@ -716,53 +728,45 @@ candidate contains r if {
 # ---------------------------------------------------------------------------
 
 # file_specific_matched is true when a more-specific candidate covers the path.
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_agentjail_self(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_protected_credential(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_sensitive_basename(p)
 	in_project(p)
 	not is_protected_credential(p)
 	not is_agentjail_self(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_sensitive_basename(p)
 	not in_project(p)
 	not is_protected_credential(p)
 	not is_agentjail_self(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	in_project(p)
 	not is_protected_credential(p)
 	not is_sensitive_basename(p)
 	not is_agentjail_self(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_temp_path(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_agent_harness_path(p)
 	not is_agentjail_self(p)
 }
 
-file_specific_matched if {
-	p := file_path
+file_specific_matched(p) if {
 	is_downloads_path(p)
 	not is_sensitive_basename(p)
 	not is_agentjail_self(p)
@@ -770,10 +774,21 @@ file_specific_matched if {
 
 candidate contains r if {
 	input.tool_name in {"Write", "Edit", "Read"}
-	not file_specific_matched
+	p := file_paths[_]
+	not file_specific_matched(p)
 	r := {
 		"action":  "ask",
 		"rule_id": "file_policy/default",
-		"reason":  "no file policy matched",
+		"reason":  sprintf("no file policy matched %q", [p]),
+	}
+}
+
+candidate contains r if {
+	input.tool_name in {"Write", "Edit", "Read"}
+	count(file_paths) == 0
+	r := {
+		"action":  "ask",
+		"rule_id": "file_policy/default",
+		"reason":  "no file path supplied",
 	}
 }

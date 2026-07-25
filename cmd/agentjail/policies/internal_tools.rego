@@ -7,11 +7,10 @@
 # agentjail to guard. Without this rule each one hits `resolver/default` and
 # escalates to the user, which is pure noise.
 #
-# Scope note: Codex and Cursor do NOT surface internal tools to agentjail — their
-# hooked surfaces are only side-effectful tools (Codex: Bash/apply_patch/MCP;
-# Cursor: Bash/Read/MCP), which the core policies intentionally govern. So this
-# allow-list is effectively Claude-only by virtue of the tool names; there is no
-# Codex/Cursor internal-tool surface to add.
+# Scope note: Codex's orchestration tools can surface to agentjail alongside
+# side-effectful hooks. They are listed below explicitly; unknown tools still
+# fall through to resolver/default. Cursor's configured matchers cover only
+# side-effectful tools (Bash/Read/MCP).
 #
 # A second set (benign_tools, below) auto-allows tools that DO touch the
 # filesystem/shell but only in ways already governed elsewhere or with no new
@@ -64,6 +63,14 @@ internal_tools := {
 	"SendMessage",
 	"UpdatePlan",
 	"update_plan",
+	"create_goal",
+	"get_goal",
+	"update_goal",
+	"wait_agent",
+	"collaborationlist_agents",
+	"collaborationwait_agent",
+	"collaboration.list_agents",
+	"collaboration.wait_agent",
 }
 
 candidate contains r if {
@@ -101,6 +108,18 @@ benign_tools := {
 	"Workflow",
 	"EnterWorktree",
 	"ExitWorktree",
+	"spawn_agent",
+	"followup_task",
+	"send_message",
+	"interrupt_agent",
+	"collaborationspawn_agent",
+	"collaborationfollowup_task",
+	"collaborationsend_message",
+	"collaborationinterrupt_agent",
+	"collaboration.spawn_agent",
+	"collaboration.followup_task",
+	"collaboration.send_message",
+	"collaboration.interrupt_agent",
 }
 
 candidate contains r if {

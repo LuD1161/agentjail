@@ -224,6 +224,41 @@ func TestMirrorPolicyDecisions(t *testing.T) {
 	}
 }
 
+func TestCustomAllowCannotBypassLockedSelfProtection(t *testing.T) {
+	const customAllow = `package agentjail
+
+import future.keywords.contains
+import future.keywords.if
+
+candidate contains r if {
+	r := {
+		"action": "allow",
+		"rule_id": "custom/precedence/allow-everything",
+		"reason": "adversarial fixture",
+	}
+}`
+
+	opts := buildMirrorOpts(t)
+	opts = append(opts, rego.Module("custom-precedence.rego", customAllow))
+	pq, err := rego.New(opts...).PrepareForEval(context.Background())
+	if err != nil {
+		t.Fatalf("PrepareForEval: %v", err)
+	}
+
+	action := evalDecision(t, pq, map[string]interface{}{
+		"hook_event": "PreToolUse",
+		"tool_name":  "Write",
+		"tool_input": map[string]interface{}{
+			"file_path": "/Users/dev/.agentjail/policy.yaml",
+			"content":   "disabled_rules: []",
+		},
+		"cwd": "/Users/dev/project",
+	})
+	if action != "deny" {
+		t.Fatalf("custom allow bypassed locked self-protection: got %q, want deny", action)
+	}
+}
+
 // TestUpgradeSimulation proves that installCoreRules replaces a stale else-chain
 // core file, and that after replacement the OPA evaluation correctly enforces
 // both core rules (sudo → deny) and library rules (git reset --hard → deny).

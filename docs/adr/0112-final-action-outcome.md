@@ -43,12 +43,11 @@ cross-platform — no kernel-log tailing, no macOS-only dependency.
 
 - No hardcoded rule→layer map and no predicted sandbox verdicts: the sandbox's
   own EPERM is the evidence, tied to the exact action by `ToolUseID`.
-- **Claude-Code-first.** The per-call id and PostToolUse hook come from Claude
-  Code. Codex/Cursor lack an equivalent post-hook today, so their rows stay
-  policy-only and say so — not faked.
+- **Claude Code and Codex.** Both expose a per-call id and PostToolUse hook, so
+  both can record the sandbox's final outcome. Cursor lacks an equivalent
+  post-hook today, so its rows stay policy-only and say so — not faked.
 - Attribution is signature-based (`EPERM` in the result) at action
   granularity, not a structured per-syscall record. For a Bash command it
   means "this call hit a sandbox denial," which is the outcome a reader cares
   about.
-- Requires registering a PostToolUse hook at install (only PreToolUse is wired
-  today).
+- Requires registering both PreToolUse and PostToolUse at install.

@@ -14,10 +14,13 @@
 // Supported agents (--agent flag or AGENTJAIL_AGENT env var):
 //   - claude (default): Deny → exit 2 (stderr reason). Allow/ask → stdout
 //     hookSpecificOutput JSON.
-//   - codex: Deny → exit 2 (stderr reason). Allow → exit 0 with empty stdout.
-//     Ask → exit 2 because Codex PreToolUse does not support prompting.
+//   - codex: PreToolUse deny → exit 2; allow → exit 0 with empty stdout; ask
+//     → exit 2 because PreToolUse cannot initiate a native approval. Its
+//     PermissionRequest event returns allow/deny or declines an ask so Codex's
+//     own approval UI remains authoritative when it is already prompting.
 //   - cursor: Cursor stdin/stdout differ. All decisions → exit 0; stdout JSON
-//     with {"permission":"allow|deny|ask",...} (snake_case, T0-confirmed).
+//     with {"permission":"allow|deny|ask",...}; beforeReadFile supports only
+//     allow/deny, so an ask is rendered as deny.
 //
 // Protocol: newline-delimited JSON over Unix domain socket. Details in
 // agentpolicy/docs/DECISION_RPC.md.
@@ -33,12 +36,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
@@ -59,6 +64,9 @@ type hookInput struct {
 	ToolInput     map[string]interface{} `json:"tool_input"`
 	SessionID     string                 `json:"session_id"`
 	CWD           string                 `json:"cwd"`
+	// PermissionMode is Codex's current mode. The adapter permits only the
+	// ADR 0114-codex-permission-request default-mode git-push bridge.
+	PermissionMode string `json:"permission_mode,omitempty"`
 	// ToolUseID is Claude Code's per-tool-call id (ADR 0112). Present on both
 	// PreToolUse and PostToolUse invocations; empty on Codex/Cursor, which
 	// fall back to correlationID's hash.
@@ -69,35 +77,48 @@ type hookInput struct {
 	ToolResponse json.RawMessage `json:"tool_response,omitempty"`
 }
 
+type cursorHookEvent string
+
+const (
+	cursorBeforeShellExecution cursorHookEvent = "beforeShellExecution"
+	cursorBeforeMCPExecution   cursorHookEvent = "beforeMCPExecution"
+	cursorBeforeReadFile       cursorHookEvent = "beforeReadFile"
+	canonicalPreToolUse                        = "PreToolUse"
+	codexPermissionRequest                     = "PermissionRequest"
+)
+
 // cursorShellInput is the Cursor stdin payload for beforeShellExecution.
 // Top-level "command" field (not nested in tool_input).
 // T0 confirmed fields.
 type cursorShellInput struct {
-	Command        string   `json:"command"`
-	CWD            string   `json:"cwd"`
-	HookEventName  string   `json:"hook_event_name"`
-	WorkspaceRoots []string `json:"workspace_roots"`
+	Command        string          `json:"command"`
+	CWD            string          `json:"cwd"`
+	HookEventName  cursorHookEvent `json:"hook_event_name"`
+	WorkspaceRoots []string        `json:"workspace_roots"`
 }
 
 // cursorMCPInput is the Cursor stdin payload for beforeMCPExecution.
 // tool_input is an escaped JSON string, not a nested object (T0 confirmed).
 type cursorMCPInput struct {
-	ToolName      string `json:"tool_name"`
-	ToolInput     string `json:"tool_input"` // escaped JSON string
-	Command       string `json:"command"`
-	HookEventName string `json:"hook_event_name"`
+	ToolName       string          `json:"tool_name"`
+	ToolInput      string          `json:"tool_input"` // escaped JSON string
+	Command        string          `json:"command"`
+	URL            string          `json:"url"`
+	HookEventName  cursorHookEvent `json:"hook_event_name"`
+	WorkspaceRoots []string        `json:"workspace_roots"`
 }
 
 // cursorReadFileInput is the Cursor stdin payload for beforeReadFile.
 // Uses "file_path" at top level.
 type cursorReadFileInput struct {
-	FilePath      string `json:"file_path"`
-	HookEventName string `json:"hook_event_name"`
+	FilePath       string          `json:"file_path"`
+	HookEventName  cursorHookEvent `json:"hook_event_name"`
+	WorkspaceRoots []string        `json:"workspace_roots"`
 }
 
 // cursorGenericInput is used to detect the event name before full parsing.
 type cursorGenericInput struct {
-	HookEventName string `json:"hook_event_name"`
+	HookEventName cursorHookEvent `json:"hook_event_name"`
 }
 
 // daemonRequest is an alias for wire.Request — the shape the daemon expects on its Unix socket.
@@ -106,6 +127,25 @@ type daemonRequest = wire.Request
 // daemonResponse is an alias for wire.Response — the shape the daemon returns over the Unix socket.
 // The Impact field (omitempty) is included in the canonical wire shape; the hook ignores it.
 type daemonResponse = wire.Response
+
+// renderedAction uses the daemon's agent-specific response translation when
+// present. The fallback keeps hooks compatible with a daemon from before ADR
+// 0114 while preserving the wire protocol's canonical Action field.
+func renderedAction(resp daemonResponse, agent, hookEvent string) string {
+	if resp.EffectiveAction != "" {
+		return resp.EffectiveAction
+	}
+	policyAction := resp.Action
+	if resp.WouldAction != "" {
+		policyAction = resp.WouldAction
+	}
+	return string(agentpolicy.Normalize(agentpolicy.Request{
+		Agent:          agent,
+		HookEvent:      hookEvent,
+		PolicyAction:   agentpolicy.Action(policyAction),
+		EnforcedAction: agentpolicy.Action(resp.Action),
+	}).EffectiveAction)
+}
 
 // claudeHookOutput is the JSON Claude Code expects on stdout when the hook
 // exits 0. Claude Code's PreToolUse contract:
@@ -340,6 +380,23 @@ type codexSystemMessageOutput struct {
 	SystemMessage string `json:"systemMessage"`
 }
 
+// codexPermissionRequestOutput is the current Codex PermissionRequest schema.
+// Its decision is deliberately distinct from PreToolUse's permissionDecision.
+// See ADR 0114-codex-permission-request.
+type codexPermissionRequestOutput struct {
+	HookSpecificOutput codexPermissionSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type codexPermissionSpecificOutput struct {
+	HookEventName string                  `json:"hookEventName"`
+	Decision      codexPermissionDecision `json:"decision"`
+}
+
+type codexPermissionDecision struct {
+	Behavior string `json:"behavior"`
+	Message  string `json:"message,omitempty"`
+}
+
 // writeCodexSystemMessage emits a user-visible warning on Codex's allow path.
 // Codex documents systemMessage as supported for PreToolUse and surfaces it as
 // a warning; stderr is only read as the blocking reason on exit 2, so this is
@@ -350,6 +407,21 @@ func writeCodexSystemMessage(msg string) {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
+}
+
+// writeCodexPermissionDecision answers a Codex-native approval request. An
+// ask deliberately writes nothing: Codex then shows its ordinary approval UI.
+func writeCodexPermissionDecision(behavior, message string) {
+	out := codexPermissionRequestOutput{
+		HookSpecificOutput: codexPermissionSpecificOutput{
+			HookEventName: codexPermissionRequest,
+			Decision: codexPermissionDecision{
+				Behavior: behavior,
+				Message:  message,
+			},
+		},
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(out)
 }
 
 // writeAllowWithSystemMessage writes an "allow" response carrying a
@@ -446,47 +518,53 @@ func writeCursorAsk(reason string) {
 }
 
 // parseCursorInput parses the raw stdin bytes for the Cursor adapter and
-// returns a daemonRequest ready to send to the daemon.
+// returns a canonical daemon request plus the source event needed to render
+// Cursor's event-specific response schema.
 // Returns an error when the input cannot be parsed.
-func parseCursorInput(stdinBytes []byte) (daemonRequest, error) {
+func parseCursorInput(stdinBytes []byte) (daemonRequest, cursorHookEvent, error) {
 	// First detect the event name.
 	var generic cursorGenericInput
 	if err := json.Unmarshal(stdinBytes, &generic); err != nil {
-		return daemonRequest{}, fmt.Errorf("parse hook_event_name: %w", err)
+		return daemonRequest{}, "", fmt.Errorf("parse hook_event_name: %w", err)
 	}
 
 	var req daemonRequest
 
 	switch generic.HookEventName {
-	case "beforeShellExecution":
+	case cursorBeforeShellExecution:
 		var inp cursorShellInput
 		if err := json.Unmarshal(stdinBytes, &inp); err != nil {
-			return daemonRequest{}, fmt.Errorf("parse beforeShellExecution: %w", err)
+			return daemonRequest{}, "", fmt.Errorf("parse beforeShellExecution: %w", err)
+		}
+		cwd := inp.CWD
+		if cwd == "" {
+			cwd = cursorWorkspaceCWD("", inp.WorkspaceRoots)
 		}
 		req = daemonRequest{
 			ID:        "cursor-shell",
-			HookEvent: "beforeShellExecution",
+			HookEvent: canonicalPreToolUse,
 			ToolName:  "Bash",
 			ToolInput: map[string]interface{}{"command": inp.Command},
-			CWD:       inp.CWD,
+			CWD:       cwd,
 		}
 
-	case "beforeReadFile":
+	case cursorBeforeReadFile:
 		var inp cursorReadFileInput
 		if err := json.Unmarshal(stdinBytes, &inp); err != nil {
-			return daemonRequest{}, fmt.Errorf("parse beforeReadFile: %w", err)
+			return daemonRequest{}, "", fmt.Errorf("parse beforeReadFile: %w", err)
 		}
 		req = daemonRequest{
 			ID:        "cursor-readfile",
-			HookEvent: "beforeReadFile",
+			HookEvent: canonicalPreToolUse,
 			ToolName:  "Read",
 			ToolInput: map[string]interface{}{"file_path": inp.FilePath},
+			CWD:       cursorWorkspaceCWD(inp.FilePath, inp.WorkspaceRoots),
 		}
 
-	case "beforeMCPExecution":
+	case cursorBeforeMCPExecution:
 		var inp cursorMCPInput
 		if err := json.Unmarshal(stdinBytes, &inp); err != nil {
-			return daemonRequest{}, fmt.Errorf("parse beforeMCPExecution: %w", err)
+			return daemonRequest{}, "", fmt.Errorf("parse beforeMCPExecution: %w", err)
 		}
 		// tool_input is an escaped JSON string in beforeMCPExecution (T0 confirmed).
 		// Parse it into a map for the daemon.
@@ -499,16 +577,82 @@ func parseCursorInput(stdinBytes []byte) (daemonRequest, error) {
 		}
 		req = daemonRequest{
 			ID:        "cursor-mcp",
-			HookEvent: "beforeMCPExecution",
-			ToolName:  inp.ToolName,
+			HookEvent: canonicalPreToolUse,
+			ToolName:  cursorMCPToolName(inp),
 			ToolInput: toolInput,
+			CWD:       cursorWorkspaceCWD("", inp.WorkspaceRoots),
 		}
 
 	default:
-		return daemonRequest{}, fmt.Errorf("unknown cursor hook_event_name: %q", generic.HookEventName)
+		return daemonRequest{}, "", fmt.Errorf("unknown cursor hook_event_name: %q", generic.HookEventName)
 	}
 
-	return req, nil
+	return req, generic.HookEventName, nil
+}
+
+func cursorWorkspaceCWD(filePath string, roots []string) string {
+	if len(roots) == 0 {
+		return ""
+	}
+	if filePath == "" {
+		return roots[0]
+	}
+
+	best := ""
+	for _, root := range roots {
+		rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(filePath))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	return best
+}
+
+func cursorMCPToolName(inp cursorMCPInput) string {
+	toolName := strings.TrimSpace(inp.ToolName)
+	if strings.HasPrefix(toolName, "mcp__") {
+		return toolName
+	}
+	if server, tool, ok := strings.Cut(toolName, "/"); ok {
+		return "mcp__" + cursorMCPComponent(server) + "__" + cursorMCPComponent(tool)
+	}
+
+	server := cursorSimpleMCPServer(inp.Command)
+	if server == "" && inp.URL != "" {
+		if parsed, err := url.Parse(inp.URL); err == nil {
+			server = parsed.Hostname()
+		}
+	}
+	if server == "" {
+		server = "unknown"
+	}
+	return "mcp__" + cursorMCPComponent(server) + "__" + cursorMCPComponent(toolName)
+}
+
+func cursorSimpleMCPServer(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	for _, r := range command {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
+			r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return ""
+	}
+	return command
+}
+
+func cursorMCPComponent(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return strings.ReplaceAll(value, "__", "_")
 }
 
 // dialDaemon connects to the daemon socket with a 30 ms timeout.
@@ -609,6 +753,10 @@ func runClaude(agent string) {
 		handlePostToolUse(agent, input)
 		return
 	}
+	if agent == "codex" && input.HookEventName == codexPermissionRequest {
+		runCodexPermissionRequest(input)
+		return
+	}
 
 	// 2. Determine socket path. AGENTJAIL_SOCKET can override the default for
 	// tests/tooling, but only when it resolves under the trusted ~/.agentjail
@@ -625,14 +773,15 @@ func runClaude(agent string) {
 
 	// 4. Build and send the daemon request.
 	req := daemonRequest{
-		ID:        "hook-" + input.SessionID + "-" + input.ToolName,
-		HookEvent: input.HookEventName,
-		ToolName:  input.ToolName,
-		ToolInput: input.ToolInput,
-		SessionID: input.SessionID,
-		CWD:       input.CWD,
-		Agent:     agent,
-		AgentPID:  findAgentPID(),
+		ID:             "hook-" + input.SessionID + "-" + input.ToolName,
+		HookEvent:      input.HookEventName,
+		ToolName:       input.ToolName,
+		ToolInput:      input.ToolInput,
+		SessionID:      input.SessionID,
+		CWD:            input.CWD,
+		Agent:          agent,
+		AgentPID:       findAgentPID(),
+		PermissionMode: input.PermissionMode,
 		// ADR 0112: correlation id PostToolUse will report the outcome under.
 		ToolUseID: correlationID(input.ToolUseID, input.SessionID, input.ToolName, input.ToolInput),
 	}
@@ -652,10 +801,17 @@ func runClaude(agent string) {
 	// 5. Print policy eval indicator to stderr.
 	noColor := os.Getenv("NO_COLOR") != ""
 	printPolicyEval(noColor, input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
+	if agent == "codex" && resp.DeferToNativePermission {
+		return
+	}
 
 	// 6. Translate daemon action to Claude Code exit/output convention.
-	switch resp.Action {
+	switch renderedAction(resp, agent, input.HookEventName) {
 	case "deny":
+		if agent == "codex" && (resp.PolicyAction == "ask" || resp.Action == "ask") {
+			fmt.Fprintf(os.Stderr, "agentjail: ask requires human review but Codex PreToolUse cannot initiate an approval request; denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
+			os.Exit(2)
+		}
 		// Exit code 2: Claude Code's fast-block path reads stderr for the reason.
 		fmt.Fprintf(os.Stderr, "agentjail: denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
 		if resp.RuleID == "mcp_policy/unknown" {
@@ -672,7 +828,7 @@ func runClaude(agent string) {
 
 	case "ask":
 		if agent == "codex" {
-			fmt.Fprintf(os.Stderr, "agentjail: ask requires human review but Codex PreToolUse does not support ask; denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
+			fmt.Fprintf(os.Stderr, "agentjail: ask requires human review but Codex PreToolUse cannot initiate an approval request; denied by policy (rule=%s): %s\n", resp.RuleID, resp.Reason)
 			os.Exit(2)
 		}
 		writeAsk(resp.Reason)
@@ -706,6 +862,76 @@ func runClaude(agent string) {
 	}
 }
 
+// runCodexPermissionRequest applies the canonical policy to an approval Codex
+// has already decided to request. A policy ask declines to decide so Codex
+// retains its native approval UI. This does not relax PreToolUse: that event
+// blocks an ask before execution when Codex will not issue a request.
+// See ADR 0114-codex-permission-request.
+func runCodexPermissionRequest(input hookInput) {
+	sockPath := resolveSocketPath()
+	conn, err := dialDaemon(sockPath)
+	if err != nil {
+		failOpenCodexPermissionRequest("dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
+		return
+	}
+	defer conn.Close()
+
+	// PermissionRequest has the same canonical tool payload as PreToolUse, but
+	// needs its own rendering capability: policy ask defers to Codex's native
+	// approval UI instead of becoming the pre-tool fail-closed denial.
+	req := daemonRequest{
+		ID:             "hook-" + input.SessionID + "-" + input.ToolName,
+		HookEvent:      codexPermissionRequest,
+		ToolName:       input.ToolName,
+		ToolInput:      input.ToolInput,
+		SessionID:      input.SessionID,
+		CWD:            input.CWD,
+		Agent:          "codex",
+		AgentPID:       findAgentPID(),
+		PermissionMode: input.PermissionMode,
+	}
+
+	evalStart := time.Now()
+	resp, err := sendAndReceive(conn, req)
+	evalMs := time.Since(evalStart).Milliseconds()
+	if err != nil {
+		category := "read-response"
+		if isWriteErr(err) {
+			category = "dial-daemon"
+		}
+		failOpenCodexPermissionRequest(category, err.Error())
+		return
+	}
+
+	printPolicyEval(os.Getenv("NO_COLOR") != "", input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
+	switch resp.Action {
+	case "deny":
+		writeCodexPermissionDecision("deny", fmt.Sprintf("Blocked by AgentJail policy (rule=%s): %s", resp.RuleID, resp.Reason))
+	case "allow":
+		writeCodexPermissionDecision("allow", "")
+	case "ask":
+		// No stdout is Codex's documented "decline to decide" result. The
+		// daemon persists the canonical ask; Codex owns the ensuing human UI.
+		return
+	default:
+		// The daemon protocol is expected to return only allow|ask|deny. An
+		// unknown value must not approve a pending native request.
+		writeCodexPermissionDecision("deny", "Blocked by AgentJail: unrecognized policy decision.")
+	}
+}
+
+// failOpenCodexPermissionRequest preserves AgentJail's hook fail-open
+// availability posture without manufacturing an approval. PermissionRequest
+// is already on Codex's native approval path, so an empty decision lets its
+// existing prompt continue and a system message makes degradation visible.
+func failOpenCodexPermissionRequest(category, detail string) {
+	failOpenMarker("codex", category)
+	fb, _ := loadHookFallback()
+	printFailOpenBanner(fb.Level)
+	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
+	writeCodexSystemMessage(failOpenSystemMessage(fb.Level))
+}
+
 // runCursor implements the Cursor hook adapter (--agent=cursor).
 // All decisions exit 0; stdout carries the Cursor JSON response.
 func runCursor() {
@@ -720,7 +946,7 @@ func runCursor() {
 	}
 
 	// 2. Parse Cursor-format input and map to daemonRequest.
-	req, err := parseCursorInput(stdinBytes)
+	req, cursorEvent, err := parseCursorInput(stdinBytes)
 	if err != nil {
 		failOpenCursor("parse-input", err.Error(), "", nil, "")
 		return
@@ -752,12 +978,16 @@ func runCursor() {
 	}
 
 	// 6. Translate daemon action to Cursor's stdout JSON (exit 0 always).
-	switch resp.Action {
+	switch renderedAction(resp, "cursor", string(cursorEvent)) {
 	case "deny":
 		writeCursorDeny(resp.Reason)
 
 	case "ask":
-		writeCursorAsk(resp.Reason)
+		if cursorEvent == cursorBeforeReadFile {
+			writeCursorDeny(resp.Reason)
+		} else {
+			writeCursorAsk(resp.Reason)
+		}
 
 	default:
 		// "allow" or unknown → allow.

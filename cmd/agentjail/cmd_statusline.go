@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -16,15 +17,20 @@ import (
 
 var statuslineCmd = &cobra.Command{
 	Use:    "statusline",
-	Short:  "Output status line indicator for Claude Code",
+	Short:  "Output status line indicator for supported coding agents",
 	Hidden: true,
 	Run:    runStatusline,
 }
 
 var statuslineChain string
+var statuslineChainBase64 string
+var statuslineIntegration string
 
 func init() {
 	statuslineCmd.Flags().StringVar(&statuslineChain, "chain", "", "chain with another status line command")
+	statuslineCmd.Flags().StringVar(&statuslineChainBase64, "chain-base64", "", "chain with an encoded status line command")
+	statuslineCmd.Flags().StringVar(&statuslineIntegration, "integration", "", "status line host integration")
+	_ = statuslineCmd.Flags().MarkHidden("integration")
 	rootCmd.AddCommand(statuslineCmd)
 }
 
@@ -181,21 +187,28 @@ func shieldBadge() string {
 func runStatusline(cmd *cobra.Command, args []string) {
 	parts := []string{shieldBadge()}
 
-	if statuslineChain != "" {
+	chain := statuslineChain
+	if statuslineChainBase64 != "" {
+		if decoded, err := base64.RawStdEncoding.DecodeString(statuslineChainBase64); err == nil {
+			chain = string(decoded)
+		}
+	}
+	if chain != "" {
 		stdin, _ := io.ReadAll(os.Stdin)
-		chainParts := strings.Fields(statuslineChain)
-		if len(chainParts) > 0 {
-			c := exec.Command(chainParts[0], chainParts[1:]...)
-			c.Stdin = strings.NewReader(string(stdin))
-			out, err := c.CombinedOutput()
-			if err == nil {
-				s := strings.TrimSpace(string(out))
-				if s != "" {
-					parts = append(parts, s)
-				}
-			}
+		if chained := runChainedStatusline(chain, stdin); chained != "" {
+			parts = append(parts, chained)
 		}
 	}
 
 	fmt.Print(strings.Join(parts, " · "))
+}
+
+func runChainedStatusline(command string, stdin []byte) string {
+	c := exec.Command("/bin/sh", "-c", command)
+	c.Stdin = strings.NewReader(string(stdin))
+	out, err := c.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

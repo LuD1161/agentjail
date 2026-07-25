@@ -16,7 +16,7 @@ import (
 var defaultLookPath = exec.LookPath
 
 // Codex is the agent implementation for OpenAI's Codex CLI.
-// It wires the agentjail PreToolUse hook into ~/.codex/hooks.json,
+// It wires the agentjail PreToolUse, PermissionRequest, and PostToolUse hooks into ~/.codex/hooks.json,
 // enables features.hooks in ~/.codex/config.toml (strict safe-mode only),
 // and prints the manual trust instruction (hook trust cannot be persisted).
 type Codex struct{}
@@ -162,6 +162,17 @@ type codexHook struct {
 	StatusMessage string `json:"statusMessage,omitempty"`
 }
 
+// Codex also sends the listed orchestration calls through its hook bridge.
+// Keep collaboration names exact: a future collaboration tool is not assumed
+// side-effect-free and must fall through to Codex's normal hook behavior until
+// it has an explicit policy classification.
+const codexToolMatcher = `^(Bash|apply_patch|mcp__.*|Agent|update_plan|create_goal|get_goal|update_goal|wait_agent|collaboration\.(list_agents|wait_agent|spawn_agent|followup_task|send_message|interrupt_agent))$`
+
+// PermissionRequest is a separate native approval bridge. Keep it registered
+// with the pre/post hooks so each Codex lifecycle seam is present together.
+// See ADR 0114-codex-permission-request.
+var codexHookEvents = [...]string{"PreToolUse", "PermissionRequest", "PostToolUse"}
+
 // codexHookCommand returns the canonical registered hook command for Codex:
 // env.HookBin + " --agent=codex". This mirrors cursorHookCommand in agent_cursor.go.
 func codexHookCommand(env Env) string {
@@ -176,8 +187,8 @@ func codexHookCmdMatches(cmd, hookBin string) bool {
 	return cmd == hookBin || cmd == hookBin+" --agent=codex"
 }
 
-// codexMergeHooksJSON reads (or creates) ~/.codex/hooks.json and merges a
-// PreToolUse entry for the canonical codex hook command. Idempotent. If the
+// codexMergeHooksJSON reads (or creates) ~/.codex/hooks.json and merges every
+// required Codex event entry for the canonical hook command. Idempotent. If the
 // file exists but is malformed JSON, returns an error and leaves it untouched.
 func codexMergeHooksJSON(env Env) error {
 	hooksPath := filepath.Join(env.Home, ".codex", "hooks.json")
@@ -198,8 +209,9 @@ func codexMergeHooksJSON(env Env) error {
 	return writeFileAtomic(hooksPath, updated, 0o600)
 }
 
-// codexMergeHookEntry merges a PreToolUse entry for the canonical codex hook
-// command (hookBin + " --agent=codex") into raw hooks.json content.
+// codexMergeHookEntry merges PreToolUse, PermissionRequest, and PostToolUse entries for the
+// canonical codex hook command (hookBin + " --agent=codex") into raw
+// hooks.json content.
 // Returns (newJSON, changed, error).
 //
 // Migration algorithm (replace-in-place, no duplicates):
@@ -225,38 +237,39 @@ func codexMergeHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 		root.Hooks = make(map[string][]codexMatcherGroup)
 	}
 
-	// Replace-in-place: drop any entry matching either form (legacy bare or new
-	// --agent=codex), then append exactly one canonical new-form entry. This makes
-	// upgrades idempotent and never produces duplicates.
-	ptu := root.Hooks["PreToolUse"]
-	var filtered []codexMatcherGroup
-	for _, g := range ptu {
-		if groupContainsCmdMatcher(g, hookBin) {
-			continue // drop our entry (either form)
+	changed := false
+	for _, event := range codexHookEvents {
+		existing := root.Hooks[event]
+		var filtered []codexMatcherGroup
+		for _, g := range existing {
+			if groupContainsCmdMatcher(g, hookBin) {
+				continue
+			}
+			filtered = append(filtered, g)
 		}
-		filtered = append(filtered, g)
+
+		filtered = dropDegenerateGroups(filtered)
+
+		desired := append(filtered, codexMatcherGroup{
+			Matcher: codexToolMatcher,
+			Hooks: []codexHook{
+				{
+					Type:    "command",
+					Command: canonicalCmd,
+					Timeout: 30,
+				},
+			},
+		})
+
+		if !reflect.DeepEqual(existing, desired) {
+			root.Hooks[event] = desired
+			changed = true
+		}
 	}
 
-	filtered = dropDegenerateGroups(filtered)
-
-	desired := append(filtered, codexMatcherGroup{
-		Matcher: ".*",
-		Hooks: []codexHook{
-			{
-				Type:    "command",
-				Command: canonicalCmd,
-				Timeout: 30,
-			},
-		},
-	})
-
-	// Idempotent: if the document already equals the desired end-state (foreign
-	// groups preserved in order, our single canonical entry last), don't rewrite.
-	if reflect.DeepEqual(ptu, desired) {
+	if !changed {
 		return raw, false, nil
 	}
-
-	root.Hooks["PreToolUse"] = desired
 
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -266,14 +279,19 @@ func codexMergeHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 	return out, true, nil
 }
 
-// codexHookEntryPresent checks whether any agentjail hook entry (either form)
-// appears in any PreToolUse matcher group. Returns (parsed_ok, found, error).
+// codexHookEntryPresent checks whether an agentjail hook entry (either form)
+// appears in every required hook event. Returns (parsed_ok, found, error).
 func codexHookEntryPresent(raw []byte, hookBin string) (bool, bool, error) {
 	var root codexHooksRoot
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return false, false, err
 	}
-	return true, codexHookCmdExists(root.Hooks["PreToolUse"], hookBin), nil
+	for _, event := range codexHookEvents {
+		if !codexHookCmdExists(root.Hooks[event], hookBin) {
+			return true, false, nil
+		}
+	}
+	return true, true, nil
 }
 
 // codexHookCmdExists reports whether any hook in any matcher group in groups
@@ -287,8 +305,9 @@ func codexHookCmdExists(groups []codexMatcherGroup, hookBin string) bool {
 	return false
 }
 
-// codexRemoveHookEntry removes any matcher group whose hooks list matches the
-// agentjail hook command (either legacy bare or new --agent=codex form).
+// codexRemoveHookEntry removes matcher groups from every required event whose
+// hooks list matches the agentjail hook command (either legacy bare or new
+// --agent=codex form).
 // Returns (newJSON, changed, error).
 func codexRemoveHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 	var root codexHooksRoot
@@ -296,22 +315,27 @@ func codexRemoveHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("hooks.json is malformed JSON: %w", err)
 	}
 
-	ptu := root.Hooks["PreToolUse"]
-	var filtered []codexMatcherGroup
-	for _, g := range ptu {
-		if groupContainsCmdMatcher(g, hookBin) {
-			continue // drop this group
+	changed := false
+	for _, event := range codexHookEvents {
+		existing := root.Hooks[event]
+		var filtered []codexMatcherGroup
+		for _, g := range existing {
+			if groupContainsCmdMatcher(g, hookBin) {
+				continue
+			}
+			filtered = append(filtered, g)
 		}
-		filtered = append(filtered, g)
+
+		filtered = dropDegenerateGroups(filtered)
+		if !reflect.DeepEqual(existing, filtered) {
+			root.Hooks[event] = filtered
+			changed = true
+		}
 	}
-
-	filtered = dropDegenerateGroups(filtered)
-
-	if len(filtered) == len(ptu) {
+	if !changed {
 		return raw, false, nil
 	}
 
-	root.Hooks["PreToolUse"] = filtered
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return raw, false, fmt.Errorf("marshal hooks.json: %w", err)

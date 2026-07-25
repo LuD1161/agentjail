@@ -106,6 +106,40 @@ func stubDaemon(t *testing.T, dir string, actionFn func(req daemonRequest) (stri
 	return sockPath
 }
 
+// stubDaemonResponse serves one complete daemon response for adapter tests
+// that exercise response metadata beyond the legacy action/reason fields.
+func stubDaemonResponse(t *testing.T, responseFn func(req daemonRequest) daemonResponse) string {
+	t.Helper()
+	sockPath := filepath.Join(trustedHome(t), "test-daemon-response.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("stub listen: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		_ = os.Remove(sockPath)
+	})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		if !scanner.Scan() {
+			return
+		}
+		var req daemonRequest
+		if json.Unmarshal(scanner.Bytes(), &req) != nil {
+			return
+		}
+		resp := responseFn(req)
+		resp.ID = req.ID
+		_ = json.NewEncoder(conn).Encode(resp)
+	}()
+	return sockPath
+}
+
 // runHook runs the hook binary with the given stdin JSON and environment.
 // Returns stdout bytes, stderr bytes, and the exit code.
 func runHook(t *testing.T, bin string, stdinJSON string, env []string) ([]byte, []byte, int) {
@@ -146,6 +180,29 @@ func makeStdinJSON(toolName string, toolInput map[string]interface{}, sessionID 
 		CWD:           "/tmp/test-project",
 	}
 	b, _ := json.Marshal(h)
+	return string(b)
+}
+
+// makeCodexPermissionRequestJSON builds the documented Codex approval-hook
+// payload. permission_mode is intentionally configurable to prove that
+// AgentJail does not infer a prompt from default/dontAsk/bypass modes.
+func makeCodexPermissionRequestJSON(toolName string, toolInput map[string]interface{}, sessionID, permissionMode string) string {
+	payload := struct {
+		HookEventName  string                 `json:"hook_event_name"`
+		ToolName       string                 `json:"tool_name"`
+		ToolInput      map[string]interface{} `json:"tool_input"`
+		SessionID      string                 `json:"session_id"`
+		CWD            string                 `json:"cwd"`
+		PermissionMode string                 `json:"permission_mode"`
+	}{
+		HookEventName:  codexPermissionRequest,
+		ToolName:       toolName,
+		ToolInput:      toolInput,
+		SessionID:      sessionID,
+		CWD:            "/tmp/test-project",
+		PermissionMode: permissionMode,
+	}
+	b, _ := json.Marshal(payload)
 	return string(b)
 }
 
@@ -295,8 +352,132 @@ func TestCodexHook_AskBlocks(t *testing.T) {
 	if !strings.Contains(stderrStr, "requires human review") {
 		t.Errorf("stderr missing ask reason; got %q", stderrStr)
 	}
-	if !strings.Contains(stderrStr, "does not support ask") {
-		t.Errorf("stderr missing Codex ask explanation; got %q", stderrStr)
+	if !strings.Contains(stderrStr, "cannot initiate an approval request") {
+		t.Errorf("stderr missing Codex PreToolUse fallback explanation; got %q", stderrStr)
+	}
+}
+
+func TestCodexPermissionRequest_DenyRendersNativeSchema(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
+		if req.HookEvent != codexPermissionRequest {
+			t.Errorf("policy hook event = %q, want %q", req.HookEvent, codexPermissionRequest)
+		}
+		return "deny", "remote mutation requires review", "command_policy/confirm-git-push"
+	})
+
+	stdin := makeCodexPermissionRequestJSON("Bash", map[string]interface{}{"command": "git push origin main"}, "permission-deny", "default")
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+	if code != 0 {
+		t.Fatalf("PermissionRequest deny exit code = %d, stderr=%q", code, stderr)
+	}
+	var out codexPermissionRequestOutput
+	if err := json.Unmarshal(stdout, &out); err != nil {
+		t.Fatalf("decode native PermissionRequest output: %v; stdout=%q", err, stdout)
+	}
+	if out.HookSpecificOutput.HookEventName != codexPermissionRequest {
+		t.Errorf("hook event = %q, want %q", out.HookSpecificOutput.HookEventName, codexPermissionRequest)
+	}
+	if out.HookSpecificOutput.Decision.Behavior != "deny" {
+		t.Errorf("behavior = %q, want deny", out.HookSpecificOutput.Decision.Behavior)
+	}
+	if !strings.Contains(out.HookSpecificOutput.Decision.Message, "command_policy/confirm-git-push") {
+		t.Errorf("deny message missing rule id: %q", out.HookSpecificOutput.Decision.Message)
+	}
+}
+
+func TestCodexPermissionRequest_AllowRendersNativeSchema(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
+		return "allow", "normal command", "command_policy/default-allow"
+	})
+
+	stdin := makeCodexPermissionRequestJSON("Bash", map[string]interface{}{"command": "git status"}, "permission-allow", "default")
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+	if code != 0 {
+		t.Fatalf("PermissionRequest allow exit code = %d, stderr=%q", code, stderr)
+	}
+	var out codexPermissionRequestOutput
+	if err := json.Unmarshal(stdout, &out); err != nil {
+		t.Fatalf("decode native PermissionRequest output: %v; stdout=%q", err, stdout)
+	}
+	if got := out.HookSpecificOutput.Decision.Behavior; got != "allow" {
+		t.Errorf("behavior = %q, want allow", got)
+	}
+}
+
+func TestCodexPermissionRequest_AskDeclinesNativeDecision(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
+		return "ask", "remote mutation requires human review", "command_policy/confirm-git-push"
+	})
+
+	stdin := makeCodexPermissionRequestJSON("Bash", map[string]interface{}{"command": "git push origin main"}, "permission-ask", "default")
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+	if code != 0 {
+		t.Fatalf("PermissionRequest ask exit code = %d, stderr=%q", code, stderr)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("policy ask must decline Codex's request (empty stdout), got %q", stdout)
+	}
+}
+
+func TestCodexPreToolUseAskBlocksInBypassModes(t *testing.T) {
+	for _, mode := range []string{"dontAsk", "bypassPermissions"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := buildHook(t, dir)
+			sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
+				return "ask", "requires human review", "command_policy/confirm-git-push"
+			})
+			stdin := makeStdinJSON("Bash", map[string]interface{}{"command": "git push origin main"}, "pretool-"+mode)
+			var raw map[string]interface{}
+			if err := json.Unmarshal([]byte(stdin), &raw); err != nil {
+				t.Fatal(err)
+			}
+			raw["permission_mode"] = mode
+			b, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, code := runHookWithArgs(t, bin, string(b), []string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+			if code != 2 {
+				t.Fatalf("PreToolUse ask in %s must fail closed, code=%d stdout=%q stderr=%q", mode, code, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestCodexPreToolUseDefaultGitPushFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := stubDaemonResponse(t, func(req daemonRequest) daemonResponse {
+		if req.PermissionMode != "default" {
+			t.Errorf("permission mode = %q, want default", req.PermissionMode)
+		}
+		if req.ToolInput["command"] != "git push origin main" {
+			t.Errorf("command = %#v, want local git push fixture", req.ToolInput["command"])
+		}
+		return daemonResponse{
+			Action:            "deny",
+			PolicyAction:      "ask",
+			EffectiveAction:   "deny",
+			Adapter:           "codex",
+			RuleID:            "command_policy/confirm-git-push",
+			Reason:            "git push may affect remote branches; confirm intent before proceeding",
+			TranslationReason: "Codex PreToolUse cannot initiate an interactive approval; fail closed",
+		}
+	})
+	stdin := `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main"},"session_id":"git-push-default","cwd":"/tmp/test-project","permission_mode":"default"}`
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+	if code != 2 {
+		t.Fatalf("default git push must fail closed, code=%d stderr=%q", code, stderr)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("denied PreToolUse must not emit an unsupported decision, got %q", stdout)
 	}
 }
 

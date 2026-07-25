@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ func newCursorEnv(t *testing.T) Env {
 	return Env{
 		Home:    home,
 		HookBin: filepath.Join(home, ".agentjail", "bin", "agentjail-hook"),
+		CLIBin:  filepath.Join(home, ".agentjail", "bin", "agentjail"),
 	}
 }
 
@@ -44,6 +46,19 @@ func readCursorHooksFile(t *testing.T, env Env) []byte {
 		t.Fatalf("readCursorHooksFile: %v", err)
 	}
 	return b
+}
+
+func readCursorStatusLineCommand(t *testing.T, env Env) string {
+	t.Helper()
+	b, err := os.ReadFile(cursorCLIConfigPath(env))
+	if err != nil {
+		t.Fatalf("read cli-config.json: %v", err)
+	}
+	_, _, command, err := parseCursorStatusLine(b)
+	if err != nil {
+		t.Fatalf("parse cli-config.json: %v", err)
+	}
+	return command
 }
 
 // assertCursorEntryCount counts the number of entries with command == hookCmd
@@ -182,6 +197,41 @@ func TestCursorInstallIdempotent(t *testing.T) {
 	}
 }
 
+func TestCursorInstallMigratesLegacyBareHook(t *testing.T) {
+	env := newCursorEnv(t)
+	legacy := env.HookBin
+	foreign := "/usr/local/bin/foreign-hook"
+	initial := []byte(`{
+  "version": 1,
+  "hooks": {
+    "PreToolUse": [{"command": "` + legacy + `"}],
+    "beforeShellExecution": [
+      {"command": "` + legacy + `"},
+      {"command": "` + foreign + `"}
+    ]
+  }
+}`)
+	writeCursorHooks(t, env, initial, 0o600)
+
+	if err := (Cursor{}).Install(env); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	data := readCursorHooksFile(t, env)
+	var root cursorHooksJSON
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, found := root.Hooks["PreToolUse"]; found {
+		t.Fatalf("obsolete PreToolUse entry was not removed: %s", data)
+	}
+	assertCursorEntryCount(t, data, "beforeShellExecution", legacy, 0)
+	assertCursorEntryCount(t, data, "beforeShellExecution", foreign, 1)
+	for _, event := range cursorHookEvents {
+		assertCursorEntryCount(t, data, event, cursorHookCommand(env), 1)
+	}
+}
+
 // TestCursorInstallPreservesUserHook verifies that a pre-existing user-defined
 // hook entry is preserved after Install.
 func TestCursorInstallPreservesUserHook(t *testing.T) {
@@ -300,6 +350,91 @@ func TestCursorInstallPreservesMode(t *testing.T) {
 	}
 }
 
+func TestCursorInstallAddsStatusLine(t *testing.T) {
+	env := newCursorEnv(t)
+	mkCursorDir(t, env)
+
+	if err := (Cursor{}).Install(env); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readCursorStatusLineCommand(t, env), quotePOSIX(env.CLIBin)+" statusline --integration cursor"; got != want {
+		t.Fatalf("statusLine.command = %q, want %q", got, want)
+	}
+}
+
+func TestCursorStatusLinePreservesAndRestoresExistingCommand(t *testing.T) {
+	env := newCursorEnv(t)
+	mkCursorDir(t, env)
+	configPath := cursorCLIConfigPath(env)
+	const foreign = `printf '%s' "$CURSOR_SESSION_ID" | tr a-z A-Z`
+	initial := []byte(`{"theme":"system","statusLine":{"type":"command","command":"` +
+		strings.ReplaceAll(foreign, `"`, `\"`) + `","padding":2,"timeoutMs":900}}`)
+	if err := os.WriteFile(configPath, initial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Cursor{}).Install(env); err != nil {
+		t.Fatal(err)
+	}
+	command := readCursorStatusLineCommand(t, env)
+	owned, encoded := cursorOwnedStatusLine(command)
+	if !owned || encoded == "" {
+		t.Fatalf("status line was not wrapped: %q", command)
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(encoded)
+	if err != nil || string(decoded) != foreign {
+		t.Fatalf("encoded chain = %q, decoded %q, err %v", encoded, decoded, err)
+	}
+
+	if err := (Cursor{}).Uninstall(env); err != nil {
+		t.Fatal(err)
+	}
+	if got := readCursorStatusLineCommand(t, env); got != foreign {
+		t.Fatalf("restored command = %q, want %q", got, foreign)
+	}
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"padding": 2`) || !strings.Contains(string(b), `"timeoutMs": 900`) {
+		t.Fatalf("status-line options were not preserved:\n%s", b)
+	}
+}
+
+func TestCursorStatusLineRefreshesOwnedCommand(t *testing.T) {
+	old := "'/old home/.agentjail/bin/agentjail' statusline --integration cursor"
+	raw := []byte(`{"statusLine":{"type":"command","command":"` + old + `"}}`)
+	got, changed, err := cursorMergeStatusLineEntry(raw, "/new home/.agentjail/bin/agentjail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected owned command path to refresh")
+	}
+	_, _, command, err := parseCursorStatusLine(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != "'/new home/.agentjail/bin/agentjail' statusline --integration cursor" {
+		t.Fatalf("refreshed command = %q", command)
+	}
+}
+
+func TestCursorInstallRejectsMalformedCLIConfigBeforeWritingHooks(t *testing.T) {
+	env := newCursorEnv(t)
+	mkCursorDir(t, env)
+	if err := os.WriteFile(cursorCLIConfigPath(env), []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (Cursor{}).Install(env); err == nil {
+		t.Fatal("expected malformed cli-config.json error")
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, ".cursor", "hooks.json")); !os.IsNotExist(err) {
+		t.Fatalf("hooks.json was written before config validation: %v", err)
+	}
+}
+
 // ---- Uninstall ---------------------------------------------------------------
 
 // TestCursorUninstallRemovesEntries verifies that Uninstall removes the
@@ -337,6 +472,30 @@ func TestCursorUninstallIdempotent(t *testing.T) {
 	}
 	if err := ag.Uninstall(env); err != nil {
 		t.Fatalf("second Uninstall: %v", err)
+	}
+}
+
+func TestCursorUninstallRemovesOwnedStatusLine(t *testing.T) {
+	env := newCursorEnv(t)
+	mkCursorDir(t, env)
+	ag := Cursor{}
+	if err := ag.Install(env); err != nil {
+		t.Fatal(err)
+	}
+	if err := ag.Uninstall(env); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(cursorCLIConfigPath(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(b, &root); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := root["statusLine"]; present {
+		t.Fatalf("owned statusLine survived uninstall:\n%s", b)
 	}
 }
 

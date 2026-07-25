@@ -86,10 +86,56 @@ func CanonicalizePath(p, cwd string) (canonical string, failClose bool) {
 	return p, false
 }
 
-// NormalizeToolInput returns a copy of toolInput with file_path, path, and
-// old_path values canonicalized against cwd.  If a path fails to canonicalize
-// and signals fail-close, the field is replaced with a sentinel that will
-// match no allow rule so the engine defaults to ask/deny.
+// NormalizeToolCall translates agent-specific tool aliases into the canonical
+// policy contract, then canonicalizes their inputs.
+func NormalizeToolCall(toolName string, toolInput map[string]interface{}, cwd string) (string, map[string]interface{}) {
+	if toolName != "apply_patch" {
+		return toolName, NormalizeToolInput(toolInput, cwd)
+	}
+
+	out := make(map[string]interface{}, len(toolInput)+1)
+	for k, v := range toolInput {
+		out[k] = v
+	}
+	if patch, ok := out["command"].(string); ok {
+		out["file_paths"] = ExtractPatchPaths(patch)
+	}
+	return "Edit", NormalizeToolInput(out, cwd)
+}
+
+// ExtractPatchPaths returns every file named by an apply_patch envelope.
+func ExtractPatchPaths(patch string) []string {
+	prefixes := [...]string{
+		"*** Add File: ",
+		"*** Delete File: ",
+		"*** Update File: ",
+		"*** Move to: ",
+	}
+	seen := make(map[string]struct{})
+	var paths []string
+	for _, line := range strings.Split(patch, "\n") {
+		for _, prefix := range prefixes {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			path := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if path == "" {
+				break
+			}
+			if _, exists := seen[path]; !exists {
+				seen[path] = struct{}{}
+				paths = append(paths, path)
+			}
+			break
+		}
+	}
+	return paths
+}
+
+// NormalizeToolInput returns a copy of toolInput with file_path, file_paths,
+// path, and old_path values canonicalized against cwd. If a path fails to
+// canonicalize and signals fail-close, it is replaced with a sentinel that
+// will match no allow rule so the engine defaults to ask/deny.
 //
 // For Bash commands, ~ and $HOME tokens are expanded to the real home directory
 // so the Rego sensitive-path patterns (which match absolute paths) fire
@@ -115,6 +161,17 @@ func NormalizeToolInput(toolInput map[string]interface{}, cwd string) map[string
 				out[field] = canonical
 			}
 		}
+	}
+	if rawPaths, ok := out["file_paths"].([]string); ok {
+		paths := make([]string, 0, len(rawPaths))
+		for _, raw := range rawPaths {
+			if canonical, failClose := CanonicalizePath(raw, cwd); failClose {
+				paths = append(paths, "/__agentjail_failclosed__")
+			} else if canonical != "" {
+				paths = append(paths, canonical)
+			}
+		}
+		out["file_paths"] = paths
 	}
 	if cmd, ok := out["command"].(string); ok && cmd != "" {
 		out["command"] = ExpandCommandPaths(cmd)

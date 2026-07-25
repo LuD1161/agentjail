@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/agentpolicy/policy"
 )
 
 // cursorStubDaemon is like stubDaemon but serves multiple connections so that
@@ -125,8 +129,8 @@ func TestCursorHook_MCPDeny(t *testing.T) {
 
 	sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
 		// Verify the daemon sees the right tool name.
-		if req.ToolName != "github_mcp_server/create_issue" {
-			t.Errorf("daemon: tool_name = %q, want %q", req.ToolName, "github_mcp_server/create_issue")
+		if req.ToolName != "mcp__github_mcp_server__create_issue" {
+			t.Errorf("daemon: tool_name = %q, want %q", req.ToolName, "mcp__github_mcp_server__create_issue")
 		}
 		return "deny", "MCP tool blocked", "mcp_policy"
 	})
@@ -278,8 +282,190 @@ func TestCursorHook_ShellRequestMapping(t *testing.T) {
 	if cmd != "rm -rf /tmp/foo" {
 		t.Errorf("ToolInput.command = %q, want %q", cmd, "rm -rf /tmp/foo")
 	}
-	if capturedReq.HookEvent != "beforeShellExecution" {
-		t.Errorf("HookEvent = %q, want %q", capturedReq.HookEvent, "beforeShellExecution")
+	if capturedReq.HookEvent != canonicalPreToolUse {
+		t.Errorf("HookEvent = %q, want %q", capturedReq.HookEvent, canonicalPreToolUse)
+	}
+}
+
+func TestParseCursorInputNormalizesCanonicalRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantTool  string
+		wantCWD   string
+		wantEvent cursorHookEvent
+	}{
+		{
+			name: "shell falls back to workspace root",
+			input: `{
+				"hook_event_name":"beforeShellExecution",
+				"command":"git status",
+				"cwd":"",
+				"workspace_roots":["/workspace/project"]
+			}`,
+			wantTool:  "Bash",
+			wantCWD:   "/workspace/project",
+			wantEvent: cursorBeforeShellExecution,
+		},
+		{
+			name: "read selects containing root",
+			input: `{
+				"hook_event_name":"beforeReadFile",
+				"file_path":"/workspace/api/main.go",
+				"workspace_roots":["/workspace/web","/workspace/api"]
+			}`,
+			wantTool:  "Read",
+			wantCWD:   "/workspace/api",
+			wantEvent: cursorBeforeReadFile,
+		},
+		{
+			name: "slash MCP name carries server",
+			input: `{
+				"hook_event_name":"beforeMCPExecution",
+				"tool_name":"github/create_issue",
+				"tool_input":"{}",
+				"workspace_roots":["/workspace/project"]
+			}`,
+			wantTool:  "mcp__github__create_issue",
+			wantCWD:   "/workspace/project",
+			wantEvent: cursorBeforeMCPExecution,
+		},
+		{
+			name: "bare MCP name uses simple command identity",
+			input: `{
+				"hook_event_name":"beforeMCPExecution",
+				"tool_name":"create_invoice",
+				"tool_input":"{}",
+				"command":"stripe-mcp"
+			}`,
+			wantTool:  "mcp__stripe-mcp__create_invoice",
+			wantEvent: cursorBeforeMCPExecution,
+		},
+		{
+			name: "URL MCP uses hostname when command is not an identifier",
+			input: `{
+				"hook_event_name":"beforeMCPExecution",
+				"tool_name":"fetch",
+				"tool_input":"{}",
+				"command":"npx -y remote-mcp",
+				"url":"https://mcp.example.com/rpc"
+			}`,
+			wantTool:  "mcp__mcp.example.com__fetch",
+			wantEvent: cursorBeforeMCPExecution,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, event, err := parseCursorInput([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("parseCursorInput: %v", err)
+			}
+			if req.HookEvent != canonicalPreToolUse {
+				t.Errorf("HookEvent = %q, want %q", req.HookEvent, canonicalPreToolUse)
+			}
+			if req.ToolName != tt.wantTool {
+				t.Errorf("ToolName = %q, want %q", req.ToolName, tt.wantTool)
+			}
+			if req.CWD != tt.wantCWD {
+				t.Errorf("CWD = %q, want %q", req.CWD, tt.wantCWD)
+			}
+			if event != tt.wantEvent {
+				t.Errorf("source event = %q, want %q", event, tt.wantEvent)
+			}
+		})
+	}
+}
+
+func TestCursorHook_ReadAskRendersDeny(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
+		return "ask", "review this file read", "file_policy/sensitive_in_project"
+	})
+	input := `{
+		"hook_event_name":"beforeReadFile",
+		"file_path":"/workspace/project/.env",
+		"workspace_roots":["/workspace/project"]
+	}`
+
+	stdout, stderr, code := runHookWithArgs(t, bin, input,
+		[]string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=cursor"})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q", code, stderr)
+	}
+	var out cursorHookOutput
+	if err := json.Unmarshal(stdout, &out); err != nil {
+		t.Fatalf("decode cursor stdout: %v (stdout=%q)", err, stdout)
+	}
+	if out.Permission != "deny" {
+		t.Errorf("permission = %q, want deny", out.Permission)
+	}
+}
+
+func TestCursorRequestsFireCanonicalPolicies(t *testing.T) {
+	policyFiles := []string{"resolver.rego", "file_policy.rego", "command_policy.rego", "mcp_policy.rego"}
+	modules := make([][2]string, 0, len(policyFiles))
+	for _, name := range policyFiles {
+		src, err := os.ReadFile(filepath.Join("..", "..", "agentpolicy", "policies", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		modules = append(modules, [2]string{name, string(src)})
+	}
+	cfg := config.Default()
+	eng, err := policy.NewHookOPAEngineWithData(context.Background(), modules, map[string]interface{}{
+		"config": cfg.ToOPAData(),
+	})
+	if err != nil {
+		t.Fatalf("compile policies: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		input      string
+		wantAction string
+		wantRule   string
+	}{
+		{
+			name:       "dangerous shell is denied",
+			input:      `{"hook_event_name":"beforeShellExecution","command":"rm -rf /","cwd":"/workspace/project"}`,
+			wantAction: "deny",
+			wantRule:   "command_policy/no-rm-rf-absolute",
+		},
+		{
+			name:       "in-workspace read is allowed",
+			input:      `{"hook_event_name":"beforeReadFile","file_path":"/workspace/project/main.go","workspace_roots":["/workspace/project"]}`,
+			wantAction: "allow",
+			wantRule:   "file_policy/project_allow",
+		},
+		{
+			name:       "blocked MCP server is denied",
+			input:      `{"hook_event_name":"beforeMCPExecution","tool_name":"create_invoice","tool_input":"{}","command":"stripe-mcp"}`,
+			wantAction: "deny",
+			wantRule:   "mcp_policy/blocked",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _, err := parseCursorInput([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("parseCursorInput: %v", err)
+			}
+			got, err := eng.Eval(context.Background(), policy.HookInput{
+				HookEvent: req.HookEvent,
+				ToolName:  req.ToolName,
+				ToolInput: req.ToolInput,
+				CWD:       req.CWD,
+			})
+			if err != nil {
+				t.Fatalf("Eval: %v", err)
+			}
+			if got.Action != tt.wantAction || got.RuleID != tt.wantRule {
+				t.Errorf("decision = (%q, %q), want (%q, %q)", got.Action, got.RuleID, tt.wantAction, tt.wantRule)
+			}
+		})
 	}
 }
 

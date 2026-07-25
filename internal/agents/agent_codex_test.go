@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -72,13 +73,17 @@ func readConfigTOML(t *testing.T, env Env) string {
 // codexHookEntryCount counts how many PreToolUse matcher groups in hooks.json
 // have hookCmd as one of their hook commands.
 func codexHookEntryCount(t *testing.T, data []byte, hookCmd string) int {
+	return codexHookEntryCountForEvent(t, data, "PreToolUse", hookCmd)
+}
+
+func codexHookEntryCountForEvent(t *testing.T, data []byte, event, hookCmd string) int {
 	t.Helper()
 	var root codexHooksRoot
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("codexHookEntryCount: unmarshal: %v", err)
 	}
 	count := 0
-	for _, g := range root.Hooks["PreToolUse"] {
+	for _, g := range root.Hooks[event] {
 		for _, h := range g.Hooks {
 			if h.Command == hookCmd {
 				count++
@@ -163,36 +168,67 @@ func TestCodexInstallCreatesHooksJSON(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("hooks.json is invalid JSON: %v\ncontent: %s", err, data)
 	}
-	groups := root.Hooks["PreToolUse"]
-	if len(groups) == 0 {
-		t.Fatalf("hooks.json has no PreToolUse groups")
-	}
 	wantCmd := env.HookBin + " --agent=codex"
-	count := codexHookEntryCount(t, data, wantCmd)
-	if count != 1 {
-		t.Errorf("agentjail entry appears %d times, want 1", count)
-	}
 
-	// Verify the hook type is "command" and timeout is set.
-	found := false
-	for _, g := range groups {
-		for _, h := range g.Hooks {
-			if h.Command == wantCmd {
-				if h.Type != "command" {
-					t.Errorf("hook type = %q, want \"command\"", h.Type)
+	for _, event := range codexHookEvents {
+		groups := root.Hooks[event]
+		if len(groups) == 0 {
+			t.Fatalf("hooks.json has no %s groups", event)
+		}
+		count := codexHookEntryCountForEvent(t, data, event, wantCmd)
+		if count != 1 {
+			t.Errorf("%s agentjail entry appears %d times, want 1", event, count)
+		}
+
+		found := false
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				if h.Command == wantCmd {
+					if h.Type != "command" {
+						t.Errorf("%s hook type = %q, want \"command\"", event, h.Type)
+					}
+					if h.Timeout != 30 {
+						t.Errorf("%s hook timeout = %d, want 30", event, h.Timeout)
+					}
+					if g.Matcher != codexToolMatcher {
+						t.Errorf("%s hook matcher = %q, want %q", event, g.Matcher, codexToolMatcher)
+					}
+					found = true
 				}
-				if h.Timeout != 30 {
-					t.Errorf("hook timeout = %d, want 30", h.Timeout)
-				}
-				if g.Matcher != ".*" {
-					t.Errorf("hook matcher = %q, want \".*\"", g.Matcher)
-				}
-				found = true
 			}
 		}
+		if !found {
+			t.Errorf("agentjail %s hook entry not found in hooks.json", event)
+		}
 	}
-	if !found {
-		t.Errorf("agentjail hook entry not found in hooks.json")
+}
+
+func TestCodexToolMatcherScope(t *testing.T) {
+	matcher := regexp.MustCompile(codexToolMatcher)
+	for _, tool := range []string{"Bash", "apply_patch", "mcp__github__create_issue", "Agent"} {
+		if !matcher.MatchString(tool) {
+			t.Errorf("matcher does not cover policy-governed tool %q", tool)
+		}
+	}
+	for _, tool := range []string{"webrun", "view_image", "apply_patch_preview"} {
+		if matcher.MatchString(tool) {
+			t.Errorf("matcher unexpectedly intercepts internal tool %q", tool)
+		}
+	}
+	for _, tool := range []string{
+		"update_plan", "create_goal", "get_goal", "update_goal", "wait_agent",
+		"collaboration.list_agents", "collaboration.wait_agent",
+		"collaboration.spawn_agent", "collaboration.followup_task",
+		"collaboration.send_message", "collaboration.interrupt_agent",
+	} {
+		if !matcher.MatchString(tool) {
+			t.Errorf("matcher does not cover Codex orchestration tool %q", tool)
+		}
+	}
+	for _, tool := range []string{"collaboration.unknown", "collaboration.delete_all_agents"} {
+		if matcher.MatchString(tool) {
+			t.Errorf("matcher must not classify unknown Codex collaboration tool %q", tool)
+		}
 	}
 }
 
@@ -744,6 +780,12 @@ func TestCodexUninstallPreservesUserHook(t *testing.T) {
 	if codexHookEntryCount(t, data, env.HookBin+" --agent=codex") != 0 {
 		t.Errorf("agentjail hook still present after Uninstall")
 	}
+	if codexHookEntryCountForEvent(t, data, "PostToolUse", env.HookBin+" --agent=codex") != 0 {
+		t.Errorf("agentjail PostToolUse hook still present after Uninstall")
+	}
+	if codexHookEntryCountForEvent(t, data, "PermissionRequest", env.HookBin+" --agent=codex") != 0 {
+		t.Errorf("agentjail PermissionRequest hook still present after Uninstall")
+	}
 	if codexHookEntryCount(t, data, userCmd) != 1 {
 		t.Errorf("user hook %q lost after Uninstall", userCmd)
 	}
@@ -878,6 +920,33 @@ func TestCodexStatusNoHooksJSON(t *testing.T) {
 	s := ag.Status(env)
 	if s.Installed {
 		t.Errorf("Status.Installed = true when hooks.json absent, want false")
+	}
+}
+
+func TestCodexStatusRequiresEveryLifecycleHook(t *testing.T) {
+	env := newCodexEnv(t)
+	writeHooksJSON(t, env, buildBareHooksJSON(env.HookBin))
+
+	s := (Codex{}).Status(env)
+	if s.Installed {
+		t.Errorf("Status.Installed = true with only PreToolUse, want false")
+	}
+}
+
+func TestCodexStatusRequiresPermissionRequest(t *testing.T) {
+	env := newCodexEnv(t)
+	mkCodexDir(t, env)
+	command := env.HookBin + " --agent=codex"
+	writeHooksJSON(t, env, []byte(`{
+  "hooks": {
+    "PreToolUse": [{"matcher":"Bash","hooks":[{"type":"command","command":"`+command+`"}]}],
+    "PostToolUse": [{"matcher":"Bash","hooks":[{"type":"command","command":"`+command+`"}]}]
+  }
+}`))
+
+	s := (Codex{}).Status(env)
+	if s.Installed {
+		t.Error("Status.Installed = true without PermissionRequest, want false")
 	}
 }
 
@@ -1088,16 +1157,16 @@ func TestCodexMigrationUninstallNew(t *testing.T) {
 	}
 }
 
-// TestCodexMigrationStatusBare verifies that Status reports Installed=true
-// when the legacy bare-form entry is present.
+// TestCodexMigrationStatusBare verifies that a legacy PreToolUse-only install
+// is reported incomplete until Install adds PostToolUse.
 func TestCodexMigrationStatusBare(t *testing.T) {
 	env := newCodexEnv(t)
 	writeHooksJSON(t, env, buildBareHooksJSON(env.HookBin))
 
 	ag := Codex{}
 	s := ag.Status(env)
-	if !s.Installed {
-		t.Errorf("Status.Installed = false for legacy bare-form entry, want true")
+	if s.Installed {
+		t.Errorf("Status.Installed = true for legacy PreToolUse-only entry, want false")
 	}
 }
 

@@ -2,6 +2,7 @@ package policyeval
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -68,6 +69,47 @@ func TestNormalizeToolInput_PreservesOtherFields(t *testing.T) {
 	out := NormalizeToolInput(input, "/tmp")
 	if out["extra"] != 42 {
 		t.Errorf("extra field not preserved: got %v", out["extra"])
+	}
+}
+
+func TestNormalizeToolCall_ApplyPatchUsesEditPolicyContract(t *testing.T) {
+	cwd := CanonicalizeCWD(t.TempDir())
+	toolName, input := NormalizeToolCall("apply_patch", map[string]interface{}{
+		"command": "*** Begin Patch\n*** Update File: internal/main.go\n*** Add File: testdata/new.txt\n*** End Patch",
+	}, cwd)
+	if toolName != "Edit" {
+		t.Errorf("tool name = %q, want Edit", toolName)
+	}
+	paths, ok := input["file_paths"].([]string)
+	if !ok {
+		t.Fatalf("file_paths = %#v, want []string", input["file_paths"])
+	}
+	if len(paths) != 2 {
+		t.Fatalf("file_paths = %v, want two paths", paths)
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(path, cwd+string(os.PathSeparator)) {
+			t.Errorf("path %q is not canonicalized beneath %q", path, cwd)
+		}
+	}
+}
+
+func TestExtractPatchPaths(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: added.txt\n*** Update File: changed.txt\n*** Move to: moved.txt\n*** Delete File: removed.txt\n*** Update File: changed.txt\n*** End Patch"
+	got := ExtractPatchPaths(patch)
+	want := []string{"added.txt", "changed.txt", "moved.txt", "removed.txt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExtractPatchPaths() = %v, want %v", got, want)
+	}
+}
+
+func TestNormalizeToolCall_PreservesNonPatchTool(t *testing.T) {
+	toolName, input := NormalizeToolCall("Bash", map[string]interface{}{"command": "git status"}, "/tmp")
+	if toolName != "Bash" {
+		t.Errorf("tool name = %q, want Bash", toolName)
+	}
+	if input["command"] != "git status" {
+		t.Errorf("command = %#v, want git status", input["command"])
 	}
 }
 

@@ -90,6 +90,32 @@ test_ssh_key_denied if {
 	agentjail.decision.rule_id == deny_sensitive with input as write_event("/Users/dev/.ssh/id_rsa")
 }
 
+# apply_patch carries every target as file_paths. One protected target must
+# win over an otherwise allowed project target.
+test_multiple_file_paths_deny_if_any_path_is_protected if {
+	event := {
+		"hook_event": "PreToolUse",
+		"tool_name": "Edit",
+		"tool_input": {"file_paths": ["/Users/dev/myproject/main.go", "/Users/dev/.ssh/id_rsa"]},
+		"session_id": "s1",
+		"cwd": "/Users/dev/myproject",
+	}
+	agentjail.decision.action == "deny" with input as event
+	agentjail.decision.rule_id == deny_sensitive with input as event
+}
+
+test_multiple_project_file_paths_allowed if {
+	event := {
+		"hook_event": "PreToolUse",
+		"tool_name": "Edit",
+		"tool_input": {"file_paths": ["/Users/dev/myproject/main.go", "/Users/dev/myproject/test.go"]},
+		"session_id": "s1",
+		"cwd": "/Users/dev/myproject",
+	}
+	agentjail.decision.action == "allow" with input as event
+	agentjail.decision.rule_id == project_allow with input as event
+}
+
 # ---------------------------------------------------------------------------
 # Deny: ~/.ssh/ directory - any file under .ssh/ is denied
 # ---------------------------------------------------------------------------
