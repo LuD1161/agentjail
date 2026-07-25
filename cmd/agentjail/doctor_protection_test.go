@@ -74,15 +74,42 @@ func TestDaemonDowntimeCheck(t *testing.T) {
 		t.Errorf("no sentinel should be ok, got %q", clean.status)
 	}
 
-	down := daemonDowntimeCheck(protectionSignals{
-		DaemonDownSince: protoNow.Add(-72 * time.Hour),
-	}, protoNow)
-	if down.status != "warn" {
-		t.Errorf("status = %q, want warn", down.status)
-	}
-	if !strings.Contains(down.detail, "3d") {
-		t.Errorf("detail should quantify the outage, got %q", down.detail)
-	}
+	t.Run("unresolved", func(t *testing.T) {
+		down := daemonDowntimeCheck(protectionSignals{
+			DaemonDownSince: protoNow.Add(-72 * time.Hour),
+			LastDecision:    protoNow.Add(-73 * time.Hour),
+		}, protoNow)
+		if down.status != "warn" {
+			t.Errorf("status = %q, want warn", down.status)
+		}
+		if !strings.Contains(down.detail, "3d") {
+			t.Errorf("detail should quantify the outage, got %q", down.detail)
+		}
+	})
+
+	t.Run("later decision resolves warning", func(t *testing.T) {
+		recovered := daemonDowntimeCheck(protectionSignals{
+			DaemonDownSince: protoNow.Add(-10 * time.Minute),
+			LastDecision:    protoNow.Add(-9 * time.Minute),
+		}, protoNow)
+		if recovered.status != "ok" {
+			t.Errorf("status = %q, want ok; detail=%q", recovered.status, recovered.detail)
+		}
+		if !strings.Contains(recovered.detail, "resumed") {
+			t.Errorf("detail should describe recovery, got %q", recovered.detail)
+		}
+	})
+
+	t.Run("equal timestamp is not proof of recovery", func(t *testing.T) {
+		atFailure := protoNow.Add(-time.Hour)
+		got := daemonDowntimeCheck(protectionSignals{
+			DaemonDownSince: atFailure,
+			LastDecision:    atFailure,
+		}, protoNow)
+		if got.status != "warn" {
+			t.Errorf("status = %q, want warn; detail=%q", got.status, got.detail)
+		}
+	})
 }
 
 func TestDroppedDecisionsCheck(t *testing.T) {

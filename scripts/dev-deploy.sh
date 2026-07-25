@@ -63,11 +63,28 @@ else
 fi
 
 # install-or-refresh: on a fresh box this creates the launchd plist + wires the
-# hooks (and copies hook + daemon + starts the daemon). On an already-installed
-# box it just refreshes that wiring. Run the freshly-built CLI so it finds its
-# dev siblings in $SRC.
-echo "==> agentjail install (idempotent: installs if absent, refreshes if present)"
+# hooks (and copies hook + daemon + starts the daemon). Run the freshly-built
+# CLI so it finds its dev siblings in $SRC.
+echo "==> agentjail install (base infrastructure)"
 "$SRC/agentjail" install
+
+# A base install intentionally short-circuits when every detected agent is
+# already protected. That is correct for normal use, but a dev deployment must
+# also reconcile each adapter's owned hook entries so matcher/schema changes
+# become live immediately. Per-agent install preserves foreign hooks while
+# migrating or replacing AgentJail-owned entries.
+echo "==> reconciling AgentJail hook entries for detected agents"
+for agent in claude-code cursor codex; do
+	case "$agent" in
+	claude-code) agent_dir="$HOME/.claude" ;;
+	cursor) agent_dir="$HOME/.cursor" ;;
+	codex) agent_dir="$HOME/.codex" ;;
+	esac
+	if [ -d "$agent_dir" ]; then
+		"$SRC/agentjail" install --for "$agent"
+		echo "    reconciled $agent"
+	fi
+done
 
 # Swap the 2 real binaries explicitly (install already did this using the
 # colocated $SRC build, so this is belt-and-suspenders) and re-affirm the 4
@@ -111,7 +128,21 @@ Linux)
 	;;
 esac
 
-sleep 1
+echo "==> waiting for daemon health"
+daemon_ready=false
+for _ in $(seq 1 15); do
+	if "$BIN/agentjail" status 2>&1 | grep -q 'daemon              ✓ running'; then
+		daemon_ready=true
+		break
+	fi
+	sleep 1
+done
+if [ "$daemon_ready" != true ]; then
+	echo "    daemon did not become healthy within 15 seconds" >&2
+	"$BIN/agentjail" status >&2 || true
+	exit 1
+fi
+
 echo "==> now running:"
-pgrep -fl 'agentjail-daemon|agentjail-netproxy' || echo "    (daemon still starting; netproxy starts on the next shielded 'claude' launch)"
+pgrep -fl 'agentjail-daemon|agentjail-netproxy' || echo "    daemon healthy; netproxy starts on the next shielded 'claude' launch"
 echo "==> done. Next 'claude' launch uses the new shield + spawns the session-aware netproxy on :9100."

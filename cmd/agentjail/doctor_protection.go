@@ -73,9 +73,8 @@ func enforcementGapCheck(sig protectionSignals, now time.Time) doctorCheck {
 	}
 }
 
-// daemonDowntimeCheck turns the fail-open sentinel into a duration. The hook
-// writes it the first time it cannot reach the daemon and the daemon clears it
-// on startup, so a surviving sentinel dates the start of the current outage.
+// daemonDowntimeCheck distinguishes a current fail-open window from one followed
+// by a successfully recorded policy decision.
 func daemonDowntimeCheck(sig protectionSignals, now time.Time) doctorCheck {
 	if sig.DaemonDownSince.IsZero() {
 		return doctorCheck{
@@ -84,10 +83,18 @@ func daemonDowntimeCheck(sig protectionSignals, now time.Time) doctorCheck {
 			detail: "no unresolved fail-open window",
 		}
 	}
+	if sig.LastDecision.After(sig.DaemonDownSince) {
+		return doctorCheck{
+			label:  "Fail-open history",
+			status: statusOK,
+			detail: fmt.Sprintf("hook failed open at %s; policy decisions resumed %s later",
+				sig.DaemonDownSince.Format(time.RFC3339), roundDur(sig.LastDecision.Sub(sig.DaemonDownSince))),
+		}
+	}
 	return doctorCheck{
 		label:  "Fail-open history",
 		status: statusWarn,
-		detail: fmt.Sprintf("the hook failed open at %s (%s ago) and the daemon has not started since — everything after that ran unenforced. Restart: agentjail daemon restart",
+		detail: fmt.Sprintf("the hook failed open at %s (%s ago) and no later policy decision is recorded — tool calls after that may have run unenforced. Restart: agentjail daemon restart",
 			sig.DaemonDownSince.Format(time.RFC3339), roundDur(now.Sub(sig.DaemonDownSince))),
 	}
 }

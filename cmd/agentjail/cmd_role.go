@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/LuD1161/agentjail/internal/daemonapp"
@@ -9,6 +10,32 @@ import (
 	"github.com/LuD1161/agentjail/internal/shieldapp"
 	"github.com/spf13/cobra"
 )
+
+var (
+	roleUserHomeDir   = os.UserHomeDir
+	roleRestartDaemon = restartDaemonViaSupervisor
+)
+
+// runDaemonRole reserves the human-facing restart verb before forwarding
+// process-role arguments to daemonapp. A bare positional "restart" used to
+// be ignored by daemonapp, starting an unconfigured daemon that served the
+// resolver default instead of the installed rule bundle.
+func runDaemonRole(args []string) int {
+	if len(args) == 1 && args[0] == "restart" {
+		home, err := roleUserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail daemon restart: determine home: %v\n", err)
+			return 1
+		}
+		if err := roleRestartDaemon(home); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail daemon restart: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "agentjail daemon restarted")
+		return 0
+	}
+	return daemonapp.Run(args)
+}
 
 // roleCommands registers hidden `agentjail <role> ...` subcommands that
 // forward straight into the corresponding role app's own arg handling.
@@ -25,7 +52,7 @@ var daemonCmd = &cobra.Command{
 	Hidden:             true,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		os.Exit(daemonapp.Run(args))
+		os.Exit(runDaemonRole(args))
 		return nil
 	},
 }

@@ -57,7 +57,7 @@ dev-install: $(DEV_BINS)  ## build + install binaries, policy rules, and restart
 	$$ok && echo "" && echo "All binaries installed and verified. Restart Claude Code to activate." || \
 		(echo "" && echo "Some binaries failed verification." && exit 1)
 
-dev-deploy:  ## build all 5 binaries from the working tree + hot-swap the local install and restart daemon (run from a plain terminal)
+dev-deploy:  ## build, force-reconcile detected agent hooks, hot-swap local binaries, and restart daemon (run from a plain terminal)
 	./scripts/dev-deploy.sh
 
 bin/agentjail-hook:
