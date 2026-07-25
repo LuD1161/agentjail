@@ -50,6 +50,7 @@ import (
 	"strings"
 
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/custompolicy"
 )
 
 // ---- Reserved prefixes -------------------------------------------------------
@@ -65,13 +66,6 @@ var reservedPrefixes = []string{
 }
 
 // ---- Regex patterns for static analysis -------------------------------------
-
-// rePkgDecl matches the `package agentjail` declaration line.
-var rePkgDecl = regexp.MustCompile(`(?m)^\s*package\s+agentjail\b`)
-
-// reDecisionDecl matches lines that declare `decision` or `default decision`
-// (reuses the logic from decision_producer_guard_test.go).
-var reDecisionDecl = regexp.MustCompile(`(?m)^\s*(default\s+)?decision\s*(:=|=)`)
 
 // reRuleIDHeader matches the convention comment header:
 //
@@ -188,25 +182,8 @@ func runPolicyRemove(name string) int {
 // "rule_id": "..." literals) we require at least one @rule_id header so the
 // namespace can be verified.
 func enforceAuthoringContract(src, stem string) error {
-	// 1. Must be `package agentjail`.
-	if !rePkgDecl.MatchString(src) {
-		return fmt.Errorf("file must declare 'package agentjail' (found no matching declaration)")
-	}
-
-	// 2. Must NOT declare decision.
-	if reDecisionDecl.MatchString(src) {
-		// Check it's not just a comment.
-		scanner := bufio.NewScanner(strings.NewReader(src))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if strings.HasPrefix(line, "#") {
-				continue
-			}
-			if reDecisionDecl.MatchString(line) {
-				return fmt.Errorf("file declares 'decision' directly — custom rules must use 'candidate contains r if { ... }' instead.\n" +
-					"  Only resolver.rego may produce data.agentjail.decision (ADR 0014 §5).")
-			}
-		}
+	if err := custompolicy.ValidateModule(stem+".rego", src); err != nil {
+		return err
 	}
 
 	// 3. Collect rule_ids.

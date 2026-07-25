@@ -106,6 +106,10 @@ func (s *sqliteStore) migrate() error {
 			cwd             TEXT,
 			tool_input_redacted TEXT,
 			would_action    TEXT    NOT NULL DEFAULT '',
+			policy_action      TEXT    NOT NULL DEFAULT '',
+			effective_action   TEXT    NOT NULL DEFAULT '',
+			adapter            TEXT    NOT NULL DEFAULT '',
+			translation_reason TEXT    NOT NULL DEFAULT '',
 			tool_use_id     TEXT    NOT NULL DEFAULT '',
 			final_action    TEXT    NOT NULL DEFAULT '',
 			enforcer        TEXT    NOT NULL DEFAULT ''
@@ -182,7 +186,7 @@ func (s *sqliteStore) migrate() error {
 	}
 	// Final-outcome columns (ADR 0112): additive, idempotent per column.
 	if tableExists(s.db, "decisions") {
-		for _, col := range []string{"tool_use_id", "final_action", "enforcer"} {
+		for _, col := range []string{"policy_action", "effective_action", "adapter", "translation_reason", "tool_use_id", "final_action", "enforcer"} {
 			if !columnExists(s.db, "decisions", col) {
 				if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE decisions ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, col)); err != nil {
 					return fmt.Errorf("store: migrate: add decisions.%s: %w", col, err)
@@ -284,9 +288,9 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.ExecContext(ctx, `INSERT INTO decisions
-		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, tool_use_id, final_action, enforcer)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction, d.ToolUseID, d.FinalAction, d.Enforcer,
+		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, policy_action, effective_action, adapter, translation_reason, tool_use_id, final_action, enforcer)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction, d.PolicyAction, d.EffectiveAction, d.Adapter, d.TranslationReason, d.ToolUseID, d.FinalAction, d.Enforcer,
 	); err != nil {
 		return fmt.Errorf("store: insert decision: %w", err)
 	}
@@ -382,7 +386,7 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		}
 		args = append(args, f.AfterID)
 	}
-	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, tool_use_id, final_action, enforcer FROM decisions"
+	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, policy_action, effective_action, adapter, translation_reason, tool_use_id, final_action, enforcer FROM decisions"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -396,25 +400,29 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 	var out []DecisionRecord
 	for rows.Next() {
 		var (
-			id        int64
-			tsStr     string
-			sid       string
-			agent     sql.NullString
-			toolName  string
-			summary   sql.NullString
-			action    string
-			ruleID    sql.NullString
-			reason    sql.NullString
-			impact    sql.NullString
-			elapsed   sql.NullInt64
-			cwd       sql.NullString
-			toolInput sql.NullString
-			wouldAct  sql.NullString
-			toolUseID sql.NullString
-			finalAct  sql.NullString
-			enforcer  sql.NullString
+			id                int64
+			tsStr             string
+			sid               string
+			agent             sql.NullString
+			toolName          string
+			summary           sql.NullString
+			action            string
+			ruleID            sql.NullString
+			policyReason      sql.NullString
+			impact            sql.NullString
+			elapsed           sql.NullInt64
+			cwd               sql.NullString
+			toolInput         sql.NullString
+			wouldAct          sql.NullString
+			policyAct         sql.NullString
+			effective         sql.NullString
+			adapter           sql.NullString
+			translationReason sql.NullString
+			toolUseID         sql.NullString
+			finalAct          sql.NullString
+			enforcer          sql.NullString
 		)
-		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &reason, &impact, &elapsed, &cwd, &toolInput, &wouldAct, &toolUseID, &finalAct, &enforcer); err != nil {
+		if err := rows.Scan(&id, &tsStr, &sid, &agent, &toolName, &summary, &action, &ruleID, &policyReason, &impact, &elapsed, &cwd, &toolInput, &wouldAct, &policyAct, &effective, &adapter, &translationReason, &toolUseID, &finalAct, &enforcer); err != nil {
 			return nil, fmt.Errorf("store: scan decision: %w", err)
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, tsStr)
@@ -427,12 +435,16 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 			Summary:           summary.String,
 			Action:            action,
 			RuleID:            ruleID.String,
-			Reason:            reason.String,
+			Reason:            policyReason.String,
 			Impact:            impact.String,
 			ElapsedUs:         elapsed.Int64,
 			CWD:               cwd.String,
 			ToolInputRedacted: toolInput.String,
 			WouldAction:       wouldAct.String,
+			PolicyAction:      policyAct.String,
+			EffectiveAction:   effective.String,
+			Adapter:           adapter.String,
+			TranslationReason: translationReason.String,
 			ToolUseID:         toolUseID.String,
 			FinalAction:       finalAct.String,
 			Enforcer:          enforcer.String,

@@ -1,6 +1,6 @@
 -- name: InsertDecision :exec
-INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, policy_action, effective_action, adapter, translation_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: CountWouldBlockByRule :many
 -- Monitor-mode report: what policy would have stopped, grouped by rule. Rows
@@ -103,4 +103,3 @@ FROM audit_log ORDER BY ts DESC LIMIT ?;
 
 -- name: DeleteOldAuditLog :exec
 DELETE FROM audit_log WHERE ts < ?;
-

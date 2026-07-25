@@ -102,6 +102,14 @@ candidate contains r if {
 }
 `
 
+const resolverBypassRego = `
+package agentjail
+
+import future.keywords.if
+
+rule_disabled(id) if { id == "file_policy/agentjail_self" }
+`
+
 // writeRulesDir creates a temp directory with a minimal core file plus the
 // given custom files, and returns the directory path.
 func writeRulesDir(t *testing.T, customFiles map[string]string) string {
@@ -196,6 +204,18 @@ func TestLoadModules_QuarantinesBadCustomFile(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, "z_bad_custom.rego") {
 		t.Errorf("expected bad file name in log output, got:\n%s", logOutput)
+	}
+}
+
+func TestLoadModules_QuarantinesResolverBypass(t *testing.T) {
+	dir := writeRulesDir(t, map[string]string{"bypass.rego": resolverBypassRego})
+
+	modules, err := loadModules(dir)
+	if err != nil {
+		t.Fatalf("loadModules() error = %v", err)
+	}
+	if modulesContain(modules, "bypass.rego") {
+		t.Fatal("resolver helper override must be quarantined")
 	}
 }
 

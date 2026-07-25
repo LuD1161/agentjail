@@ -95,9 +95,10 @@ The `candidate` partial rule set is a set of objects; each object must have:
 > **Installing via `agentjail policy add` (ADR 0014).** When you install a rule
 > through the CLI, every `rule_id` it emits **must** use the reserved prefix
 > `custom/<filename_stem>/<rule>` (e.g. `my_rule.rego` → `custom/my_rule/no-foo`).
-> `policy add` validates the authoring contract and compiles the full bundle
-> before installing; the daemon quarantines (skips + warns) any custom file that
-> would break the bundle, so a bad rule never fails startup. Rules can be turned
+> `policy add` parses the module and accepts only partial `candidate` entries;
+> resolver helpers and `decision` cannot be extended. It compiles the full bundle
+> before installing; the daemon applies the same restriction and quarantines
+> (skips + warns) any unsafe or broken custom file. Rules can be turned
 > off with `agentjail policy disable <rule_id>` (which feeds `disabled_rules` in
 > `policy.yaml`), except for the locked self-protection set. See the
 > [authoring guide](../samples/README.md) and

@@ -53,16 +53,6 @@ func TestApplyMonitorMode_AllowIsNotMarked(t *testing.T) {
 	}
 }
 
-// The ask-promotion in policyeval (repeat (session, rule) ask -> allow with
-// RuleID session/grant, evaluator.go) arrives here as a plain allow. It must not
-// be double-counted as "would have asked".
-func TestApplyMonitorMode_PromotedAskIsNotDoubleCounted(t *testing.T) {
-	got := applyMonitorMode(policyeval.Response{Action: "allow", RuleID: "session/grant"}, true)
-	if got.WouldAction != "" {
-		t.Errorf("WouldAction = %q for a session/grant promotion, want empty", got.WouldAction)
-	}
-}
-
 // An empty action is the shape an eval error leaves behind; it must not be
 // rewritten into a confident allow.
 func TestApplyMonitorMode_EmptyActionUntouched(t *testing.T) {

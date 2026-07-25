@@ -26,21 +26,25 @@ import (
 // evaluation. Fields match what cmd/agentjail-daemon/main.go writes via
 // log/slog's JSON handler.
 type evalLine struct {
-	Time      time.Time `json:"time"`
-	Level     string    `json:"level"`
-	Msg       string    `json:"msg"`
-	ReqID     string    `json:"req_id,omitempty"`
-	Tool      string    `json:"tool,omitempty"`
-	SessionID string    `json:"session_id,omitempty"`
-	Agent     string    `json:"agent,omitempty"`
-	CWD       string    `json:"cwd,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	Action    string    `json:"action,omitempty"`
-	RuleID    string    `json:"rule_id,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	Impact    string    `json:"impact,omitempty"` // policy-declared consequence text; overrides builtinImpact when non-empty
-	ElapsedUs int64     `json:"elapsed_us,omitempty"`
-	Err       string    `json:"err,omitempty"`
+	Time              time.Time `json:"time"`
+	Level             string    `json:"level"`
+	Msg               string    `json:"msg"`
+	ReqID             string    `json:"req_id,omitempty"`
+	Tool              string    `json:"tool,omitempty"`
+	SessionID         string    `json:"session_id,omitempty"`
+	Agent             string    `json:"agent,omitempty"`
+	CWD               string    `json:"cwd,omitempty"`
+	Summary           string    `json:"summary,omitempty"`
+	Action            string    `json:"action,omitempty"`
+	RuleID            string    `json:"rule_id,omitempty"`
+	Reason            string    `json:"reason,omitempty"`
+	Impact            string    `json:"impact,omitempty"` // policy-declared consequence text; overrides builtinImpact when non-empty
+	ElapsedUs         int64     `json:"elapsed_us,omitempty"`
+	Err               string    `json:"err,omitempty"`
+	PolicyAction      string    `json:"policy_action,omitempty"`
+	EffectiveAction   string    `json:"effective_action,omitempty"`
+	Adapter           string    `json:"adapter,omitempty"`
+	TranslationReason string    `json:"translation_reason,omitempty"`
 }
 
 // ─── agent normalization registry ────────────────────────────────────────────
@@ -435,11 +439,15 @@ func evalLineFromDecision(d store.DecisionRecord) evalLine {
 		Summary:   d.Summary,
 		// Show the FINAL outcome, not just the policy verdict: a command
 		// policy allowed but the OS sandbox blocked reads as deny (ADR 0112).
-		Action:    effectiveAction(d),
-		RuleID:    d.RuleID,
-		Reason:    d.Reason,
-		Impact:    d.Impact,
-		ElapsedUs: d.ElapsedUs,
+		Action:            effectiveAction(d),
+		RuleID:            d.RuleID,
+		Reason:            d.Reason,
+		Impact:            d.Impact,
+		ElapsedUs:         d.ElapsedUs,
+		PolicyAction:      d.PolicyAction,
+		EffectiveAction:   d.EffectiveAction,
+		Adapter:           d.Adapter,
+		TranslationReason: d.TranslationReason,
 	}
 }
 

@@ -168,8 +168,8 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 }
 
 const insertDecision = `-- name: InsertDecision :exec
-INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO decisions (ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, policy_action, effective_action, adapter, translation_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertDecisionParams struct {
@@ -186,6 +186,10 @@ type InsertDecisionParams struct {
 	Cwd               sql.NullString `json:"cwd"`
 	ToolInputRedacted sql.NullString `json:"tool_input_redacted"`
 	WouldAction       string         `json:"would_action"`
+	PolicyAction      string         `json:"policy_action"`
+	EffectiveAction   string         `json:"effective_action"`
+	Adapter           string         `json:"adapter"`
+	TranslationReason string         `json:"translation_reason"`
 }
 
 func (q *Queries) InsertDecision(ctx context.Context, arg InsertDecisionParams) error {
@@ -203,6 +207,10 @@ func (q *Queries) InsertDecision(ctx context.Context, arg InsertDecisionParams) 
 		arg.Cwd,
 		arg.ToolInputRedacted,
 		arg.WouldAction,
+		arg.PolicyAction,
+		arg.EffectiveAction,
+		arg.Adapter,
+		arg.TranslationReason,
 	)
 	return err
 }

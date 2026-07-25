@@ -27,14 +27,15 @@ import (
 // Request is the wire shape the daemon expects on its Unix socket.
 // Field names must match the daemon's JSON tags exactly; snake_case, no omitempty.
 type Request struct {
-	ID        string                 `json:"id"`
-	HookEvent string                 `json:"hook_event"`
-	ToolName  string                 `json:"tool_name"`
-	ToolInput map[string]interface{} `json:"tool_input"`
-	SessionID string                 `json:"session_id"`
-	CWD       string                 `json:"cwd"`
-	Agent     string                 `json:"agent,omitempty"`
-	AgentPID  int                    `json:"agent_pid,omitempty"`
+	ID             string                 `json:"id"`
+	HookEvent      string                 `json:"hook_event"`
+	ToolName       string                 `json:"tool_name"`
+	ToolInput      map[string]interface{} `json:"tool_input"`
+	SessionID      string                 `json:"session_id"`
+	CWD            string                 `json:"cwd"`
+	Agent          string                 `json:"agent,omitempty"`
+	AgentPID       int                    `json:"agent_pid,omitempty"`
+	PermissionMode string                 `json:"permission_mode,omitempty"`
 	// ToolUseID is the stable per-tool-call identifier that ties the
 	// PreToolUse decision to its PostToolUse outcome (ADR 0112). Claude Code's
 	// tool_use_id when present, else a hook-computed hash.
@@ -68,7 +69,12 @@ type Response struct {
 	// hook can say "would have blocked" instead of allowing in silence. Empty
 	// in enforce mode; Action is always what is actually being enforced.
 	// See ADR 0091-monitor-mode-tools.
-	WouldAction string `json:"would_action,omitempty"`
+	WouldAction             string `json:"would_action,omitempty"`
+	PolicyAction            string `json:"policy_action,omitempty"`
+	EffectiveAction         string `json:"effective_action,omitempty"`
+	Adapter                 string `json:"adapter,omitempty"`
+	TranslationReason       string `json:"translation_reason,omitempty"`
+	DeferToNativePermission bool   `json:"defer_to_native_permission,omitempty"`
 }
 
 // DefaultSocketPath returns the default path for the daemon Unix socket.

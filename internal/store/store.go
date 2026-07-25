@@ -49,6 +49,16 @@ type DecisionRecord struct {
 	// See ADR 0091-monitor-mode-tools.
 	WouldAction string
 
+	// PolicyAction is the immutable canonical verdict returned by policy.
+	// EffectiveAction is the response an agent protocol actually received;
+	// Adapter and TranslationReason explain any intentional difference.
+	// Action remains the daemon-enforced action for backwards-compatible
+	// monitor-mode reporting. See ADR 0115-agent-decision-adapters.
+	PolicyAction      string
+	EffectiveAction   string
+	Adapter           string
+	TranslationReason string
+
 	// ToolUseID ties this decision to its PostToolUse outcome. FinalAction and
 	// Enforcer are the combined per-action outcome and the layer responsible
 	// for it (policy or sandbox), filled at PreToolUse and updated by the

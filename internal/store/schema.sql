@@ -16,7 +16,14 @@ CREATE TABLE IF NOT EXISTS decisions (
     -- (monitor mode downgraded it). Empty means they matched. `action` is always
     -- what was ACTUALLY enforced -- it must never overstate enforcement.
     -- See ADR 0091-monitor-mode-tools.
-    would_action    TEXT    NOT NULL DEFAULT ''
+    would_action       TEXT    NOT NULL DEFAULT '',
+    policy_action      TEXT    NOT NULL DEFAULT '',
+    effective_action   TEXT    NOT NULL DEFAULT '',
+    adapter            TEXT    NOT NULL DEFAULT '',
+    translation_reason TEXT    NOT NULL DEFAULT '',
+    tool_use_id        TEXT    NOT NULL DEFAULT '',
+    final_action       TEXT    NOT NULL DEFAULT '',
+    enforcer           TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_session_ts ON decisions(session_id, ts);

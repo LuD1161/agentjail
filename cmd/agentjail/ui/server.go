@@ -1748,9 +1748,13 @@ func decisionsToEvalLines(in []localstore.DecisionRecord, includeToolInput bool)
 			Impact:    d.Impact,
 			ElapsedUs: d.ElapsedUs,
 
-			FinalAction: d.FinalAction,
-			Enforcer:    d.Enforcer,
-			ToolUseID:   d.ToolUseID,
+			FinalAction:       d.FinalAction,
+			Enforcer:          d.Enforcer,
+			ToolUseID:         d.ToolUseID,
+			PolicyAction:      d.PolicyAction,
+			EffectiveAction:   d.EffectiveAction,
+			Adapter:           d.Adapter,
+			TranslationReason: d.TranslationReason,
 		}
 		if includeToolInput {
 			line.ToolInputRedacted = d.ToolInputRedacted

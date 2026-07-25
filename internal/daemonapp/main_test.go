@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -960,9 +961,8 @@ func newTestServerWithPolicy(t *testing.T, regoSrc string) (*server, string) {
 	return srv, sockPath
 }
 
-// TestDaemon_AskDecisionNotCached verifies that "ask" decisions are never
-// stored in the cache, so every call for the same input is re-evaluated by OPA
-// (enabling Claude Code's "Yes, during this session" mechanism to work).
+// TestDaemon_AskDecisionNotCached verifies that repeated asks remain asks.
+// A retry is not evidence that the user approved the action.
 func TestDaemon_AskDecisionNotCached(t *testing.T) {
 	ctx := context.Background()
 
@@ -986,38 +986,19 @@ func TestDaemon_AskDecisionNotCached(t *testing.T) {
 		CWD:       "/home/user",
 	}
 
-	// First eval — should return "ask".
-	resp1, err := srv.evaluator.Eval(ctx, req)
-	if err != nil {
-		t.Fatalf("first eval error: %v", err)
-	}
-	if resp1.Action != "ask" {
-		t.Errorf("first eval: expected action=ask, got %q", resp1.Action)
-	}
-
-	// Second eval of the same input and session — should return "allow"
-	// because the session grant kicks in (user approved the first ask).
-	req.ID = "ask-test-2"
-	resp2, err := srv.evaluator.Eval(ctx, req)
-	if err != nil {
-		t.Fatalf("second eval error: %v", err)
-	}
-	if resp2.Action != "allow" {
-		t.Errorf("second eval: expected action=allow (session grant), got %q", resp2.Action)
-	}
-	if resp2.RuleID != "session/grant" {
-		t.Errorf("second eval: expected rule_id=session/grant, got %q", resp2.RuleID)
-	}
-
-	// Third eval from a DIFFERENT session — should still ask (session-scoped).
-	req.ID = "ask-test-3"
-	req.SessionID = "s2"
-	resp3, err := srv.evaluator.Eval(ctx, req)
-	if err != nil {
-		t.Fatalf("third eval error: %v", err)
-	}
-	if resp3.Action != "ask" {
-		t.Errorf("third eval (different session): expected ask, got %q", resp3.Action)
+	for i, sessionID := range []string{"s1", "s1", "s2"} {
+		req.ID = fmt.Sprintf("ask-test-%d", i+1)
+		req.SessionID = sessionID
+		resp, err := srv.evaluator.Eval(ctx, req)
+		if err != nil {
+			t.Fatalf("eval %d: %v", i+1, err)
+		}
+		if resp.Action != "ask" {
+			t.Errorf("eval %d (session %q): action=%q, want ask", i+1, sessionID, resp.Action)
+		}
+		if resp.RuleID != "test/ask" {
+			t.Errorf("eval %d (session %q): rule_id=%q, want test/ask", i+1, sessionID, resp.RuleID)
+		}
 	}
 }
 

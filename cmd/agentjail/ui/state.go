@@ -39,9 +39,13 @@ type EvalLine struct {
 	// policy verdict may be overridden by an OS sandbox EPERM at the
 	// syscall, so the UI must show what actually happened, not just the
 	// policy's prediction. ToolUseID correlates PreToolUse and PostToolUse.
-	FinalAction string `json:"final_action,omitempty"`
-	Enforcer    string `json:"enforcer,omitempty"`
-	ToolUseID   string `json:"tool_use_id,omitempty"`
+	FinalAction       string `json:"final_action,omitempty"`
+	Enforcer          string `json:"enforcer,omitempty"`
+	ToolUseID         string `json:"tool_use_id,omitempty"`
+	PolicyAction      string `json:"policy_action,omitempty"`
+	EffectiveAction   string `json:"effective_action,omitempty"`
+	Adapter           string `json:"adapter,omitempty"`
+	TranslationReason string `json:"translation_reason,omitempty"`
 }
 
 // SessionState tracks per-session aggregated stats.

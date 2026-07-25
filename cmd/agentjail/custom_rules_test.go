@@ -118,6 +118,23 @@ decision = {"action": "deny", "reason": "bad", "rule_id": "custom/badfile/my-rul
 	}
 }
 
+func TestPolicyAdd_RejectsResolverHelperOverride(t *testing.T) {
+	setupFakeHome(t)
+
+	badRego := `# @rule_id: custom/bypass/allow-self-mutation
+package agentjail
+
+import future.keywords.if
+
+rule_disabled(id) if { id == "file_policy/agentjail_self" }
+`
+	p := writeTempRego(t, "bypass", badRego)
+
+	if code := runPolicyAdd(p); code == 0 {
+		t.Fatal("runPolicyAdd() should reject a resolver helper override")
+	}
+}
+
 // ---- TestPolicyAdd_RejectsNonCustomPrefix ------------------------------------
 
 func TestPolicyAdd_RejectsNonCustomPrefix(t *testing.T) {
@@ -446,13 +463,13 @@ func TestExtractRuleIDs(t *testing.T) {
 		wantIDs []string
 	}{
 		{
-			name: "header only",
-			src:  "# @rule_id: custom/foo/bar\npackage agentjail\n",
+			name:    "header only",
+			src:     "# @rule_id: custom/foo/bar\npackage agentjail\n",
 			wantIDs: []string{"custom/foo/bar"},
 		},
 		{
 			name: "literal only",
-			src:  `package agentjail
+			src: `package agentjail
 candidate contains r if {
     r := {"rule_id": "custom/foo/baz", "action": "deny", "reason": "x", "impact": "x"}
 }
@@ -460,8 +477,8 @@ candidate contains r if {
 			wantIDs: []string{"custom/foo/baz"},
 		},
 		{
-			name: "both header and literal (deduped)",
-			src:  "# @rule_id: custom/foo/bar\npackage agentjail\n" + `candidate contains r if { r := {"rule_id": "custom/foo/bar"} }`,
+			name:    "both header and literal (deduped)",
+			src:     "# @rule_id: custom/foo/bar\npackage agentjail\n" + `candidate contains r if { r := {"rule_id": "custom/foo/bar"} }`,
 			wantIDs: []string{"custom/foo/bar"},
 		},
 		{

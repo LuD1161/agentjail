@@ -48,8 +48,10 @@ import (
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/custompolicy"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/logrotate"
@@ -72,7 +74,7 @@ type Response = policyeval.Response
 // and session tracking.
 type server struct {
 	// evaluator owns the OPA engine, LRU cache, per-project engines,
-	// repo-root cache, AWS profile cache, and ask-promotion tracking.
+	// repo-root cache, and AWS profile cache.
 	evaluator policyeval.Evaluator
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
@@ -548,6 +550,23 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			// every downstream consumer records what actually happened rather
 			// than what policy wanted. See ADR 0091-monitor-mode-tools.
 			resp = applyMonitorMode(resp, s.monitoring.Load())
+			policyAction := resp.Action
+			if resp.WouldAction != "" {
+				policyAction = resp.WouldAction
+			}
+			translation := agentpolicy.Normalize(agentpolicy.Request{
+				Agent:          req.Agent,
+				HookEvent:      req.HookEvent,
+				RuleID:         resp.RuleID,
+				PermissionMode: req.PermissionMode,
+				PolicyAction:   agentpolicy.Action(policyAction),
+				EnforcedAction: agentpolicy.Action(resp.Action),
+			})
+			resp.PolicyAction = string(translation.PolicyAction)
+			resp.EffectiveAction = string(translation.EffectiveAction)
+			resp.Adapter = translation.Adapter
+			resp.TranslationReason = translation.TranslationReason
+			resp.DeferToNativePermission = translation.DeferToNativePermission
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
 
@@ -594,28 +613,32 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			slog.Warn("eval error", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "err", err, "elapsed_us", elapsed.Microseconds())
 		} else {
-			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "tool_input_redacted", redactedInput, "action", resp.Action, "would_action", resp.WouldAction, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
+			slog.Info("eval", "req_id", req.ID, "tool", req.ToolName, "session_id", req.SessionID, "agent", req.Agent, "cwd", req.CWD, "summary", summary, "tool_input_redacted", redactedInput, "action", resp.Action, "would_action", resp.WouldAction, "policy_action", resp.PolicyAction, "effective_action", resp.EffectiveAction, "adapter", resp.Adapter, "translation_reason", resp.TranslationReason, "rule_id", resp.RuleID, "reason", resp.Reason, "impact", resp.Impact, "elapsed_us", elapsed.Microseconds())
 			// Persist the decision to SQLite (async, fail-open). The full
 			// tool_input is redacted at the store boundary (ADR 0019).
 			s.enqueueDecision(store.DecisionRecord{
-				Ts:          time.Now(),
-				SessionID:   req.SessionID,
-				Agent:       req.Agent,
-				ToolName:    req.ToolName,
-				Summary:     summary,
-				Action:      resp.Action,
-				WouldAction: resp.WouldAction,
-				RuleID:      resp.RuleID,
-				Reason:      resp.Reason,
-				Impact:      resp.Impact,
-				ElapsedUs:   elapsed.Microseconds(),
-				CWD:         req.CWD,
-				ToolInput:   req.ToolInput,
+				Ts:                time.Now(),
+				SessionID:         req.SessionID,
+				Agent:             req.Agent,
+				ToolName:          req.ToolName,
+				Summary:           summary,
+				Action:            resp.Action,
+				WouldAction:       resp.WouldAction,
+				PolicyAction:      resp.PolicyAction,
+				EffectiveAction:   resp.EffectiveAction,
+				Adapter:           resp.Adapter,
+				TranslationReason: resp.TranslationReason,
+				RuleID:            resp.RuleID,
+				Reason:            resp.Reason,
+				Impact:            resp.Impact,
+				ElapsedUs:         elapsed.Microseconds(),
+				CWD:               req.CWD,
+				ToolInput:         req.ToolInput,
 				// Seed the final outcome from the enforced policy verdict (ADR
 				// 0112). A policy deny is already final; an allow is provisional
 				// until PostToolUse reports whether the sandbox overrode it.
 				ToolUseID:   req.ToolUseID,
-				FinalAction: finalFromAction(resp.Action),
+				FinalAction: finalFromAction(resp.EffectiveAction),
 				Enforcer:    "policy",
 			})
 		}
@@ -853,6 +876,10 @@ func loadModules(rulesDir string) ([][2]string, error) {
 	copy(accumulated, baseline)
 
 	for _, cf := range customFiles {
+		if err := custompolicy.ValidateModule(cf.name, cf.src); err != nil {
+			slog.Warn("skipping custom rule: authoring contract violation", "file", cf.name, "err", err)
+			continue
+		}
 		candidate := append(accumulated, [2]string{cf.name, cf.src}) //nolint:gocritic
 		_, compileErr := policy.NewHookOPAEngine(ctx, candidate)
 		if compileErr != nil {
