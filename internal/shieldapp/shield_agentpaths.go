@@ -36,6 +36,8 @@ func agentPaths() AgentPaths {
 	return AgentPaths{
 		HomeRW: []string{
 			".claude",     // Claude Code config, sessions, plugins
+			".codex",      // Codex config, SQLite state, hooks, and aliases
+			".cursor",     // Cursor config, hooks, and CLI state
 			".claude-mem", // claude-mem MCP plugin database
 			".cache",      // Claude CLI cache (node, updates)
 			".local",      // Claude binary, tool installs
@@ -51,7 +53,6 @@ func agentPaths() AgentPaths {
 			".agentjail",
 			".npm-global", // npm global modules (plugins may need this)
 			".config",     // XDG config (MCP server configs, etc.)
-			".codex",      // codex skills and config
 			".nvm",        // Node version manager
 			".fnm",        // Fast node manager
 			".npm",        // npm cache/config

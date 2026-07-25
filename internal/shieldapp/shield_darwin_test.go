@@ -3,6 +3,8 @@
 package shieldapp
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,10 +14,27 @@ import (
 	"testing"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 )
 
 // ---- Unit tests: sbpl profile generation ----
+
+func TestRecordSandboxExecFailureEmitsShieldFailed(t *testing.T) {
+	emitter := &captureEmitter{}
+	recordSandboxExecFailure(context.Background(), emitter, errors.New("sandbox_apply: operation not permitted"))
+
+	event, ok := emitter.find(audit.ShieldFailed)
+	if !ok {
+		t.Fatal("sandbox-exec failure was not recorded as shield.failed")
+	}
+	if event.Entity != "sandbox-exec" || event.Actor != "shield" {
+		t.Errorf("event = %+v; want sandbox-exec shield failure", event)
+	}
+	if event.Detail["reason"] != "sandbox_apply: operation not permitted" {
+		t.Errorf("reason = %q; want exec error", event.Detail["reason"])
+	}
+}
 
 // TestGenerateSBProfileContainsDenyBlock verifies the generated sbpl profile
 // has both deny blocks and the expected subpath entries.

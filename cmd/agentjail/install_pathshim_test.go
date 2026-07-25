@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,4 +157,68 @@ func TestShimConsentRecorded(t *testing.T) {
 			t.Error("expected no consent when no rc file exists")
 		}
 	})
+}
+
+func TestRenderPathShimTargetsAgentCommand(t *testing.T) {
+	for _, target := range pathShimTargets {
+		t.Run(target.Command, func(t *testing.T) {
+			shimDir := filepath.Join(t.TempDir(), ".agentjail", "bin")
+			shimPath := filepath.Join(shimDir, target.Command)
+			got := renderPathShim(target, filepath.Join(shimDir, "agentjail-shield"), shimDir, shimPath)
+
+			for _, want := range []string{
+				"command -v " + target.Command,
+				"Running " + target.Command + " UNSHIELDED",
+				`exec "$SHIELD" -- "$REAL_` + strings.ToUpper(target.Command) + `" "$@"`,
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("shim for %s missing %q", target.Command, want)
+				}
+			}
+			if target.Command == "codex" {
+				if !strings.Contains(got, `--yolo`) || !strings.Contains(got, `--dangerously-bypass-approvals-and-sandbox`) {
+					t.Error("Codex shim must translate legacy --yolo to the current bypass flag")
+				}
+			} else if strings.Contains(got, "dangerously-bypass-approvals-and-sandbox") {
+				t.Errorf("non-Codex shim unexpectedly contains Codex --yolo compatibility")
+			}
+
+			script := filepath.Join(t.TempDir(), target.Command)
+			if err := os.WriteFile(script, []byte(got), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := exec.Command("/bin/sh", "-n", script).CombinedOutput(); err != nil {
+				t.Fatalf("invalid shell script: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestInstallPathShimWritesEveryAgent(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".agentjail", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "agentjail-shield"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ZDOTDIR", "")
+
+	if err := installPathShim(home); err != nil {
+		t.Fatal(err)
+	}
+	if !pathShimsInstalled(home) {
+		t.Fatal("expected every supported agent shim to be installed")
+	}
+
+	uninstallPathShim(home)
+	for _, target := range pathShimTargets {
+		if _, err := os.Stat(filepath.Join(binDir, target.Command)); !os.IsNotExist(err) {
+			t.Errorf("%s shim survived uninstall: %v", target.Command, err)
+		}
+	}
 }

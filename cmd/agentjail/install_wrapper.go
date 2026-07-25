@@ -164,80 +164,39 @@ func uninstallVSCodeWrapper(home string, app string) error {
 	return os.WriteFile(settingsPath, out, 0o600)
 }
 
-// installPathShim creates a claude shim binary at ~/.agentjail/bin/claude
-// and adds ~/.agentjail/bin to the shell profile PATH.
+type pathShimTarget struct {
+	Command     string
+	DisplayName string
+}
+
+var pathShimTargets = []pathShimTarget{
+	{Command: "claude", DisplayName: "Claude Code"},
+	{Command: "codex", DisplayName: "Codex"},
+	{Command: "agent", DisplayName: "Cursor"},
+}
+
+// installPathShim creates shims for supported agent CLIs under
+// ~/.agentjail/bin and adds that directory to the shell profile PATH.
 func installPathShim(home string) error {
 	shimDir := filepath.Join(home, ".agentjail", "bin")
-	shimPath := filepath.Join(shimDir, "claude")
 
 	shieldBin, err := findShieldBinary(home)
 	if err != nil {
 		return fmt.Errorf("cannot install PATH shim: shield binary not found — run `agentjail install` first")
 	}
 
-	// Create a shell script shim (not a compiled binary — simpler for now).
-	//
-	// The shim sits on PATH ahead of the real claude, so every failure mode here
-	// is a failure mode of the user's claude. It therefore fails OPEN: if the
-	// shield is gone, claude still runs (unshielded, loudly). See ADR 0063.
-	shimContent := fmt.Sprintf(`#!/bin/sh
-# agentjail PATH shim — transparently wraps claude with agentjail-shield.
-# Installed by: agentjail install --with-path-shim
-# Remove with:  agentjail uninstall
-
-set -e
-
-SHIELD="%s"
-
-# Find the real claude binary, excluding our own directory.
-find_real_claude() {
-    # Save and modify PATH to exclude our directory.
-    _orig_path="$PATH"
-    _shim_dir="%s"
-    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${_shim_dir}$" | tr '\n' ':' | sed 's/:$//')
-    _real=$(command -v claude 2>/dev/null || true)
-    PATH="$_orig_path"
-    echo "$_real"
-}
-
-REAL_CLAUDE=$(find_real_claude)
-
-if [ -z "$REAL_CLAUDE" ]; then
-    echo "ERROR: claude not found in PATH (excluding %s)" >&2
-    echo "  Install Claude Code, or remove the shim: rm %s" >&2
-    exit 127
-fi
-
-# Guard against loop: if real claude IS this script, abort.
-if [ "$REAL_CLAUDE" = "%s" ]; then
-    echo "ERROR: PATH shim resolved to itself at %s" >&2
-    echo "  Check your PATH order." >&2
-    exit 1
-fi
-
-# Fail open. A missing shield must never brick claude: an interrupted upgrade,
-# a partial uninstall, or a quarantined binary would otherwise leave every
-# claude invocation dead with a cryptic "exec: not found". -x also catches a
-# dangling agentjail-shield -> agentjail role symlink, since it follows links.
-if [ ! -x "$SHIELD" ]; then
-    echo "WARNING: agentjail-shield is missing or not executable at $SHIELD" >&2
-    echo "  Running claude UNSHIELDED — policy hooks may still apply." >&2
-    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: agentjail uninstall --path-shim-only (or rm %s)" >&2
-    exec "$REAL_CLAUDE" "$@"
-fi
-
-exec "$SHIELD" -- "$REAL_CLAUDE" "$@"
-`, shieldBin, shimDir, shimDir, shimPath, shimPath, shimPath, shimPath)
-
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create shim directory: %v", err)
 	}
 
-	if err := os.WriteFile(shimPath, []byte(shimContent), 0o755); err != nil {
-		return fmt.Errorf("failed to write shim: %v", err)
+	for _, target := range pathShimTargets {
+		shimPath := filepath.Join(shimDir, target.Command)
+		shimContent := renderPathShim(target, shieldBin, shimDir, shimPath)
+		if err := os.WriteFile(shimPath, []byte(shimContent), 0o755); err != nil {
+			return fmt.Errorf("failed to write %s shim: %v", target.Command, err)
+		}
+		fmt.Fprintf(os.Stdout, "  %s PATH shim installed at %s\n", target.DisplayName, shimPath)
 	}
-
-	fmt.Fprintf(os.Stdout, "  PATH shim installed at %s\n", shimPath)
 
 	// Add to shell profile if not already present.
 	if err := addToShellProfile(home, shimDir); err != nil {
@@ -250,11 +209,79 @@ exec "$SHIELD" -- "$REAL_CLAUDE" "$@"
 	return nil
 }
 
+func renderPathShim(target pathShimTarget, shieldBin, shimDir, shimPath string) string {
+	commandUpper := strings.ToUpper(target.Command)
+	codexYoloCompat := ""
+	if target.Command == "codex" {
+		codexYoloCompat = `# Codex renamed its legacy --yolo flag. Preserve the familiar invocation while
+# forwarding the current equivalent; AgentJail's outer shield remains active.
+if [ "${1:-}" = "--yolo" ]; then
+    shift
+    set -- --dangerously-bypass-approvals-and-sandbox "$@"
+fi
+
+`
+	}
+	return fmt.Sprintf(`#!/bin/sh
+# agentjail PATH shim — transparently wraps %s with agentjail-shield.
+# Installed by: agentjail install --with-path-shim
+# Remove with:  agentjail uninstall
+
+set -e
+
+SHIELD="%s"
+
+find_real_agent() {
+    # Save and modify PATH to exclude our directory.
+    _orig_path="$PATH"
+    _shim_dir="%s"
+    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${_shim_dir}$" | tr '\n' ':' | sed 's/:$//')
+    _real=$(command -v %s 2>/dev/null || true)
+    PATH="$_orig_path"
+    echo "$_real"
+}
+
+REAL_%s=$(find_real_agent)
+
+if [ -z "$REAL_%s" ]; then
+    echo "ERROR: %s not found in PATH (excluding %s)" >&2
+    echo "  Install %s, or remove the shim: rm %s" >&2
+    exit 127
+fi
+
+# Guard against loop: if the real agent IS this script, abort.
+if [ "$REAL_%s" = "%s" ]; then
+    echo "ERROR: PATH shim resolved to itself at %s" >&2
+    echo "  Check your PATH order." >&2
+    exit 1
+fi
+
+%s
+
+# Fail open. A missing shield must never brick the agent: an interrupted upgrade,
+# a partial uninstall, or a quarantined binary would otherwise leave every
+# invocation dead with a cryptic "exec: not found". -x also catches a
+# dangling agentjail-shield -> agentjail role symlink, since it follows links.
+if [ ! -x "$SHIELD" ]; then
+    echo "WARNING: agentjail-shield is missing or not executable at $SHIELD" >&2
+    echo "  Running %s UNSHIELDED — policy hooks may still apply." >&2
+    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: agentjail uninstall --path-shim-only (or rm %s)" >&2
+    exec "$REAL_%s" "$@"
+fi
+
+exec "$SHIELD" -- "$REAL_%s" "$@"
+
+`, target.Command, shieldBin, shimDir, target.Command, commandUpper, commandUpper,
+		target.Command, shimDir, target.DisplayName, shimPath, commandUpper, shimPath,
+		shimPath, codexYoloCompat, target.Command, shimPath, commandUpper, commandUpper)
+}
+
 // uninstallPathShim removes the shim binary. Shell profile cleanup is
 // handled by the existing cleanupShellRCPath in install.go.
 func uninstallPathShim(home string) {
-	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
-	os.Remove(shimPath)
+	for _, target := range pathShimTargets {
+		os.Remove(filepath.Join(home, ".agentjail", "bin", target.Command))
+	}
 }
 
 // removePathShimOnly removes just the PATH shim — the binary AND its opt-in
@@ -300,11 +327,9 @@ func shimConsentRecorded(home string) bool {
 // no missing-command. The user believes they are shielded and is not. Called
 // unconditionally from install. See ADR 0062.
 func reassertPathShim(home string) {
-	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
-	_, statErr := os.Stat(shimPath)
-	onDisk := statErr == nil
+	complete := pathShimsInstalled(home)
 
-	if !onDisk && !shimConsentRecorded(home) {
+	if !anyPathShimInstalled(home) && !shimConsentRecorded(home) {
 		return // never opted in — nothing to reassert
 	}
 
@@ -312,9 +337,27 @@ func reassertPathShim(home string) {
 		fmt.Fprintf(os.Stderr, "agentjail: warning: could not reassert PATH shim: %v\n", err)
 		return
 	}
-	if !onDisk {
+	if !complete {
 		fmt.Fprintln(os.Stderr, "agentjail: restored the PATH shim (your shell profile opts into it, but the shim was missing)")
 	}
+}
+
+func pathShimsInstalled(home string) bool {
+	for _, target := range pathShimTargets {
+		if _, err := os.Stat(filepath.Join(home, ".agentjail", "bin", target.Command)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func anyPathShimInstalled(home string) bool {
+	for _, target := range pathShimTargets {
+		if _, err := os.Stat(filepath.Join(home, ".agentjail", "bin", target.Command)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // addToShellProfile adds the agentjail bin directory to PATH in the

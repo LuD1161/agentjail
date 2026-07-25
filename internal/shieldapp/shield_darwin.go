@@ -77,8 +77,6 @@ func sensitiveWritePaths(home string) []string {
 // darwin-specific hardening.
 func sensitiveWritePathsExtra(home string) []string {
 	return []string{
-		home + "/.codex",
-		home + "/.cursor",
 		home + "/.docker",
 		home + "/.kube",
 		home + "/.cargo",
@@ -988,9 +986,21 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 
 	// syscall.Exec replaces this process entirely.  If it returns, it failed.
 	if err := syscall.Exec(sandboxExecPath, argv, env); err != nil {
+		recordSandboxExecFailure(ctx, emitter, err)
 		fmt.Fprintf(os.Stderr, "agentjail-shield: exec sandbox-exec failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// recordSandboxExecFailure closes the launch audit when Seatbelt cannot apply.
+// See ADR 0089-record-shield-launches.
+func recordSandboxExecFailure(ctx context.Context, emitter audit.Emitter, err error) {
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.ShieldFailed,
+		Entity:    "sandbox-exec",
+		Detail:    map[string]string{"reason": err.Error()},
+		Actor:     "shield",
+	})
 }
 
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec

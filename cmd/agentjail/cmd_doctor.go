@@ -447,24 +447,26 @@ func checkHooks(home string) []doctorCheck {
 // the "never opted in" case carries no repair, because installing a shim the
 // user never consented to is not a repair (ADR 0086-doctor-repairs-diagnosed).
 func pathShimCheck(home string) doctorCheck {
-	shimPath := filepath.Join(home, ".agentjail", "bin", "claude")
-	switch _, err := os.Stat(shimPath); {
-	case err == nil:
+	shimDir := filepath.Join(home, ".agentjail", "bin")
+	switch {
+	case pathShimsInstalled(home):
 		return doctorCheck{
 			label:  "PATH shim",
 			status: statusOK,
-			detail: shimPath,
+			detail: filepath.Join(shimDir, "{claude,codex,agent}"),
 		}
 	case shimConsentRecorded(home):
-		// Dangling: the shell profile still prepends ~/.agentjail/bin to PATH,
-		// but no shim sits there, so `claude` silently resolves to the real
-		// unshielded binary. Reported as a failure, not a neutral "opt-in"
-		// note — the user opted in and is not getting it (ADR 0062).
+		var missing []string
+		for _, target := range pathShimTargets {
+			if _, err := os.Stat(filepath.Join(shimDir, target.Command)); err != nil {
+				missing = append(missing, target.Command)
+			}
+		}
 		return doctorCheck{
 			label:  "PATH shim",
 			status: statusFail,
 			repair: repairPathShim,
-			detail: "MISSING but your shell profile opts into it — `claude` is running UNSHIELDED. Repair: agentjail doctor --fix (or agentjail install --with-path-shim)",
+			detail: fmt.Sprintf("MISSING %s but your shell profile opts in — those agents run UNSHIELDED. Repair: agentjail doctor --fix (or agentjail install --with-path-shim)", strings.Join(missing, ", ")),
 		}
 	default:
 		return doctorCheck{
