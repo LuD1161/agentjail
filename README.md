@@ -193,6 +193,18 @@ curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh |
 
 Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards.
 
+Cursor shell, file-read, and MCP events are normalized into the same policy
+contract as Claude Code and Codex. Cursor cannot prompt interactively for a
+file read, so an agentjail `ask` verdict on `beforeReadFile` fails closed as a
+normal `deny`; shell and MCP `ask` verdicts keep Cursor's approval prompt.
+Re-running `agentjail install --for cursor` also replaces a legacy bare
+AgentJail hook command with the Cursor-specific adapter.
+Codex registers `PreToolUse` and `PostToolUse` only for Bash, `apply_patch`,
+and MCP calls, so internal UI/orchestration tools are not intercepted and
+sandbox-denied tool outcomes are recorded against the original decision.
+Each `apply_patch` target is normalized to the same file-policy contract as an
+Edit, so a multi-file patch is denied when any target is protected.
+
 ```sh
 agentjail status                      # verify everything is wired
 agentjail doctor                      # diagnose a specific setup problem
@@ -204,7 +216,7 @@ agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay
 ```
 
-**Is this session actually protected?** In Claude Code, the status line tells you, for the whole life of the session:
+**Is this session actually protected?** In Claude Code and Cursor CLI, the status line tells you, for the whole life of the session:
 
 ```
 🔒 [secured by agentjail (v1.0.0)]        ← shield active, policy daemon answering
@@ -220,6 +232,8 @@ The badge attests **both** enforcement layers ([ADR 0085](./docs/adr/0085-status
 - `POLICY OFF` — the shield is holding, but the policy daemon is unreachable and the hook is failing open, so no rule is being evaluated. Restart the daemon; `agentjail doctor` says why.
 
 The padlock only appears when both are live. When agentjail is uninstalled the badge disappears entirely.
+
+Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the AgentJail badge, so Codex protection is activated by the PATH shim and verified with `agentjail status` or `agentjail doctor`.
 
 <details>
 <summary><b>More install options</b></summary>
@@ -238,14 +252,14 @@ agentjail install --all               # non-interactive, install all detected
 
 **Terminal PATH shim (opt-in):**
 ```sh
-agentjail install --with-path-shim    # wrap `claude` in the shield automatically
+agentjail install --with-path-shim    # wrap `claude`, `codex`, and Cursor's `agent`
 ```
 
-By default, hooks are wired but you launch the sandbox explicitly with `agentjail claude`. The PATH shim installs a `claude` wrapper at `~/.agentjail/bin/claude` and prepends that directory to your shell profile, so a plain `claude` runs shielded without you thinking about it.
+By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands run shielded without a special launch command.
 
 It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstalls and upgrades restore the shim rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 
-The shim **fails open**. If the shield binary is missing (interrupted upgrade, partial uninstall), it warns loudly and runs your real `claude` unshielded rather than breaking it ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
+Each shim **fails open**. If the shield binary is missing (interrupted upgrade, partial uninstall), it warns loudly and runs the real agent unshielded rather than breaking it ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
 
 It only covers profile-sourcing interactive shells. VS Code/Cursor use the process wrapper (`agentjail install --for vscode`); cron, non-interactive shells, and absolute-path invocations are not covered.
 
@@ -369,7 +383,7 @@ agentjail uninstall --keep-secrets    # keep the encrypted store + master key
 agentjail uninstall --for claude-code # just unhook one agent
 ```
 
-Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. Your Claude Code `statusLine` is removed too — and if agentjail wrapped a statusline you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
+Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. AgentJail's Claude Code and Cursor CLI status lines are removed too — and if agentjail wrapped a status line you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md), [ADR 0113](./docs/adr/0113-cursor-status-line.md)).
 
 > **`policy.yaml` is deleted.** Reinstalling writes a **fresh default**, where `mcp.allowed: []` denies every MCP server. If you have customised your MCP allowlist or `network.allowed_hosts`, back it up first:
 > ```sh
@@ -497,7 +511,7 @@ agentjail policy list
 
 **Namespace:** every custom rule_id must use `custom/<filename_stem>/<rule>`.
 
-**Validation:** `agentjail policy add` enforces `package agentjail`, no `decision` declaration, correct namespace, and full-bundle OPA compile.
+**Validation:** `agentjail policy add` accepts only partial `candidate` entries in `package agentjail`; resolver helpers and `decision` are not extensible. It also checks the namespace and compiles the full OPA bundle.
 
 **Input is type-checked:** rules are compiled against a schema of the fields the daemon actually sends, so a typo like `input.tool_nme` is rejected at install with the offending line and the list of valid fields — rather than compiling clean and silently never firing. Referencing a field that is *declared but absent* at eval (`aws_account` on a non-AWS call, `command_binaries` on a non-Bash tool) stays legal; that is normal Rego and still evaluates to undefined.
 

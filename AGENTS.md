@@ -24,6 +24,23 @@ Three deployment tiers, in build order:
 7. **[`docs/adr/0004-credential-broker-tier1.md`](./docs/adr/0004-credential-broker-tier1.md)** — credential broker design (Tier 1.5 OSS path).
 8. **[`docs/adr/`](./docs/adr/)** — all ADRs. Each captures one decision with Context / Decision / Consequences.
 
+## Current external integrations
+
+Agent hook schemas, CLI flags, SDKs, MCP protocols, and hosted service behavior
+are versioned external contracts. Before making a definitive claim about one:
+
+1. Check the installed version locally.
+2. Consult the current official documentation (use the documentation MCP,
+   including Context7 when available; otherwise browse the vendor's primary
+   source).
+3. Run a minimal live compatibility check when the behavior affects enforcement.
+4. Record the source, version, and verification date in the relevant ADR or
+   integration test.
+
+Do not rely on remembered or historical behavior for a security decision. If
+the documented capability is uncertain, use the conservative adapter behavior
+and expose the uncertainty in the audit record.
+
 ## Standard libraries — no hacky patterns
 
 OSS-relevant dependencies:

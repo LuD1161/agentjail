@@ -72,8 +72,8 @@ the daemon is down.
 | Platform | Hook event | Config file | What is intercepted |
 |---|---|---|---|
 | Claude Code | `PreToolUse` | `~/.claude/settings.json` | Bash, Write, Edit, Read, all MCP tools |
-| Codex CLI | `PreToolUse` | `~/.codex/hooks.json` | Bash, apply_patch, MCP tools |
-| Cursor | `preToolUse` + `beforeShellExecution` | `~/.cursor/hooks.json` | All tool types |
+| Codex CLI | `PreToolUse` + `PermissionRequest` + `PostToolUse` | `~/.codex/hooks.json` | Bash, apply_patch, MCP tools |
+| Cursor | `beforeShellExecution` + `beforeMCPExecution` + `beforeReadFile` | `~/.cursor/hooks.json` | Shell, MCP, and agent file reads |
 
 The hook is configured in a file the agent reads at startup. Because the agent runs *inside* the hook framework, it cannot remove the hook from within itself. The policy binary runs in the host shell, not in the agent's process.
 
@@ -191,12 +191,13 @@ text.
   to `~/.agentjail/audit.log`. `library/no-daemon-kill` is on by default but
   disableable with `--force` — the daemon runs under launchd/systemd with
   `KeepAlive=true`, so a kill is a speed bump, not a permanent disable.
-- **Custom rules** — `agentjail policy add <file.rego>` validates the authoring
-  contract (`package agentjail`, `candidate`-only, reserved `custom/<name>/<rule>`
-  ids) by compiling the full bundle, then installs it. The daemon load path is a
-  deterministic quarantine: the core+library baseline always loads, and each
-  custom file is added only if it keeps the bundle compiling — a bad custom rule
-  is skipped with a warning, never failing startup or going open.
+- **Custom rules** — `agentjail policy add <file.rego>` parses the module AST and
+  accepts only partial `candidate` entries in `package agentjail`; resolver
+  helpers and `decision` are not extensible. It validates reserved
+  `custom/<name>/<rule>` ids and compiles the full bundle before installation.
+  The daemon repeats the extension-surface validation during deterministic
+  quarantine, so a manually dropped unsafe module is skipped rather than
+  weakening the baseline.
 
 See ADRs [0012](adr/0012-daemon-config-overlay.md),
 [0013](adr/0013-file-policy-temp-and-project-posture.md), and

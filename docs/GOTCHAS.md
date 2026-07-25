@@ -267,6 +267,127 @@ no repo context, and the scenario passed by having nothing to do.
   from a neutral directory, and the worktree case has its own scenario.
 - AGE-241 (open — it affects `main`, not just the tunnel).
 
+## 16. Adapter tests must cross the policy boundary
+
+Cursor adapter tests proved that its shell and MCP payloads reached the daemon,
+but the fixtures asserted Cursor's native event and tool names. The daemon
+accepted those strings while every Rego rule expected the canonical
+`PreToolUse` / `mcp__<server>__<tool>` contract. The tests were green while
+dangerous shell commands and blocked MCP servers both missed their policies.
+
+The same adapter also emitted `ask` for `beforeReadFile`, although Cursor only
+accepts `allow|deny` for that event, and discarded the common
+`workspace_roots` field needed for project membership.
+
+- **Rule:** an adapter test must evaluate its translated request through the
+  real policy engine and assert the firing `rule_id`, not stop at socket
+  serialization.
+- **Rule:** response tests are event-specific. A verdict supported by one hook
+  schema may be invalid in another hook from the same client.
+- GitHub #12, #13, #14.
+
+## 17. A retry is not an approval
+
+The evaluator remembered the first `ask` for each session and rule, then
+silently changed every retry to `allow`. That made repeated Codex tool calls
+bypass policy even though Codex hooks cannot report an approval. The green test
+suite explicitly asserted this unsafe promotion as intended behavior.
+
+- **Rule:** authorization state must come from an authenticated approval event,
+  never inferred from repetition.
+- **Rule:** clients without an approval callback must keep receiving `ask`;
+  their adapters decide how to present or fail closed on that verdict.
+
+## 18. Recovery evidence outranks a stale marker
+
+The hook's fail-open marker survived a transient daemon timeout, so `doctor`
+continued saying the daemon had never restarted even after newer policy
+decisions proved enforcement had resumed.
+
+- **Rule:** a health report must reconcile historical markers with newer
+  positive evidence before describing an incident as ongoing.
+- **Rule:** distinguish “this call failed open” from “protection is still off.”
+
+## 19. Read-only config is not writable agent state
+
+The macOS shield listed `~/.codex` and `~/.cursor` as read-only in the shared
+path contract, then separately denied writes to both directories. Codex could
+launch, but its SQLite state initialization failed with “attempt to write a
+readonly database.” The green profile tests did not exercise a real Codex
+startup.
+
+- **Rule:** every agent state directory belongs in the shared writable-path
+  contract; do not duplicate a contradictory per-OS deny override.
+
+## 20. CLI aliases can disappear upstream
+
+Codex 0.145 removed the legacy `--yolo` spelling while users and wrappers still
+invoked it. The AgentJail shim forwarded the argument faithfully, so Codex
+rejected the command before a session began.
+
+- **Rule:** compatibility belongs at the adapter boundary; translate removed
+  aliases to the current explicit flag without weakening AgentJail's outer
+  shield.
+
+## 21. A pre-exec activation record is provisional
+
+The macOS shield recorded `shield.activated` immediately before `sandbox-exec`,
+but a nested Seatbelt launch can fail at `sandbox_apply` after that write. The
+audit trail then claimed activation with no matching failure, even though the
+agent never started under the requested inner sandbox.
+
+- **Rule:** when an exec-based enforcement handoff returns, record its failure
+  against the same launch; a pre-exec activation event alone is not proof that
+  the kernel accepted the sandbox.
+
+## 22. A rendered denial is not necessarily a policy denial
+
+Codex PreToolUse cannot render a native interactive `ask`. The hook therefore
+failed closed, but the decision store only retained the rendered result. A user
+could not distinguish policy deciding `deny` from policy deciding `ask` that a
+specific agent protocol had to render as deny.
+
+- **Rule:** preserve the canonical policy action and record the adapter's
+  effective action, identity, and translation reason separately.
+- **Rule:** final action and enforcer answer a different question: what
+  ultimately happened and whether policy or the sandbox enforced it. Do not
+  overload them to explain protocol translation. See ADR 0115-agent-decision-adapters.
+
+## 23. A wildcard matcher is not a capability classification
+
+Codex's hook matcher admitted every `collaboration.*` tool, while policy only
+listed older undotted spellings. Known calls reached `resolver/default`; a new
+upstream collaboration tool would have been treated as though it were already
+reviewed. The unit suites were green because matcher and policy were tested
+separately.
+
+- **Rule:** enumerate agent-internal capabilities exactly, and test that every
+  matcher-admitted name has a non-default policy result. Unknown names must
+  remain unclassified and fail safe.
+
+## 24. Rego namespaces are extensible unless the extension surface is enforced
+
+Custom rules were checked for `decision` with a text pattern, but Rego lets a
+second `rule_disabled` body extend the resolver predicate. That could filter a
+locked candidate before priority resolution while still compiling cleanly.
+
+- **Rule:** validate custom modules from their AST and accept only partial
+  `candidate` entries. Repeat that validation when the daemon loads files that
+  were placed in the rules directory outside the CLI. See ADR 0116-custom-rule-surface.
+
+## 25. A recovery command must not become an unconfigured service
+
+The fail-open banner told users to run `agentjail daemon restart`, but `daemon`
+was the hidden process-role dispatcher. It forwarded the positional word
+`restart` to the daemon, which ignored it and started without `--rules`. That
+process won the singleton lock and served `resolver/default`, allowing every
+otherwise-covered request while launchd correctly stood down. Existing daemon
+tests were green because they exercised the symlinked role with its explicit
+flags, not the recovery command shown to users.
+
+- **Rule:** reserve and test every human-facing verb before forwarding role
+  arguments; recovery instructions are executable security surface, not prose.
+
 ---
 
 ## Testing gotchas
