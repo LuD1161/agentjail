@@ -411,6 +411,18 @@ commands into recorded sandbox blocks while all outcome tests stayed green.
 - **Rule:** model success and failure events separately when the upstream
   protocol does. See ADR 0112-final-action-outcome.
 
+## 28. A page limit is not a snapshot definition
+
+`agentjail logs --no-follow` queried decisions oldest-first with a 1,000-row
+limit and exited after that first page. It looked like a bounded snapshot, but
+on a busy database it omitted every recent decision—the exact rows a policy
+investigation needed.
+
+- **Rule:** define which window a bounded view means before applying `LIMIT`.
+  Select newest-first for a "latest N" window, reverse only for chronological
+  presentation, and use keyset pagination when the command promises all rows.
+  See ADR 0018-sqlite-local-store.
+
 ---
 
 ## Testing gotchas

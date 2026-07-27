@@ -223,6 +223,7 @@ type logsOpts struct {
 	verbose  bool          // -v: show command/file_path + reason + session_id
 	session  string        // filter by session_id substring
 	basic    bool          // --basic: disable rich mode (scrolling region + status bar)
+	latest   int           // snapshot the newest N matching decisions, then exit
 }
 
 // ANSI escape sequences. We keep them as bare strings — no external dep.
@@ -276,6 +277,7 @@ func runLogs(args []string) int {
 	verbose := fs.Bool("v", false, "verbose: show the command/file_path, reason, and session_id")
 	sessionStr := fs.String("session", "", "filter by session_id substring match")
 	basicMode := fs.Bool("basic", false, "disable rich TUI mode (no status bar, no IMPACT column); useful for piping or CI")
+	latest := fs.Int("latest", 0, "print the newest N matching decisions chronologically and exit (max 10000)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -285,14 +287,30 @@ func runLogs(args []string) int {
 	}
 
 	logExplicit := false
+	latestExplicit := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "log" {
+		switch f.Name {
+		case "log":
 			logExplicit = true
+		case "latest":
+			latestExplicit = true
 		}
 	})
+	if latestExplicit && (*latest < 1 || *latest > 10000) {
+		fmt.Fprintln(os.Stderr, "agentjail logs: --latest must be between 1 and 10000")
+		return 2
+	}
+	if latestExplicit && logExplicit {
+		fmt.Fprintln(os.Stderr, "agentjail logs: --latest requires the SQLite store; remove --log")
+		return 2
+	}
 	useDB := !logExplicit
 	if useDB {
 		if _, err := os.Stat(*dbPath); err != nil {
+			if latestExplicit {
+				fmt.Fprintf(os.Stderr, "agentjail logs: --latest requires SQLite store %s: %v\n", *dbPath, err)
+				return 1
+			}
 			fmt.Fprintf(os.Stderr, "agentjail logs: SQLite store %s not available (%v), falling back to daemon.log\n", *dbPath, err)
 			useDB = false
 		}
@@ -343,6 +361,10 @@ func runLogs(args []string) int {
 		verbose:  *verbose,
 		session:  *sessionStr,
 		basic:    !richEnabled,
+		latest:   *latest,
+	}
+	if latestExplicit {
+		opts.follow = false
 	}
 
 	// Signal handling — SIGINT / SIGTERM exits cleanly.
@@ -372,6 +394,10 @@ func runLogs(args []string) int {
 }
 
 func streamStoredLogs(opts logsOpts, doneCh <-chan struct{}) int {
+	return streamStoredLogsWithPageSize(opts, doneCh, 1000)
+}
+
+func streamStoredLogsWithPageSize(opts logsOpts, doneCh <-chan struct{}, pageSize int) int {
 	st, err := store.OpenReadOnly(opts.dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail logs: open %s: %v\n", opts.dbPath, err)
@@ -392,17 +418,28 @@ func streamStoredLogs(opts logsOpts, doneCh <-chan struct{}) int {
 
 	lastID := int64(0)
 	for {
-		rows, err := st.ListDecisions(context.Background(), store.Filter{
+		filter := store.Filter{
 			SessionID: opts.session,
 			Since:     opts.since,
 			Actions:   opts.actions,
 			Tool:      opts.tool,
 			AfterID:   lastID,
-			Limit:     1000,
-		})
+			Limit:     pageSize,
+		}
+		if opts.latest > 0 {
+			filter.Limit = opts.latest
+			filter.OrderDesc = true
+		}
+		rows, err := st.ListDecisions(context.Background(), filter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail logs: query %s: %v\n", opts.dbPath, err)
 			return 1
+		}
+		if opts.latest > 0 {
+			// Reverse the newest-first query for display. See ADR 0018-sqlite-local-store.
+			for left, right := 0, len(rows)-1; left < right; left, right = left+1, right-1 {
+				rows[left], rows[right] = rows[right], rows[left]
+			}
 		}
 		for _, row := range rows {
 			if row.ID > lastID {
@@ -415,6 +452,12 @@ func streamStoredLogs(opts logsOpts, doneCh <-chan struct{}) int {
 				continue
 			}
 			_ = renderEvalLine(line, opts, nil)
+		}
+		if opts.latest > 0 {
+			return 0
+		}
+		if len(rows) == pageSize {
+			continue
 		}
 		if !opts.follow {
 			return 0

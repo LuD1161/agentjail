@@ -4,8 +4,13 @@
 
 ## Unreleased
 
+### Added
+
+- **Bounded decision snapshots**: `agentjail logs --latest N` selects the newest matching SQLite decisions and prints them chronologically, including JSON output.
+
 ### Fixed
 
+- **Complete non-follow logs**: `agentjail logs --no-follow` now traverses every matching SQLite page instead of stopping after the oldest 1,000 decisions.
 - **Truthful sandbox outcomes**: successful tool output that merely discusses `EPERM` or sandbox denials is no longer recorded as an OS-enforced block; Claude failures now use `PostToolUseFailure`, while Codex attribution requires structured failure evidence.
 - **Inert commit-message paths**: static, non-expanding `git commit -m` text no longer triggers the Bash sensitive-path rule, while expansions, other arguments, and chained commands remain protected.
 

@@ -216,6 +216,7 @@ agentjail doctor                      # diagnose a specific setup problem
 agentjail doctor --fix                # repair what it can (dead daemon, dangling shim, stale service unit), then re-check
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
+agentjail logs --latest 1000 --json   # newest 1000 matching decisions, chronological JSON
 agentjail sessions list               # active and past agent sessions
 agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay

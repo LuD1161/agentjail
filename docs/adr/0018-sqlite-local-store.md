@@ -101,7 +101,10 @@ This preserves existing audit history across the upgrade.
 `agentjail logs` and `agentjail replay` query SQLite instead of tailing
 `daemon.log`. If the DB is absent (a pre-upgrade install that has not yet
 run the daemon), `agentjail logs` falls back to the legacy `daemon.log`
-tail so mixed-version installs keep working.
+tail so mixed-version installs keep working. `agentjail logs --latest N`
+queries newest-first so the SQL limit selects the newest matching window, then
+prints that window chronologically. Snapshot reads without `--latest` traverse
+all matching rows with ascending keyset pagination.
 
 ## Consequences
 

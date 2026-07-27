@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +179,92 @@ func TestLogsDB_JSONOutput(t *testing.T) {
 		}
 		if !strings.Contains(line, `"action"`) {
 			t.Errorf("line %d missing action field: %q", i, line)
+		}
+	}
+}
+
+func TestLogsDB_LatestSelectsNewestAndPrintsChronologically(t *testing.T) {
+	dbPath, st := newTestDB(t)
+	ctx := context.Background()
+	for _, summary := range []string{"fourth", "fifth", "sixth"} {
+		if err := st.RecordDecision(ctx, store.DecisionRecord{
+			Ts:        time.Now().UTC(),
+			SessionID: "sess-latest",
+			Agent:     "codex",
+			ToolName:  "Bash",
+			Summary:   summary,
+			Action:    "allow",
+		}); err != nil {
+			t.Fatalf("RecordDecision(%s): %v", summary, err)
+		}
+	}
+
+	out := captureStdout(t, func() {
+		code := runLogs([]string{"--db", dbPath, "--latest", "2", "--json", "--no-color", "--basic"})
+		if code != 0 {
+			t.Errorf("runLogs exit = %d, want 0", code)
+		}
+	})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d rows, want 2: %q", len(lines), out)
+	}
+	var got []evalLine
+	for _, line := range lines {
+		var row evalLine
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("decode JSON line %q: %v", line, err)
+		}
+		got = append(got, row)
+	}
+	if got[0].Summary != "fifth" || got[1].Summary != "sixth" {
+		t.Fatalf("latest rows = [%q, %q], want [fifth, sixth]", got[0].Summary, got[1].Summary)
+	}
+}
+
+func TestLogsDB_NoFollowTraversesEveryPage(t *testing.T) {
+	dbPath, st := newTestDB(t)
+	ctx := context.Background()
+	for i := 0; i < 100; i++ {
+		if err := st.RecordDecision(ctx, store.DecisionRecord{
+			Ts:        time.Now().UTC(),
+			SessionID: "sess-pages",
+			Agent:     "codex",
+			ToolName:  "Bash",
+			Summary:   fmt.Sprintf("paged-%03d", i),
+			Action:    "allow",
+		}); err != nil {
+			t.Fatalf("RecordDecision(%d): %v", i, err)
+		}
+	}
+
+	out := captureStdout(t, func() {
+		code := streamStoredLogsWithPageSize(logsOpts{
+			dbPath: dbPath,
+			raw:    true,
+			basic:  true,
+		}, make(chan struct{}), 100)
+		if code != 0 {
+			t.Errorf("streamStoredLogsWithPageSize exit = %d, want 0", code)
+		}
+	})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 103 {
+		t.Fatalf("got %d rows, want 103", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], `"summary":"paged-099"`) {
+		t.Fatalf("last row is not the last stored decision: %q", lines[len(lines)-1])
+	}
+}
+
+func TestLogsDB_LatestRejectsInvalidLimit(t *testing.T) {
+	for _, limit := range []string{"0", "10001"} {
+		code := 0
+		captureStderr(t, func() {
+			code = runLogs([]string{"--latest", limit})
+		})
+		if code != 2 {
+			t.Errorf("--latest %s exit = %d, want 2", limit, code)
 		}
 	}
 }

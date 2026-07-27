@@ -348,7 +348,7 @@ func (s *sqliteStore) DecisionCount(ctx context.Context) (int64, error) {
 	return s.queries.GetDecisionCount(ctx)
 }
 
-// ListDecisions returns decisions matching f, oldest-first (chronological).
+// ListDecisions returns decisions matching f in the requested ID order.
 func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error) {
 	var (
 		conds []string
