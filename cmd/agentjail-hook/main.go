@@ -72,9 +72,13 @@ type hookInput struct {
 	// fall back to correlationID's hash.
 	ToolUseID string `json:"tool_use_id"`
 	// ToolResponse is Claude Code's PostToolUse-only payload carrying the
-	// tool's result (shape varies by tool — ADR 0112). Left as raw JSON since
-	// the hook only needs to scan it for the sandbox's denial signature.
+	// tool's result. Codex also uses this field, but its value is tool-specific.
+	// Outcome handling decodes the agent-specific evidence into typed structs.
 	ToolResponse json.RawMessage `json:"tool_response,omitempty"`
+	// Error and IsInterrupt are Claude Code's PostToolUseFailure fields.
+	// PostToolUse is success-only as of Claude Code 2.1.216.
+	Error       string `json:"error,omitempty"`
+	IsInterrupt bool   `json:"is_interrupt,omitempty"`
 }
 
 type cursorHookEvent string
@@ -85,6 +89,7 @@ const (
 	cursorBeforeReadFile       cursorHookEvent = "beforeReadFile"
 	canonicalPreToolUse                        = "PreToolUse"
 	codexPermissionRequest                     = "PermissionRequest"
+	claudePostToolUseFailure                   = "PostToolUseFailure"
 )
 
 // cursorShellInput is the Cursor stdin payload for beforeShellExecution.
@@ -745,11 +750,12 @@ func runClaude(agent string) {
 		return
 	}
 
-	// ADR 0112: PostToolUse is a distinct, non-blocking path — the tool
-	// already ran, so it reports the observed outcome and always exits 0
-	// rather than falling through to the PreToolUse allow/ask/deny handling
-	// below.
-	if input.HookEventName == "PostToolUse" {
+	// These outcome events are non-blocking: the tool already ran, so the hook
+	// reports the observation and always exits 0. Claude separates success
+	// (PostToolUse) from failure (PostToolUseFailure); Codex reports both
+	// through PostToolUse. See ADR 0112-final-action-outcome.
+	if input.HookEventName == "PostToolUse" ||
+		(agent == "claude" && input.HookEventName == claudePostToolUseFailure) {
 		handlePostToolUse(agent, input)
 		return
 	}

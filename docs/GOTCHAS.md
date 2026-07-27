@@ -399,6 +399,18 @@ denials were green, but a static `git commit -m` message documenting
   heredocs, and remote-shell payloads stay covered unless a real shell parser
   can prove where execution occurs. See ADR 0001-os-sandbox-enforcement-layer.
 
+## 27. Error words are not evidence of failure
+
+The outcome hook scanned every successful tool response for `EPERM`,
+“operation not permitted,” or the words “sandbox” and “deny.” Reading
+AgentJail's own documentation therefore turned policy-allowed, successful
+commands into recorded sandbox blocks while all outcome tests stayed green.
+
+- **Rule:** classify a sandbox denial only after the agent protocol proves the
+  tool failed. Output prose is supporting detail, never the failure signal.
+- **Rule:** model success and failure events separately when the upstream
+  protocol does. See ADR 0112-final-action-outcome.
+
 ---
 
 ## Testing gotchas

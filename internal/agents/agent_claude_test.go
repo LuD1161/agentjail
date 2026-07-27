@@ -58,17 +58,22 @@ func readSettings(t *testing.T, env Env) []byte {
 // assertEntryCount counts how many times hookCmd appears in PreToolUse.
 func assertEntryCount(t *testing.T, data []byte, hookCmd string, want int) {
 	t.Helper()
+	assertEventEntryCount(t, data, "PreToolUse", hookCmd, want)
+}
+
+func assertEventEntryCount(t *testing.T, data []byte, event, hookCmd string, want int) {
+	t.Helper()
 	var root map[string]interface{}
 	if err := json.Unmarshal(data, &root); err != nil {
-		t.Fatalf("assertEntryCount: unmarshal: %v", err)
+		t.Fatalf("assertEventEntryCount: unmarshal: %v", err)
 	}
 	hooks, _ := root["hooks"].(map[string]interface{})
 	if hooks == nil && want == 0 {
 		return
 	}
-	ptu, _ := hooks["PreToolUse"].([]interface{})
+	entries, _ := hooks[event].([]interface{})
 	count := 0
-	for _, entry := range ptu {
+	for _, entry := range entries {
 		em, _ := entry.(map[string]interface{})
 		if em == nil {
 			continue
@@ -78,8 +83,8 @@ func assertEntryCount(t *testing.T, data []byte, hookCmd string, want int) {
 		}
 	}
 	if count != want {
-		t.Errorf("assertEntryCount: hookCmd %q appears %d times, want %d\ndata: %s",
-			hookCmd, count, want, data)
+		t.Errorf("assertEventEntryCount: hookCmd %q appears %d times in %s, want %d\ndata: %s",
+			hookCmd, count, event, want, data)
 	}
 }
 
@@ -127,7 +132,9 @@ func TestClaudeInstallAddsEntry(t *testing.T) {
 	}
 
 	data := readSettings(t, env)
-	assertEntryCount(t, data, env.HookBin, 1)
+	for _, event := range claudeHookEvents {
+		assertEventEntryCount(t, data, event, env.HookBin, 1)
+	}
 }
 
 // TestClaudeInstallIdempotent verifies that running Install twice leaves
@@ -261,7 +268,9 @@ func TestClaudeUninstallRemovesEntry(t *testing.T) {
 	}
 
 	data := readSettings(t, env)
-	assertEntryCount(t, data, env.HookBin, 0)
+	for _, event := range claudeHookEvents {
+		assertEventEntryCount(t, data, event, env.HookBin, 0)
+	}
 }
 
 // TestClaudeUninstallIdempotent verifies that Uninstall is idempotent: running
@@ -388,6 +397,21 @@ func TestClaudeStatusNotInstalled(t *testing.T) {
 	s := ag.Status(env)
 	if s.Installed {
 		t.Errorf("Status.Installed = true when no settings.json, want false")
+	}
+}
+
+func TestClaudeStatusRequiresFailureOutcomeHook(t *testing.T) {
+	env := newClaudeEnv(t)
+	writeSettings(t, env, []byte(`{
+  "hooks": {
+    "PreToolUse": [{"matcher":"*","hooks":[{"type":"command","command":"`+env.HookBin+`"}]}],
+    "PostToolUse": [{"matcher":"*","hooks":[{"type":"command","command":"`+env.HookBin+`"}]}]
+  }
+}`))
+
+	s := (ClaudeCode{}).Status(env)
+	if s.Installed {
+		t.Fatal("Status.Installed = true without PostToolUseFailure hook")
 	}
 }
 

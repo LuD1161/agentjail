@@ -9,7 +9,7 @@ import (
 )
 
 // ClaudeCode is the agent implementation for Anthropic's Claude Code.
-// It wires/unwires the agentjail PreToolUse hook in ~/.claude/settings.json.
+// It wires/unwires AgentJail's policy and outcome hooks in settings.json.
 type ClaudeCode struct{}
 
 // ID returns "claude-code".
@@ -138,8 +138,9 @@ func claudeMergeHookEntry(settings []byte, hookCmd string) ([]byte, bool) {
 		hooks = make(map[string]interface{})
 	}
 
-	// The same hook binary is wired for PreToolUse (policy decision) and
-	// PostToolUse (observed sandbox outcome, ADR 0112). Both are idempotent.
+	// The same hook binary is wired for the policy decision and both outcome
+	// events. Claude Code 2.1.216 separates successful and failed tool calls.
+	// See ADR 0112-final-action-outcome.
 	changed := false
 	for _, event := range claudeHookEvents {
 		list, _ := hooks[event].([]interface{})
@@ -171,10 +172,9 @@ func claudeMergeHookEntry(settings []byte, hookCmd string) ([]byte, bool) {
 	return out, true
 }
 
-// claudeHookEvents are the Claude Code hook events agentjail wires the same
-// hook binary into: PreToolUse for the policy decision, PostToolUse for the
-// observed outcome (ADR 0112-final-action-outcome).
-var claudeHookEvents = []string{"PreToolUse", "PostToolUse"}
+// claudeHookEvents are the lifecycle seams AgentJail owns. PostToolUse cannot
+// prove failure; PostToolUseFailure carries the typed failure evidence.
+var claudeHookEvents = []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}
 
 // claudeStatuslineSuffix is appended to the agentjail CLI binary path to form
 // the command agentjail owns in Claude Code's statusLine setting.
@@ -310,8 +310,7 @@ func claudeRemoveHookEntry(settings []byte, hookCmd string) []byte {
 		return settings
 	}
 
-	// Remove the hook from every event it was wired into (ADR 0112 added
-	// PostToolUse alongside PreToolUse).
+	// Remove the hook from every event it was wired into.
 	changed := false
 	for _, event := range claudeHookEvents {
 		list, _ := hooks[event].([]interface{})

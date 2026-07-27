@@ -34,11 +34,9 @@ func correlationID(toolUseID, sessionID, toolName string, toolInput map[string]i
 	return "h-" + hex.EncodeToString(sum[:])[:16]
 }
 
-// sandboxDenialSignature reports whether s (the stringified tool_response)
-// carries the OS sandbox's denial tell. EPERM / "Operation not permitted" is
-// the same signature on macOS seatbelt and Linux Landlock (ADR 0112), so this
-// check is cross-platform with no kernel-log tailing. excerpt is a short,
-// human-readable window around the match for Outcome.Detail.
+// sandboxDenialSignature reports whether s carries the OS sandbox's denial
+// tell. Callers must first establish that the tool failed; output text alone
+// is not evidence of enforcement. See ADR 0112-final-action-outcome.
 func sandboxDenialSignature(s string) (matched bool, excerpt string) {
 	lower := strings.ToLower(s)
 	idx := -1
@@ -47,8 +45,6 @@ func sandboxDenialSignature(s string) (matched bool, excerpt string) {
 		idx = strings.Index(lower, "operation not permitted")
 	case strings.Contains(lower, "eperm"):
 		idx = strings.Index(lower, "eperm")
-	case strings.Contains(lower, "sandbox") && strings.Contains(lower, "deny"):
-		idx = strings.Index(lower, "sandbox")
 	default:
 		return false, ""
 	}
@@ -68,22 +64,83 @@ func sandboxDenialSignature(s string) (matched bool, excerpt string) {
 	return true, excerpt
 }
 
-// extractExitCode best-effort pulls an integer exit/status code out of a
-// parsed tool_response. The shape varies by tool (ADR 0112: "shape varies, so
-// parse it as a map"), so this only checks the handful of common key names
-// used across Claude Code's built-in tools; ok is false when none are found,
-// in which case the caller reports ExitCode 0.
-func extractExitCode(resp map[string]interface{}) (code int, ok bool) {
-	for _, key := range []string{"exit_code", "exitCode", "exit_status", "code", "status"} {
-		v, present := resp[key]
-		if !present {
-			continue
-		}
-		if f, isNum := v.(float64); isNum {
-			return int(f), true
+// codexToolResponse is the structured subset that can prove a Codex tool
+// failed. Codex 0.145.0 documents tool_response as tool-specific and emits
+// plain output for current Bash implementations, so an unstructured string
+// cannot establish failure even if it contains denial words.
+type codexToolResponse struct {
+	ExitCode     *int                       `json:"exit_code,omitempty"`
+	LegacyCode   *int                       `json:"exitCode,omitempty"`
+	LegacyStatus *int                       `json:"exit_status,omitempty"`
+	Metadata     *codexToolResponseMetadata `json:"metadata,omitempty"`
+	Output       string                     `json:"output,omitempty"`
+	Stdout       string                     `json:"stdout,omitempty"`
+	Stderr       string                     `json:"stderr,omitempty"`
+	Error        string                     `json:"error,omitempty"`
+}
+
+type codexToolResponseMetadata struct {
+	ExitCode *int `json:"exit_code,omitempty"`
+}
+
+func (r codexToolResponse) failure() (exitCode int, failed bool) {
+	for _, code := range []*int{r.ExitCode, r.LegacyCode, r.LegacyStatus} {
+		if code != nil {
+			return *code, *code != 0
 		}
 	}
+	if r.Metadata != nil && r.Metadata.ExitCode != nil {
+		return *r.Metadata.ExitCode, *r.Metadata.ExitCode != 0
+	}
 	return 0, false
+}
+
+func (r codexToolResponse) denialText() string {
+	return strings.Join([]string{r.Output, r.Stdout, r.Stderr, r.Error}, "\n")
+}
+
+// classifyOutcome converts agent-specific hook payloads into the canonical
+// observation. A sandbox denial requires two independent facts: the tool
+// failed and its failure detail carries a sandbox signature.
+func classifyOutcome(agent string, input hookInput) wire.Outcome {
+	var (
+		exitCode int
+		failed   bool
+		detail   string
+	)
+
+	switch agent {
+	case "claude":
+		if input.HookEventName != claudePostToolUseFailure {
+			return wire.Outcome{}
+		}
+		// Claude Code 2.1.216 emits PostToolUseFailure only for failed tools
+		// and carries the failure in the typed top-level error field.
+		failed = input.Error != ""
+		detail = input.Error
+	case "codex":
+		if input.HookEventName != "PostToolUse" || len(input.ToolResponse) == 0 {
+			return wire.Outcome{}
+		}
+		var response codexToolResponse
+		if err := json.Unmarshal(input.ToolResponse, &response); err != nil {
+			// Codex 0.145.0 Bash output is commonly a JSON string. It carries
+			// no structured status, so treating its prose as failure evidence
+			// would recreate the false-positive bug.
+			return wire.Outcome{}
+		}
+		exitCode, failed = response.failure()
+		detail = response.denialText()
+	default:
+		return wire.Outcome{}
+	}
+
+	outcome := wire.Outcome{ExitCode: exitCode}
+	if !failed {
+		return outcome
+	}
+	outcome.SandboxDenied, outcome.Detail = sandboxDenialSignature(detail)
+	return outcome
 }
 
 // handlePostToolUse implements the PostToolUse half of ADR 0112. It never
@@ -93,18 +150,7 @@ func extractExitCode(resp map[string]interface{}) (code int, ok bool) {
 func handlePostToolUse(agent string, input hookInput) {
 	defer os.Exit(0)
 
-	var respMap map[string]interface{}
-	stringified := string(input.ToolResponse)
-	if len(input.ToolResponse) > 0 {
-		if err := json.Unmarshal(input.ToolResponse, &respMap); err == nil {
-			if b, err := json.Marshal(respMap); err == nil {
-				stringified = string(b)
-			}
-		}
-	}
-
-	denied, excerpt := sandboxDenialSignature(stringified)
-	exitCode, _ := extractExitCode(respMap)
+	outcome := classifyOutcome(agent, input)
 
 	req := daemonRequest{
 		ID:        "hook-" + input.SessionID + "-" + input.ToolName,
@@ -114,11 +160,7 @@ func handlePostToolUse(agent string, input hookInput) {
 		Agent:     agent,
 		AgentPID:  findAgentPID(),
 		ToolUseID: correlationID(input.ToolUseID, input.SessionID, input.ToolName, input.ToolInput),
-		Outcome: &wire.Outcome{
-			SandboxDenied: denied,
-			ExitCode:      exitCode,
-			Detail:        excerpt,
-		},
+		Outcome:   &outcome,
 	}
 
 	conn, err := dialDaemon(resolveSocketPath())

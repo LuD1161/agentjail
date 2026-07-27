@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **Truthful sandbox outcomes**: successful tool output that merely discusses `EPERM` or sandbox denials is no longer recorded as an OS-enforced block; Claude failures now use `PostToolUseFailure`, while Codex attribution requires structured failure evidence.
 - **Inert commit-message paths**: static, non-expanding `git commit -m` text no longer triggers the Bash sensitive-path rule, while expansions, other arguments, and chained commands remain protected.
 
 ## v1.1.0 - 2026-07-26
