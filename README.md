@@ -13,7 +13,7 @@ A safety rail for Claude Code, Codex, and Cursor. <br>
 Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v1.0.0](https://img.shields.io/badge/v1.0.0-released-orange)
+&nbsp;![v1.1.0](https://img.shields.io/badge/v1.1.0-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v1.1.0** | Jul 26, 2026 | Codex and Cursor join Claude Code under default OS-sandbox activation, with complete hook/status/uninstall integration. Typed policy-to-agent adapters preserve canonical versus effective decisions. Custom Rego extensions are constrained to candidate rules and quarantined when invalid. |
 | **v1.0.0** | Jul 21, 2026 | Network visibility ships on **Linux and macOS**: capture your agent's LLM traffic (Claude `/v1/messages`, bodies) and enforce per-host network policy through the transparent tunnel (MITM, HTTP/2 + gRPC, opt-in IPv6). On macOS the LLM call is captured with **no system extension** via a base-URL capture gateway. Real-agent capture on the installed build. Network UI tab. Consolidated network flag precedence + `doctor` sourcing. |
 | **v0.9.0** | Jul 16, 2026 | Monitor mode: see what a policy would allow, deny, or ask before you enforce it. Attestation verifies the policy daemon end to end (UNSECURED when not shielded, degraded when the daemon is down). Control-plane token auth across daemon, netproxy, and broker. `agentjail doctor --fix`. |
 | **v0.8.0** | Jul 14, 2026 | Multicall binary consolidation: 6 shipped binaries become 2 (`agentjail` + `agentjail-hook`), role names kept as symlinks. Release version-stamp fix. |

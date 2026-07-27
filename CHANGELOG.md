@@ -4,31 +4,42 @@
 
 ## Unreleased
 
+## v1.1.0 - 2026-07-26
+
+![v1.1.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.1.0-summary.svg)
+
 #### TL;DR
 
-- **The darwin shield now actually enforces policy while shielded**: a blanket store deny was swallowing the daemon's own decision socket, so every hook silently failed open and `POLICY OFF` showed honestly - now fixed with a scoped carve-out.
-- **Nested Claude Code sessions behave like a real session again**: a shielded launch no longer inherits the parent's child-session marker, so transcripts and compaction work instead of silently degrading.
-- **One session identifier end to end** (AGE-111): the Network tab now groups, filters, names, and perma-links on the same Claude session id the Monitor tab and the policy daemon use, backfilled for rows captured before the id was known.
-- **Sandbox is the default, with an opt-out**: `agentjail claude` runs sandboxed (Landlock/Seatbelt) by default; `agentjail claude --no-sandbox` runs hook-only for hosts that can't sandbox. The OS sandbox — not the bypassable command regex — is the real boundary; policy `deny` stays `deny` as best-effort defense and the sole protection in hook-only mode.
-- **Every action shows its true final outcome and who enforced it** (ADR 0112): the Monitor tab now reports the combined policy+sandbox result — a command policy allowed but the OS sandbox blocked (`cat ~/.ssh/id_rsa`) renders as `blocked · sandbox`, never a misleading green allow.
-- **Network/Monitor UI polish**: agent + cwd + session-name labels on sessions, always-visible scrollbars in the request/response panes, full tool input on live monitor events, newest-first sort by default, and a fixed column-header clipping bug.
+- **Launch Codex and Cursor through the same default OS sandbox as Claude Code**, with PATH shims, hook installation, status reporting, and uninstall support for all three agents.
+- **Preserve policy meaning across agent protocols** by recording the canonical policy action separately from the effective action rendered to Claude, Codex, or Cursor.
+- **Harden custom Rego rules** so extensions can add candidates but cannot override the resolver, suppress locked rules, or mutate policy evaluation.
+- **Fix daemon recovery and uninstall targeting** so restart uses the installed supervisor and uninstall probes only the daemon belonging to the requested home.
 
 ### Added
 
-- **`--no-sandbox` opt-out for `agentjail run`/`claude`**: the sandbox is the default; `--no-sandbox` runs the agent hook-only (no OS sandbox) for hosts that can't sandbox or an explicit opt-out.
-- **One session identifier across monitor + network** (AGE-111): a watcher resolves the live Claude Code session id a few seconds after shield launch (the agent process must exist first) and stamps it onto every capture row going forward, with a synchronous backfill pass at child exit so short-lived sessions aren't left keyed to the old capture id. The Network tab now joins, names, and perma-links sessions on this same identifier, instead of maintaining a separate one from the daemon.
-- **Session labels in both tabs**: sessions show the coding agent's logo, the launch directory, and the user-assigned session name (falling back to an id prefix) instead of an opaque UUID.
-- **Final per-action outcome with the responsible enforcer** (ADR 0112): the two hook phases correlate by `tool_use_id` (Claude Code's, or a hash fallback); PreToolUse records the policy verdict and a new PostToolUse hook reads the tool result, detects the sandbox's `EPERM` / "Operation not permitted" signature, and reports it so the daemon records the real final outcome (`blocked` by `sandbox`). Cross-platform via EPERM; Claude-Code-first. Registers the PostToolUse hook at install.
+- **Codex and Cursor PATH shims**: detected installations now receive the same automatic shield activation as Claude Code; macOS grants the agent-specific runtime paths from the shared sandbox contract.
+- **Complete Codex hook integration**: registers `PreToolUse`, `PermissionRequest`, and `PostToolUse`, normalizes their wire shapes, and preserves Codex-native approvals when Codex independently opens a permission request.
+- **Complete Cursor hook integration**: handles shell, MCP, and file-read hook events with typed normalization and binary allow/deny rendering.
+- **Cursor status line** (ADR 0113-cursor-status-line): installs an AgentJail protection badge while preserving and restoring a user's existing status command byte-for-byte.
+- **Agent decision adapters** (ADR 0115-agent-decision-adapters): decision records, logs, and UI state expose `policy_action`, `effective_action`, adapter provenance, and translation reason.
+- **Cross-agent clean-VM conformance scenario** covering installed Claude Code, Codex, and Cursor hook behavior.
+
+### Changed
+
+- **Codex asks fail closed at `PreToolUse`** (ADR 0117-codex-ask-boundary): because Codex hooks cannot create an approval prompt, AgentJail records canonical `ask` and renders an explicit effective `deny`; an ask can never silently continue.
+- **Policy inputs normalize at the adapter boundary** so file paths, shell commands, MCP calls, session identity, and tool-call correlation have one canonical shape across supported agents.
+- **Daemon restart uses the installed supervisor** instead of treating `restart` as daemon process arguments and accidentally starting an unconfigured resolver-default daemon.
 
 ### Fixed
 
-- **Darwin shield silently ran unenforced** - the blanket store-access deny (ADR 0092 D3) also blocked reads/connects to the daemon's own decision socket, so `probeDaemon`'s stat call was denied by the sandbox and every hook failed open; the session ran shield-only with no policy enforcement, and the statusline correctly (but silently) showed `POLICY OFF`. The shield now emits a narrow carve-out for exactly that socket literal, mirroring the read-denied/connect-allowed boundary already used on Linux.
-- **Shielded launches inherited child-session mode** - the `CLAUDE_CODE_CHILD_SESSION` marker leaked into a shielded launch's environment whenever the launching shell descended from another Claude Code session, putting the new (and distinct) agent session into child mode: transcripts off, no compaction, context filling in one call. The shield now strips the inherited marker before exec on both darwin and Linux.
-- **Request/response panes looked unscrollable** - long bodies had no visible scrollbar (Radix ScrollArea's hover-only overlay, and an invisible thumb on the dark theme); replaced with native, always-visible scrollbars.
-- **Live monitor events showed truncated tool input** - the SSE feed parsed the daemon's eval log line, which only carried a 200-character summary; the log line now carries the same redacted, 4096-char-capped input the store persists, so the detail pane shows the full call.
-- **Narrow column headers overflowed into the next column** - a column's label/sort/filter cluster could spill past its resize handle, making a filter icon look like it belonged to the neighboring column; header cells now clip to their own width.
-- **Monitor and network tables defaulted to oldest-first** - both now default-sort by timestamp, newest first.
-- **Recent-requests endpoint used the old per-capture session id** - unified onto the same Claude session id as the rest of the Network tab.
+- **Uninstall target-home isolation**: daemon liveness checks now probe the socket under the requested home, rather than the process user's daemon, preventing false aborts that leave hooks and shell RC entries installed.
+- **Fail-open recovery reporting**: `doctor` recognizes a later recorded decision as proof that policy evaluation resumed instead of leaving a permanent outage warning.
+- **Development deployment**: refreshes all multicall role symlinks and the hook binary consistently.
+
+### Security
+
+- **Custom rule surface validation** (ADR 0116-custom-rule-surface): OPA AST validation accepts only partial `candidate` entries and rejects resolver/helper declarations, both at `policy add` and daemon load; invalid manually installed rules are quarantined without weakening the baseline.
+- **Canonical/effective action separation** prevents protocol limitations from being misreported as policy decisions and keeps final sandbox attribution independent.
 
 ## v1.0.0 - 2026-07-21
 
