@@ -176,7 +176,9 @@ blocks an agent from running `agentjail policy disable`/`mcp` or writing into
 `~/.agentjail/`. The mutation guard uses specific subcommand patterns (e.g.
 `agentjail\s+update\b`) rather than broad keyword matching, to avoid false
 positives when "agentjail" or "update" appears as a path component or in prompt
-text.
+text. The sensitive-path rule likewise ignores only static, non-expanding
+`git commit -m` message text; command substitutions, other arguments, chained
+commands, and remote shell payloads remain subject to the deny.
 
 ### Tuning, disabling, and custom rules (ADR 0014)
 

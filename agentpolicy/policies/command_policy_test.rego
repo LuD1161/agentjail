@@ -334,6 +334,7 @@ test_bash_redirect_to_ssh_deny if {
 	d := agentjail.decision with input as bash_input("printf 'null' > /Users/dev/.ssh/id_rsa")
 	d.action == "deny"
 	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+	d.reason == "Bash access to sensitive paths is denied; use an auditable file tool if policy permits, or a purpose-built status command that does not expose contents"
 }
 
 test_bash_tee_aws_deny if {
@@ -429,6 +430,103 @@ test_bash_git_commit_mentions_env_example_allow if {
 		"rule_id": "command_policy/default-allow",
 		"reason":  "no dangerous-command pattern matched",
 	} with input as bash_input(`git commit -m ".env.example docs"`)
+}
+
+# Static commit-message text is inert metadata, not a host path access.
+test_bash_git_commit_static_sensitive_message_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input(`git -c user.name="Test User" commit -m "document bind-mount over /etc/resolv.conf"`)
+}
+
+test_bash_git_commit_static_sensitive_single_quote_message_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input(`git commit --message='document ~/.ssh handling'`)
+}
+
+test_bash_git_commit_multiple_static_sensitive_messages_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input(`git commit -m "document /etc/resolv.conf" --message='and ~/.ssh behavior'`)
+}
+
+test_bash_multiline_git_commit_static_sensitive_message_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input(`git status
+git add docs
+	git -c user.name="Test User" commit -m "document bind-mount over /etc/resolv.conf"`)
+}
+
+test_bash_multiline_static_commit_message_allow if {
+	agentjail.decision == {
+		"action":  "allow",
+		"rule_id": "command_policy/default-allow",
+		"reason":  "no dangerous-command pattern matched",
+	} with input as bash_input(`git -c user.name="Test User" commit -s -m "fix(tunnel): document resolver setup
+
+The guest bind-mounts a generated file over /etc/resolv.conf.
+This text is inert commit metadata."`)
+}
+
+test_bash_multiline_git_commit_other_sensitive_line_deny if {
+	d := agentjail.decision with input as bash_input(
+		"git commit -m \"document ~/.ssh handling\"\ncat ~/.ssh/id_rsa")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+# Expansions and sensitive paths outside the literal message still execute on
+# the host and must not inherit the metadata exemption.
+test_bash_git_commit_command_substitution_sensitive_message_deny if {
+	d := agentjail.decision with input as bash_input(`git commit -m "$(cat ~/.ssh/id_rsa)"`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_git_commit_sensitive_path_outside_message_deny if {
+	d := agentjail.decision with input as bash_input(`git commit -m "safe message" --author="$(cat ~/.aws/credentials)"`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_git_commit_chained_sensitive_read_deny if {
+	d := agentjail.decision with input as bash_input(`git commit -m "document ~/.ssh handling"; cat ~/.ssh/id_rsa`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_git_commit_backtick_substitution_sensitive_message_deny if {
+	d := agentjail.decision with input as bash_input("git commit -m \"`cat ~/.ssh/id_rsa`\"")
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_git_commit_escaped_quote_sensitive_message_deny if {
+	d := agentjail.decision with input as bash_input(`git commit -m "document \"; cat ~/.ssh/id_rsa; echo \""`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_non_git_message_flag_sensitive_path_deny if {
+	d := agentjail.decision with input as bash_input(`tool -m "document ~/.ssh handling"`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
+}
+
+test_bash_non_message_option_suffix_sensitive_path_deny if {
+	d := agentjail.decision with input as bash_input(`git commit --custom-m "document ~/.ssh handling"`)
+	d.action == "deny"
+	d.rule_id == "command_policy/no-bash-touch-sensitive-path"
 }
 
 # ---------------------------------------------------------------------------

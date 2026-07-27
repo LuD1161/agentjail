@@ -388,6 +388,17 @@ flags, not the recovery command shown to users.
 - **Rule:** reserve and test every human-facing verb before forwarding role
   arguments; recovery instructions are executable security surface, not prose.
 
+## 26. Shell text is not all executable shell
+
+The sensitive-path rule scanned the entire Bash command string. Its credential
+denials were green, but a static `git commit -m` message documenting
+`/etc/resolv.conf` was denied as though Git would open that path.
+
+- **Rule:** exclude only grammar-bounded inert fields, then scan everything
+  else. Double-quoted command substitutions, other arguments, chained commands,
+  heredocs, and remote-shell payloads stay covered unless a real shell parser
+  can prove where execution occurs. See ADR 0001-os-sandbox-enforcement-layer.
+
 ---
 
 ## Testing gotchas

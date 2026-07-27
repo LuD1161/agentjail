@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Inert commit-message paths**: static, non-expanding `git commit -m` text no longer triggers the Bash sensitive-path rule, while expansions, other arguments, and chained commands remain protected.
+
 ## v1.1.0 - 2026-07-26
 
 ![v1.1.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.1.0-summary.svg)

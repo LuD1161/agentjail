@@ -121,7 +121,7 @@ var ruleRegistry = []RuleEntry{
 	{
 		ID:          "command_policy/no-bash-touch-sensitive-path",
 		Source:      RuleSourceCore,
-		Description: "Block bash touch/truncation of sensitive paths",
+		Description: "Block Bash access to sensitive paths",
 	},
 	{
 		ID:          "command_policy/confirm-curl-download",

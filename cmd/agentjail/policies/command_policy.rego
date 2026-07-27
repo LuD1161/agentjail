@@ -400,21 +400,34 @@ candidate contains r if {
 #   cp foo ~/.gnupg/
 # file_policy.rego catches Write/Edit/Read tool calls to these paths, but
 # agents can bypass that by issuing the equivalent Bash command. This rule
-# closes that loophole by denying any Bash command that mentions a known
-# sensitive path. Over-broad on purpose - `cat ~/.ssh/known_hosts` also gets
-# denied, which is the right default; users can explicitly use the Read tool.
+# closes that loophole by denying any Bash command that operationally mentions
+# a known sensitive path. Static git commit messages are inert metadata and are
+# removed before matching. See ADR 0001-os-sandbox-enforcement-layer.
 # ---------------------------------------------------------------------------
 
 candidate contains r if {
 	is_bash
-	contains_sensitive_path(cmd)
+	contains_sensitive_path(sensitive_path_scan_text(cmd))
 	r := {
 		"action":  "deny",
 		"rule_id": "command_policy/no-bash-touch-sensitive-path",
-		"reason":  "Bash command references a sensitive path (SSH/cloud/GPG/credentials); use the Write, Edit, or Read tool so file_policy can audit",
+		"reason":  "Bash access to sensitive paths is denied; use an auditable file tool if policy permits, or a purpose-built status command that does not expose contents",
 		"impact":  "would touch sensitive path via Bash",
 	}
 }
+
+# A literal -m/--message argument cannot access the host. Keep every other
+# argument in the scan so substitutions and path-bearing options still deny.
+# The message body may span lines; anchoring the prefix to a git commit command
+# prevents another program's -m flag from inheriting the exemption.
+# See ADR 0001-os-sandbox-enforcement-layer.
+static_git_message_pattern := "(?ms)(^|\\n)(\\s*git(?:\\s+[^;&|\\n]*)?\\s+commit(?:\\s+[^;&|\\n]*)?\\s+)(-m|--message)(=|\\s+)('[^']*'|\"[^\"$`\\\\]*\")"
+
+sensitive_path_scan_text(c) := regex.replace(
+	regex.replace(c, static_git_message_pattern, "$1$2"),
+	static_git_message_pattern,
+	"$1$2",
+)
 
 # Sensitive path patterns - mirrors file_policy.rego's is_sensitive_path
 # clauses but matches against the raw command string rather than tool_input.file_path.
@@ -620,7 +633,7 @@ any_dangerous_pattern if {
 }
 
 any_dangerous_pattern if {
-	contains_sensitive_path(cmd)
+	contains_sensitive_path(sensitive_path_scan_text(cmd))
 }
 
 any_dangerous_pattern if {
