@@ -4,22 +4,14 @@
 
 ## Unreleased
 
-### Added
-
-- **Bounded decision snapshots**: `agentjail logs --latest N` selects the newest matching SQLite decisions and prints them chronologically, including JSON output.
-
-### Fixed
-
-- **Complete non-follow logs**: `agentjail logs --no-follow` now traverses every matching SQLite page instead of stopping after the oldest 1,000 decisions.
-- **Truthful sandbox outcomes**: successful tool output that merely discusses `EPERM` or sandbox denials is no longer recorded as an OS-enforced block; Claude failures now use `PostToolUseFailure`, while Codex attribution requires structured failure evidence.
-- **Inert commit-message paths**: static, non-expanding `git commit -m` text no longer triggers the Bash sensitive-path rule, while expansions, other arguments, and chained commands remain protected.
-
-## v1.1.0 - 2026-07-26
+## v1.1.0 - 2026-07-27
 
 ![v1.1.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.1.0-summary.svg)
 
 #### TL;DR
 
+- **Display live AgentJail protection state when Codex sessions start and stop**, including startup, resume, clear, and compact boundaries.
+- **Distinguish full protection, shield-only operation, and unshielded sessions** by probing both enforcement layers before attesting.
 - **Launch Codex and Cursor through the same default OS sandbox as Claude Code**, with PATH shims, hook installation, status reporting, and uninstall support for all three agents.
 - **Preserve policy meaning across agent protocols** by recording the canonical policy action separately from the effective action rendered to Claude, Codex, or Cursor.
 - **Harden custom Rego rules** so extensions can add candidates but cannot override the resolver, suppress locked rules, or mutate policy evaluation.
@@ -27,12 +19,14 @@
 
 ### Added
 
+- **Codex lifecycle attestation** (ADR 0113-cursor-status-line): matcher-free `SessionStart` and `Stop` hooks display `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive` through Codex's supported `systemMessage` channel.
 - **Codex and Cursor PATH shims**: detected installations now receive the same automatic shield activation as Claude Code; macOS grants the agent-specific runtime paths from the shared sandbox contract.
-- **Complete Codex hook integration**: registers policy hooks plus `SessionStart` and `Stop`, displays live shield-and-daemon state at session boundaries, normalizes tool wire shapes, and preserves Codex-native approvals when Codex independently opens a permission request.
+- **Complete Codex hook integration**: registers `PreToolUse`, `PermissionRequest`, and `PostToolUse`, normalizes their wire shapes, and preserves Codex-native approvals when Codex independently opens a permission request.
 - **Complete Cursor hook integration**: handles shell, MCP, and file-read hook events with typed normalization and binary allow/deny rendering.
 - **Cursor status line** (ADR 0113-cursor-status-line): installs an AgentJail protection badge while preserving and restoring a user's existing status command byte-for-byte.
 - **Agent decision adapters** (ADR 0115-agent-decision-adapters): decision records, logs, and UI state expose `policy_action`, `effective_action`, adapter provenance, and translation reason.
 - **Cross-agent clean-VM conformance scenario** covering installed Claude Code, Codex, and Cursor hook behavior.
+- **Bounded decision snapshots**: `agentjail logs --latest N` selects the newest matching SQLite decisions and prints them chronologically, including JSON output.
 
 ### Changed
 
@@ -45,6 +39,9 @@
 - **Uninstall target-home isolation**: daemon liveness checks now probe the socket under the requested home, rather than the process user's daemon, preventing false aborts that leave hooks and shell RC entries installed.
 - **Fail-open recovery reporting**: `doctor` recognizes a later recorded decision as proof that policy evaluation resumed instead of leaving a permanent outage warning.
 - **Development deployment**: refreshes all multicall role symlinks and the hook binary consistently.
+- **Complete non-follow logs**: `agentjail logs --no-follow` now traverses every matching SQLite page instead of stopping after the oldest 1,000 decisions.
+- **Truthful sandbox outcomes**: successful tool output that merely discusses `EPERM` or sandbox denials is no longer recorded as an OS-enforced block; Claude failures now use `PostToolUseFailure`, while Codex attribution requires structured failure evidence.
+- **Inert commit-message paths**: static, non-expanding `git commit -m` text no longer triggers the Bash sensitive-path rule, while expansions, other arguments, and chained commands remain protected.
 
 ### Security
 
