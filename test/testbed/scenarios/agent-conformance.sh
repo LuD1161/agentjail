@@ -37,6 +37,12 @@ run_exit_hook "Codex allow project shell" allow \
 run_exit_hook "Codex deny rm command" deny \
     '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf /"},"session_id":"conformance-codex","cwd":"'"$PROJECT"'"}' codex
 
+printf '%s\n' \
+    '{"hook_event_name":"SessionStart","session_id":"conformance-codex","cwd":"'"$PROJECT"'","source":"startup"}' |
+    AGENTJAIL_SHIELDED=1 "$HOOK" --agent=codex > /tmp/agent-conformance.codex-lifecycle.out 2>/tmp/agent-conformance.err
+codex_lifecycle=$(jq -r '.systemMessage // "invalid"' /tmp/agent-conformance.codex-lifecycle.out 2>/dev/null)
+scn_check "Codex startup attests shield and daemon" "🔒 AgentJail: sandbox + policy active" "$codex_lifecycle"
+
 run_cursor() {
     local label="$1" expected="$2" payload="$3" want actual rc
     printf '%s\n' "$payload" | "$HOOK" --agent=cursor > /tmp/agent-conformance.cursor.out 2>/tmp/agent-conformance.err

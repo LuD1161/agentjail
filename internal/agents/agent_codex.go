@@ -16,7 +16,7 @@ import (
 var defaultLookPath = exec.LookPath
 
 // Codex is the agent implementation for OpenAI's Codex CLI.
-// It wires the agentjail PreToolUse, PermissionRequest, and PostToolUse hooks into ~/.codex/hooks.json,
+// It wires the agentjail policy and lifecycle hooks into ~/.codex/hooks.json,
 // enables features.hooks in ~/.codex/config.toml (strict safe-mode only),
 // and prints the manual trust instruction (hook trust cannot be persisted).
 type Codex struct{}
@@ -146,7 +146,7 @@ type codexHooksRoot struct {
 }
 
 type codexMatcherGroup struct {
-	Matcher string `json:"matcher"`
+	Matcher string `json:"matcher,omitempty"`
 	// omitempty is defense-in-depth: a nil Hooks slice must never marshal to
 	// JSON `null`, which Codex's own hooks.json parser rejects ("invalid
 	// type: null, expected a sequence"). dropDegenerateGroups is the primary
@@ -168,10 +168,19 @@ type codexHook struct {
 // it has an explicit policy classification.
 const codexToolMatcher = `^(Bash|apply_patch|mcp__.*|Agent|update_plan|create_goal|get_goal|update_goal|wait_agent|collaboration\.(list_agents|wait_agent|spawn_agent|followup_task|send_message|interrupt_agent))$`
 
-// PermissionRequest is a separate native approval bridge. Keep it registered
-// with the pre/post hooks so each Codex lifecycle seam is present together.
+// PermissionRequest is a separate native approval bridge. SessionStart and
+// Stop surface the live enforcement state at session boundaries.
 // See ADR 0114-codex-permission-request.
-var codexHookEvents = [...]string{"PreToolUse", "PermissionRequest", "PostToolUse"}
+var codexHookEvents = [...]string{"SessionStart", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop"}
+
+func codexHookMatcher(event string) string {
+	switch event {
+	case "PreToolUse", "PermissionRequest", "PostToolUse":
+		return codexToolMatcher
+	default:
+		return ""
+	}
+}
 
 // codexHookCommand returns the canonical registered hook command for Codex:
 // env.HookBin + " --agent=codex". This mirrors cursorHookCommand in agent_cursor.go.
@@ -209,7 +218,7 @@ func codexMergeHooksJSON(env Env) error {
 	return writeFileAtomic(hooksPath, updated, 0o600)
 }
 
-// codexMergeHookEntry merges PreToolUse, PermissionRequest, and PostToolUse entries for the
+// codexMergeHookEntry merges policy and lifecycle entries for the
 // canonical codex hook command (hookBin + " --agent=codex") into raw
 // hooks.json content.
 // Returns (newJSON, changed, error).
@@ -251,7 +260,7 @@ func codexMergeHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
 		filtered = dropDegenerateGroups(filtered)
 
 		desired := append(filtered, codexMatcherGroup{
-			Matcher: codexToolMatcher,
+			Matcher: codexHookMatcher(event),
 			Hooks: []codexHook{
 				{
 					Type:    "command",

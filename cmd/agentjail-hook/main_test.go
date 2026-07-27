@@ -206,6 +206,52 @@ func makeCodexPermissionRequestJSON(toolName string, toolInput map[string]interf
 	return string(b)
 }
 
+func TestCodexLifecycleAttestation(t *testing.T) {
+	tests := []struct {
+		name       string
+		event      string
+		shielded   bool
+		daemon     bool
+		wantNotice string
+	}{
+		{"startup protected", codexSessionStart, true, true, "🔒 AgentJail: sandbox + policy active"},
+		{"startup daemon offline", codexSessionStart, true, false, "⚠ AgentJail: sandbox active, policy daemon offline"},
+		{"startup unshielded", codexSessionStart, false, true, "⚠ AgentJail: OS sandbox inactive"},
+		{"stop protected", codexStop, true, true, "🔒 AgentJail: sandbox + policy active"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := buildHook(t, dir)
+			socketPath := filepath.Join(trustedHome(t), "missing.sock")
+			if tt.daemon {
+				socketPath = stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
+					return "allow", "", ""
+				})
+			}
+			env := []string{"AGENTJAIL_SOCKET=" + socketPath, "AGENTJAIL_SHIELDED=0"}
+			if tt.shielded {
+				env[1] = "AGENTJAIL_SHIELDED=1"
+			}
+			stdin := `{"hook_event_name":"` + tt.event + `","session_id":"lifecycle-test","cwd":"/tmp/test-project"}`
+			stdout, stderr, code := runHookWithArgs(t, bin, stdin, env, []string{"--agent=codex"})
+			if code != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			var out codexLifecycleOutput
+			if err := json.Unmarshal(stdout, &out); err != nil {
+				t.Fatalf("decode output: %v (%q)", err, stdout)
+			}
+			if !out.Continue {
+				t.Error("continue=false, want true")
+			}
+			if out.SystemMessage != tt.wantNotice {
+				t.Errorf("systemMessage=%q, want %q", out.SystemMessage, tt.wantNotice)
+			}
+		})
+	}
+}
+
 // TestHook_Allow verifies that a stub daemon returning "allow" causes the hook
 // to exit 0 and write a valid allow response to stdout.
 func TestHook_Allow(t *testing.T) {

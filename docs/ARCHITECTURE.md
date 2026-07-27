@@ -72,7 +72,7 @@ the daemon is down.
 | Platform | Hook event | Config file | What is intercepted |
 |---|---|---|---|
 | Claude Code | `PreToolUse` | `~/.claude/settings.json` | Bash, Write, Edit, Read, all MCP tools |
-| Codex CLI | `PreToolUse` + `PermissionRequest` + `PostToolUse` | `~/.codex/hooks.json` | Bash, apply_patch, MCP tools |
+| Codex CLI | `SessionStart` + `PreToolUse` + `PermissionRequest` + `PostToolUse` + `Stop` | `~/.codex/hooks.json` | Lifecycle attestation; Bash, apply_patch, MCP tools |
 | Cursor | `beforeShellExecution` + `beforeMCPExecution` + `beforeReadFile` | `~/.cursor/hooks.json` | Shell, MCP, and agent file reads |
 
 The hook is configured in a file the agent reads at startup. Because the agent runs *inside* the hook framework, it cannot remove the hook from within itself. The policy binary runs in the host shell, not in the agent's process.

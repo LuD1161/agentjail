@@ -28,7 +28,7 @@
 ### Added
 
 - **Codex and Cursor PATH shims**: detected installations now receive the same automatic shield activation as Claude Code; macOS grants the agent-specific runtime paths from the shared sandbox contract.
-- **Complete Codex hook integration**: registers `PreToolUse`, `PermissionRequest`, and `PostToolUse`, normalizes their wire shapes, and preserves Codex-native approvals when Codex independently opens a permission request.
+- **Complete Codex hook integration**: registers policy hooks plus `SessionStart` and `Stop`, displays live shield-and-daemon state at session boundaries, normalizes tool wire shapes, and preserves Codex-native approvals when Codex independently opens a permission request.
 - **Complete Cursor hook integration**: handles shell, MCP, and file-read hook events with typed normalization and binary allow/deny rendering.
 - **Cursor status line** (ADR 0113-cursor-status-line): installs an AgentJail protection badge while preserving and restoring a user's existing status command byte-for-byte.
 - **Agent decision adapters** (ADR 0115-agent-decision-adapters): decision records, logs, and UI state expose `policy_action`, `effective_action`, adapter provenance, and translation reason.

@@ -14,7 +14,8 @@
 // Supported agents (--agent flag or AGENTJAIL_AGENT env var):
 //   - claude (default): Deny → exit 2 (stderr reason). Allow/ask → stdout
 //     hookSpecificOutput JSON.
-//   - codex: PreToolUse deny → exit 2; allow → exit 0 with empty stdout; ask
+//   - codex: SessionStart/Stop → live enforcement systemMessage. PreToolUse
+//     deny → exit 2; allow → exit 0 with empty stdout; ask
 //     → exit 2 because PreToolUse cannot initiate a native approval. Its
 //     PermissionRequest event returns allow/deny or declines an ask so Codex's
 //     own approval UI remains authoritative when it is already prompting.
@@ -89,6 +90,8 @@ const (
 	cursorBeforeReadFile       cursorHookEvent = "beforeReadFile"
 	canonicalPreToolUse                        = "PreToolUse"
 	codexPermissionRequest                     = "PermissionRequest"
+	codexSessionStart                          = "SessionStart"
+	codexStop                                  = "Stop"
 	claudePostToolUseFailure                   = "PostToolUseFailure"
 )
 
@@ -385,6 +388,11 @@ type codexSystemMessageOutput struct {
 	SystemMessage string `json:"systemMessage"`
 }
 
+type codexLifecycleOutput struct {
+	Continue      bool   `json:"continue"`
+	SystemMessage string `json:"systemMessage"`
+}
+
 // codexPermissionRequestOutput is the current Codex PermissionRequest schema.
 // Its decision is deliberately distinct from PreToolUse's permissionDecision.
 // See ADR 0114-codex-permission-request.
@@ -412,6 +420,26 @@ func writeCodexSystemMessage(msg string) {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
+}
+
+func writeCodexLifecycleAttestation() {
+	shielded := os.Getenv("AGENTJAIL_SHIELDED") == "1"
+	daemonActive := false
+	if conn, err := dialDaemon(resolveSocketPath()); err == nil {
+		daemonActive = true
+		_ = conn.Close()
+	}
+
+	message := "⚠ AgentJail: OS sandbox inactive"
+	if shielded && daemonActive {
+		message = "🔒 AgentJail: sandbox + policy active"
+	} else if shielded {
+		message = "⚠ AgentJail: sandbox active, policy daemon offline"
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(codexLifecycleOutput{
+		Continue:      true,
+		SystemMessage: message,
+	})
 }
 
 // writeCodexPermissionDecision answers a Codex-native approval request. An
@@ -747,6 +775,11 @@ func runClaude(agent string) {
 	var input hookInput
 	if err := json.Unmarshal(stdinBytes, &input); err != nil {
 		failOpenClaudeLike(agent, "parse-input", err.Error(), "", nil, "")
+		return
+	}
+	if agent == "codex" &&
+		(input.HookEventName == codexSessionStart || input.HookEventName == codexStop) {
+		writeCodexLifecycleAttestation()
 		return
 	}
 

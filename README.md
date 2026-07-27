@@ -204,9 +204,10 @@ file read, so an agentjail `ask` verdict on `beforeReadFile` fails closed as a
 normal `deny`; shell and MCP `ask` verdicts keep Cursor's approval prompt.
 Re-running `agentjail install --for cursor` also replaces a legacy bare
 AgentJail hook command with the Cursor-specific adapter.
-Codex registers `PreToolUse` and `PostToolUse` only for Bash, `apply_patch`,
-and MCP calls, so internal UI/orchestration tools are not intercepted and
+Codex registers `PreToolUse`, `PermissionRequest`, and `PostToolUse` only for
+policy-governed tools, so unrelated UI calls are not intercepted and
 sandbox-denied tool outcomes are recorded against the original decision.
+`SessionStart` and `Stop` also display a live shield-and-daemon attestation.
 Each `apply_patch` target is normalized to the same file-policy contract as an
 Edit, so a multi-file patch is denied when any target is protected.
 
@@ -239,7 +240,7 @@ The badge attests **both** enforcement layers ([ADR 0085](./docs/adr/0085-status
 
 The padlock only appears when both are live. When agentjail is uninstalled the badge disappears entirely.
 
-Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the AgentJail badge, so Codex protection is activated by the PATH shim and verified with `agentjail status` or `agentjail doctor`.
+Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the persistent AgentJail badge. Instead, AgentJail's `SessionStart` and `Stop` hooks display one of `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive`; `agentjail status` and `agentjail doctor` remain available for an on-demand check.
 
 <details>
 <summary><b>More install options</b></summary>

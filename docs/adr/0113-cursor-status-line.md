@@ -20,6 +20,11 @@ Codex also exposes `/statusline`, but its `tui.status_line` setting is a closed 
 of built-in item identifiers. It cannot run an external command, so it cannot host the
 AgentJail badge through its native footer.
 
+Codex CLI 0.145.0 exposes `SessionStart` and `Stop` hooks whose common JSON output accepts
+`systemMessage`. Official Codex hook documentation was verified on 2026-07-26, and the
+installed CLI's `rust-v0.145.0` source was checked at commit
+`25af12f7e61572b0bc18ddb1008be543b91519b0`.
+
 ## Decision
 
 `Cursor.Install` owns the `statusLine.command` value in `~/.cursor/cli-config.json`:
@@ -39,7 +44,9 @@ is rejected before hook installation mutates `hooks.json`.
 
 Codex receives shield activation through its PATH shim. AgentJail does not rewrite
 `tui.status_line` because none of its supported identifiers can truthfully report shield
-and daemon state.
+and daemon state. It registers matcher-free `SessionStart` and `Stop` hooks that probe the
+daemon socket and read the inherited shield marker, then emit one of three typed
+`systemMessage` attestations: fully protected, shield-only, or unshielded.
 
 ## Consequences
 
@@ -50,5 +57,10 @@ Cursor configuration gains the same ownership and total-uninstall guarantees as 
 Code. Chained commands retain shell semantics instead of being reduced to argv tokens.
 
 Codex remains without a persistent AgentJail footer badge until it supports custom status
-commands. Its PATH shim still activates the shield, and hooks continue to enforce policy;
-AgentJail does not present a built-in Codex field as equivalent protection evidence.
+commands. It now displays truthful enforcement state when a session starts and stops,
+including startup, resume, clear, and compact sources covered by a matcher-free
+`SessionStart`. AgentJail does not present a built-in Codex field as equivalent protection
+evidence.
+
+Codex requires the user to trust project hooks once through `/hooks`; an untrusted hook
+cannot attest before that trust decision.

@@ -190,8 +190,9 @@ func TestCodexInstallCreatesHooksJSON(t *testing.T) {
 					if h.Timeout != 30 {
 						t.Errorf("%s hook timeout = %d, want 30", event, h.Timeout)
 					}
-					if g.Matcher != codexToolMatcher {
-						t.Errorf("%s hook matcher = %q, want %q", event, g.Matcher, codexToolMatcher)
+					wantMatcher := codexHookMatcher(event)
+					if g.Matcher != wantMatcher {
+						t.Errorf("%s hook matcher = %q, want %q", event, g.Matcher, wantMatcher)
 					}
 					found = true
 				}
@@ -228,6 +229,28 @@ func TestCodexToolMatcherScope(t *testing.T) {
 	for _, tool := range []string{"collaboration.unknown", "collaboration.delete_all_agents"} {
 		if matcher.MatchString(tool) {
 			t.Errorf("matcher must not classify unknown Codex collaboration tool %q", tool)
+		}
+	}
+}
+
+func TestCodexLifecycleHooksOmitMatcher(t *testing.T) {
+	env := newCodexEnv(t)
+	mkCodexDir(t, env)
+	if err := (Codex{}).Install(env); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	var root codexHooksRoot
+	if err := json.Unmarshal(readHooksJSON(t, env), &root); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"SessionStart", "Stop"} {
+		groups := root.Hooks[event]
+		if len(groups) != 1 {
+			t.Fatalf("%s groups = %d, want 1", event, len(groups))
+		}
+		if groups[0].Matcher != "" {
+			t.Errorf("%s matcher = %q, want omitted", event, groups[0].Matcher)
 		}
 	}
 }
