@@ -29,9 +29,9 @@ func daemonSocketHome(t *testing.T) string {
 
 // TestIsDaemonRunning_NoSocket: nothing ever listened, no socket file.
 func TestIsDaemonRunning_NoSocket(t *testing.T) {
-	daemonSocketHome(t)
+	sock := daemonSocketHome(t)
 
-	if isDaemonRunning() {
+	if isDaemonRunning(sock) {
 		t.Error("expected false when the daemon socket does not exist")
 	}
 }
@@ -56,7 +56,7 @@ func TestIsDaemonRunning_StaleSocket(t *testing.T) {
 		t.Fatalf("test setup: socket file should still exist: %v", err)
 	}
 
-	if isDaemonRunning() {
+	if isDaemonRunning(sock) {
 		t.Error("expected false for a stale socket file with no listener behind it")
 	}
 }
@@ -72,7 +72,7 @@ func TestIsDaemonRunning_LiveListener(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	if !isDaemonRunning() {
+	if !isDaemonRunning(sock) {
 		t.Error("expected true while a listener is accepting on the daemon socket")
 	}
 }

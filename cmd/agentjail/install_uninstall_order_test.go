@@ -19,10 +19,10 @@ func TestWaitForDaemonStop_AlreadyStopped(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".agentjail"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	socketPath := filepath.Join(home, ".agentjail", "daemon.sock")
 
 	start := time.Now()
-	if stillRunning := waitForDaemonStop(2 * time.Second); stillRunning {
+	if stillRunning := waitForDaemonStop(socketPath, 2*time.Second); stillRunning {
 		t.Error("expected stopped when no socket exists")
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -44,15 +44,14 @@ func TestWaitForDaemonStop_StillListening(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".agentjail"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
-
-	l, err := net.Listen("unix", filepath.Join(home, ".agentjail", "daemon.sock"))
+	socketPath := filepath.Join(home, ".agentjail", "daemon.sock")
+	l, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = l.Close() }()
 
-	if stillRunning := waitForDaemonStop(300 * time.Millisecond); !stillRunning {
+	if stillRunning := waitForDaemonStop(socketPath, 300*time.Millisecond); !stillRunning {
 		t.Error("a live listener must be reported as still running")
 	}
 }

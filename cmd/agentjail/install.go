@@ -73,7 +73,6 @@ import (
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/ui"
-	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // plistLabel is the launchd service identifier.
@@ -689,7 +688,8 @@ func performFullUninstall(home, goos string, keepSecrets, force bool) UninstallR
 		// hand, by a test harness, or on a box with no D-Bus session survives
 		// the stop above — and its hookwatch then fights the rest of this
 		// teardown.
-		r.DaemonStillRunning = waitForDaemonStop(daemonStopDeadline)
+		socketPath := filepath.Join(home, ".agentjail", "daemon.sock")
+		r.DaemonStillRunning = waitForDaemonStop(socketPath, daemonStopDeadline)
 		if r.DaemonStillRunning {
 			r.HardFailed = true
 			// Abort before touching anything else. A live daemon's hookwatch
@@ -1287,7 +1287,7 @@ func printStatusOutput(w io.Writer, home string) {
 	}
 	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue(serviceLabel, "", serviceBadge))
 
-	daemonRunning := isDaemonRunning()
+	daemonRunning := isDaemonRunning(filepath.Join(home, ".agentjail", "daemon.sock"))
 	daemonBadge2 := u.Badge("ok", "running")
 	if !daemonRunning {
 		daemonBadge2 = u.Badge("fail", "not running")
@@ -1968,10 +1968,10 @@ const daemonStopDeadline = 3 * time.Second
 // waitForDaemonStop polls until the daemon socket stops answering, or the
 // deadline expires. Returns true if the daemon is STILL running — i.e. the
 // teardown did not actually stop it (ADR 0065).
-func waitForDaemonStop(deadline time.Duration) bool {
+func waitForDaemonStop(socketPath string, deadline time.Duration) bool {
 	const interval = 100 * time.Millisecond
 	for waited := time.Duration(0); ; waited += interval {
-		if !isDaemonRunning() {
+		if !isDaemonRunning(socketPath) {
 			return false
 		}
 		if waited >= deadline {
@@ -1984,8 +1984,8 @@ func waitForDaemonStop(deadline time.Duration) bool {
 // isDaemonRunning reports whether a daemon is listening, by dialing the socket
 // every other client uses. Deliberately not a service-manager query and not a
 // stat: see ADR 0061.
-func isDaemonRunning() bool {
-	conn, err := net.DialTimeout("unix", wire.DefaultSocketPath(), daemonProbeTimeout)
+func isDaemonRunning(socketPath string) bool {
+	conn, err := net.DialTimeout("unix", socketPath, daemonProbeTimeout)
 	if err != nil {
 		return false
 	}
