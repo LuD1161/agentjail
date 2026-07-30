@@ -218,6 +218,7 @@ agentjail doctor --fix                # repair what it can (dead daemon, danglin
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail logs --latest 1000 --json   # newest 1000 matching decisions, chronological JSON
+agentjail stats                       # aggregate final outcomes, policy denies, latency, and coverage
 agentjail sessions list               # active and past agent sessions
 agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay
@@ -697,6 +698,38 @@ Two things it is not:
   ([AGE-244](https://linear.app/agentjail/issue/AGE-244)). A quiet report means
   *your tool calls* were clean — and a thin ruleset flags nothing, which looks
   identical.
+
+### What has it actually done? — `agentjail stats`
+
+`logs` streams individual decisions; `stats` aggregates final outcomes. One
+read-only pass over the local store gives you totals, top policy deny rules, a
+per-agent and per-surface breakdown, latency percentiles, and any day the shield
+activated but recorded zero decisions.
+
+```console
+$ agentjail stats
+AgentJail Activity (all time)
+════════════════════════════════════════════════════════════
+
+Total outcomes:             1004
+Sessions:                   4
+Allowed / Asked / Blocked:  930 / 2 / 72
+Active days:                5  (2026-07-15 → 2026-07-20)
+Latency (p50/p90/p95/p99/max): 1.2ms / 2.4ms / 2.7ms / 4.2ms / 23.5ms
+Block rate: █░░░░░░░░░░░░░░░░░░░░░░░ 7.2%
+
+Top Policy Deny Rules
+─────────────────────────────────────────────────────────────────────────
+  #   Rule                                Count  Share  Impact
+  1   mcp_policy/unknown                     56  77.8%  ██████████
+  2   command_policy/no-bash-touch-se…       13  18.1%  ██░░░░░░░░
+```
+
+Scope with `--since` (`24h`, `7d`, `0` for all time), widen tables with
+`--top N`, and get the machine-readable form with `--json`. Latency is
+microseconds and is a local engineering surface only —
+[ADR 0002](docs/adr/0002-latency-as-engineering-metric.md) forbids citing raw
+`elapsed_us` in external claims.
 
 ---
 
