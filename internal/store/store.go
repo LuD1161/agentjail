@@ -199,7 +199,50 @@ type ReadOnlyStore interface {
 	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	ListDistinctSkillInputs(ctx context.Context) ([]string, error)
 	CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error)
+	ComputeStats(ctx context.Context, since time.Time) (StatsReport, error)
 	Close() error
+}
+
+// StatsReport is the typed aggregate summary rendered by `agentjail stats`.
+// It is the whole contract the CLI depends on: adding a field here never breaks
+// existing callers, so the store stays free to grow the report. All aggregation
+// (including percentiles) lives behind ComputeStats so the DB never opens
+// outside internal/store. See AGE-213.
+type StatsReport struct {
+	Since      time.Time `json:"since"`       // window start; zero == all time
+	FirstDay   string    `json:"first_day"`   // earliest active day (YYYY-MM-DD), "" if none
+	LastDay    string    `json:"last_day"`    // latest active day, "" if none
+	ActiveDays int       `json:"active_days"` // distinct days with at least one decision
+
+	Total    int64 `json:"total"`    // decisions in window
+	Sessions int64 `json:"sessions"` // distinct sessions in window
+	Allow    int64 `json:"allow"`
+	Deny     int64 `json:"deny"`
+	Ask      int64 `json:"ask"`
+
+	DenyRules    []LabeledCount `json:"deny_rules"`    // top deny rules, ranked
+	ByAgent      []LabeledCount `json:"by_agent"`      // per-agent decision counts
+	BySurface    []LabeledCount `json:"by_surface"`    // audit_log event_type counts (per-surface)
+	Latency      LatencyStats   `json:"latency"`       // over elapsed_us, microseconds
+	CoverageGaps []string       `json:"coverage_gaps"` // days shield activated but zero decisions (AGE-212 signal)
+}
+
+// LabeledCount is one ranked (label, count) row in a StatsReport breakdown.
+type LabeledCount struct {
+	Label string `json:"label"`
+	Count int64  `json:"count"`
+}
+
+// LatencyStats holds decision-latency percentiles in microseconds. Local
+// engineering surface only: ADR 0002-latency-as-engineering-metric forbids
+// citing raw elapsed_us in external claims.
+type LatencyStats struct {
+	Count int64 `json:"count"`
+	P50   int64 `json:"p50_us"`
+	P90   int64 `json:"p90_us"`
+	P95   int64 `json:"p95_us"`
+	P99   int64 `json:"p99_us"`
+	Max   int64 `json:"max_us"`
 }
 
 // WouldBlockCount is one row of the monitor-mode report: a rule that fired,

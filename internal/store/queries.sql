@@ -103,3 +103,49 @@ FROM audit_log ORDER BY ts DESC LIMIT ?;
 
 -- name: DeleteOldAuditLog :exec
 DELETE FROM audit_log WHERE ts < ?;
+
+-- Stats aggregates (agentjail stats). Each is scoped by `ts >= ?`; pass a zero
+-- time formatted as RFC3339 for all-time. See AGE-213.
+
+-- name: CountByActionSince :many
+SELECT CASE lower(final_action)
+    WHEN 'blocked' THEN 'deny'
+    WHEN 'allowed' THEN 'allow'
+    WHEN 'ask'     THEN 'ask'
+    ELSE action
+  END AS action,
+  COUNT(*) AS count
+FROM decisions
+WHERE ts >= ?
+GROUP BY 1
+ORDER BY count DESC;
+
+-- name: CountDenyRulesSince :many
+SELECT rule_id, COUNT(*) AS count FROM decisions
+WHERE COALESCE(NULLIF(policy_action, ''), action) = 'deny' AND ts >= ?
+GROUP BY rule_id
+ORDER BY count DESC;
+
+-- name: CountByAgentSince :many
+SELECT agent, COUNT(*) AS count FROM decisions
+WHERE ts >= ? GROUP BY agent ORDER BY count DESC;
+
+-- name: CountDistinctSessionsSince :one
+SELECT COUNT(DISTINCT session_id) AS count FROM decisions WHERE ts >= ?;
+
+-- name: CountAuditByTypeSince :many
+SELECT event_type, COUNT(*) AS count FROM audit_log
+WHERE ts >= ? GROUP BY event_type ORDER BY count DESC;
+
+-- name: ListElapsedMicrosSince :many
+SELECT elapsed_us FROM decisions
+WHERE ts >= ? AND elapsed_us IS NOT NULL AND elapsed_us > 0
+ORDER BY elapsed_us ASC;
+
+-- name: DecisionDaysSince :many
+SELECT CAST(substr(ts, 1, 10) AS TEXT) AS day, COUNT(*) AS count FROM decisions
+WHERE ts >= ? GROUP BY day ORDER BY day ASC;
+
+-- name: ShieldDaysSince :many
+SELECT CAST(substr(ts, 1, 10) AS TEXT) AS day, COUNT(*) AS count FROM audit_log
+WHERE event_type = 'shield.activated' AND ts >= ? GROUP BY day ORDER BY day ASC;

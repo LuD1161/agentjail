@@ -55,6 +55,163 @@ func (q *Queries) CountActionsBySession(ctx context.Context) ([]CountActionsBySe
 	return items, nil
 }
 
+const countAuditByTypeSince = `-- name: CountAuditByTypeSince :many
+SELECT event_type, COUNT(*) AS count FROM audit_log
+WHERE ts >= ? GROUP BY event_type ORDER BY count DESC
+`
+
+type CountAuditByTypeSinceRow struct {
+	EventType string `json:"event_type"`
+	Count     int64  `json:"count"`
+}
+
+func (q *Queries) CountAuditByTypeSince(ctx context.Context, ts string) ([]CountAuditByTypeSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, countAuditByTypeSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountAuditByTypeSinceRow{}
+	for rows.Next() {
+		var i CountAuditByTypeSinceRow
+		if err := rows.Scan(&i.EventType, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countByActionSince = `-- name: CountByActionSince :many
+
+SELECT CASE lower(final_action)
+    WHEN 'blocked' THEN 'deny'
+    WHEN 'allowed' THEN 'allow'
+    WHEN 'ask'     THEN 'ask'
+    ELSE action
+  END AS action,
+  COUNT(*) AS count
+FROM decisions
+WHERE ts >= ?
+GROUP BY 1
+ORDER BY count DESC
+`
+
+type CountByActionSinceRow struct {
+	Action string `json:"action"`
+	Count  int64  `json:"count"`
+}
+
+// Stats aggregates (agentjail stats). Each is scoped by `ts >= ?`; pass a zero
+// time formatted as RFC3339 for all-time. See AGE-213.
+func (q *Queries) CountByActionSince(ctx context.Context, ts string) ([]CountByActionSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, countByActionSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountByActionSinceRow{}
+	for rows.Next() {
+		var i CountByActionSinceRow
+		if err := rows.Scan(&i.Action, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countByAgentSince = `-- name: CountByAgentSince :many
+SELECT agent, COUNT(*) AS count FROM decisions
+WHERE ts >= ? GROUP BY agent ORDER BY count DESC
+`
+
+type CountByAgentSinceRow struct {
+	Agent sql.NullString `json:"agent"`
+	Count int64          `json:"count"`
+}
+
+func (q *Queries) CountByAgentSince(ctx context.Context, ts string) ([]CountByAgentSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, countByAgentSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountByAgentSinceRow{}
+	for rows.Next() {
+		var i CountByAgentSinceRow
+		if err := rows.Scan(&i.Agent, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countDenyRulesSince = `-- name: CountDenyRulesSince :many
+SELECT rule_id, COUNT(*) AS count FROM decisions
+WHERE COALESCE(NULLIF(policy_action, ''), action) = 'deny' AND ts >= ?
+GROUP BY rule_id
+ORDER BY count DESC
+`
+
+type CountDenyRulesSinceRow struct {
+	RuleID sql.NullString `json:"rule_id"`
+	Count  int64          `json:"count"`
+}
+
+func (q *Queries) CountDenyRulesSince(ctx context.Context, ts string) ([]CountDenyRulesSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, countDenyRulesSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountDenyRulesSinceRow{}
+	for rows.Next() {
+		var i CountDenyRulesSinceRow
+		if err := rows.Scan(&i.RuleID, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countDistinctSessionsSince = `-- name: CountDistinctSessionsSince :one
+SELECT COUNT(DISTINCT session_id) AS count FROM decisions WHERE ts >= ?
+`
+
+func (q *Queries) CountDistinctSessionsSince(ctx context.Context, ts string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countDistinctSessionsSince, ts)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countWouldBlockByRule = `-- name: CountWouldBlockByRule :many
 SELECT rule_id, would_action, tool_name, COUNT(*) AS count
 FROM decisions
@@ -88,6 +245,39 @@ func (q *Queries) CountWouldBlockByRule(ctx context.Context, ts string) ([]Count
 			&i.ToolName,
 			&i.Count,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const decisionDaysSince = `-- name: DecisionDaysSince :many
+SELECT CAST(substr(ts, 1, 10) AS TEXT) AS day, COUNT(*) AS count FROM decisions
+WHERE ts >= ? GROUP BY day ORDER BY day ASC
+`
+
+type DecisionDaysSinceRow struct {
+	Day   string `json:"day"`
+	Count int64  `json:"count"`
+}
+
+func (q *Queries) DecisionDaysSince(ctx context.Context, ts string) ([]DecisionDaysSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, decisionDaysSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DecisionDaysSinceRow{}
+	for rows.Next() {
+		var i DecisionDaysSinceRow
+		if err := rows.Scan(&i.Day, &i.Count); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -585,6 +775,68 @@ func (q *Queries) ListDistinctSkillInputs(ctx context.Context) ([]sql.NullString
 			return nil, err
 		}
 		items = append(items, tool_input_redacted)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listElapsedMicrosSince = `-- name: ListElapsedMicrosSince :many
+SELECT elapsed_us FROM decisions
+WHERE ts >= ? AND elapsed_us IS NOT NULL AND elapsed_us > 0
+ORDER BY elapsed_us ASC
+`
+
+func (q *Queries) ListElapsedMicrosSince(ctx context.Context, ts string) ([]sql.NullInt64, error) {
+	rows, err := q.db.QueryContext(ctx, listElapsedMicrosSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []sql.NullInt64{}
+	for rows.Next() {
+		var elapsed_us sql.NullInt64
+		if err := rows.Scan(&elapsed_us); err != nil {
+			return nil, err
+		}
+		items = append(items, elapsed_us)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const shieldDaysSince = `-- name: ShieldDaysSince :many
+SELECT CAST(substr(ts, 1, 10) AS TEXT) AS day, COUNT(*) AS count FROM audit_log
+WHERE event_type = 'shield.activated' AND ts >= ? GROUP BY day ORDER BY day ASC
+`
+
+type ShieldDaysSinceRow struct {
+	Day   string `json:"day"`
+	Count int64  `json:"count"`
+}
+
+func (q *Queries) ShieldDaysSince(ctx context.Context, ts string) ([]ShieldDaysSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, shieldDaysSince, ts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ShieldDaysSinceRow{}
+	for rows.Next() {
+		var i ShieldDaysSinceRow
+		if err := rows.Scan(&i.Day, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

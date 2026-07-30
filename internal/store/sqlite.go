@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,6 +258,130 @@ func (s *sqliteStore) CountWouldBlock(ctx context.Context, since time.Time) ([]W
 		})
 	}
 	return out, nil
+}
+
+// ComputeStats assembles the aggregate report for `agentjail stats` from a
+// handful of GROUP BY queries plus a client-side percentile pass. since is the
+// window start; a zero time means all-time. See AGE-213.
+func (s *sqliteStore) ComputeStats(ctx context.Context, since time.Time) (StatsReport, error) {
+	cutoff := since.UTC().Format(time.RFC3339Nano)
+	rep := StatsReport{Since: since}
+
+	actions, err := s.queries.CountByActionSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats actions: %w", err)
+	}
+	for _, a := range actions {
+		rep.Total += a.Count
+		switch a.Action {
+		case "allow":
+			rep.Allow = a.Count
+		case "deny":
+			rep.Deny = a.Count
+		case "ask":
+			rep.Ask = a.Count
+		}
+	}
+
+	if rep.Sessions, err = s.queries.CountDistinctSessionsSince(ctx, cutoff); err != nil {
+		return rep, fmt.Errorf("store: stats sessions: %w", err)
+	}
+
+	denyRules, err := s.queries.CountDenyRulesSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats deny rules: %w", err)
+	}
+	for _, r := range denyRules {
+		rep.DenyRules = append(rep.DenyRules, LabeledCount{Label: nullOr(r.RuleID, "(none)"), Count: r.Count})
+	}
+
+	agents, err := s.queries.CountByAgentSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats agents: %w", err)
+	}
+	for _, a := range agents {
+		rep.ByAgent = append(rep.ByAgent, LabeledCount{Label: nullOr(a.Agent, "(unknown)"), Count: a.Count})
+	}
+
+	surfaces, err := s.queries.CountAuditByTypeSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats surfaces: %w", err)
+	}
+	for _, sf := range surfaces {
+		rep.BySurface = append(rep.BySurface, LabeledCount{Label: sf.EventType, Count: sf.Count})
+	}
+
+	elapsed, err := s.queries.ListElapsedMicrosSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats latency: %w", err)
+	}
+	rep.Latency = percentiles(elapsed) // ordered ASC by the query
+
+	decDays, err := s.queries.DecisionDaysSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats decision days: %w", err)
+	}
+	rep.ActiveDays = len(decDays)
+	decidedDays := make(map[string]struct{}, len(decDays))
+	for i, d := range decDays {
+		decidedDays[d.Day] = struct{}{}
+		if i == 0 {
+			rep.FirstDay = d.Day
+		}
+		rep.LastDay = d.Day
+	}
+
+	shieldDays, err := s.queries.ShieldDaysSince(ctx, cutoff)
+	if err != nil {
+		return rep, fmt.Errorf("store: stats shield days: %w", err)
+	}
+	for _, d := range shieldDays {
+		if _, ok := decidedDays[d.Day]; !ok {
+			// Shield activated that day but nothing was recorded -- the AGE-212
+			// under-recording signal, surfaced so the failure self-reports.
+			rep.CoverageGaps = append(rep.CoverageGaps, d.Day)
+		}
+	}
+
+	return rep, nil
+}
+
+// percentiles computes p50/p90/p95/p99/max over an ASC-sorted slice of
+// nullable microsecond values. NULLs are excluded by the query's WHERE, so
+// every value is valid; an empty slice yields a zero LatencyStats.
+func percentiles(sorted []sql.NullInt64) LatencyStats {
+	n := len(sorted)
+	if n == 0 {
+		return LatencyStats{}
+	}
+	at := func(p float64) int64 {
+		// Nearest-rank: index of the ceil(p*n)-th value, clamped to [0, n-1].
+		idx := int(math.Ceil(p*float64(n))) - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= n {
+			idx = n - 1
+		}
+		return sorted[idx].Int64
+	}
+	return LatencyStats{
+		Count: int64(n),
+		P50:   at(0.50),
+		P90:   at(0.90),
+		P95:   at(0.95),
+		P99:   at(0.99),
+		Max:   sorted[n-1].Int64,
+	}
+}
+
+// nullOr returns the string value of a NullString, or dflt when it is NULL or
+// empty. Keeps report labels stable rather than blank.
+func nullOr(s sql.NullString, dflt string) string {
+	if s.Valid && s.String != "" {
+		return s.String
+	}
+	return dflt
 }
 
 // tableExists reports whether a table with the given name exists in the DB.
@@ -1061,6 +1186,9 @@ func (r *sqliteROStore) ListDistinctSkillInputs(ctx context.Context) ([]string, 
 }
 func (r *sqliteROStore) CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error) {
 	return r.inner.CountWouldBlock(ctx, since)
+}
+func (r *sqliteROStore) ComputeStats(ctx context.Context, since time.Time) (StatsReport, error) {
+	return r.inner.ComputeStats(ctx, since)
 }
 func (r *sqliteROStore) Close() error { return r.inner.Close() }
 

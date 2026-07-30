@@ -83,6 +83,10 @@ func (m *mockReadOnlyStore) CountWouldBlock(ctx context.Context, since time.Time
 	return nil, nil
 }
 
+func (m *mockReadOnlyStore) ComputeStats(context.Context, time.Time) (store.StatsReport, error) {
+	return store.StatsReport{}, nil
+}
+
 func TestResolveSessionPrefix_ExactMatch(t *testing.T) {
 	st := &mockReadOnlyStore{
 		sessions: []store.Session{
