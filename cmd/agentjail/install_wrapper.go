@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/LuD1161/agentjail/internal/pathshim"
 )
 
 const (
@@ -164,240 +166,73 @@ func uninstallVSCodeWrapper(home string, app string) error {
 	return os.WriteFile(settingsPath, out, 0o600)
 }
 
-type pathShimTarget struct {
-	Command     string
-	DisplayName string
-}
+type pathShimTarget = pathshim.Target
 
-var pathShimTargets = []pathShimTarget{
-	{Command: "claude", DisplayName: "Claude Code"},
-	{Command: "codex", DisplayName: "Codex"},
-	{Command: "agent", DisplayName: "Cursor"},
-}
+var pathShimTargets = pathshim.Targets()
 
 // installPathShim creates shims for supported agent CLIs under
 // ~/.agentjail/bin and adds that directory to the shell profile PATH.
 func installPathShim(home string) error {
-	shimDir := filepath.Join(home, ".agentjail", "bin")
-
 	shieldBin, err := findShieldBinary(home)
 	if err != nil {
 		return fmt.Errorf("cannot install PATH shim: shield binary not found — run `agentjail install` first")
 	}
-
-	if err := os.MkdirAll(shimDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create shim directory: %v", err)
-	}
-
-	for _, target := range pathShimTargets {
-		shimPath := filepath.Join(shimDir, target.Command)
-		shimContent := renderPathShim(target, shieldBin, shimDir, shimPath)
-		if err := os.WriteFile(shimPath, []byte(shimContent), 0o755); err != nil {
-			return fmt.Errorf("failed to write %s shim: %v", target.Command, err)
-		}
-		fmt.Fprintf(os.Stdout, "  %s PATH shim installed at %s\n", target.DisplayName, shimPath)
-	}
-
-	// Add to shell profile if not already present.
-	if err := addToShellProfile(home, shimDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: could not update shell profile: %v\n", err)
-		fmt.Fprintf(os.Stderr, "  Add this to your shell profile manually:\n")
-		fmt.Fprintf(os.Stderr, "    export PATH=\"%s:$PATH\"\n", shimDir)
-	}
-
-	fmt.Fprintln(os.Stdout, "  Run `hash -r` or open a new shell to activate.")
-	return nil
+	return pathshim.Install(home, shieldBin, os.Stdout, os.Stderr)
 }
 
 func renderPathShim(target pathShimTarget, shieldBin, shimDir, shimPath string) string {
-	commandUpper := strings.ToUpper(target.Command)
-	codexYoloCompat := ""
-	if target.Command == "codex" {
-		codexYoloCompat = `# Codex renamed its legacy --yolo flag. Preserve the familiar invocation while
-# forwarding the current equivalent; AgentJail's outer shield remains active.
-if [ "${1:-}" = "--yolo" ]; then
-    shift
-    set -- --dangerously-bypass-approvals-and-sandbox "$@"
-fi
-
-`
-	}
-	return fmt.Sprintf(`#!/bin/sh
-# agentjail PATH shim — transparently wraps %s with agentjail-shield.
-# Installed by: agentjail install --with-path-shim
-# Remove with:  agentjail uninstall
-
-set -e
-
-SHIELD="%s"
-
-find_real_agent() {
-    # Save and modify PATH to exclude our directory.
-    _orig_path="$PATH"
-    _shim_dir="%s"
-    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${_shim_dir}$" | tr '\n' ':' | sed 's/:$//')
-    _real=$(command -v %s 2>/dev/null || true)
-    PATH="$_orig_path"
-    echo "$_real"
-}
-
-REAL_%s=$(find_real_agent)
-
-if [ -z "$REAL_%s" ]; then
-    echo "ERROR: %s not found in PATH (excluding %s)" >&2
-    echo "  Install %s, or remove the shim: rm %s" >&2
-    exit 127
-fi
-
-# Guard against loop: if the real agent IS this script, abort.
-if [ "$REAL_%s" = "%s" ]; then
-    echo "ERROR: PATH shim resolved to itself at %s" >&2
-    echo "  Check your PATH order." >&2
-    exit 1
-fi
-
-%s
-
-# Fail open. A missing shield must never brick the agent: an interrupted upgrade,
-# a partial uninstall, or a quarantined binary would otherwise leave every
-# invocation dead with a cryptic "exec: not found". -x also catches a
-# dangling agentjail-shield -> agentjail role symlink, since it follows links.
-if [ ! -x "$SHIELD" ]; then
-    echo "WARNING: agentjail-shield is missing or not executable at $SHIELD" >&2
-    echo "  Running %s UNSHIELDED — policy hooks may still apply." >&2
-    echo "  Repair: agentjail install --with-path-shim   |   Remove shim: agentjail uninstall --path-shim-only (or rm %s)" >&2
-    exec "$REAL_%s" "$@"
-fi
-
-exec "$SHIELD" -- "$REAL_%s" "$@"
-
-`, target.Command, shieldBin, shimDir, target.Command, commandUpper, commandUpper,
-		target.Command, shimDir, target.DisplayName, shimPath, commandUpper, shimPath,
-		shimPath, codexYoloCompat, target.Command, shimPath, commandUpper, commandUpper)
+	return pathshim.Render(target, shieldBin, shimDir, shimPath)
 }
 
 // uninstallPathShim removes the shim binary. Shell profile cleanup is
 // handled by the existing cleanupShellRCPath in install.go.
 func uninstallPathShim(home string) {
-	for _, target := range pathShimTargets {
-		os.Remove(filepath.Join(home, ".agentjail", "bin", target.Command))
-	}
+	pathshim.Remove(home)
 }
 
-// removePathShimOnly removes just the PATH shim — the binary AND its opt-in
-// record — while leaving the rest of the install (hook, daemon, ~/.agentjail)
-// intact. Stripping the fenced rc block is the load-bearing half: without it the
-// recorded opt-in survives, and the next `agentjail install` (reassertPathShim)
-// or `agentjail doctor --fix` (restorePathShim) would put the shim right back.
-// Returns the rc files actually modified so the caller can report them.
+// removePathShimOnly removes derived shims and their durable consent marker.
+// See ADR 0062-path-shim-consent-is-the-rc-block.
 func removePathShimOnly(home string) []string {
 	uninstallPathShim(home)
 	return cleanupShellRCWith(home, stripShimRCBlock)
 }
 
-// shimConsentRecorded reports whether the user opted into the PATH shim, by
-// looking for the fenced marker installPathShim writes into a shell rc.
-//
-// The rc block — not the shim file — is the durable record of that choice. The
-// shim lives in ~/.agentjail/bin, which uninstall removes wholesale
-// (removeInstallDir), so the file's absence cannot distinguish "never opted in"
-// from "opted in, then wiped by an uninstall/reinstall cycle". The rc block
-// survives both. See ADR 0062.
+// shimConsentRecorded reads the durable shell-profile opt-in marker.
+// See ADR 0062-path-shim-consent-is-the-rc-block.
 func shimConsentRecorded(home string) bool {
-	for _, rc := range shellRCCandidates(home) {
-		b, err := os.ReadFile(rc)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(b), shimRCMarkerStart) {
-			return true
-		}
-	}
-	return false
+	return pathshim.ConsentRecorded(home, os.Getenv("ZDOTDIR"))
 }
 
-// reassertPathShim regenerates the PATH shim whenever the user has opted in —
-// either the shim is already on disk (refresh it, so a brew upgrade or curl|sh
-// reinstall picks up the current template instead of stale flags from an older
-// build), or consent is recorded in a shell rc but the file is gone (restore it).
-//
-// The restore case is the one that matters: without it, the rc still prepends
-// ~/.agentjail/bin to PATH but no claude sits there, so the shell resolves
-// straight past it to the real unshielded binary — silently, with no error and
-// no missing-command. The user believes they are shielded and is not. Called
-// unconditionally from install. See ADR 0062.
+// reassertPathShim refreshes derived wrappers only after durable opt-in.
+// See ADR 0062-path-shim-consent-is-the-rc-block.
 func reassertPathShim(home string) {
-	complete := pathShimsInstalled(home)
-
-	if !anyPathShimInstalled(home) && !shimConsentRecorded(home) {
-		return // never opted in — nothing to reassert
-	}
-
-	if err := installPathShim(home); err != nil {
+	shieldBin, err := findShieldBinary(home)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail: warning: could not reassert PATH shim: %v\n", err)
 		return
 	}
-	if !complete {
+	result, err := pathshim.Reassert(home, shieldBin, os.Stdout, os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail: warning: could not reassert PATH shim: %v\n", err)
+		return
+	}
+	if result.Restored {
 		fmt.Fprintln(os.Stderr, "agentjail: restored the PATH shim (your shell profile opts into it, but the shim was missing)")
 	}
 }
 
 func pathShimsInstalled(home string) bool {
-	for _, target := range pathShimTargets {
-		if _, err := os.Stat(filepath.Join(home, ".agentjail", "bin", target.Command)); err != nil {
-			return false
-		}
-	}
-	return true
+	return pathshim.Complete(home)
 }
 
 func anyPathShimInstalled(home string) bool {
-	for _, target := range pathShimTargets {
-		if _, err := os.Stat(filepath.Join(home, ".agentjail", "bin", target.Command)); err == nil {
-			return true
-		}
-	}
-	return false
+	return pathshim.AnyInstalled(home)
 }
 
 // addToShellProfile adds the agentjail bin directory to PATH in the
 // appropriate shell profile. Idempotent — skips if already present.
 func addToShellProfile(home, binDir string) error {
-	block := fmt.Sprintf("\n%s\nexport PATH=\"%s:$PATH\"\n%s\n", shimRCMarkerStart, binDir, shimRCMarkerEnd)
-
-	// Determine which rc file to use.
-	rcPath := ""
-	switch {
-	case fileExists(filepath.Join(home, ".zshrc")):
-		rcPath = filepath.Join(home, ".zshrc")
-	case fileExists(filepath.Join(home, ".bashrc")):
-		rcPath = filepath.Join(home, ".bashrc")
-	case fileExists(filepath.Join(home, ".bash_profile")):
-		rcPath = filepath.Join(home, ".bash_profile")
-	default:
-		// Create .bashrc as default.
-		rcPath = filepath.Join(home, ".bashrc")
-	}
-
-	// Check if already present.
-	content, _ := os.ReadFile(rcPath)
-	if strings.Contains(string(content), shimRCMarkerStart) {
-		return nil // already present
-	}
-
-	f, err := os.OpenFile(rcPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = f.WriteString(block)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stdout, "  PATH added to %s\n", rcPath)
-	return nil
+	return pathshim.AddToShellProfile(home, binDir)
 }
 
 // isOurWrapper checks if a wrapper path belongs to agentjail.

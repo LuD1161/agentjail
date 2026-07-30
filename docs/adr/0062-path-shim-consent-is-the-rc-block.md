@@ -79,3 +79,9 @@ failure mode is an unwanted shim install rather than a silent security downgrade
 The shim remains one launch path among several. Sessions started outside a profile-sourcing
 shell are still unshielded, and the hook still only warns. Closing that gap is verified
 activation (draft ADR 0029) and is out of scope here.
+
+## Implementation note
+
+The shared `internal/pathshim` package owns target enumeration, wrapper rendering,
+consent detection, and restoration. Install, doctor, and uninstall call that
+contract instead of maintaining separate target lists or templates.

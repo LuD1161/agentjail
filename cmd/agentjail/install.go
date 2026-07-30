@@ -68,6 +68,7 @@ import (
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agents"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/pathshim"
 	"github.com/LuD1161/agentjail/internal/picker"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
@@ -790,27 +791,14 @@ func performFullUninstall(home, goos string, keepSecrets, force bool) UninstallR
 //     PATH shim; see shimConsentRecorded.
 const (
 	pathRCMarker      = "# added by agentjail installer"
-	shimRCMarkerStart = "# >>> agentjail >>>"
-	shimRCMarkerEnd   = "# <<< agentjail <<<"
+	shimRCMarkerStart = pathshim.MarkerStart
+	shimRCMarkerEnd   = pathshim.MarkerEnd
 )
 
-// shellRCCandidates lists every shell rc agentjail may have written a PATH
-// export into, honoring $ZDOTDIR. Single source of truth for the writer
-// (addToShellProfile), the scrubber (cleanupShellRCPath), and the consent
-// probe (shimConsentRecorded) — they must agree on the file set or each will
-// disagree about whether the shim is installed.
+// shellRCCandidates shares the writer's profile set with uninstall cleanup.
+// See ADR 0062-path-shim-consent-is-the-rc-block.
 func shellRCCandidates(home string) []string {
-	candidates := []string{
-		filepath.Join(home, ".zshrc"),
-		filepath.Join(home, ".bashrc"),
-		filepath.Join(home, ".bash_profile"),
-		filepath.Join(home, ".profile"),
-		filepath.Join(home, ".config", "fish", "config.fish"),
-	}
-	if zd := os.Getenv("ZDOTDIR"); zd != "" {
-		candidates = append(candidates, filepath.Join(zd, ".zshrc"))
-	}
-	return candidates
+	return pathshim.RCCandidates(home, os.Getenv("ZDOTDIR"))
 }
 
 // stripAgentjailPathBlock removes every agentjail PATH block from shell rc
