@@ -265,7 +265,7 @@ agentjail install --with-path-shim    # wrap `claude`, `codex`, and Cursor's `ag
 
 By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands run shielded without a special launch command.
 
-It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstalls and upgrades restore the shim rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
+It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstall, `agentjail update`, and daemon auto-update all restore the complete shim set rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 
 Each shim **fails open**. If the shield binary is missing (interrupted upgrade, partial uninstall), it warns loudly and runs the real agent unshielded rather than breaking it ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).
 

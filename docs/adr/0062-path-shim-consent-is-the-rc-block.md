@@ -83,5 +83,6 @@ activation (draft ADR 0029) and is out of scope here.
 ## Implementation note
 
 The shared `internal/pathshim` package owns target enumeration, wrapper rendering,
-consent detection, and restoration. Install, doctor, and uninstall call that
-contract instead of maintaining separate target lists or templates.
+consent detection, and restoration. Install, doctor, uninstall, manual update,
+and daemon auto-update call that contract instead of maintaining separate target
+lists or templates.

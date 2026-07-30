@@ -478,6 +478,33 @@ func TestPerformUpdate_ReconcilesRoleSymlinks(t *testing.T) {
 	}
 }
 
+func TestReassertUpdatedPathShimRestoresConsentedTargets(t *testing.T) {
+	home := t.TempDir()
+	installDir := filepath.Join(home, ".agentjail", "bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "agentjail"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfupdate.EnsureRoleSymlinks(installDir); err != nil {
+		t.Fatal(err)
+	}
+	rc := shimRCMarkerStart + "\nexport PATH=\"" + installDir + ":$PATH\"\n" + shimRCMarkerEnd + "\n"
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(rc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHomeDirFn := updateHomeDirFn
+	updateHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { updateHomeDirFn = origHomeDirFn })
+
+	reassertUpdatedPathShim(installDir)
+	if !pathShimsInstalled(home) {
+		t.Fatal("manual update did not restore the complete consented shim set")
+	}
+}
+
 // ── --force flag tests ────────────────────────────────────────────────────────
 
 // TestPerformUpdate_ForceReinstall verifies that --force reinstalls the same version.

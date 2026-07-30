@@ -3,6 +3,7 @@ package daemonapp
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/notify"
+	"github.com/LuD1161/agentjail/internal/pathshim"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -269,12 +271,31 @@ func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 	if err := selfupdate.EnsureRoleSymlinks(uc.InstallDir); err != nil {
 		slog.Warn("auto-update: could not reconcile role symlinks", "err", err)
 	}
+	shimRestored := false
+	if result, err := uc.reassertPathShim(); err != nil {
+		slog.Warn("auto-update: could not reassert PATH shim", "err", err)
+	} else {
+		shimRestored = result.Restored
+	}
 
-	slog.Info("auto-update: binaries swapped, exiting for restart", "version", latest, "swapped", swappedCount)
+	slog.Info("auto-update: binaries swapped, exiting for restart", "version", latest, "swapped", swappedCount, "path_shim_restored", shimRestored)
 
 	// 8. Exit — the supervisor restarts the new daemon. Both platforms must
 	// restart a clean exit(0) or this strands the daemon (ADR 0070).
 	osExitFn(0)
+}
+
+func (uc *UpdateChecker) reassertPathShim() (pathshim.Result, error) {
+	basePath := filepath.Clean(uc.BasePath)
+	if filepath.Clean(uc.InstallDir) != filepath.Join(basePath, "bin") {
+		return pathshim.Result{}, nil
+	}
+	return pathshim.Reassert(
+		filepath.Dir(basePath),
+		filepath.Join(uc.InstallDir, "agentjail-shield"),
+		io.Discard,
+		io.Discard,
+	)
 }
 
 func (uc *UpdateChecker) throttlePath() string {

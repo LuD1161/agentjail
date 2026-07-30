@@ -200,6 +200,38 @@ func TestUpdateChecker_AutoUpdate_SkipsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckerReassertsConsentedPathShim(t *testing.T) {
+	home := t.TempDir()
+	basePath := filepath.Join(home, ".agentjail")
+	installDir := filepath.Join(basePath, "bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "agentjail"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfupdate.EnsureRoleSymlinks(installDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("# >>> agentjail >>>\n# <<< agentjail <<<\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	uc := &UpdateChecker{BasePath: basePath, InstallDir: installDir}
+	result, err := uc.reassertPathShim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Applied || !result.Restored {
+		t.Fatalf("result = %+v, want applied restoration", result)
+	}
+	for _, command := range []string{"claude", "codex", "agent"} {
+		if _, err := os.Stat(filepath.Join(installDir, command)); err != nil {
+			t.Errorf("%s shim not restored: %v", command, err)
+		}
+	}
+}
+
 func TestUpdateChecker_AutoUpdate_SkipsBrew(t *testing.T) {
 	origKey := selfupdate.SigningPubKey
 	selfupdate.SigningPubKey = "RWQfakekeyfortest"

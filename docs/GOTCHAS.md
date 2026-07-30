@@ -423,6 +423,17 @@ investigation needed.
   presentation, and use keyset pagination when the command promises all rows.
   See ADR 0018-sqlite-local-store.
 
+## 29. Updating binaries does not update derived launchers
+
+The updater correctly swapped binaries and reconciled role symlinks, so its
+tests stayed green. PATH shims are generated scripts, though, and neither the
+manual nor daemon updater regenerated them. A user who had opted in before
+Codex and Cursor support kept only the old Claude wrapper after updating.
+
+- **Rule:** every update path must reconcile derived launchers after the binary
+  swap, using the same target and consent contract as install. See
+  ADR 0062-path-shim-consent-is-the-rc-block.
+
 ---
 
 ## Testing gotchas

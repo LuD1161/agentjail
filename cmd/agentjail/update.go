@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/pathshim"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 )
@@ -44,6 +45,8 @@ import (
 // updateURLBaseFn is the package-level hook used by performUpdate to build the
 // primary download URL.  Tests override it to point at a mock HTTP server.
 var updateURLBaseFn = selfupdate.UpdateURLBase
+
+var updateHomeDirFn = os.UserHomeDir
 
 // defaultUpdateInstallDir returns the binary installation directory, honouring
 // AGENTJAIL_HOME (default: ~/.agentjail/bin).
@@ -383,6 +386,7 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	if err := selfupdate.EnsureRoleSymlinks(installDir); err != nil {
 		fmt.Fprintf(os.Stderr, "  warning: could not reconcile role symlinks: %v\n", err)
 	}
+	reassertUpdatedPathShim(installDir)
 
 	// Step 8c: the updater hands the daemon back to its supervisor with exit(0)
 	// (ADR 0070), so verify the DEPLOYED definition will catch it before relying
@@ -444,6 +448,21 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	}
 
 	return 0
+}
+
+func reassertUpdatedPathShim(installDir string) {
+	home, err := updateHomeDirFn()
+	if err != nil || filepath.Clean(installDir) != filepath.Join(home, ".agentjail", "bin") {
+		return
+	}
+	result, err := pathshim.Reassert(home, filepath.Join(installDir, "agentjail-shield"), os.Stdout, os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not reassert PATH shim: %v\n", err)
+		return
+	}
+	if result.Restored {
+		fmt.Println("🔧  PATH shim restored from your existing shell-profile opt-in")
+	}
 }
 
 // formatChangelogBullets extracts markdown bullet lines from a changelog body,
