@@ -44,6 +44,35 @@ func TestPercentiles(t *testing.T) {
 	}
 }
 
+// TestRecordDecisionNormalizesEmptyAgent guards store-boundary attribution.
+// See AGE-213.
+func TestRecordDecisionNormalizesEmptyAgent(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "norm.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	ts := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	if err := s.RecordDecision(ctx, DecisionRecord{Ts: ts, SessionID: "blank", ToolName: "Bash", Action: "allow"}); err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+
+	got, err := s.ListDecisions(ctx, Filter{SessionID: "blank"})
+	if err != nil {
+		t.Fatalf("ListDecisions: %v", err)
+	}
+	if len(got) != 1 || got[0].Agent != AgentUnknown {
+		t.Fatalf("agent = %q (n=%d), want %q", func() string {
+			if len(got) > 0 {
+				return got[0].Agent
+			}
+			return ""
+		}(), len(got), AgentUnknown)
+	}
+}
+
 // TestComputeStats exercises the full aggregate over a real temp DB.
 func TestComputeStats(t *testing.T) {
 	ctx := context.Background()

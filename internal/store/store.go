@@ -68,6 +68,9 @@ type DecisionRecord struct {
 	Enforcer    string
 }
 
+// AgentUnknown marks a decision with no attributable agent. See AGE-213.
+const AgentUnknown = "unknown"
+
 // AuditRecord is one policy-mutation audit event (replaces audit.log).
 type AuditRecord struct {
 	ID     int64

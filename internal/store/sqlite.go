@@ -406,6 +406,10 @@ func columnExists(db *sql.DB, table, column string) bool {
 // best-effort.
 func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) error {
 	ts := d.Ts.UTC().Format(time.RFC3339Nano)
+	// Keep missing attribution queryable at the store boundary. See AGE-213.
+	if d.Agent == "" {
+		d.Agent = AgentUnknown
+	}
 	redacted := RedactToolInput(d.ToolInput)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
