@@ -4,6 +4,32 @@
 
 ## Unreleased
 
+## v1.2.0 - 2026-07-29
+
+![v1.2.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.2.0-summary.svg)
+
+#### TL;DR
+
+- **Summarize AgentJail activity** with final outcomes, policy deny rules, per-agent counts, latency percentiles, and recording coverage from the local SQLite store.
+- **Scope and automate reports** with `agentjail stats --since`, `--top`, and typed JSON output.
+- **Restore consented PATH shims during every update** so existing opt-ins gain the complete Claude Code, Codex, and Cursor wrapper set.
+
+### Added
+
+- **`agentjail stats`**: a read-only activity summary over the singleton `store.ReadOnlyStore`, with all-time or duration-scoped reports, ranked policy deny rules, per-agent and audit-event breakdowns, latency percentiles, and coverage-gap warnings.
+- **Machine-readable stats**: `--json` emits the typed aggregate contract, `--since` accepts durations such as `24h` and `7d`, and `--top` controls ranked table depth.
+
+### Changed
+
+- **Final-outcome totals**: allowed, asked, and blocked counts follow the observed final action, including OS-sandbox blocks, while the deny-rule table remains tied to canonical policy denies.
+- **Missing agent identity** is normalized to the explicit `unknown` sentinel at the store boundary so attribution gaps remain queryable.
+- **Shared PATH-shim contract**: install, doctor, uninstall, manual update, and daemon auto-update use one target list, renderer, consent probe, and restoration path.
+
+### Fixed
+
+- **Manual `agentjail update` restores PATH shims** after swapping binaries and reconciling role symlinks, but only when a prior wrapper or shell-profile consent marker exists.
+- **Daemon auto-update restores PATH shims** under the same opt-in contract, fixing upgrades that kept an older Claude-only wrapper and failed to add the v1.1 Codex and Cursor wrappers.
+
 ## v1.1.0 - 2026-07-27
 
 ![v1.1.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.1.0-summary.svg)
