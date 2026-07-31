@@ -119,7 +119,7 @@ fi
 
 # The Codex approval matrix models users who launch through the opt-in PATH
 # shim. This is a separate consented install action, not a second base install.
-# See ADR 0118-codex-approval-broker.
+# See ADR 0119-command-approval-transport.
 if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
     log "installing the opt-in Codex PATH shim for approval compatibility"
     "$HOME/.agentjail/bin/agentjail" install --with-path-shim

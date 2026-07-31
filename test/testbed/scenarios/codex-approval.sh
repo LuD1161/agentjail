@@ -10,14 +10,18 @@ PROJECT="$HOME/work/codex-approval"
 REMOTE="$HOME/work/remotes/codex-approval.git"
 SESSION="codex-approval-$RANDOM"
 CODEX_VERSION="codex-cli 0.146.0"
-PROMPT_MARKER="agentjail approval-exec --operation git-push"
+PROMPT_MARKER="agentjail approval-exec --operation shell-command"
 DISPLAY_MARKER="🔐 AgentJail approval required for:"
-EXPECTED_BRANCH=""
+EXPECTED_CONTEXT=""
+CUSTOM_RULE_INSTALLED=0
 
-scn_init "codex-approval" "native approve, decline, never, and ignored-rule behavior against a local bare remote"
+scn_init "codex-approval" "native approval for built-in and user-authored Bash ask policies"
 
 cleanup() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
+    if [ "$CUSTOM_RULE_INSTALLED" -eq 1 ]; then
+        "$AJ" policy remove codex_approval_probe >/dev/null 2>&1 || true
+    fi
     rm -f /tmp/codex-auth.json "$HOME/.codex/auth.json"
 }
 trap cleanup EXIT INT TERM
@@ -53,6 +57,32 @@ git -C "$PROJECT" add README.md
 git -C "$PROJECT" commit -qm "test: seed approval repository"
 git -C "$PROJECT" remote add origin "$REMOTE"
 
+CUSTOM_RULE="/tmp/codex_approval_probe.rego"
+cat >"$CUSTOM_RULE" <<'REGO'
+package agentjail
+
+import future.keywords.if
+import future.keywords.contains
+
+candidate contains r if {
+    input.tool_name == "Bash"
+    contains(object.get(input.tool_input, "command", ""), "agentjail-custom-approval-marker")
+    r := {
+        "action": "ask",
+        "rule_id": "custom/codex_approval_probe/confirm-marker",
+        "reason": "testbed custom policy requires human approval",
+    }
+}
+REGO
+if "$AJ" policy add "$CUSTOM_RULE" >/dev/null; then
+    CUSTOM_RULE_INSTALLED=1
+    sleep 1
+else
+    scn_fail "custom Bash ask policy installs for the compatibility scenario"
+    finish_and_exit
+fi
+rm -f "$CUSTOM_RULE"
+
 branch_exists() {
     git --git-dir="$REMOTE" show-ref --verify --quiet "refs/heads/$1"
 }
@@ -69,7 +99,7 @@ wait_for_approval_prompt() {
         fi
         if printf '%s' "$output" | grep -Fq "$PROMPT_MARKER" \
             && printf '%s' "$output" | grep -Fq "$DISPLAY_MARKER" \
-            && printf '%s' "$output" | grep -Fq "HEAD:refs/heads/$EXPECTED_BRANCH"; then
+            && printf '%s' "$output" | grep -Fq "$EXPECTED_CONTEXT"; then
             return 0
         fi
         if [ $((i % 10)) -eq 0 ]; then
@@ -90,11 +120,16 @@ print_sanitized_pane() {
 
 start_interactive_push() {
     local branch="$1"
-    EXPECTED_BRANCH="$branch"
+    EXPECTED_CONTEXT="HEAD:refs/heads/$branch"
+    start_interactive_command "git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch"
+}
+
+start_interactive_command() {
+    local command="$1"
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     tmux new-session -d -s "$SESSION" -x 180 -y 48
     tmux send-keys -t "$SESSION:0.0" \
-        "cd '$PROJECT' && '$CODEX_REAL' --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch'" Enter
+        "cd '$PROJECT' && '$CODEX_REAL' --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: $command'" Enter
 }
 
 APPROVE_BRANCH="agentjail-approval-approve"
@@ -118,6 +153,33 @@ if branch_exists "$APPROVE_BRANCH"; then
     scn_ok "approved prompt pushes the exact requested branch"
 else
     scn_fail "approved prompt pushes the exact requested branch"
+fi
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+CUSTOM_EFFECT="$PROJECT/custom-approved.txt"
+CUSTOM_COMMAND="printf agentjail-custom-approval-marker > $CUSTOM_EFFECT"
+rm -f "$CUSTOM_EFFECT"
+EXPECTED_CONTEXT="agentjail-custom-approval-marker"
+start_interactive_command "$CUSTOM_COMMAND"
+if wait_for_approval_prompt; then
+    scn_ok "user-authored Bash ask opens the same native approval prompt"
+    tmux send-keys -t "$SESSION:0.0" "1" Enter
+else
+    scn_fail "user-authored Bash ask opens the same native approval prompt"
+    print_sanitized_pane
+    finish_and_exit
+fi
+for i in $(seq 1 60); do
+    [ -f "$CUSTOM_EFFECT" ] && break
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "  INFO  waiting for approved custom-policy effect (${i}s/60s)"
+    fi
+    sleep 1
+done
+if [ "$(cat "$CUSTOM_EFFECT" 2>/dev/null || true)" = "agentjail-custom-approval-marker" ]; then
+    scn_ok "approved custom-policy command executes the exact requested effect"
+else
+    scn_fail "approved custom-policy command executes the exact requested effect"
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
