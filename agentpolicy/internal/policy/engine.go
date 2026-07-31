@@ -58,7 +58,13 @@ type HookInput struct {
 	// ["git", "agentjail", "grep"]. Empty for non-Bash tools.
 	// Rego reads this as input.command_binaries.
 	CommandBinaries []string `json:"command_binaries,omitempty"`
+	// CommandIntents contains semantic operations derived from parsed Bash
+	// invocations rather than inert text in the raw shell string.
+	CommandIntents []CommandIntent `json:"command_intents,omitempty"`
 }
+
+// CommandIntent is a semantic operation derived from a parsed command.
+type CommandIntent string
 
 // Engine is the abstraction new callers depend on. The concrete
 // implementation (hookOPAEngine) evaluates OPA Rego in-process; future

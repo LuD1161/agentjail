@@ -42,6 +42,9 @@ type HookEngine = internalpolicy.Engine
 // the Claude Code PreToolUse JSON payload exactly (snake_case).
 type HookInput = internalpolicy.HookInput
 
+// CommandIntent is a semantic operation derived from a parsed command.
+type CommandIntent = internalpolicy.CommandIntent
+
 // Cache is the decision-cache interface. Implementations must be
 // safe for concurrent use.
 type Cache = internalpolicy.Cache

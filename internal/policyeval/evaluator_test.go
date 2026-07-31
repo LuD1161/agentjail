@@ -1,6 +1,7 @@
 package policyeval
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"strings"
@@ -8,6 +9,56 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/policy"
 )
+
+type capturingEngine struct {
+	input policy.HookInput
+}
+
+func (e *capturingEngine) Eval(_ context.Context, input policy.HookInput) (policy.Decision, error) {
+	e.input = input
+	return policy.Decision{Action: "allow", RuleID: "test/capture"}, nil
+}
+
+func TestEvalInjectsParsedCommandIntents(t *testing.T) {
+	engine := &capturingEngine{}
+	evaluator := New(engine, policy.NewLRUCache(8), nil, nil)
+	_, err := evaluator.Eval(context.Background(), Request{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "git -C /tmp/work -c color.ui=false push origin topic",
+		},
+		SessionID: "test",
+		CWD:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	want := []policy.CommandIntent{"git-push"}
+	if !reflect.DeepEqual(engine.input.CommandIntents, want) {
+		t.Fatalf("CommandIntents = %v, want %v", engine.input.CommandIntents, want)
+	}
+}
+
+func TestEvalDoesNotClassifyTextOnlyCommandArguments(t *testing.T) {
+	engine := &capturingEngine{}
+	evaluator := New(engine, policy.NewLRUCache(8), nil, nil)
+	_, err := evaluator.Eval(context.Background(), Request{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{
+			"command": `rg -n "git push" README.md`,
+		},
+		SessionID: "test",
+		CWD:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if len(engine.input.CommandIntents) != 0 {
+		t.Fatalf("CommandIntents = %v, want none", engine.input.CommandIntents)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // NormalizeToolInput

@@ -127,6 +127,13 @@ fires, the default is **ask** (fail-safe, not silent allow). Every rule has a
 namespaced `rule_id` (`file_policy/…`, `command_policy/…`, `mcp_policy/…`,
 `library/…`, `custom/<name>/…`).
 
+For Bash calls, the daemon parses executable invocations before OPA evaluation
+and supplies both binary names and typed command intents. Git remote-update
+policy classifies the subcommand after documented global options such as `-C`
+and `-c`; it does not scan the whole shell string for adjacent words. This
+distinguishes an executed operation from inert arguments in commands such as
+source searches. See ADR 0118-codex-approval-broker.
+
 ### Config overlay (ADR 0012)
 
 The daemon loads `~/.agentjail/policy.yaml`, merges it over built-in defaults,

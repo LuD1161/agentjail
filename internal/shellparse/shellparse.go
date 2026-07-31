@@ -69,6 +69,11 @@ type Result struct {
 	// ($(...) and `...`). For "git status && /usr/local/bin/agentjail
 	// policy list | grep foo", Binaries is ["git", "agentjail", "grep"].
 	Binaries []string
+	// Invocations contains the parsed executable and argument vector for each
+	// command in the shell expression. Unlike Binaries, argument text is kept
+	// so downstream semantic classifiers can reason about subcommands without
+	// matching inert text in another command's arguments.
+	Invocations []Invocation
 }
 
 // Parse extracts binary names from a shell command string.
@@ -84,7 +89,11 @@ func Parse(cmd string) Result {
 	if binaries == nil {
 		binaries = []string{}
 	}
-	return Result{Binaries: binaries}
+	invocations := parseInvocations(cmd, 0)
+	if invocations == nil {
+		invocations = []Invocation{}
+	}
+	return Result{Binaries: binaries, Invocations: invocations}
 }
 
 // parseBinaries is the recursive core of Parse. depth bounds recursion into

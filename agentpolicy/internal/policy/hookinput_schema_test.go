@@ -88,8 +88,8 @@ func TestSchemaRejectsUnknownInputRef(t *testing.T) {
 
 // TestSchemaAllowsOptionalFields is the counterweight to the test above, and
 // the distinction that makes the schema correct rather than merely strict.
-// repo_root / aws_account / command_binaries are `omitempty` — they are
-// legitimately absent for non-git / non-AWS / non-Bash calls. Referencing an
+// repo_root / aws_account / command_binaries / command_intents are
+// `omitempty` — they are legitimately absent for non-git / non-AWS / non-Bash calls. Referencing an
 // absent-but-declared field is a normal, intentional Rego pattern (the rule
 // simply doesn't match) and MUST stay legal. A schema that rejected these
 // would be worse than no schema at all.
@@ -98,6 +98,7 @@ func TestSchemaAllowsOptionalFields(t *testing.T) {
 		`	input.aws_account == "123456789012"`,
 		`	input.repo_root == "/repo"`,
 		`	input.command_binaries[_] == "curl"`,
+		`	input.command_intents[_] == "git-push"`,
 	} {
 		if _, err := NewHookOPAEngine(context.Background(), candidateModule(body)); err != nil {
 			t.Errorf("optional-field reference rejected — schema is too strict\n body: %s\n err: %v", body, err)

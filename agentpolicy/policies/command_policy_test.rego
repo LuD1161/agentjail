@@ -33,6 +33,17 @@ bash_input_with_binaries(cmd, binaries) := {
 	"command_binaries":  binaries,
 }
 
+# bash_input_with_intents includes semantic command operations classified by
+# the daemon from parsed executable argv.
+bash_input_with_intents(cmd, intents) := {
+	"hook_event":      "PreToolUse",
+	"tool_name":       "Bash",
+	"tool_input":      {"command": cmd, "description": ""},
+	"session_id":      "test-session",
+	"cwd":             "/Users/dev/project",
+	"command_intents": intents,
+}
+
 deny_verdict(rule_id) := {"action": "deny", "rule_id": rule_id, "reason": r} if {
 	r := agentjail.decision.reason with input as bash_input("placeholder")
 }
@@ -113,34 +124,46 @@ git_push_force_default_deny := {
 }
 
 test_git_push_force_deny if {
-	agentjail.decision == git_push_force_default_deny with input as bash_input("git push origin main --force")
+	agentjail.decision == git_push_force_default_deny with input as bash_input_with_intents(
+		"git push origin main --force",
+		["git-push-force-default"])
 }
 
 test_git_push_f_deny if {
-	agentjail.decision == git_push_force_default_deny with input as bash_input("git push origin main -f")
+	agentjail.decision == git_push_force_default_deny with input as bash_input_with_intents(
+		"git push origin main -f",
+		["git-push-force-default"])
 }
 
 # `git push origin +main` (refspec force) also targets the default branch → deny.
 test_git_push_plus_main_deny if {
-	agentjail.decision == git_push_force_default_deny with input as bash_input("git push origin +main")
+	agentjail.decision == git_push_force_default_deny with input as bash_input_with_intents(
+		"git push origin +main",
+		["git-push-force-default"])
 }
 
 # Force-pushing a topic/feature branch → allow (normal rebase / PR update).
 test_git_push_force_topic_allow if {
-	d := agentjail.decision with input as bash_input("git push --force origin feature/my-branch")
+	d := agentjail.decision with input as bash_input_with_intents(
+		"git push --force origin feature/my-branch",
+		["git-push-force-topic"])
 	d.action == "allow"
 	d.rule_id == "command_policy/allow-git-push-force-topic"
 }
 
 test_git_push_f_topic_allow if {
-	d := agentjail.decision with input as bash_input("git push -f origin my-topic")
+	d := agentjail.decision with input as bash_input_with_intents(
+		"git push -f origin my-topic",
+		["git-push-force-topic"])
 	d.action == "allow"
 	d.rule_id == "command_policy/allow-git-push-force-topic"
 }
 
 # Bare `git push -f` (implicit current branch) → ask (can't read the branch).
 test_git_push_force_implicit_ask if {
-	d := agentjail.decision with input as bash_input("git push -f")
+	d := agentjail.decision with input as bash_input_with_intents(
+		"git push -f",
+		["git-push-force-implicit"])
 	d.action == "ask"
 	d.rule_id == "command_policy/confirm-git-push-force"
 }
@@ -148,7 +171,9 @@ test_git_push_force_implicit_ask if {
 # A topic branch whose name merely contains "main" as a substring is NOT the
 # default branch and stays allowed (word-boundary guard).
 test_git_push_force_mainlike_branch_allow if {
-	d := agentjail.decision with input as bash_input("git push -f origin feature-maintenance")
+	d := agentjail.decision with input as bash_input_with_intents(
+		"git push -f origin feature-maintenance",
+		["git-push-force-topic"])
 	d.action == "allow"
 	d.rule_id == "command_policy/allow-git-push-force-topic"
 }
@@ -230,7 +255,25 @@ test_git_push_no_force_ask if {
 		"action":  "ask",
 		"rule_id": "command_policy/confirm-git-push",
 		"reason":  "git push may affect remote branches; confirm intent before proceeding",
-	} with input as bash_input("git push origin feature/my-branch")
+	} with input as bash_input_with_intents(
+		"git push origin feature/my-branch",
+		["git-push"])
+}
+
+test_git_global_option_push_ask if {
+	d := agentjail.decision with input as bash_input_with_intents(
+		"git -C /tmp/work -c color.ui=false push origin topic",
+		["git-push"])
+	d.action == "ask"
+	d.rule_id == "command_policy/confirm-git-push"
+}
+
+test_text_only_push_words_allow if {
+	d := agentjail.decision with input as bash_input_with_intents(
+		`rg -n "git push" README.md`,
+		[])
+	d.action == "allow"
+	d.rule_id == "command_policy/default-allow"
 }
 
 # ---------------------------------------------------------------------------

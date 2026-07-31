@@ -36,6 +36,13 @@
         "type": "string"
       },
       "description": "Optional (omitempty). Command binary basenames parsed out of a Bash tool_input.command; undefined for non-Bash tools."
+    },
+    "command_intents": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional (omitempty). Semantic operations derived from parsed Bash invocations; undefined when no classified operation is present."
     }
   },
   "required": [

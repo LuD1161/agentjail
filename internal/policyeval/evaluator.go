@@ -19,6 +19,7 @@ import (
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/commandintent"
 	"github.com/LuD1161/agentjail/internal/shellparse"
 )
 
@@ -150,6 +151,9 @@ func (e *evaluator) Eval(ctx context.Context, req Request) (Response, error) {
 		if cmd, ok := normalizedInput["command"].(string); ok {
 			parsed := shellparse.Parse(cmd)
 			input.CommandBinaries = parsed.Binaries
+			for _, intent := range commandintent.Analyze(parsed) {
+				input.CommandIntents = append(input.CommandIntents, policy.CommandIntent(intent))
+			}
 		}
 	}
 

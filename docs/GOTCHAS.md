@@ -476,6 +476,19 @@ stopped daemon and still pass after the supervisor recovered.
   the state whose first-install behavior the gate claims to prove. See ADR
   0053-vm-testbed-engine.
 
+## 33. A command phrase is not an executable invocation
+
+The remote-update rule recognized adjacent words in raw Bash text. Its tests
+were green, but the valid global-option form `git -C <repo> push ...` fell
+through to default allow, while an inert source-search argument containing the
+same words prompted. Codex never saw an AgentJail `ask` in the bypass case.
+
+- **Rule:** classify semantic operations from parsed executable argv, including
+  the CLI's documented global-option grammar; do not infer execution from words
+  elsewhere in the shell string.
+- **Rule:** every command-policy scenario needs equivalent syntax variants and
+  a text-only negative control. See ADR 0118-codex-approval-broker and AGE-263.
+
 ---
 
 ## Testing gotchas

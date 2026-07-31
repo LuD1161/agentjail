@@ -39,6 +39,9 @@ cmd := input.tool_input.command
 # command_binaries is the list of command binary basenames extracted by the
 # daemon's shell parser. For "git status && agentjail policy list | grep foo",
 # this is ["git", "agentjail", "grep"]. Available only for Bash tool calls.
+#
+# command_intents is the list of semantic operations classified from those
+# parsed invocations. Git policy consumes this field instead of raw text.
 
 # is_bash returns true when this is a Bash tool PreToolUse event.
 is_bash if {
@@ -150,40 +153,32 @@ candidate contains r if {
 	}
 }
 
-# ---------------------------------------------------------------------------
-# git force-push - branch-aware.
-#
-# Force-pushing a topic/feature branch is a normal rebase / PR-update workflow,
-# so it should NOT be blocked. Force-pushing the default branch (main/master)
-# rewrites shared history and can destroy others' commits, so it stays denied.
-# When the target branch can't be read from the command (`git push -f` with no
-# explicit refspec - it pushes the *current* branch, which the daemon can't see
-# from the command string), we ask rather than guess.
-#
-# "Force" = -f / --force / --force-with-lease, or the `+<refspec>` push syntax.
-# ---------------------------------------------------------------------------
+# Git operations are classified from executable argv by internal/commandintent.
+# This avoids both global-option bypasses and inert text false positives.
+_has_command_intent(intent) if {
+	input.command_intents[_] == intent
+}
 
-# A force-push of any form.
-_git_push_force if regex.match(`\bgit\s+push\b.*\s(-f\b|--force\b)`, cmd)
+_has_git_push_intent if {
+	_has_command_intent("git-push")
+}
 
-_git_push_force if regex.match(`\bgit\s+push\b.*\s\+\S+`, cmd) # git push origin +branch
+_has_git_push_intent if {
+	_has_command_intent("git-push-force-default")
+}
 
-# The command names a protected default branch (main/master) as a ref. Preceded
-# by a space, "/", "+", or ":" so it matches `origin main`, `+main`, `HEAD:main`,
-# `origin/main`. Over-broad on purpose (errs toward deny for a destructive op):
-# any mention of a main/master ref token in a force-push command counts.
-_git_push_default_branch if regex.match(`(^|[\s/+:])(main|master)\b`, cmd)
+_has_git_push_intent if {
+	_has_command_intent("git-push-force-topic")
+}
 
-# The command carries an explicit `<remote> <refspec>` (≥2 non-flag args), so the
-# branch IS named - as opposed to a bare `git push -f` that pushes the current
-# branch implicitly.
-_git_push_explicit_target if regex.match(`\bgit\s+push\b(\s+-{1,2}[\w-]+(=\S+)?)*\s+[^\s-]\S*\s+\+?\S+`, cmd)
+_has_git_push_intent if {
+	_has_command_intent("git-push-force-implicit")
+}
 
 # Force-push to the default branch → deny (rewrites shared history).
 candidate contains r if {
 	is_bash
-	_git_push_force
-	_git_push_default_branch
+	_has_command_intent("git-push-force-default")
 	r := {
 		"action":  "deny",
 		"rule_id": "command_policy/no-git-push-force",
@@ -195,9 +190,7 @@ candidate contains r if {
 # Force-push to an explicit non-default branch (your own topic branch) → allow.
 candidate contains r if {
 	is_bash
-	_git_push_force
-	_git_push_explicit_target
-	not _git_push_default_branch
+	_has_command_intent("git-push-force-topic")
 	r := {
 		"action":  "allow",
 		"rule_id": "command_policy/allow-git-push-force-topic",
@@ -211,9 +204,7 @@ candidate contains r if {
 # isn't the default branch.
 candidate contains r if {
 	is_bash
-	_git_push_force
-	not _git_push_explicit_target
-	not _git_push_default_branch
+	_has_command_intent("git-push-force-implicit")
 	r := {
 		"action":  "ask",
 		"rule_id": "command_policy/confirm-git-push-force",
@@ -504,11 +495,10 @@ contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/Library
 # ASK rules - ambiguous; require operator confirmation
 # ---------------------------------------------------------------------------
 
-# git push without --force (could push to a protected branch or production remote).
+# A non-force remote update may target a protected branch or production remote.
 candidate contains r if {
 	is_bash
-	regex.match(`\bgit\s+push\b`, cmd)
-	not regex.match(`\bgit\s+push\b.*\s(-f\b|--force\b)`, cmd)
+	_has_command_intent("git-push")
 	r := {
 		"action":  "ask",
 		"rule_id": "command_policy/confirm-git-push",
@@ -609,10 +599,6 @@ any_dangerous_pattern if {
 }
 
 any_dangerous_pattern if {
-	regex.match(`\bgit\s+push\b.*\s(-f\b|--force\b)`, cmd)
-}
-
-any_dangerous_pattern if {
 	regex.match(`\b(env|printenv)\b.*\|\s*curl\b`, cmd)
 }
 
@@ -637,7 +623,7 @@ any_dangerous_pattern if {
 }
 
 any_dangerous_pattern if {
-	regex.match(`\bgit\s+push\b`, cmd)
+	_has_git_push_intent
 }
 
 any_dangerous_pattern if {

@@ -1,6 +1,7 @@
 package shellparse
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -99,6 +100,61 @@ func TestParseResult_EmptyNotNil(t *testing.T) {
 	r := Parse("")
 	if r.Binaries == nil {
 		t.Error("expected non-nil Binaries slice for empty input")
+	}
+	if r.Invocations == nil {
+		t.Error("expected non-nil Invocations slice for empty input")
+	}
+}
+
+func TestParseInvocations(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		want []Invocation
+	}{
+		{
+			name: "git global options",
+			cmd:  `git -C "/tmp/work repo" -c color.ui=false push origin HEAD:refs/heads/topic`,
+			want: []Invocation{{Binary: "git", Arguments: []string{"-C", "/tmp/work repo", "-c", "color.ui=false", "push", "origin", "HEAD:refs/heads/topic"}}},
+		},
+		{
+			name: "text argument is not an invocation",
+			cmd:  `rg -n "git push" README.md`,
+			want: []Invocation{{Binary: "rg", Arguments: []string{"-n", "git push", "README.md"}}},
+		},
+		{
+			name: "environment wrapper",
+			cmd:  `env TRACE=1 git -C /tmp/work push origin topic`,
+			want: []Invocation{
+				{Binary: "env", Arguments: []string{"TRACE=1", "git", "-C", "/tmp/work", "push", "origin", "topic"}},
+				{Binary: "git", Arguments: []string{"-C", "/tmp/work", "push", "origin", "topic"}},
+			},
+		},
+		{
+			name: "shell script",
+			cmd:  `sh -c 'git -C /tmp/work push origin topic'`,
+			want: []Invocation{
+				{Binary: "sh", Arguments: []string{"-c", "git -C /tmp/work push origin topic"}},
+				{Binary: "git", Arguments: []string{"-C", "/tmp/work", "push", "origin", "topic"}},
+			},
+		},
+		{
+			name: "chained commands",
+			cmd:  `echo ready && /usr/bin/git status`,
+			want: []Invocation{
+				{Binary: "echo", Arguments: []string{"ready"}},
+				{Binary: "git", Arguments: []string{"status"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.cmd).Invocations
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Parse(%q).Invocations = %#v, want %#v", tt.cmd, got, tt.want)
+			}
+		})
 	}
 }
 

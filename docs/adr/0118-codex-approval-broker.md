@@ -25,6 +25,16 @@ structured logs. Existing decision persistence for the original PreToolUse
 request remains the established redacted `RedactToolInput` behavior; this
 bridge must not add another persistence path for the original command.
 
+A live test on 2026-07-31 exposed an earlier boundary: the valid Git invocation
+`git -C <repo> push ...` did not reach the bridge because command policy matched
+only adjacent words in raw shell text. It selected
+`command_policy/default-allow`, so Codex had no AgentJail approval to present.
+The same raw scan also treated inert search arguments containing those words as
+an operation. Git's documented CLI grammar permits global options before the
+subcommand; the policy contract must therefore describe executable intent, not
+surface spelling. The effect-boundary transport broker is tracked separately in
+AGE-269.
+
 ## Decision
 
 For a Codex Bash `PreToolUse` canonical `ask`, and only when both hook and
@@ -62,6 +72,13 @@ broker argv and daemon socket request, and must never be reused as authority.
 
 This amends ADR 0117-codex-ask-boundary for eligible Bash asks. All other Codex
 PreToolUse asks remain fail-closed denies.
+
+The daemon parses Bash into executable invocations and classifies Git operations
+before Rego evaluation. `command_intents` carries one of the typed remote-update
+shapes: normal, forced default branch, forced explicit topic, or forced implicit
+target. Classification consumes Git's documented global options (`-C`, `-c`,
+and long forms), push options, and refspecs. Rego selects policy outcomes from
+those intents and no longer scans raw command text for Git remote updates.
 
 ## Consequences
 
@@ -116,5 +133,9 @@ the bridge capability retain the 45 ms ceiling.
    fresh-process attestation.
 7. The managed execpolicy rule is exact, idempotent, and ownership-safe.
 8. Before merge, run the installed Codex `0.146` compatibility matrix for
-   approve, cancel, and `--ignore-rules`, plus `go build ./...`, `go vet ./...`,
+   approve, cancel, `approval_policy=never`, and `--ignore-rules` using the
+   valid `git -C <repo> push ...` form, plus `go build ./...`, `go vet ./...`,
    `go test ./...`, `make smoke`, and `make adr-check`.
+9. Text-only mentions in another executable's arguments do not produce a Git
+   remote-update intent, while repeated global options and branch-aware force
+   forms preserve their deny/ask/allow outcomes.

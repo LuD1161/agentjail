@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
+	"github.com/LuD1161/agentjail/internal/commandintent"
+	"github.com/LuD1161/agentjail/internal/shellparse"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
 
@@ -228,13 +230,13 @@ func TestTry_REPL_Piped(t *testing.T) {
 	inBuf := bytes.NewBufferString("rm -rf /\ngit status\nexit\n")
 
 	r := &tryRunner{
-		in:    inBuf,
-		out:   outBuf,
-		errw:  errBuf,
+		in:      inBuf,
+		out:     outBuf,
+		errw:    errBuf,
 		evalOne: eval,
-		home:  home,
-		cwd:   "/tmp/test-project",
-		isTTY: false,
+		home:    home,
+		cwd:     "/tmp/test-project",
+		isTTY:   false,
 	}
 
 	code := r.repl(false)
@@ -267,13 +269,13 @@ func TestTry_REPL_Piped_Error(t *testing.T) {
 	inBuf := bytes.NewBufferString("git status\n")
 
 	r := &tryRunner{
-		in:    inBuf,
-		out:   outBuf,
-		errw:  errBuf,
+		in:      inBuf,
+		out:     outBuf,
+		errw:    errBuf,
 		evalOne: eval,
-		home:  home,
-		cwd:   "/tmp/test-project",
-		isTTY: false,
+		home:    home,
+		cwd:     "/tmp/test-project",
+		isTTY:   false,
 	}
 
 	code := r.repl(false)
@@ -329,13 +331,13 @@ func TestTry_JSON_REPL(t *testing.T) {
 	inBuf := bytes.NewBufferString("rm -rf /\ngit status\n")
 
 	r := &tryRunner{
-		in:    inBuf,
-		out:   outBuf,
-		errw:  errBuf,
+		in:      inBuf,
+		out:     outBuf,
+		errw:    errBuf,
 		evalOne: eval,
-		home:  home,
-		cwd:   "/tmp/test-project",
-		isTTY: false,
+		home:    home,
+		cwd:     "/tmp/test-project",
+		isTTY:   false,
 	}
 
 	code := r.repl(true)
@@ -504,9 +506,9 @@ func TestTry_OPAVerdicts(t *testing.T) {
 	}
 
 	cases := []struct {
-		desc      string
-		cmd       string
-		readPath  string
+		desc       string
+		cmd        string
+		readPath   string
 		wantAction string
 	}{
 		{"rm -rf / → deny", "rm -rf /", "", "deny"},
@@ -532,6 +534,11 @@ func TestTry_OPAVerdicts(t *testing.T) {
 				ToolInput: req.ToolInput,
 				SessionID: req.SessionID,
 				CWD:       req.CWD,
+			}
+			if command, ok := req.ToolInput["command"].(string); ok {
+				for _, intent := range commandintent.Analyze(shellparse.Parse(command)) {
+					hookInput.CommandIntents = append(hookInput.CommandIntents, policy.CommandIntent(intent))
+				}
 			}
 
 			d, evalErr := eng.Eval(ctx, hookInput)

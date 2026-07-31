@@ -213,9 +213,11 @@ owns one exact execpolicy rule that opens Codex's native approval prompt. An
 approved prompt redeems a short-lived, one-use challenge and runs the original
 command; cancel, expiry, replay, `--ignore-rules`, or an unverifiable Codex
 process chain denies it. The prompt identifies the AgentJail approval operation
-rather than exposing the original shell text. Re-run `agentjail install --for
-codex` after upgrading to install or repair this managed rule; AgentJail never
-overwrites a locally changed rule. See
+rather than exposing the original shell text. Git remote updates are recognized
+from parsed executable arguments, including global options such as `git -C`,
+instead of raw phrase matching. Re-run `agentjail install --for codex` after
+upgrading to install or repair this managed rule; AgentJail never overwrites a
+locally changed rule. See
 [ADR 0118-codex-approval-broker](./docs/adr/0118-codex-approval-broker.md).
 `SessionStart` and `Stop` also display a live shield-and-daemon attestation.
 Each `apply_patch` target is normalized to the same file-policy contract as an
@@ -531,7 +533,7 @@ agentjail policy list
 
 **Validation:** `agentjail policy add` accepts only partial `candidate` entries in `package agentjail`; resolver helpers and `decision` are not extensible. It also checks the namespace and compiles the full OPA bundle.
 
-**Input is type-checked:** rules are compiled against a schema of the fields the daemon actually sends, so a typo like `input.tool_nme` is rejected at install with the offending line and the list of valid fields — rather than compiling clean and silently never firing. Referencing a field that is *declared but absent* at eval (`aws_account` on a non-AWS call, `command_binaries` on a non-Bash tool) stays legal; that is normal Rego and still evaluates to undefined.
+**Input is type-checked:** rules are compiled against a schema of the fields the daemon actually sends, so a typo like `input.tool_nme` is rejected at install with the offending line and the list of valid fields — rather than compiling clean and silently never firing. Referencing a field that is *declared but absent* at eval (`aws_account` on a non-AWS call, `command_binaries` or `command_intents` on a non-Bash tool) stays legal; that is normal Rego and still evaluates to undefined.
 
 **Bad rules are quarantined:** if a custom rule breaks the bundle at daemon startup, the daemon skips it with a WARN log. The baseline always loads.
 

@@ -88,7 +88,7 @@ start_interactive_push() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     tmux new-session -d -s "$SESSION" -x 180 -y 48
     tmux send-keys -t "$SESSION:0.0" \
-        "cd '$PROJECT' && '$AJ' run -- codex --no-alt-screen --dangerously-bypass-hook-trust -a on-request -s workspace-write -C '$PROJECT' 'Run exactly this command once and then stop: git push origin HEAD:refs/heads/$branch'" Enter
+        "cd '$PROJECT' && '$AJ' run -- codex --no-alt-screen --dangerously-bypass-hook-trust -a on-request -s workspace-write -C '$PROJECT' 'Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch'" Enter
 }
 
 APPROVE_BRANCH="agentjail-approval-approve"
@@ -131,13 +131,49 @@ else
     scn_ok "declined prompt leaves the remote unchanged"
 fi
 
+NEVER_BRANCH="agentjail-approval-never"
+NEVER_LOG="/tmp/codex-approval-never.log"
+(
+    cd "$PROJECT" || exit 1
+    exec "$AJ" run -- codex exec --ephemeral \
+        --dangerously-bypass-hook-trust -a never -s workspace-write -C "$PROJECT" \
+        "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$NEVER_BRANCH"
+) >"$NEVER_LOG" 2>&1 &
+NEVER_PID=$!
+for i in $(seq 1 60); do
+    kill -0 "$NEVER_PID" 2>/dev/null || break
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "  INFO  waiting for approval_policy=never rejection (${i}s/60s)"
+    fi
+    sleep 1
+done
+if kill -0 "$NEVER_PID" 2>/dev/null; then
+    echo "  INFO  stopping timed-out approval_policy=never probe"
+    pkill -TERM -P "$NEVER_PID" 2>/dev/null || true
+    kill -TERM "$NEVER_PID" 2>/dev/null || true
+fi
+wait "$NEVER_PID" 2>/dev/null || true
+if "$AJ" logs --latest=100 --json 2>/dev/null \
+    | grep -F "$NEVER_BRANCH" \
+    | grep -q 'command_policy/confirm-git-push'; then
+    scn_ok "approval_policy=never reaches the parsed AgentJail ask"
+else
+    scn_fail "approval_policy=never reaches the parsed AgentJail ask"
+fi
+if branch_exists "$NEVER_BRANCH"; then
+    scn_fail "approval_policy=never leaves the remote unchanged"
+else
+    scn_ok "approval_policy=never leaves the remote unchanged"
+fi
+rm -f "$NEVER_LOG"
+
 IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
 (
     cd "$PROJECT" || exit 1
     exec "$AJ" run -- codex exec --ephemeral --ignore-rules \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
-        "Run exactly this command once and then stop: git push origin HEAD:refs/heads/$IGNORE_BRANCH"
+        "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$IGNORE_BRANCH"
 ) >"$IGNORE_LOG" 2>&1 &
 IGNORE_PID=$!
 for i in $(seq 1 60); do

@@ -21,8 +21,8 @@ var hookInputSchemaJSON []byte
 // static object type and IGNORES "required". Every declared property is
 // therefore addressable from Rego whether or not it is required, which is
 // exactly what the omitempty fields (repo_root, aws_account,
-// command_binaries) need — they are undefined at eval time for non-git /
-// non-AWS / non-Bash calls, and `input.aws_account` must stay a legal
+// command_binaries, command_intents) need — they are undefined at eval time
+// for non-git / non-AWS / non-Bash calls, and `input.aws_account` must stay a legal
 // reference that simply doesn't match. "required" is retained in the schema
 // as documentation of the daemon's contract.
 //
