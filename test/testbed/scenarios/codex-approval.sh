@@ -12,7 +12,7 @@ SESSION="codex-approval-$RANDOM"
 CODEX_VERSION="codex-cli 0.146.0"
 PROMPT_MARKER="AgentJail policy requires|agentjail approval-exec"
 
-scn_init "codex-approval" "native approve, decline, and ignored-rule behavior against a local bare remote"
+scn_init "codex-approval" "native approve, decline, never, and ignored-rule behavior against a local bare remote"
 
 cleanup() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -135,8 +135,9 @@ NEVER_BRANCH="agentjail-approval-never"
 NEVER_LOG="/tmp/codex-approval-never.log"
 (
     cd "$PROJECT" || exit 1
-    exec "$AJ" run -- codex exec --ephemeral \
-        --dangerously-bypass-hook-trust -a never -s workspace-write -C "$PROJECT" \
+    exec "$AJ" run -- codex -a never \
+        --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
+        exec --ephemeral \
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$NEVER_BRANCH"
 ) >"$NEVER_LOG" 2>&1 &
 NEVER_PID=$!
@@ -159,6 +160,9 @@ if "$AJ" logs --latest=100 --json 2>/dev/null \
     scn_ok "approval_policy=never reaches the parsed AgentJail ask"
 else
     scn_fail "approval_policy=never reaches the parsed AgentJail ask"
+    sed -E 's/[A-Za-z0-9_-]{43}/<challenge>/g' "$NEVER_LOG" \
+        | tail -30 \
+        | sed 's/^/    /'
 fi
 if branch_exists "$NEVER_BRANCH"; then
     scn_fail "approval_policy=never leaves the remote unchanged"
@@ -171,8 +175,9 @@ IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
 (
     cd "$PROJECT" || exit 1
-    exec "$AJ" run -- codex exec --ephemeral --ignore-rules \
+    exec "$AJ" run -- codex \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
+        exec --ephemeral --ignore-rules \
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$IGNORE_BRANCH"
 ) >"$IGNORE_LOG" 2>&1 &
 IGNORE_PID=$!
@@ -189,6 +194,16 @@ if kill -0 "$IGNORE_PID" 2>/dev/null; then
     kill -TERM "$IGNORE_PID" 2>/dev/null || true
 fi
 wait "$IGNORE_PID" 2>/dev/null || true
+if "$AJ" logs --latest=100 --json 2>/dev/null \
+    | grep -F "$IGNORE_BRANCH" \
+    | grep -q 'command_policy/confirm-git-push'; then
+    scn_ok "--ignore-rules reaches the parsed AgentJail ask"
+else
+    scn_fail "--ignore-rules reaches the parsed AgentJail ask"
+    sed -E 's/[A-Za-z0-9_-]{43}/<challenge>/g' "$IGNORE_LOG" \
+        | tail -30 \
+        | sed 's/^/    /'
+fi
 if branch_exists "$IGNORE_BRANCH"; then
     scn_fail "--ignore-rules cannot redeem the unobserved challenge"
 else

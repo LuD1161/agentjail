@@ -489,6 +489,18 @@ same words prompted. Codex never saw an AgentJail `ask` in the bypass case.
 - **Rule:** every command-policy scenario needs equivalent syntax variants and
   a text-only negative control. See ADR 0118-codex-approval-broker and AGE-263.
 
+## 34. An unchanged target does not prove enforcement
+
+The Codex `never` scenario placed the top-level `-a` flag after `exec`, whose
+parser does not accept it in `0.146.0`. Codex exited before making a tool call,
+the remote stayed unchanged, and the negative test appeared to pass.
+
+- **Rule:** a denial test must prove the protected operation reached the
+  intended policy boundary before asserting that the target was unchanged.
+- **Rule:** run versioned CLI scenarios through the documented parser boundary;
+  a usage error and a security denial are different outcomes. See ADR
+  0118-codex-approval-broker.
+
 ---
 
 ## Testing gotchas

@@ -18,6 +18,12 @@ create a prompt, and `--ignore-rules` executes the rewrite without a
 `PermissionRequest`. The latter means an input rewrite alone can never prove
 user intent.
 
+The 2026-07-31 matrix also verified the CLI boundary for noninteractive mode:
+`-a never` is a top-level Codex option and must precede the `exec` subcommand.
+The `exec` parser does not accept `-a`; an invalid invocation exits before any
+tool call. Negative scenarios therefore require both an audit assertion that
+the unique operation reached AgentJail policy and an unchanged remote.
+
 The bridge must preserve the canonical policy action and must not weaken the
 default Codex approval policy. It must also avoid putting original shell text
 into the rewritten input, the broker command line, challenge audit data, or
