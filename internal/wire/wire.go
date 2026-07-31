@@ -80,6 +80,7 @@ type Response struct {
 	DeferToNativePermission bool   `json:"defer_to_native_permission,omitempty"`
 	CodexApprovalBridge     bool   `json:"codex_approval_bridge,omitempty"`
 	ApprovalChallenge       string `json:"approval_challenge,omitempty"`
+	ApprovalDisplay         string `json:"approval_display,omitempty"`
 }
 
 const CapabilityCodexApprovalBridgeV1 = "codex_approval_bridge_v1"

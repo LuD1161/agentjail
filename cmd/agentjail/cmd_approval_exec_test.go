@@ -14,12 +14,19 @@ func TestRunApprovalExecCommandWritesBrokerFailure(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetErr(&stderr)
 
-	err := runApprovalExecCommand(cmd, approvalexec.ChallengeID("not-a-challenge"))
+	err := runApprovalExecCommand(cmd, approvalexec.ChallengeID("not-a-challenge"), approvalexec.GitPushOperation)
 	if err == nil {
 		t.Fatal("malformed challenge succeeded")
 	}
 	if !strings.Contains(stderr.String(), "malformed challenge") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunApprovalExecRejectsUnsupportedDisplayOperation(t *testing.T) {
+	err := runApprovalExec("not-a-challenge", "package-publish")
+	if err == nil || !strings.Contains(err.Error(), "unsupported operation") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

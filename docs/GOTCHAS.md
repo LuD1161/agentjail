@@ -515,6 +515,33 @@ approval categories.
   mode; assert both the enabled prompt category and every category that must
   remain disabled. See ADR 0118-codex-approval-broker and AGE-263.
 
+## 36. A prompt is not approval context
+
+The native Codex gate appeared and the push executed only after approval, but
+the prompt displayed only `agentjail approval-exec --challenge …`. Enforcement
+was correct while the human still could not tell that the pending effect was a
+Git push.
+
+- **Rule:** an approval test must assert the user-visible operation label, not
+  merely that some prompt appeared.
+- **Rule:** expose a bounded typed effect such as `git-push`, never the raw
+  shell command; scope the broker to operations whose labels are truthful.
+  See ADR 0118-codex-approval-broker and AGE-263.
+
+## 37. An operation label is not an approval payload
+
+Adding `--operation git-push` made the native prompt truthful but still hid the
+repository, remote, and refspec the user was being asked to authorize. Unit
+tests and the live gate asserted the label, so both stayed green while the
+approval remained too vague for an informed decision.
+
+- **Rule:** show the redacted effective command through a supported display
+  channel next to the native gate, with a visually distinct approval marker;
+  never put raw shell text into executable broker metadata.
+- **Rule:** live approval tests must assert both the typed operation label and
+  command-specific context such as the requested ref.
+  See ADR 0118-codex-approval-broker and AGE-263.
+
 ---
 
 ## Testing gotchas

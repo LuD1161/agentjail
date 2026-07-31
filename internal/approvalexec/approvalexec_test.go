@@ -78,13 +78,34 @@ func TestParseBrokerCommandRejectsShellSyntax(t *testing.T) {
 		t.Fatalf("canonical broker command = %q, %v", got, ok)
 	}
 	for _, command := range []string{
-		"agentjail approval-exec --challenge " + string(valid) + "; git push",
-		"agentjail approval-exec --challenge '" + string(valid) + "'",
-		"agentjail approval-exec --challenge " + string(valid) + " extra",
-		"agentjail approval-exec --challenge short",
+		"agentjail approval-exec --operation git-push --challenge " + string(valid) + "; git push",
+		"agentjail approval-exec --operation git-push --challenge '" + string(valid) + "'",
+		"agentjail approval-exec --operation git-push --challenge " + string(valid) + " extra",
+		"agentjail approval-exec --operation unknown --challenge " + string(valid),
+		"agentjail approval-exec --operation git-push --challenge short",
 	} {
 		if _, ok := ParseBrokerCommand(command); ok {
 			t.Fatalf("accepted non-canonical broker command %q", command)
+		}
+	}
+}
+
+func TestSupportsRuleLimitsBrokerToGitPush(t *testing.T) {
+	for _, ruleID := range []string{
+		"command_policy/confirm-git-push",
+		"command_policy/confirm-git-push-force",
+	} {
+		if !SupportsRule(ruleID) {
+			t.Errorf("SupportsRule(%q) = false", ruleID)
+		}
+	}
+	for _, ruleID := range []string{
+		"command_policy/confirm-publish",
+		"command_policy/confirm-curl-download",
+		"resolver/default",
+	} {
+		if SupportsRule(ruleID) {
+			t.Errorf("SupportsRule(%q) = true", ruleID)
 		}
 	}
 }

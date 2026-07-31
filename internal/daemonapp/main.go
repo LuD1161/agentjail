@@ -47,6 +47,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
@@ -587,7 +588,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 
 		if req.Agent == "codex" && req.HookEvent == "PermissionRequest" && s.approvals != nil {
 			if command, _ := req.ToolInput["command"].(string); command != "" {
-				if challengeID, broker := approvalexec.ParseBrokerCommand(command); broker {
+				if challengeID, ok := approvalexec.ParseBrokerCommand(command); ok {
 					s.handleApprovalPrompt(ctx, conn, enc, req, challengeID)
 					continue
 				}
@@ -627,6 +628,14 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			resp.TranslationReason = translation.TranslationReason
 			resp.DeferToNativePermission = translation.DeferToNativePermission
 			resp.CodexApprovalBridge = translation.CodexApprovalBridge
+			if translation.CodexApprovalBridge && !approvalexec.SupportsRule(resp.RuleID) {
+				translation.CodexApprovalBridge = false
+				translation.EffectiveAction = agentpolicy.ActionDeny
+				translation.TranslationReason = "Codex approval broker currently supports Git push only; fail closed"
+				resp.EffectiveAction = string(translation.EffectiveAction)
+				resp.CodexApprovalBridge = false
+				resp.TranslationReason = translation.TranslationReason
+			}
 			if translation.CodexApprovalBridge && s.approvals != nil && verifiedCodexPID > 0 {
 				command, _ := req.ToolInput["command"].(string)
 				meta, mintErr := s.approvals.Mint(approvalexec.MintRequest{
@@ -643,6 +652,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					slog.Warn("codex approval challenge mint failed", "session_id", req.SessionID, "err", mintErr)
 				} else {
 					resp.ApprovalChallenge = string(meta.ChallengeID)
+					resp.ApprovalDisplay = approvalDisplayCommand(req.ToolInput)
 					slog.Info("codex approval challenge minted", "session_id", req.SessionID, "rule_id", resp.RuleID)
 					s.emitApprovalAudit(ctx, audit.CodexApprovalMinted, meta)
 				}
@@ -734,6 +744,38 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	if err := scanner.Err(); err != nil {
 		slog.Warn("scanner error", "err", err)
 	}
+}
+
+const maxApprovalDisplayRunes = 2048
+
+func approvalDisplayCommand(toolInput map[string]interface{}) string {
+	redacted := store.RedactToolInput(toolInput)
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(redacted), &input); err != nil || input.Command == "" {
+		return "git push (command unavailable)"
+	}
+
+	var display strings.Builder
+	for _, r := range input.Command {
+		switch {
+		case r == '\n' || r == '\r':
+			display.WriteString(" ↵ ")
+		case r == '\t':
+			display.WriteByte(' ')
+		case unicode.IsPrint(r):
+			display.WriteRune(r)
+		}
+	}
+	runes := []rune(strings.TrimSpace(display.String()))
+	if len(runes) > maxApprovalDisplayRunes {
+		return string(runes[:maxApprovalDisplayRunes]) + "…"
+	}
+	if len(runes) == 0 {
+		return "git push (command unavailable)"
+	}
+	return string(runes)
 }
 
 func approvalRef(id approvalexec.ChallengeID) string {

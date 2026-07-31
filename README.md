@@ -212,10 +212,12 @@ For a Codex Bash command with an AgentJail `ask` verdict, installation also
 owns one exact execpolicy rule that opens Codex's native approval prompt. An
 approved prompt redeems a short-lived, one-use challenge and runs the original
 command; cancel, expiry, replay, `--ignore-rules`, or an unverifiable Codex
-process chain denies it. The prompt identifies the AgentJail approval operation
-rather than exposing the original shell text. Git remote updates are recognized
-from parsed executable arguments, including global options such as `git -C`,
-instead of raw phrase matching. Re-run `agentjail install --for codex` after
+process chain denies it. AgentJail shows `🔐 AgentJail approval required for:`
+and the redacted Git command immediately before Codex's native prompt; the fixed
+command inside the prompt identifies the approval operation without carrying
+original shell text. Git remote updates are
+recognized from parsed executable arguments, including global options such as
+`git -C`, instead of raw phrase matching. Re-run `agentjail install --for codex` after
 upgrading to install or repair this managed rule; AgentJail never overwrites a
 locally changed rule. See
 [ADR 0118-codex-approval-broker](./docs/adr/0118-codex-approval-broker.md).
@@ -255,7 +257,7 @@ The padlock only appears when both are live. When agentjail is uninstalled the b
 
 Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the persistent AgentJail badge. Instead, AgentJail's `SessionStart` and `Stop` hooks display one of `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive`; `agentjail status` and `agentjail doctor` remain available for an on-demand check.
 
-When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. AgentJail `ask` decisions can therefore use Codex's native prompt without re-enabling sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0118](./docs/adr/0118-codex-approval-broker.md)).
+When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. For a Git-push `ask`, AgentJail prints the redacted effective Git command immediately before Codex's native prompt, while the broker command inside the prompt carries the safe label `--operation git-push`. This does not re-enable sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0118](./docs/adr/0118-codex-approval-broker.md)).
 
 <details>
 <summary><b>More install options</b></summary>

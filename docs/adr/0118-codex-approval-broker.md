@@ -49,13 +49,20 @@ sandbox, MCP, request-permission, and skill-script approval categories.
 
 ## Decision
 
-For a Codex Bash `PreToolUse` canonical `ask`, and only when both hook and
-daemon advertise `codex_approval_bridge_v1`, the daemon mints an in-memory,
+For a Codex Bash `PreToolUse` canonical `ask` from either Git-push confirmation
+rule, and only when both hook and daemon advertise
+`codex_approval_bridge_v1`, the daemon mints an in-memory,
 cryptographically random, one-use challenge. It binds the challenge to the
 Codex session, turn, tool-use correlation, working directory, policy rule,
 current tool-call epoch, and the recorded Codex process. The hook returns a
-supported PreToolUse allow with a rewritten broker input; no change is made to
-Codex's default approval policy.
+supported PreToolUse allow with a rewritten broker input whose fixed
+`--operation git-push` label tells the user what class of effect is awaiting
+approval. The same hook response uses Codex's supported `systemMessage` field
+to show `🔐 AgentJail approval required for:` and the redacted effective Git
+command immediately before the native prompt. The display is bounded and strips
+non-printable characters; it is not added to the executable broker input. Other Bash `ask` rules retain the
+fail-closed Codex behavior until their approval labels and compatibility
+scenarios are designed.
 
 Installation owns one exact Codex execpolicy rule for that broker. It is
 idempotent, refuses to overwrite a locally changed managed file, and removes
@@ -81,6 +88,9 @@ challenge nor original command may be placed in audit detail, structured logs,
 or new persistent records. The broker transport must not expose original shell
 text; an opaque one-use capability is carried only in the narrowly managed
 broker argv and daemon socket request, and must never be reused as authority.
+The user-visible command is produced through the existing store-boundary secret
+redactor before it enters the hook response. It is intentionally visible in the
+interactive Codex transcript, but raw credential values remain excluded.
 
 This amends ADR 0117-codex-ask-boundary for eligible Bash asks. All other Codex
 PreToolUse asks remain fail-closed denies.
@@ -103,12 +113,15 @@ those intents and no longer scans raw command text for Git remote updates.
 
 ## Consequences
 
-Codex can present its native approval UI for an AgentJail Bash `ask` without
-changing unrelated permission categories. The prompt identifies the AgentJail
-approval operation rather than displaying the original command, which is an
-intentional confidentiality trade-off until Codex exposes a safe display-only
-field. The bridge is not a general approval primitive for MCP, file tools, or
-arbitrary direct invocations.
+Codex can present its native approval UI for an AgentJail Git-push `ask`
+without changing unrelated permission categories. The user sees the redacted
+effective command beside the prompt and the broker argv visibly identifies
+`git-push` without carrying the original command, paths, remote, or refspec as
+executable metadata. Codex does not currently provide a display-only field
+inside its native prompt box, so the command appears immediately before that
+box rather than replacing the broker command. The bridge is not a general
+approval primitive for other Bash asks, MCP, file tools, or arbitrary direct
+invocations.
 
 The daemon holds approval state only in memory, so restart or expiry invalidates
 pending prompts. A policy decision still records the normal redacted original
@@ -136,8 +149,10 @@ the bridge capability retain the 45 ms ceiling.
 
 ## Acceptance Criteria
 
-1. A canonical Codex Bash `ask` such as `git push` yields Codex's native prompt
-   without changing the default approval policy.
+1. A canonical Codex Git-push `ask` shows the redacted effective Git command
+   immediately before Codex's native prompt, whose managed broker command
+   contains `--operation git-push`, without changing unrelated approval
+   categories.
 2. Approval executes the exact original command under the existing shield and
    working directory, preserving exit status, stdout, and stderr.
 3. Cancel, pending state, replay, expiry, wrong session or PID, a later

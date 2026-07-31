@@ -10,7 +10,9 @@ PROJECT="$HOME/work/codex-approval"
 REMOTE="$HOME/work/remotes/codex-approval.git"
 SESSION="codex-approval-$RANDOM"
 CODEX_VERSION="codex-cli 0.146.0"
-PROMPT_MARKER="AgentJail policy requires|agentjail approval-exec"
+PROMPT_MARKER="agentjail approval-exec --operation git-push"
+DISPLAY_MARKER="🔐 AgentJail approval required for:"
+EXPECTED_BRANCH=""
 
 scn_init "codex-approval" "native approve, decline, never, and ignored-rule behavior against a local bare remote"
 
@@ -65,7 +67,9 @@ wait_for_approval_prompt() {
             sleep 2
             continue
         fi
-        if printf '%s' "$output" | grep -Eq "$PROMPT_MARKER"; then
+        if printf '%s' "$output" | grep -Fq "$PROMPT_MARKER" \
+            && printf '%s' "$output" | grep -Fq "$DISPLAY_MARKER" \
+            && printf '%s' "$output" | grep -Fq "HEAD:refs/heads/$EXPECTED_BRANCH"; then
             return 0
         fi
         if [ $((i % 10)) -eq 0 ]; then
@@ -86,6 +90,7 @@ print_sanitized_pane() {
 
 start_interactive_push() {
     local branch="$1"
+    EXPECTED_BRANCH="$branch"
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     tmux new-session -d -s "$SESSION" -x 180 -y 48
     tmux send-keys -t "$SESSION:0.0" \
@@ -95,10 +100,10 @@ start_interactive_push() {
 APPROVE_BRANCH="agentjail-approval-approve"
 start_interactive_push "$APPROVE_BRANCH"
 if wait_for_approval_prompt; then
-    scn_ok "AgentJail ask opens Codex native approval prompt"
+    scn_ok "AgentJail ask shows the Git push and opens Codex native approval prompt"
     tmux send-keys -t "$SESSION:0.0" "1" Enter
 else
-    scn_fail "AgentJail ask opens Codex native approval prompt"
+    scn_fail "AgentJail ask shows the Git push and opens Codex native approval prompt"
     print_sanitized_pane
     finish_and_exit
 fi

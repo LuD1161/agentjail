@@ -389,6 +389,7 @@ type codexSystemMessageOutput struct {
 }
 
 type codexApprovalRewriteOutput struct {
+	SystemMessage      string                             `json:"systemMessage"`
 	HookSpecificOutput codexApprovalRewriteSpecificOutput `json:"hookSpecificOutput"`
 }
 
@@ -432,8 +433,9 @@ func writeCodexSystemMessage(msg string) {
 	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
 }
 
-func writeCodexApprovalRewrite(challenge approvalexec.ChallengeID) {
+func writeCodexApprovalRewrite(challenge approvalexec.ChallengeID, display string) {
 	_ = json.NewEncoder(os.Stdout).Encode(codexApprovalRewriteOutput{
+		SystemMessage: "🔐 AgentJail approval required for:\n$ " + display,
 		HookSpecificOutput: codexApprovalRewriteSpecificOutput{
 			HookEventName:      canonicalPreToolUse,
 			PermissionDecision: "allow",
@@ -881,8 +883,8 @@ func runClaude(agent string) {
 	noColor := os.Getenv("NO_COLOR") != ""
 	printPolicyEval(noColor, input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
 	if agent == "codex" && resp.CodexApprovalBridge && resp.ApprovalChallenge != "" &&
-		resp.PolicyAction == "ask" {
-		writeCodexApprovalRewrite(approvalexec.ChallengeID(resp.ApprovalChallenge))
+		resp.ApprovalDisplay != "" && resp.PolicyAction == "ask" {
+		writeCodexApprovalRewrite(approvalexec.ChallengeID(resp.ApprovalChallenge), resp.ApprovalDisplay)
 		return
 	}
 	if agent == "codex" && resp.DeferToNativePermission {

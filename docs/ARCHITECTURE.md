@@ -98,11 +98,13 @@ posture remains fail-open for ordinary policy evaluation, but a broker invocatio
 cannot execute while its authorization service is unavailable.
 
 The broker command contains an opaque challenge rather than the original shell
-text, so Codex's prompt identifies the AgentJail approval operation rather than
-displaying the full command. This bridge currently applies only to Codex Bash
-`ask` decisions; other Codex `ask` decisions retain their fail-closed adapter
-behavior. The normal redacted PreToolUse decision record remains unchanged; the
-bridge adds no original command text to its audit records or structured logs.
+text. AgentJail uses Codex's supported `systemMessage` field to show the redacted
+effective Git command immediately before the native prompt, while the fixed
+command inside Codex's prompt identifies the `git-push` approval operation.
+This bridge currently applies only to Codex Bash `ask` decisions; other Codex
+`ask` decisions retain their fail-closed adapter behavior. The normal redacted
+PreToolUse decision record remains unchanged; the bridge adds no original
+command text to its audit records or structured logs.
 The opaque, one-use challenge is necessarily visible in the short-lived broker
 argv and its daemon socket request so concurrent prompts can be correlated; it
 is never logged or audited and cannot redeem without the bound session, epoch,

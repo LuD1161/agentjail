@@ -23,6 +23,8 @@ type Command string
 type State string
 
 const (
+	GitPushOperation = "git-push"
+
 	StatePending         State = "pending"
 	StatePromptObserved  State = "prompt_observed"
 	DefaultPendingTTL          = 30 * time.Second
@@ -263,15 +265,24 @@ func (m *Manager) Redeem(req RedeemRequest) (Redemption, error) {
 }
 
 func BrokerCommand(id ChallengeID) string {
-	return "agentjail approval-exec --challenge " + string(id)
+	return "agentjail approval-exec --operation " + GitPushOperation + " --challenge " + string(id)
 }
 
 func ParseBrokerCommand(command string) (ChallengeID, bool) {
 	fields := strings.Fields(command)
-	if len(fields) != 4 || fields[0] != "agentjail" ||
-		fields[1] != "approval-exec" || fields[2] != "--challenge" ||
-		!challengePattern.MatchString(fields[3]) {
+	if len(fields) != 6 || fields[0] != "agentjail" || fields[1] != "approval-exec" ||
+		fields[2] != "--operation" || fields[3] != GitPushOperation ||
+		fields[4] != "--challenge" || !challengePattern.MatchString(fields[5]) {
 		return "", false
 	}
-	return ChallengeID(fields[3]), true
+	return ChallengeID(fields[5]), true
+}
+
+func SupportsRule(ruleID string) bool {
+	switch ruleID {
+	case "command_policy/confirm-git-push", "command_policy/confirm-git-push-force":
+		return true
+	default:
+		return false
+	}
 }

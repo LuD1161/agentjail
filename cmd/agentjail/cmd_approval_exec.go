@@ -17,6 +17,7 @@ import (
 )
 
 var approvalChallenge string
+var approvalOperation string
 
 var approvalExecCmd = &cobra.Command{
 	Use:    "approval-exec",
@@ -24,17 +25,22 @@ var approvalExecCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runApprovalExecCommand(cmd, approvalexec.ChallengeID(approvalChallenge))
+		return runApprovalExecCommand(cmd, approvalexec.ChallengeID(approvalChallenge), approvalOperation)
 	},
 }
 
 func init() {
 	approvalExecCmd.Flags().StringVar(&approvalChallenge, "challenge", "", "One-use approval challenge")
+	approvalExecCmd.Flags().StringVar(&approvalOperation, "operation", "", "Typed approval operation")
 	_ = approvalExecCmd.MarkFlagRequired("challenge")
+	_ = approvalExecCmd.MarkFlagRequired("operation")
 	rootCmd.AddCommand(approvalExecCmd)
 }
 
-func runApprovalExec(challengeID approvalexec.ChallengeID) error {
+func runApprovalExec(challengeID approvalexec.ChallengeID, operation string) error {
+	if operation != approvalexec.GitPushOperation {
+		return fmt.Errorf("agentjail approval-exec: unsupported operation")
+	}
 	if _, ok := approvalexec.ParseBrokerCommand(approvalexec.BrokerCommand(challengeID)); !ok {
 		return fmt.Errorf("agentjail approval-exec: malformed challenge")
 	}
@@ -83,8 +89,8 @@ func approvalExecShell(getenv func(string) string) string {
 	return "/bin/sh"
 }
 
-func runApprovalExecCommand(cmd *cobra.Command, challengeID approvalexec.ChallengeID) error {
-	err := runApprovalExec(challengeID)
+func runApprovalExecCommand(cmd *cobra.Command, challengeID approvalexec.ChallengeID, operation string) error {
+	err := runApprovalExec(challengeID, operation)
 	if err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), err)
 	}

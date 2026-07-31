@@ -506,6 +506,7 @@ func TestCodexHook_AskBlocks(t *testing.T) {
 
 func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 	challenge := strings.Repeat("A", 43)
+	display := "git -C /tmp/work push origin HEAD:refs/heads/topic"
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -517,7 +518,7 @@ func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 		_ = read.Close()
 		_ = write.Close()
 	})
-	writeCodexApprovalRewrite(approvalexec.ChallengeID(challenge))
+	writeCodexApprovalRewrite(approvalexec.ChallengeID(challenge), display)
 	if err := write.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -534,6 +535,9 @@ func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 	}
 	if got := out.HookSpecificOutput.UpdatedInput["command"]; got != approvalexec.BrokerCommand(approvalexec.ChallengeID(challenge)) {
 		t.Fatalf("rewrite command = %#v", got)
+	}
+	if want := "🔐 AgentJail approval required for:\n$ " + display; out.SystemMessage != want {
+		t.Fatalf("systemMessage = %q, want %q", out.SystemMessage, want)
 	}
 }
 
