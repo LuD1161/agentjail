@@ -99,18 +99,21 @@ cannot execute while its authorization service is unavailable.
 
 The broker command contains an opaque challenge rather than the original shell
 text. AgentJail uses Codex's supported `systemMessage` field to show the redacted
-effective Git command immediately before the native prompt, while the fixed
-command inside Codex's prompt identifies the `git-push` approval operation.
-This bridge currently applies only to Codex Bash `ask` decisions; other Codex
-`ask` decisions retain their fail-closed adapter behavior. The normal redacted
+effective shell command immediately before the native prompt, while the fixed
+command inside Codex's prompt identifies only the `shell-command` approval
+operation. The transport follows every effective Codex Bash `ask`, including
+user-authored custom rules, rather than enumerating policy rule IDs. Non-Bash
+Codex `ask` decisions retain their fail-closed adapter behavior because Codex
+cannot initiate an equivalent prompt for those tools. The normal redacted
 PreToolUse decision record remains unchanged; the bridge adds no original
 command text to its audit records or structured logs.
 The opaque, one-use challenge is necessarily visible in the short-lived broker
 argv and its daemon socket request so concurrent prompts can be correlated; it
 is never logged or audited and cannot redeem without the bound session, epoch,
 and fresh process-topology checks. Same-user process-list exposure is therefore
-a bounded limitation, not an authorization channel.
-See [ADR 0118-codex-approval-broker](./adr/0118-codex-approval-broker.md).
+a bounded limitation, not an authorization channel. See
+[ADR 0118-codex-approval-broker](./adr/0118-codex-approval-broker.md) and
+[ADR 0119-command-approval-transport](./adr/0119-command-approval-transport.md).
 
 ---
 

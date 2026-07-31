@@ -2,7 +2,11 @@
 // hook protocol without changing the policy engine's source-of-truth verdict.
 package agentpolicy
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/LuD1161/agentjail/internal/wire"
+)
 
 // Action is a policy or hook-response action.
 type Action string
@@ -101,17 +105,37 @@ func (codexAdapter) ID() string { return "codex" }
 func (a codexAdapter) Translate(req Request) Translation {
 	translation := base(req, a.ID())
 	if strings.EqualFold(req.HookEvent, "PreToolUse") && translation.EffectiveAction == ActionAsk {
-		for _, capability := range req.Capabilities {
-			if capability == "codex_approval_bridge_v1" && req.ToolName == "Bash" {
-				translation.CodexApprovalBridge = true
-				translation.TranslationReason = "Codex ask routed through one-use native approval broker"
-				return translation
-			}
+		if req.ToolName == "Bash" && supportsCodexShellApproval(req) {
+			translation.CodexApprovalBridge = true
+			translation.TranslationReason = "Codex ask routed through one-use native approval broker"
+			return translation
 		}
 		translation.EffectiveAction = ActionDeny
 		translation.TranslationReason = "Codex PreToolUse cannot initiate an interactive approval; fail closed"
 	}
 	return translation
+}
+
+func supportsCodexShellApproval(req Request) bool {
+	legacy := false
+	for _, capability := range req.Capabilities {
+		switch capability {
+		case wire.CapabilityCodexShellApprovalV1:
+			return true
+		case wire.CapabilityCodexApprovalBridgeV1:
+			legacy = true
+		}
+	}
+	return legacy && legacyCodexGitApprovalRule(req.RuleID)
+}
+
+func legacyCodexGitApprovalRule(ruleID string) bool {
+	switch ruleID {
+	case "command_policy/confirm-git-push", "command_policy/confirm-git-push-force":
+		return true
+	default:
+		return false
+	}
 }
 
 type cursorAdapter struct{}

@@ -542,6 +542,21 @@ approval remained too vague for an informed decision.
   command-specific context such as the requested ref.
   See ADR 0118-codex-approval-broker and AGE-263.
 
+## 38. A policy transport must not enumerate policy rules
+
+The Codex broker worked for Git push, and its full live matrix was green. The
+daemon nevertheless carried a second allowlist of the two Git rule IDs, so
+publish, download, AWS, resolver, and user-authored custom Bash `ask` decisions
+still became denials. Adding a policy confirmation did not automatically gain
+the adapter behavior that `ask` promises.
+
+- **Rule:** adapters translate typed actions, not known rule names. Bind the
+  selected rule into the authorization record, but do not use its namespace as
+  a transport allowlist.
+- **Rule:** compatibility tests need an unknown custom `ask` rule. A matrix
+  containing only built-in rules cannot prove the adapter is policy-agnostic.
+  See ADR 0119-command-approval-transport.
+
 ---
 
 ## Testing gotchas

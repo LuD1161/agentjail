@@ -1,6 +1,9 @@
 # ADR 0118-codex-approval-broker
 
-Status: Proposed
+Status: Accepted
+
+The Git-only transport eligibility in this ADR is broadened by
+ADR 0119-command-approval-transport.
 
 ## Context
 

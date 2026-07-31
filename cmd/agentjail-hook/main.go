@@ -433,17 +433,68 @@ func writeCodexSystemMessage(msg string) {
 	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
 }
 
-func writeCodexApprovalRewrite(challenge approvalexec.ChallengeID, display string) {
+func writeCodexApprovalRewrite(operation string, challenge approvalexec.ChallengeID, display string) bool {
+	command, ok := codexApprovalBrokerCommand(operation, challenge)
+	if !ok {
+		return false
+	}
 	_ = json.NewEncoder(os.Stdout).Encode(codexApprovalRewriteOutput{
 		SystemMessage: "🔐 AgentJail approval required for:\n$ " + display,
 		HookSpecificOutput: codexApprovalRewriteSpecificOutput{
 			HookEventName:      canonicalPreToolUse,
 			PermissionDecision: "allow",
 			UpdatedInput: map[string]interface{}{
-				"command": approvalexec.BrokerCommand(challenge),
+				"command": command,
 			},
 		},
 	})
+	return true
+}
+
+func codexApprovalOperation(resp daemonResponse) string {
+	if validCodexApprovalOperation(resp.ApprovalOperation) {
+		return resp.ApprovalOperation
+	}
+	if legacyCodexGitApprovalRule(resp.RuleID) {
+		return string(approvalexec.GitPushOperation)
+	}
+	return ""
+}
+
+func legacyCodexGitApprovalRule(ruleID string) bool {
+	switch ruleID {
+	case "command_policy/confirm-git-push", "command_policy/confirm-git-push-force":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexApprovalBrokerCommand(operation string, challenge approvalexec.ChallengeID) (string, bool) {
+	invocation := approvalexec.BrokerInvocation{
+		Operation:   approvalexec.Operation(operation),
+		ChallengeID: challenge,
+	}
+	if !approvalexec.ValidOperation(invocation.Operation) {
+		return "", false
+	}
+	command := approvalexec.BrokerCommand(invocation)
+	parsed, ok := approvalexec.ParseBrokerCommand(command)
+	if !ok || parsed != invocation {
+		return "", false
+	}
+	return command, true
+}
+
+func validCodexApprovalOperation(operation string) bool {
+	return approvalexec.ValidOperation(approvalexec.Operation(operation))
+}
+
+func codexApprovalCapabilities() []string {
+	return []string{
+		wire.CapabilityCodexShellApprovalV1,
+		wire.CapabilityCodexApprovalBridgeV1,
+	}
 }
 
 func writeCodexLifecycleAttestation() {
@@ -725,7 +776,7 @@ const (
 func roundTripDeadline(req daemonRequest) time.Duration {
 	if req.Agent == "codex" {
 		for _, capability := range req.Capabilities {
-			if capability == wire.CapabilityCodexApprovalBridgeV1 {
+			if capability == wire.CapabilityCodexApprovalBridgeV1 || capability == wire.CapabilityCodexShellApprovalV1 {
 				return codexApprovalRoundTripDeadline
 			}
 		}
@@ -864,7 +915,7 @@ func runClaude(agent string) {
 		PermissionMode: input.PermissionMode,
 		// ADR 0112: correlation id PostToolUse will report the outcome under.
 		ToolUseID:    correlationID(input.ToolUseID, input.SessionID, input.ToolName, input.ToolInput),
-		Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1},
+		Capabilities: codexApprovalCapabilities(),
 	}
 
 	evalStart := time.Now()
@@ -882,10 +933,14 @@ func runClaude(agent string) {
 	// 5. Print policy eval indicator to stderr.
 	noColor := os.Getenv("NO_COLOR") != ""
 	printPolicyEval(noColor, input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
-	if agent == "codex" && resp.CodexApprovalBridge && resp.ApprovalChallenge != "" &&
-		resp.ApprovalDisplay != "" && resp.PolicyAction == "ask" {
-		writeCodexApprovalRewrite(approvalexec.ChallengeID(resp.ApprovalChallenge), resp.ApprovalDisplay)
-		return
+	if agent == "codex" && resp.CodexApprovalBridge && resp.PolicyAction == "ask" {
+		operation := codexApprovalOperation(resp)
+		if resp.ApprovalChallenge != "" && resp.ApprovalDisplay != "" &&
+			writeCodexApprovalRewrite(operation, approvalexec.ChallengeID(resp.ApprovalChallenge), resp.ApprovalDisplay) {
+			return
+		}
+		resp.EffectiveAction = "deny"
+		resp.TranslationReason = "Codex approval broker response was incomplete or invalid; fail closed"
 	}
 	if agent == "codex" && resp.DeferToNativePermission {
 		return
@@ -976,7 +1031,7 @@ func runCodexPermissionRequest(input hookInput) {
 		Agent:          "codex",
 		AgentPID:       findAgentPID(),
 		PermissionMode: input.PermissionMode,
-		Capabilities:   []string{wire.CapabilityCodexApprovalBridgeV1},
+		Capabilities:   codexApprovalCapabilities(),
 	}
 
 	evalStart := time.Now()

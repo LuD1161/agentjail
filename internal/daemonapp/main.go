@@ -588,8 +588,8 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 
 		if req.Agent == "codex" && req.HookEvent == "PermissionRequest" && s.approvals != nil {
 			if command, _ := req.ToolInput["command"].(string); command != "" {
-				if challengeID, ok := approvalexec.ParseBrokerCommand(command); ok {
-					s.handleApprovalPrompt(ctx, conn, enc, req, challengeID)
+				if invocation, ok := approvalexec.ParseBrokerCommand(command); ok {
+					s.handleApprovalPrompt(ctx, conn, enc, req, invocation)
 					continue
 				}
 			}
@@ -628,21 +628,14 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			resp.TranslationReason = translation.TranslationReason
 			resp.DeferToNativePermission = translation.DeferToNativePermission
 			resp.CodexApprovalBridge = translation.CodexApprovalBridge
-			if translation.CodexApprovalBridge && !approvalexec.SupportsRule(resp.RuleID) {
-				translation.CodexApprovalBridge = false
-				translation.EffectiveAction = agentpolicy.ActionDeny
-				translation.TranslationReason = "Codex approval broker currently supports Git push only; fail closed"
-				resp.EffectiveAction = string(translation.EffectiveAction)
-				resp.CodexApprovalBridge = false
-				resp.TranslationReason = translation.TranslationReason
-			}
+			approvalOperation := codexApprovalOperationFor(req.Capabilities)
 			if translation.CodexApprovalBridge && s.approvals != nil && verifiedCodexPID > 0 {
 				command, _ := req.ToolInput["command"].(string)
 				meta, mintErr := s.approvals.Mint(approvalexec.MintRequest{
 					SessionID: approvalexec.SessionID(req.SessionID),
 					TurnID:    approvalexec.TurnID(req.TurnID),
 					ToolUseID: approvalexec.ToolUseID(req.ToolUseID),
-					Command:   approvalexec.Command(command), CWD: req.CWD,
+					Operation: approvalOperation, Command: approvalexec.Command(command), CWD: req.CWD,
 					AgentPID: req.AgentPID, RuleID: resp.RuleID, Now: time.Now(),
 				})
 				if mintErr != nil {
@@ -652,6 +645,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					slog.Warn("codex approval challenge mint failed", "session_id", req.SessionID, "err", mintErr)
 				} else {
 					resp.ApprovalChallenge = string(meta.ChallengeID)
+					resp.ApprovalOperation = string(meta.Operation)
 					resp.ApprovalDisplay = approvalDisplayCommand(req.ToolInput)
 					slog.Info("codex approval challenge minted", "session_id", req.SessionID, "rule_id", resp.RuleID)
 					s.emitApprovalAudit(ctx, audit.CodexApprovalMinted, meta)
@@ -754,7 +748,7 @@ func approvalDisplayCommand(toolInput map[string]interface{}) string {
 		Command string `json:"command"`
 	}
 	if err := json.Unmarshal([]byte(redacted), &input); err != nil || input.Command == "" {
-		return "git push (command unavailable)"
+		return "command unavailable"
 	}
 
 	var display strings.Builder
@@ -783,6 +777,22 @@ func approvalRef(id approvalexec.ChallengeID) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+func codexApprovalOperationFor(capabilities []string) approvalexec.Operation {
+	legacy := false
+	for _, capability := range capabilities {
+		switch capability {
+		case wire.CapabilityCodexShellApprovalV1:
+			return approvalexec.ShellCommandOperation
+		case wire.CapabilityCodexApprovalBridgeV1:
+			legacy = true
+		}
+	}
+	if legacy {
+		return approvalexec.GitPushOperation
+	}
+	return ""
+}
+
 func (s *server) emitApprovalAudit(ctx context.Context, eventType string, meta approvalexec.Metadata) error {
 	if s.eventStore == nil {
 		return errors.New("durable audit store unavailable")
@@ -793,7 +803,10 @@ func (s *server) emitApprovalAudit(ctx context.Context, eventType string, meta a
 		SessionID: string(meta.SessionID),
 		RefID:     approvalRef(meta.ChallengeID),
 		Entity:    meta.RuleID,
-		Detail:    map[string]string{"tool_use_id": string(meta.ToolUseID)},
+		Detail: map[string]string{
+			"operation":   string(meta.Operation),
+			"tool_use_id": string(meta.ToolUseID),
+		},
 	})
 }
 
@@ -802,9 +815,9 @@ func (s *server) handleApprovalPrompt(
 	conn net.Conn,
 	enc *json.Encoder,
 	req policyeval.Request,
-	challengeID approvalexec.ChallengeID,
+	invocation approvalexec.BrokerInvocation,
 ) {
-	meta, err := s.approvals.Inspect(challengeID, time.Now())
+	meta, err := s.approvals.Inspect(invocation.ChallengeID, time.Now())
 	if err == nil {
 		peerUID, uidErr := extractPeerUID(conn)
 		peerPID, pidErr := extractPeerPID(conn)
@@ -821,7 +834,8 @@ func (s *server) handleApprovalPrompt(
 	}
 	if err == nil {
 		_, err = s.approvals.ObservePrompt(approvalexec.ObserveRequest{
-			ChallengeID: challengeID,
+			ChallengeID: invocation.ChallengeID,
+			Operation:   invocation.Operation,
 			SessionID:   approvalexec.SessionID(req.SessionID),
 			TurnID:      approvalexec.TurnID(req.TurnID),
 			CWD:         req.CWD,
@@ -830,7 +844,7 @@ func (s *server) handleApprovalPrompt(
 		})
 	}
 	if err != nil {
-		slog.Warn("codex approval prompt rejected", "challenge_ref", approvalRef(challengeID), "err", err)
+		slog.Warn("codex approval prompt rejected", "challenge_ref", approvalRef(invocation.ChallengeID), "err", err)
 		_ = enc.Encode(policyeval.Response{
 			ID: req.ID, Action: "deny", PolicyAction: "deny",
 			EffectiveAction: "deny", Adapter: "codex",
@@ -838,8 +852,8 @@ func (s *server) handleApprovalPrompt(
 		})
 		return
 	}
-	meta, _ = s.approvals.Inspect(challengeID, time.Now())
-	slog.Info("codex approval prompt observed", "challenge_ref", approvalRef(challengeID), "session_id", req.SessionID)
+	meta, _ = s.approvals.Inspect(invocation.ChallengeID, time.Now())
+	slog.Info("codex approval prompt observed", "challenge_ref", approvalRef(invocation.ChallengeID), "session_id", req.SessionID)
 	_ = s.emitApprovalAudit(ctx, audit.CodexPromptObserved, meta)
 	_ = enc.Encode(policyeval.Response{
 		ID: req.ID, Action: "ask", PolicyAction: "ask",
@@ -881,7 +895,7 @@ func (s *server) handleApprovalRedeem(
 		// Redeem owns the burn. Even an invalid peer reaches this one-use state
 		// transition with empty verification fields. See ADR 0118-codex-approval-broker.
 		redeemed, err = s.approvals.Redeem(approvalexec.RedeemRequest{
-			ChallengeID: req.ChallengeID, VerifiedSession: verifiedSession,
+			ChallengeID: req.ChallengeID, Operation: req.Operation, VerifiedSession: verifiedSession,
 			PeerChainFresh: peerFresh,
 			CurrentEpoch:   s.approvals.CurrentEpoch(meta.SessionID),
 			Now:            time.Now(),

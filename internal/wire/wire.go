@@ -80,10 +80,19 @@ type Response struct {
 	DeferToNativePermission bool   `json:"defer_to_native_permission,omitempty"`
 	CodexApprovalBridge     bool   `json:"codex_approval_bridge,omitempty"`
 	ApprovalChallenge       string `json:"approval_challenge,omitempty"`
+	ApprovalOperation       string `json:"approval_operation,omitempty"`
 	ApprovalDisplay         string `json:"approval_display,omitempty"`
 }
 
-const CapabilityCodexApprovalBridgeV1 = "codex_approval_bridge_v1"
+const (
+	// CapabilityCodexApprovalBridgeV1 is the Git-only Codex approval bridge.
+	// It remains advertised for mixed-version hook and daemon compatibility.
+	CapabilityCodexApprovalBridgeV1 = "codex_approval_bridge_v1"
+
+	// CapabilityCodexShellApprovalV1 enables the generic one-use native
+	// approval broker for eligible Codex Bash asks.
+	CapabilityCodexShellApprovalV1 = "codex_shell_approval_v1"
+)
 
 // DefaultSocketPath returns the default path for the daemon Unix socket.
 // Expands to ~/.agentjail/daemon.sock; falls back to /tmp/agentjail-daemon.sock

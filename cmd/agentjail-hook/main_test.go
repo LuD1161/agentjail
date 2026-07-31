@@ -450,6 +450,14 @@ func TestRoundTripDeadline(t *testing.T) {
 			want: codexApprovalRoundTripDeadline,
 		},
 		{
+			name: "shell-approval-capable codex",
+			req: daemonRequest{
+				Agent:        "codex",
+				Capabilities: []string{wire.CapabilityCodexShellApprovalV1},
+			},
+			want: codexApprovalRoundTripDeadline,
+		},
+		{
 			name: "codex without bridge",
 			req:  daemonRequest{Agent: "codex"},
 			want: defaultRoundTripDeadline,
@@ -518,7 +526,9 @@ func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 		_ = read.Close()
 		_ = write.Close()
 	})
-	writeCodexApprovalRewrite(approvalexec.ChallengeID(challenge), display)
+	if !writeCodexApprovalRewrite("shell-command", approvalexec.ChallengeID(challenge), display) {
+		t.Fatal("writeCodexApprovalRewrite rejected valid operation and challenge")
+	}
 	if err := write.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -533,11 +543,40 @@ func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 	if out.HookSpecificOutput.HookEventName != canonicalPreToolUse || out.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Fatalf("rewrite metadata = %#v", out.HookSpecificOutput)
 	}
-	if got := out.HookSpecificOutput.UpdatedInput["command"]; got != approvalexec.BrokerCommand(approvalexec.ChallengeID(challenge)) {
+	if got := out.HookSpecificOutput.UpdatedInput["command"]; got != "agentjail approval-exec --operation shell-command --challenge "+challenge {
 		t.Fatalf("rewrite command = %#v", got)
+	}
+	if got := out.HookSpecificOutput.UpdatedInput["command"].(string); strings.Contains(got, display) {
+		t.Fatalf("broker command leaked original command context: %q", got)
 	}
 	if want := "🔐 AgentJail approval required for:\n$ " + display; out.SystemMessage != want {
 		t.Fatalf("systemMessage = %q, want %q", out.SystemMessage, want)
+	}
+}
+
+func TestCodexApprovalOperationUsesExplicitValueOrLegacyGitFallback(t *testing.T) {
+	challenge := approvalexec.ChallengeID(strings.Repeat("A", 43))
+	for _, tt := range []struct {
+		name string
+		resp daemonResponse
+		want string
+	}{
+		{name: "explicit generic operation", resp: daemonResponse{ApprovalOperation: "shell-command"}, want: "shell-command"},
+		{name: "legacy Git response", resp: daemonResponse{RuleID: "command_policy/confirm-git-push"}, want: string(approvalexec.GitPushOperation)},
+		{name: "missing generic operation", resp: daemonResponse{RuleID: "command_policy/confirm-publish"}},
+		{name: "invalid operation", resp: daemonResponse{ApprovalOperation: "package; publish"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codexApprovalOperation(tt.resp); got != tt.want {
+				t.Fatalf("codexApprovalOperation() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if _, ok := codexApprovalBrokerCommand("shell-command", challenge); !ok {
+		t.Fatal("generic broker command rejected valid inputs")
+	}
+	if _, ok := codexApprovalBrokerCommand("package; publish", challenge); ok {
+		t.Fatal("broker command accepted shell syntax in operation")
 	}
 }
 
@@ -558,6 +597,10 @@ func TestCodexPermissionRequest_DenyRendersNativeSchema(t *testing.T) {
 	sockPath := stubDaemon(t, dir, func(req daemonRequest) (string, string, string) {
 		if req.HookEvent != codexPermissionRequest {
 			t.Errorf("policy hook event = %q, want %q", req.HookEvent, codexPermissionRequest)
+		}
+		wantCapabilities := []string{wire.CapabilityCodexShellApprovalV1, wire.CapabilityCodexApprovalBridgeV1}
+		if strings.Join(req.Capabilities, ",") != strings.Join(wantCapabilities, ",") {
+			t.Errorf("capabilities = %v, want %v", req.Capabilities, wantCapabilities)
 		}
 		return "deny", "remote mutation requires review", "command_policy/confirm-git-push"
 	})
@@ -655,6 +698,10 @@ func TestCodexPreToolUseDefaultGitPushFailsClosed(t *testing.T) {
 		}
 		if req.ToolInput["command"] != "git push origin main" {
 			t.Errorf("command = %#v, want local git push fixture", req.ToolInput["command"])
+		}
+		wantCapabilities := []string{wire.CapabilityCodexShellApprovalV1, wire.CapabilityCodexApprovalBridgeV1}
+		if strings.Join(req.Capabilities, ",") != strings.Join(wantCapabilities, ",") {
+			t.Errorf("capabilities = %v, want %v", req.Capabilities, wantCapabilities)
 		}
 		return daemonResponse{
 			Action:            "deny",

@@ -1,6 +1,10 @@
 package agentpolicy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/LuD1161/agentjail/internal/wire"
+)
 
 func TestCrossAgentConformancePreservesCanonicalPolicyAction(t *testing.T) {
 	tests := []struct {
@@ -45,17 +49,26 @@ func TestCodexApprovalBridgeRequiresBashAndCapability(t *testing.T) {
 		bridge bool
 	}{
 		{
-			name:   "Bash with capability",
-			req:    Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Bash", PolicyAction: ActionAsk, EnforcedAction: ActionAsk, Capabilities: []string{"codex_approval_bridge_v1"}},
+			name:   "Bash with shell capability bridges every rule namespace",
+			req:    Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Bash", RuleID: "custom/requires-review", PolicyAction: ActionAsk, EnforcedAction: ActionAsk, Capabilities: []string{wire.CapabilityCodexShellApprovalV1}},
 			bridge: true,
+		},
+		{
+			name:   "legacy capability preserves Git bridge",
+			req:    Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Bash", RuleID: "command_policy/confirm-git-push", PolicyAction: ActionAsk, EnforcedAction: ActionAsk, Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1}},
+			bridge: true,
+		},
+		{
+			name: "legacy capability rejects non Git ask",
+			req:  Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Bash", RuleID: "command_policy/confirm-publish", PolicyAction: ActionAsk, EnforcedAction: ActionAsk, Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1}},
 		},
 		{
 			name: "Bash without capability",
 			req:  Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Bash", PolicyAction: ActionAsk, EnforcedAction: ActionAsk},
 		},
 		{
-			name: "non-Bash with capability",
-			req:  Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Write", PolicyAction: ActionAsk, EnforcedAction: ActionAsk, Capabilities: []string{"codex_approval_bridge_v1"}},
+			name: "non-Bash with shell capability",
+			req:  Request{Agent: "codex", HookEvent: "PreToolUse", ToolName: "Write", PolicyAction: ActionAsk, EnforcedAction: ActionAsk, Capabilities: []string{wire.CapabilityCodexShellApprovalV1}},
 		},
 	}
 	for _, tt := range tests {
@@ -69,6 +82,33 @@ func TestCodexApprovalBridgeRequiresBashAndCapability(t *testing.T) {
 			}
 			if !tt.bridge && got.EffectiveAction != ActionDeny {
 				t.Fatalf("effective action = %q, want deny", got.EffectiveAction)
+			}
+		})
+	}
+}
+
+func TestCodexShellApprovalDoesNotEnumerateRuleNamespaces(t *testing.T) {
+	ruleIDs := []string{
+		"command_policy/confirm-publish",
+		"command_policy/confirm-curl-download",
+		"aws_policy/posture",
+		"resolver/default",
+		"project/team/review-deploy",
+		"custom/operator/confirm-deploy",
+	}
+	for _, ruleID := range ruleIDs {
+		t.Run(ruleID, func(t *testing.T) {
+			got := Normalize(Request{
+				Agent:          "codex",
+				HookEvent:      "PreToolUse",
+				ToolName:       "Bash",
+				RuleID:         ruleID,
+				PolicyAction:   ActionAsk,
+				EnforcedAction: ActionAsk,
+				Capabilities:   []string{wire.CapabilityCodexShellApprovalV1},
+			})
+			if !got.CodexApprovalBridge || got.EffectiveAction != ActionAsk {
+				t.Fatalf("Normalize(%q) = %#v, want native approval bridge", ruleID, got)
 			}
 		})
 	}

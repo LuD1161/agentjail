@@ -33,7 +33,7 @@ func TestApprovalDisplayCommand(t *testing.T) {
 		{
 			name:  "missing command",
 			input: map[string]interface{}{"path": "/tmp/work"},
-			want:  "git push (command unavailable)",
+			want:  "command unavailable",
 		},
 	}
 
