@@ -738,6 +738,9 @@ func TestCodexUninstallRemovesEntry(t *testing.T) {
 	if count != 0 {
 		t.Errorf("agentjail entry still present after Uninstall (count=%d)", count)
 	}
+	if _, err := os.Stat(codexExecPolicyPath(env)); !os.IsNotExist(err) {
+		t.Errorf("managed approval rule still present after Uninstall: %v", err)
+	}
 }
 
 // TestCodexUninstallIdempotent verifies that Uninstall is idempotent.
@@ -909,7 +912,11 @@ func TestCodexStatusIndependentComponents(t *testing.T) {
 	mkCodexDir(t, env)
 	ag := Codex{}
 
-	// Install hook but leave config.toml absent.
+	// Install the complete enforcement wiring but leave config.toml absent.
+	// The managed execpolicy rule is required alongside the hook.
+	if err := ensureCodexExecPolicy(env); err != nil {
+		t.Fatalf("ensureCodexExecPolicy: %v", err)
+	}
 	if err := codexMergeHooksJSON(env); err != nil {
 		t.Fatalf("codexMergeHooksJSON: %v", err)
 	}
@@ -917,7 +924,7 @@ func TestCodexStatusIndependentComponents(t *testing.T) {
 
 	s := ag.Status(env)
 
-	// hooks.json entry present → Installed should be true.
+	// The hook and approval rule are present → Installed should be true.
 	if !s.Installed {
 		t.Errorf("Status.Installed = false even though hooks.json entry is present")
 	}

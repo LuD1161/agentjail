@@ -2,6 +2,7 @@ package procutil
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 )
 
@@ -38,5 +39,28 @@ func TestFindAncestorPID_NotFound(t *testing.T) {
 	})
 	if ok {
 		t.Fatalf("expected no match, got pid %d", pid)
+	}
+}
+
+func TestDescendantChainStartedAtOrAfter(t *testing.T) {
+	self := os.Getpid()
+	boundary, err := NextStartBoundary()
+	if err != nil {
+		t.Fatalf("NextStartBoundary: %v", err)
+	}
+	if DescendantChainStartedAtOrAfter(self, os.Getppid(), boundary) {
+		t.Fatal("process that predates boundary was accepted")
+	}
+
+	child := exec.Command("sleep", "1")
+	if err := child.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+	if !DescendantChainStartedAtOrAfter(child.Process.Pid, self, boundary) {
+		t.Fatal("fresh child process was not accepted below recorded ancestor")
 	}
 }

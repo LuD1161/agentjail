@@ -20,10 +20,12 @@ const (
 type Request struct {
 	Agent          string
 	HookEvent      string
+	ToolName       string
 	RuleID         string
 	PermissionMode string
 	PolicyAction   Action
 	EnforcedAction Action
+	Capabilities   []string
 }
 
 // Translation records how an agent protocol renders a canonical policy
@@ -34,6 +36,7 @@ type Translation struct {
 	Adapter                 string
 	TranslationReason       string
 	DeferToNativePermission bool
+	CodexApprovalBridge     bool
 }
 
 // Adapter is the consumer-owned seam for an agent hook protocol.
@@ -98,6 +101,13 @@ func (codexAdapter) ID() string { return "codex" }
 func (a codexAdapter) Translate(req Request) Translation {
 	translation := base(req, a.ID())
 	if strings.EqualFold(req.HookEvent, "PreToolUse") && translation.EffectiveAction == ActionAsk {
+		for _, capability := range req.Capabilities {
+			if capability == "codex_approval_bridge_v1" && req.ToolName == "Bash" {
+				translation.CodexApprovalBridge = true
+				translation.TranslationReason = "Codex ask routed through one-use native approval broker"
+				return translation
+			}
+		}
 		translation.EffectiveAction = ActionDeny
 		translation.TranslationReason = "Codex PreToolUse cannot initiate an interactive approval; fail closed"
 	}

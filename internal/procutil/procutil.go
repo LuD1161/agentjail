@@ -5,9 +5,11 @@
 package procutil
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // commTruncateLen is the longest comm the kernel will report. Linux caps
@@ -52,6 +54,62 @@ func ReadProcessComm(pid int) string {
 // cannot be determined. The implementation is platform-specific.
 func ReadProcessPPID(pid int) int {
 	return readPPID(pid)
+}
+
+// StartMarker is an OS-monotonic process birth marker. Values are comparable
+// only on the same host and boot.
+type StartMarker uint64
+
+func ReadProcessStartMarker(pid int) (StartMarker, error) {
+	if pid <= 1 {
+		return 0, fmt.Errorf("invalid pid %d", pid)
+	}
+	return readStartMarker(pid)
+}
+
+// NextStartBoundary returns a marker strictly after all processes that existed
+// when it was called. It waits for the platform marker quantum to advance so a
+// later child cannot share a birth bucket with a pre-approval process.
+func NextStartBoundary() (StartMarker, error) {
+	initial, err := currentStartMarker()
+	if err != nil {
+		return 0, err
+	}
+	deadline := time.Now().Add(25 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		current, err := currentStartMarker()
+		if err != nil {
+			return 0, err
+		}
+		if current > initial {
+			return current, nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return 0, fmt.Errorf("process start marker did not advance")
+}
+
+// DescendantChainStartedAtOrAfter verifies that every process below ancestor
+// in pid's ancestry was born at or after boundary.
+func DescendantChainStartedAtOrAfter(pid, ancestor int, boundary StartMarker) bool {
+	if pid <= 1 || ancestor <= 1 || boundary == 0 {
+		return false
+	}
+	for i := 0; i < 20 && pid > 1; i++ {
+		if pid == ancestor {
+			return true
+		}
+		started, err := ReadProcessStartMarker(pid)
+		if err != nil || started < boundary {
+			return false
+		}
+		parent := readPPID(pid)
+		if parent <= 1 || parent == pid {
+			return false
+		}
+		pid = parent
+	}
+	return false
 }
 
 // Alive reports whether a process with the given PID currently exists. It

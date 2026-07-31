@@ -24,7 +24,7 @@ var rootCmd = &cobra.Command{
 
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Mirror main.go: record feature usage for every command except telemetry.
-		if cmd.Name() != "telemetry" {
+		if cmd.Name() != "telemetry" && cmd.Name() != "approval-exec" {
 			recordFeatureUsed(cmd.Name())
 			// Start the throttled update check + heartbeat asynchronously.
 			// Never adds latency; all network/file errors are silently discarded.

@@ -29,14 +29,16 @@ type Request struct {
 	ToolName       string                 `json:"tool_name"`
 	ToolInput      map[string]interface{} `json:"tool_input"`
 	SessionID      string                 `json:"session_id"`
+	TurnID         string                 `json:"turn_id,omitempty"`
 	CWD            string                 `json:"cwd"`
 	Agent          string                 `json:"agent,omitempty"`
 	AgentPID       int                    `json:"agent_pid,omitempty"`
 	PermissionMode string                 `json:"permission_mode,omitempty"`
 	// ToolUseID / Outcome mirror wire.Request for the final-outcome path; Eval
 	// ignores them (they matter to the daemon's record layer). See ADR 0112.
-	ToolUseID string   `json:"tool_use_id,omitempty"`
-	Outcome   *Outcome `json:"outcome,omitempty"`
+	ToolUseID    string   `json:"tool_use_id,omitempty"`
+	Outcome      *Outcome `json:"outcome,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Outcome mirrors wire.Outcome. See ADR 0112.
@@ -68,6 +70,8 @@ type Response struct {
 	Adapter                 string `json:"adapter,omitempty"`
 	TranslationReason       string `json:"translation_reason,omitempty"`
 	DeferToNativePermission bool   `json:"defer_to_native_permission,omitempty"`
+	CodexApprovalBridge     bool   `json:"codex_approval_bridge,omitempty"`
+	ApprovalChallenge       string `json:"approval_challenge,omitempty"`
 }
 
 // Evaluator evaluates policy requests and manages OPA engine lifecycle.

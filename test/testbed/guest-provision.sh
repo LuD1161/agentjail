@@ -3,7 +3,7 @@
 #
 # Turns a clean box into "a real dev machine that just installed agentjail":
 #   1. Claude Code via npm (the way a human installs it)
-#   2. optional login seeding via CLAUDE_CODE_OAUTH_TOKEN
+#   2. optional Claude login seeding and Codex CLI installation
 #   3. agentjail via the SHIPPED install.sh (LOCAL_TARBALL seam) — the true
 #      user path: checksum verify, ~/.agentjail/bin, service install, hook merge
 #   4. a realistic seed project (~/work/demo) with allowed + forbidden remotes
@@ -88,6 +88,23 @@ else
     log "no token pushed — Claude Code installed but not logged in"
 fi
 
+# Codex is installed only for the explicit live-agent approval scenario.
+# Authentication is injected later by the scenario runner.
+if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
+    if ! command -v codex >/dev/null 2>&1 || [ "$(codex --version 2>/dev/null)" != "codex-cli 0.146.0" ]; then
+        log "installing Codex CLI 0.146.0 for approval compatibility"
+        if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+            npm install -g @openai/codex@0.146.0
+        else
+            sudo npm install -g @openai/codex@0.146.0
+        fi
+    fi
+    mkdir -p "$HOME/.codex"
+    chmod 700 "$HOME/.codex"
+else
+    log "Codex compatibility install not requested"
+fi
+
 # ---- 3. agentjail via the shipped installer -----------------------------------
 
 log "running install.sh with LOCAL_TARBALL (the real user path)"
@@ -104,6 +121,10 @@ fi
 # agents). Re-run explicitly for claude-code to be deterministic + idempotent.
 log "agentjail install --for claude-code"
 "$HOME/.agentjail/bin/agentjail" install --for claude-code || true
+if command -v codex >/dev/null 2>&1; then
+    log "agentjail install --for codex"
+    "$HOME/.agentjail/bin/agentjail" install --for codex
+fi
 
 # ---- 3a. scoped AppArmor userns profile (modern Ubuntu, restriction LEFT ON) --
 # Load the per-binary profile so --tunnel works without weakening the machine.

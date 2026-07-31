@@ -15,8 +15,8 @@
 //   - claude (default): Deny → exit 2 (stderr reason). Allow/ask → stdout
 //     hookSpecificOutput JSON.
 //   - codex: SessionStart/Stop → live enforcement systemMessage. PreToolUse
-//     deny → exit 2; allow → exit 0 with empty stdout; ask
-//     → exit 2 because PreToolUse cannot initiate a native approval. Its
+//     deny → exit 2; allow → exit 0 with empty stdout; eligible Bash asks
+//     → one-use approval-broker rewrite; every other ask → exit 2. Its
 //     PermissionRequest event returns allow/deny or declines an ask so Codex's
 //     own approval UI remains authoritative when it is already prompting.
 //   - cursor: Cursor stdin/stdout differ. All decisions → exit 0; stdout JSON
@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
+	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
@@ -64,13 +65,12 @@ type hookInput struct {
 	ToolName      string                 `json:"tool_name"`
 	ToolInput     map[string]interface{} `json:"tool_input"`
 	SessionID     string                 `json:"session_id"`
+	TurnID        string                 `json:"turn_id,omitempty"`
 	CWD           string                 `json:"cwd"`
-	// PermissionMode is Codex's current mode. The adapter permits only the
-	// ADR 0114-codex-permission-request default-mode git-push bridge.
+	// PermissionMode is Codex's current mode and is retained in adapter input.
 	PermissionMode string `json:"permission_mode,omitempty"`
-	// ToolUseID is Claude Code's per-tool-call id (ADR 0112). Present on both
-	// PreToolUse and PostToolUse invocations; empty on Codex/Cursor, which
-	// fall back to correlationID's hash.
+	// ToolUseID is the per-tool-call id on current Claude Code and Codex
+	// PreToolUse/PostToolUse events. Older agents fall back to a stable hash.
 	ToolUseID string `json:"tool_use_id"`
 	// ToolResponse is Claude Code's PostToolUse-only payload carrying the
 	// tool's result. Codex also uses this field, but its value is tool-specific.
@@ -388,6 +388,16 @@ type codexSystemMessageOutput struct {
 	SystemMessage string `json:"systemMessage"`
 }
 
+type codexApprovalRewriteOutput struct {
+	HookSpecificOutput codexApprovalRewriteSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type codexApprovalRewriteSpecificOutput struct {
+	HookEventName      string                 `json:"hookEventName"`
+	PermissionDecision string                 `json:"permissionDecision"`
+	UpdatedInput       map[string]interface{} `json:"updatedInput"`
+}
+
 type codexLifecycleOutput struct {
 	Continue      bool   `json:"continue"`
 	SystemMessage string `json:"systemMessage"`
@@ -420,6 +430,18 @@ func writeCodexSystemMessage(msg string) {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
+}
+
+func writeCodexApprovalRewrite(challenge approvalexec.ChallengeID) {
+	_ = json.NewEncoder(os.Stdout).Encode(codexApprovalRewriteOutput{
+		HookSpecificOutput: codexApprovalRewriteSpecificOutput{
+			HookEventName:      canonicalPreToolUse,
+			PermissionDecision: "allow",
+			UpdatedInput: map[string]interface{}{
+				"command": approvalexec.BrokerCommand(challenge),
+			},
+		},
+	})
 }
 
 func writeCodexLifecycleAttestation() {
@@ -817,12 +839,14 @@ func runClaude(agent string) {
 		ToolName:       input.ToolName,
 		ToolInput:      input.ToolInput,
 		SessionID:      input.SessionID,
+		TurnID:         input.TurnID,
 		CWD:            input.CWD,
 		Agent:          agent,
 		AgentPID:       findAgentPID(),
 		PermissionMode: input.PermissionMode,
 		// ADR 0112: correlation id PostToolUse will report the outcome under.
-		ToolUseID: correlationID(input.ToolUseID, input.SessionID, input.ToolName, input.ToolInput),
+		ToolUseID:    correlationID(input.ToolUseID, input.SessionID, input.ToolName, input.ToolInput),
+		Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1},
 	}
 
 	evalStart := time.Now()
@@ -840,6 +864,11 @@ func runClaude(agent string) {
 	// 5. Print policy eval indicator to stderr.
 	noColor := os.Getenv("NO_COLOR") != ""
 	printPolicyEval(noColor, input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
+	if agent == "codex" && resp.CodexApprovalBridge && resp.ApprovalChallenge != "" &&
+		resp.PolicyAction == "ask" {
+		writeCodexApprovalRewrite(approvalexec.ChallengeID(resp.ApprovalChallenge))
+		return
+	}
 	if agent == "codex" && resp.DeferToNativePermission {
 		return
 	}
@@ -903,9 +932,9 @@ func runClaude(agent string) {
 
 // runCodexPermissionRequest applies the canonical policy to an approval Codex
 // has already decided to request. A policy ask declines to decide so Codex
-// retains its native approval UI. This does not relax PreToolUse: that event
-// blocks an ask before execution when Codex will not issue a request.
-// See ADR 0114-codex-permission-request.
+// retains its native approval UI. A managed broker request records prompt
+// observation; redemption still requires fresh process ancestry.
+// See ADR 0118-codex-approval-broker.
 func runCodexPermissionRequest(input hookInput) {
 	sockPath := resolveSocketPath()
 	conn, err := dialDaemon(sockPath)
@@ -924,10 +953,12 @@ func runCodexPermissionRequest(input hookInput) {
 		ToolName:       input.ToolName,
 		ToolInput:      input.ToolInput,
 		SessionID:      input.SessionID,
+		TurnID:         input.TurnID,
 		CWD:            input.CWD,
 		Agent:          "codex",
 		AgentPID:       findAgentPID(),
 		PermissionMode: input.PermissionMode,
+		Capabilities:   []string{wire.CapabilityCodexApprovalBridgeV1},
 	}
 
 	evalStart := time.Now()

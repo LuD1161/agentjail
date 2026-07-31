@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/approvalexec"
 )
 
 // buildHook compiles the hook binary into dir and returns its path.
@@ -400,6 +403,50 @@ func TestCodexHook_AskBlocks(t *testing.T) {
 	}
 	if !strings.Contains(stderrStr, "cannot initiate an approval request") {
 		t.Errorf("stderr missing Codex PreToolUse fallback explanation; got %q", stderrStr)
+	}
+}
+
+func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
+	challenge := strings.Repeat("A", 43)
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = write
+	t.Cleanup(func() {
+		os.Stdout = original
+		_ = read.Close()
+		_ = write.Close()
+	})
+	writeCodexApprovalRewrite(approvalexec.ChallengeID(challenge))
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out codexApprovalRewriteOutput
+	if err := json.Unmarshal(stdout, &out); err != nil {
+		t.Fatalf("decode bridge rewrite: %v; stdout=%q", err, stdout)
+	}
+	if out.HookSpecificOutput.HookEventName != canonicalPreToolUse || out.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("rewrite metadata = %#v", out.HookSpecificOutput)
+	}
+	if got := out.HookSpecificOutput.UpdatedInput["command"]; got != approvalexec.BrokerCommand(approvalexec.ChallengeID(challenge)) {
+		t.Fatalf("rewrite command = %#v", got)
+	}
+}
+
+func TestCodexHook_AskBridgeWithoutChallengeFailsClosed(t *testing.T) {
+	resp := daemonResponse{
+		Action:          "ask",
+		PolicyAction:    "ask",
+		EffectiveAction: "deny",
+	}
+	if got := renderedAction(resp, "codex", canonicalPreToolUse); got != "deny" {
+		t.Fatalf("missing challenge rendered action = %q, want deny", got)
 	}
 }
 

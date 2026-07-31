@@ -77,6 +77,39 @@ the daemon is down.
 
 The hook is configured in a file the agent reads at startup. Because the agent runs *inside* the hook framework, it cannot remove the hook from within itself. The policy binary runs in the host shell, not in the agent's process.
 
+### Codex native approval bridge
+
+Codex's `PreToolUse` hook cannot create a native approval prompt. For a
+canonical AgentJail `ask` on a Codex Bash call, the daemon therefore mints an
+in-memory, one-use approval challenge and the hook rewrites only that tool input
+to AgentJail's managed approval broker. Codex's exact managed execpolicy rule
+then creates its native prompt. `PermissionRequest` binds the challenge to the
+same session, turn, and working directory and records a fresh process-start
+boundary; it deliberately leaves the native decision to Codex.
+
+On approval, the broker asks the daemon to redeem the challenge. Redemption is
+one-use and requires the active Codex session plus a verifiable, fresh descendant
+process chain from the recorded agent process. The daemon returns the original
+command and working directory only after those checks; the broker execs that
+exact command. Cancel, expiry, replay, a later tool-call epoch, a missing
+managed rule, `--ignore-rules`, `approval_policy=never`, a daemon restart, or
+any unverifiable process topology fails closed. The standard hook availability
+posture remains fail-open for ordinary policy evaluation, but a broker invocation
+cannot execute while its authorization service is unavailable.
+
+The broker command contains an opaque challenge rather than the original shell
+text, so Codex's prompt identifies the AgentJail approval operation rather than
+displaying the full command. This bridge currently applies only to Codex Bash
+`ask` decisions; other Codex `ask` decisions retain their fail-closed adapter
+behavior. The normal redacted PreToolUse decision record remains unchanged; the
+bridge adds no original command text to its audit records or structured logs.
+The opaque, one-use challenge is necessarily visible in the short-lived broker
+argv and its daemon socket request so concurrent prompts can be correlated; it
+is never logged or audited and cannot redeem without the bound session, epoch,
+and fresh process-topology checks. Same-user process-list exposure is therefore
+a bounded limitation, not an authorization channel.
+See [ADR 0118-codex-approval-broker](./adr/0118-codex-approval-broker.md).
+
 ---
 
 ## Policy Model

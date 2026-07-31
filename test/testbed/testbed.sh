@@ -9,10 +9,11 @@
 #   testbed.sh ls                         list testbeds
 #   testbed.sh ssh <name>                 interactive shell
 #   testbed.sh exec <name> -- <cmd...>    run a command in the guest
-#   testbed.sh provision <name> [--worktree <path>]
+#   testbed.sh provision <name> [--worktree <path>] [--with-codex]
 #                                         build tarball -> install.sh ->
 #                                         Claude Code + agentjail, ready to use
-#   testbed.sh test <name> [scenario]     run a scenario (default: e2e-smoke) in-guest
+#   testbed.sh test <name> [scenario] [--codex-auth <path>]
+#                                         run a scenario (default: e2e-smoke) in-guest
 #   testbed.sh record <name> [scenario..] record scenarios (asciinema) -> reports/<ts>/
 #                                         with report.html + summary.json (all if none named)
 #   testbed.sh gate [--worktree <path>]   RELEASE GATE: clean box -> provision ->
@@ -96,11 +97,12 @@ do_create() {
 # ---- provision --------------------------------------------------------------
 
 do_provision() {
-    local name="${1:?usage: testbed.sh provision <name> [--worktree <path>]}"; shift
-    local worktree="$REPO_ROOT"
+    local name="${1:?usage: testbed.sh provision <name> [--worktree <path>] [--with-codex]}"; shift
+    local worktree="$REPO_ROOT" with_codex=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;
+            --with-codex) with_codex=1; shift ;;
             *) die "unknown provision flag: $1" ;;
         esac
     done
@@ -136,7 +138,6 @@ do_provision() {
         log "NOTE: no $token_file — Claude Code will be installed but not logged in."
         log "      Run 'claude setup-token' on the host and save the token there (chmod 600)."
     fi
-
     # Sync the host's global MCP servers into the guest so the testbed's Claude
     # Code sees the same MCP surface a real session does (agentjail's netproxy
     # allowlist seeding keys off installed MCPs). We copy only the global
@@ -156,7 +157,7 @@ do_provision() {
     fi
 
     log "running guest-provision.sh inside the guest"
-    guest_exec "$name" "bash /tmp/guest-provision.sh"
+    guest_exec "$name" "AGENTJAIL_TESTBED_CODEX=$with_codex bash /tmp/guest-provision.sh"
     log "provisioned. Try: $0 ssh $name   then: agentjail status && claude"
 }
 
@@ -232,7 +233,25 @@ do_gate() {
 }
 
 do_test() {
-    local name="${1:?usage: testbed.sh test <name> [scenario]}" scenario="${2:-e2e-smoke}"
+    local name="${1:?usage: testbed.sh test <name> [scenario] [--codex-auth <path>]}"; shift
+    local scenario="e2e-smoke" codex_auth=""
+    if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
+        scenario="$1"
+        shift
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --codex-auth)
+                codex_auth="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+                [ -f "$codex_auth" ] || die "Codex auth file not found: $codex_auth"
+                shift 2
+                ;;
+            *) die "unknown test flag: $1" ;;
+        esac
+    done
+    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ]; then
+        die "--codex-auth is accepted only by the codex-approval scenario"
+    fi
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
     [ -f "$script" ] || die "scenario not found: $script"
     log "running scenario '$scenario' in '$name'"
@@ -242,7 +261,23 @@ do_test() {
     # for the shipping contract to drift out from under the guard. See AGE-236.
     guest_push "$name" "$TESTBED_DIR/scenarios/chaos-lib.sh" "/tmp/testbed/scenarios/chaos-lib.sh"
     guest_push "$name" "$script" "/tmp/testbed/scenarios/${scenario}.sh"
-    guest_exec "$name" "$(chaos_env) bash /tmp/testbed/scenarios/${scenario}.sh"
+    if [ -n "$codex_auth" ]; then
+        log "injecting disposable Codex auth immediately before the scenario"
+        if ! guest_push "$name" "$codex_auth" /tmp/codex-auth.json; then
+            guest_exec "$name" "rm -f /tmp/codex-auth.json" || true
+            return 1
+        fi
+        if ! guest_exec "$name" "chmod 600 /tmp/codex-auth.json"; then
+            guest_exec "$name" "rm -f /tmp/codex-auth.json" || true
+            return 1
+        fi
+    fi
+    local rc=0
+    guest_exec "$name" "$(chaos_env) bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
+    if [ -n "$codex_auth" ]; then
+        guest_exec "$name" "rm -f /tmp/codex-auth.json \"\$HOME/.codex/auth.json\"" || true
+    fi
+    return "$rc"
 }
 
 # do_record runs scenarios under asciinema in the guest, pulls each recording

@@ -208,6 +208,15 @@ AgentJail hook command with the Cursor-specific adapter.
 Codex registers `PreToolUse`, `PermissionRequest`, and `PostToolUse` only for
 policy-governed tools, so unrelated UI calls are not intercepted and
 sandbox-denied tool outcomes are recorded against the original decision.
+For a Codex Bash command with an AgentJail `ask` verdict, installation also
+owns one exact execpolicy rule that opens Codex's native approval prompt. An
+approved prompt redeems a short-lived, one-use challenge and runs the original
+command; cancel, expiry, replay, `--ignore-rules`, or an unverifiable Codex
+process chain denies it. The prompt identifies the AgentJail approval operation
+rather than exposing the original shell text. Re-run `agentjail install --for
+codex` after upgrading to install or repair this managed rule; AgentJail never
+overwrites a locally changed rule. See
+[ADR 0118-codex-approval-broker](./docs/adr/0118-codex-approval-broker.md).
 `SessionStart` and `Stop` also display a live shield-and-daemon attestation.
 Each `apply_patch` target is normalized to the same file-policy contract as an
 Edit, so a multi-file patch is denied when any target is protected.

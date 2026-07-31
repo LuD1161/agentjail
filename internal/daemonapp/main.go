@@ -28,6 +28,8 @@ package daemonapp
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -49,6 +51,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	policy "github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
+	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/custompolicy"
@@ -57,6 +60,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/policyeval"
+	"github.com/LuD1161/agentjail/internal/procutil"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/telemetry"
@@ -76,6 +80,7 @@ type server struct {
 	// evaluator owns the OPA engine, LRU cache, per-project engines,
 	// repo-root cache, and AWS profile cache.
 	evaluator policyeval.Evaluator
+	approvals *approvalexec.Manager
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
@@ -437,6 +442,17 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		// Route grant_request to the grant server.
+		{
+			var probe struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(line, &probe) == nil && probe.Type == approvalexec.RedeemRequestType {
+				s.handleApprovalRedeem(ctx, conn, enc, line)
+				continue
+			}
+		}
+
+		// Route grant_request to the grant server.
 		if s.grantSrv != nil {
 			var probe struct {
 				Type string `json:"type"`
@@ -523,6 +539,24 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
+		// A user-space client can claim to be Codex in its JSON payload. The
+		// native approval bridge therefore binds its challenge to the kernel-
+		// observed peer's actual Codex ancestor, never the caller-reported PID.
+		// See ADR 0118-codex-approval-broker.
+		verifiedCodexPID := 0
+		if req.Agent == "codex" && req.HookEvent == "PreToolUse" {
+			if peerUID, uidErr := extractPeerUID(conn); uidErr == nil && peerUID == os.Getuid() {
+				if peerPID, pidErr := extractPeerPID(conn); pidErr == nil {
+					verifiedCodexPID, _ = procutil.FindAncestorPID(peerPID, func(pid int) bool {
+						return procutil.PIDHasComm(pid, "codex")
+					})
+				}
+			}
+			if verifiedCodexPID > 0 {
+				req.AgentPID = verifiedCodexPID
+			}
+		}
+
 		// PostToolUse outcome report (ADR 0112): the hook observed the sandbox's
 		// own EPERM signature after the tool ran and is telling us who actually
 		// enforced the call. This is not a policy decision — route it to the
@@ -535,6 +569,29 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 			_ = enc.Encode(policyeval.Response{ID: req.ID, Action: "allow"})
 			continue
+		}
+
+		if req.Agent == "codex" && req.HookEvent == "PreToolUse" && s.approvals != nil {
+			s.approvals.BeginToolCall(approvalexec.SessionID(req.SessionID))
+			if command, _ := req.ToolInput["command"].(string); command != "" {
+				if _, broker := approvalexec.ParseBrokerCommand(command); broker {
+					_ = enc.Encode(policyeval.Response{
+						ID: req.ID, Action: "deny", PolicyAction: "deny",
+						EffectiveAction: "deny", Adapter: "codex",
+						Reason: "direct approval broker invocation is not allowed",
+					})
+					continue
+				}
+			}
+		}
+
+		if req.Agent == "codex" && req.HookEvent == "PermissionRequest" && s.approvals != nil {
+			if command, _ := req.ToolInput["command"].(string); command != "" {
+				if challengeID, broker := approvalexec.ParseBrokerCommand(command); broker {
+					s.handleApprovalPrompt(ctx, conn, enc, req, challengeID)
+					continue
+				}
+			}
 		}
 
 		if req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
@@ -557,16 +614,43 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			translation := agentpolicy.Normalize(agentpolicy.Request{
 				Agent:          req.Agent,
 				HookEvent:      req.HookEvent,
+				ToolName:       req.ToolName,
 				RuleID:         resp.RuleID,
 				PermissionMode: req.PermissionMode,
 				PolicyAction:   agentpolicy.Action(policyAction),
 				EnforcedAction: agentpolicy.Action(resp.Action),
+				Capabilities:   req.Capabilities,
 			})
 			resp.PolicyAction = string(translation.PolicyAction)
 			resp.EffectiveAction = string(translation.EffectiveAction)
 			resp.Adapter = translation.Adapter
 			resp.TranslationReason = translation.TranslationReason
 			resp.DeferToNativePermission = translation.DeferToNativePermission
+			resp.CodexApprovalBridge = translation.CodexApprovalBridge
+			if translation.CodexApprovalBridge && s.approvals != nil && verifiedCodexPID > 0 {
+				command, _ := req.ToolInput["command"].(string)
+				meta, mintErr := s.approvals.Mint(approvalexec.MintRequest{
+					SessionID: approvalexec.SessionID(req.SessionID),
+					TurnID:    approvalexec.TurnID(req.TurnID),
+					ToolUseID: approvalexec.ToolUseID(req.ToolUseID),
+					Command:   approvalexec.Command(command), CWD: req.CWD,
+					AgentPID: req.AgentPID, RuleID: resp.RuleID, Now: time.Now(),
+				})
+				if mintErr != nil {
+					resp.CodexApprovalBridge = false
+					resp.EffectiveAction = "deny"
+					resp.TranslationReason = "Codex approval challenge mint failed; fail closed"
+					slog.Warn("codex approval challenge mint failed", "session_id", req.SessionID, "err", mintErr)
+				} else {
+					resp.ApprovalChallenge = string(meta.ChallengeID)
+					slog.Info("codex approval challenge minted", "session_id", req.SessionID, "rule_id", resp.RuleID)
+					s.emitApprovalAudit(ctx, audit.CodexApprovalMinted, meta)
+				}
+			} else if translation.CodexApprovalBridge {
+				resp.CodexApprovalBridge = false
+				resp.EffectiveAction = "deny"
+				resp.TranslationReason = "Codex approval broker identity unavailable; fail closed"
+			}
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
 
@@ -650,6 +734,143 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	if err := scanner.Err(); err != nil {
 		slog.Warn("scanner error", "err", err)
 	}
+}
+
+func approvalRef(id approvalexec.ChallengeID) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:8])
+}
+
+func (s *server) emitApprovalAudit(ctx context.Context, eventType string, meta approvalexec.Metadata) error {
+	if s.eventStore == nil {
+		return errors.New("durable audit store unavailable")
+	}
+	return s.eventStore.Emit(ctx, audit.Event{
+		EventType: eventType,
+		Actor:     "daemon",
+		SessionID: string(meta.SessionID),
+		RefID:     approvalRef(meta.ChallengeID),
+		Entity:    meta.RuleID,
+		Detail:    map[string]string{"tool_use_id": string(meta.ToolUseID)},
+	})
+}
+
+func (s *server) handleApprovalPrompt(
+	ctx context.Context,
+	conn net.Conn,
+	enc *json.Encoder,
+	req policyeval.Request,
+	challengeID approvalexec.ChallengeID,
+) {
+	meta, err := s.approvals.Inspect(challengeID, time.Now())
+	if err == nil {
+		peerUID, uidErr := extractPeerUID(conn)
+		peerPID, pidErr := extractPeerPID(conn)
+		_, descends := procutil.FindAncestorPID(peerPID, func(pid int) bool {
+			return pid == meta.AgentPID
+		})
+		if uidErr != nil || pidErr != nil || peerUID != os.Getuid() || !descends {
+			err = approvalexec.ErrBinding
+		}
+	}
+	var boundary procutil.StartMarker
+	if err == nil {
+		boundary, err = procutil.NextStartBoundary()
+	}
+	if err == nil {
+		_, err = s.approvals.ObservePrompt(approvalexec.ObserveRequest{
+			ChallengeID: challengeID,
+			SessionID:   approvalexec.SessionID(req.SessionID),
+			TurnID:      approvalexec.TurnID(req.TurnID),
+			CWD:         req.CWD,
+			FreshAfter:  uint64(boundary),
+			Now:         time.Now(),
+		})
+	}
+	if err != nil {
+		slog.Warn("codex approval prompt rejected", "challenge_ref", approvalRef(challengeID), "err", err)
+		_ = enc.Encode(policyeval.Response{
+			ID: req.ID, Action: "deny", PolicyAction: "deny",
+			EffectiveAction: "deny", Adapter: "codex",
+			Reason: "invalid or expired AgentJail approval challenge",
+		})
+		return
+	}
+	meta, _ = s.approvals.Inspect(challengeID, time.Now())
+	slog.Info("codex approval prompt observed", "challenge_ref", approvalRef(challengeID), "session_id", req.SessionID)
+	_ = s.emitApprovalAudit(ctx, audit.CodexPromptObserved, meta)
+	_ = enc.Encode(policyeval.Response{
+		ID: req.ID, Action: "ask", PolicyAction: "ask",
+		EffectiveAction: "ask", Adapter: "codex",
+		DeferToNativePermission: true,
+		Reason:                  "AgentJail requires native Codex approval",
+	})
+}
+
+func (s *server) handleApprovalRedeem(
+	ctx context.Context,
+	conn net.Conn,
+	enc *json.Encoder,
+	line []byte,
+) {
+	var req approvalexec.WireRedeemRequest
+	if err := json.Unmarshal(line, &req); err != nil || req.ChallengeID == "" {
+		_ = enc.Encode(approvalexec.WireRedeemResponse{Error: "malformed approval redemption"})
+		return
+	}
+	meta, err := s.approvals.Inspect(req.ChallengeID, time.Now())
+	var verifiedSession approvalexec.SessionID
+	peerFresh := false
+	if err == nil {
+		peerUID, uidErr := extractPeerUID(conn)
+		peerPID, pidErr := extractPeerPID(conn)
+		if uidErr == nil && pidErr == nil && peerUID == os.Getuid() && s.activeSessions != nil {
+			sessionID, _, active := s.activeSessions.findSessionByPID(peerPID)
+			if active && sessionID == string(meta.SessionID) {
+				verifiedSession = approvalexec.SessionID(sessionID)
+				peerFresh = procutil.DescendantChainStartedAtOrAfter(
+					peerPID, meta.AgentPID, procutil.StartMarker(meta.FreshAfter),
+				)
+			}
+		}
+	}
+	var redeemed approvalexec.Redemption
+	if err == nil {
+		// Redeem owns the burn. Even an invalid peer reaches this one-use state
+		// transition with empty verification fields. See ADR 0118-codex-approval-broker.
+		redeemed, err = s.approvals.Redeem(approvalexec.RedeemRequest{
+			ChallengeID: req.ChallengeID, VerifiedSession: verifiedSession,
+			PeerChainFresh: peerFresh,
+			CurrentEpoch:   s.approvals.CurrentEpoch(meta.SessionID),
+			Now:            time.Now(),
+		})
+	}
+	if err == nil {
+		if auditErr := s.emitApprovalAudit(ctx, audit.CodexApprovalRedeemed, meta); auditErr != nil {
+			err = fmt.Errorf("record approval redemption: %w", auditErr)
+		}
+	}
+	if err == nil {
+		if outcomeErr := s.eventStore.UpdateOutcome(ctx, string(redeemed.ToolUseID), "allowed", "policy"); outcomeErr != nil {
+			err = fmt.Errorf("record approval outcome: %w", outcomeErr)
+		}
+	}
+	if err != nil {
+		slog.Warn("codex approval redemption rejected", "challenge_ref", approvalRef(req.ChallengeID), "err", err)
+		if s.eventStore != nil {
+			_ = s.eventStore.Emit(ctx, audit.Event{
+				EventType: audit.CodexApprovalRejected,
+				Actor:     "daemon", RefID: approvalRef(req.ChallengeID),
+			})
+		}
+		_ = enc.Encode(approvalexec.WireRedeemResponse{Error: "approval unavailable or no longer valid"})
+		return
+	}
+	slog.Info("codex approval redeemed", "challenge_ref", approvalRef(req.ChallengeID), "session_id", redeemed.SessionID)
+	_ = enc.Encode(approvalexec.WireRedeemResponse{
+		OK: true, Command: redeemed.Command, CWD: redeemed.CWD,
+		ToolUseID: redeemed.ToolUseID,
+	})
 }
 
 // acceptConn admits conn onto an agent-socket worker goroutine, subject to
@@ -1064,6 +1285,7 @@ func Run(args []string) int {
 
 	srv := &server{
 		evaluator:      policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), initModules, cfg),
+		approvals:      approvalexec.NewManager(nil, 0, 0),
 		activeSessions: newActiveTracker(filepath.Dir(*policyPath)),
 		connSem:        make(chan struct{}, maxAgentConns),
 		rulesDir:       *rulesDir,

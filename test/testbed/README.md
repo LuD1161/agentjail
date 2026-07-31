@@ -21,10 +21,11 @@ is installed via npm, like a human would.
 
 ```sh
 test/testbed/testbed.sh create <name>                 # new VM + golden snapshot
-test/testbed/testbed.sh provision <name> [--worktree <path>]
+test/testbed/testbed.sh provision <name> [--worktree <path>] [--with-codex]
 test/testbed/testbed.sh ssh <name>
 test/testbed/testbed.sh exec <name> -- <cmd>
-test/testbed/testbed.sh test <name> [scenario]        # run a scenario (default: e2e-smoke)
+test/testbed/testbed.sh test <name> [scenario] [--codex-auth <path>]
+                                                       # run a scenario (default: e2e-smoke)
 test/testbed/testbed.sh gate                          # RELEASE GATE (== make e2e-release)
 test/testbed/testbed.sh snapshot <name> <tag>         # checkpoint
 test/testbed/testbed.sh reset <name> [tag]            # revert to golden
@@ -100,6 +101,21 @@ Provision exports it as `CLAUDE_CODE_OAUTH_TOKEN` in the guest's `~/.bashrc`
 (zsh on macOS — see Mac TODO below). The token is never baked into an image
 and never committed.
 
+For the live Codex approval scenario, opt in to copying only the current
+Codex `auth.json` into the disposable guest:
+
+```sh
+test/testbed/testbed.sh provision codex-approval --worktree . --with-codex
+test/testbed/testbed.sh test codex-approval codex-approval \
+  --codex-auth "$HOME/.codex/auth.json"
+```
+
+This path pins Codex CLI 0.146.0. Authentication is copied immediately before
+the scenario rather than during provisioning, and both the guest scenario and
+host runner remove it afterward. It does not copy host Codex config, plugins,
+MCP definitions, or sessions. Do not record or publish the guest filesystem
+while credentials are present.
+
 ---
 
 ## Linux side (Linux host) — DONE, for reference only
@@ -145,6 +161,7 @@ stays healthy precisely when enforcement is off.
 |---|---|---|
 | `chaos-daemon-outage` | daemon stopped mid-session; stale socket file | hook still renders a decision and never hangs; fail-open is **visible** on stdout `systemMessage` (ADR 0073 — Claude Code discards hook stderr on exit 0) on both the claude and codex paths; sentinel written; `doctor` reports the fail-open window; the divergence signature reproduces; daemon + sentinel restored |
 | `agent-conformance` | native hook JSON for Claude, Codex, and Cursor | common project allow and sensitive-path / destructive-command denies produce the correct adapter-specific result without requiring provider login |
+| `codex-approval` | real Codex 0.146 TUI plus a guest-local bare Git remote | approve pushes; decline and `--ignore-rules` do not push; guest auth is removed on exit |
 | `chaos-supervisor-restart` | `SIGTERM` (clean exit) then `SIGKILL` (crash) to the daemon PID | supervisor respawns on **both** paths; `Restart=always` / `KeepAlive=true` pinned per OS (ADR 0070 — the updater's clean `exit(0)` went un-restarted under `Restart=on-failure`); enforcement proven real again, not just `is-active` green |
 | `chaos-hook-tamper` | hook entry stripped / settings file deleted, daemon up **and** down | hookwatch re-injects with the daemon up (ADR 0026); does **not** with the daemon down — the watchdog is a goroutine inside the daemon, blind during the outage it should mitigate; a full file delete is a pinned gap (hookwatch only repairs an existing file) |
 

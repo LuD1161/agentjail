@@ -32,6 +32,7 @@ type Request struct {
 	ToolName       string                 `json:"tool_name"`
 	ToolInput      map[string]interface{} `json:"tool_input"`
 	SessionID      string                 `json:"session_id"`
+	TurnID         string                 `json:"turn_id,omitempty"`
 	CWD            string                 `json:"cwd"`
 	Agent          string                 `json:"agent,omitempty"`
 	AgentPID       int                    `json:"agent_pid,omitempty"`
@@ -44,6 +45,8 @@ type Request struct {
 	// tool call, used to record the final outcome and responsible enforcer
 	// (ADR 0112). Nil on PreToolUse.
 	Outcome *Outcome `json:"outcome,omitempty"`
+
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Outcome is the observed result of a completed tool call, reported by the
@@ -75,7 +78,11 @@ type Response struct {
 	Adapter                 string `json:"adapter,omitempty"`
 	TranslationReason       string `json:"translation_reason,omitempty"`
 	DeferToNativePermission bool   `json:"defer_to_native_permission,omitempty"`
+	CodexApprovalBridge     bool   `json:"codex_approval_bridge,omitempty"`
+	ApprovalChallenge       string `json:"approval_challenge,omitempty"`
 }
+
+const CapabilityCodexApprovalBridgeV1 = "codex_approval_bridge_v1"
 
 // DefaultSocketPath returns the default path for the daemon Unix socket.
 // Expands to ~/.agentjail/daemon.sock; falls back to /tmp/agentjail-daemon.sock

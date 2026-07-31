@@ -108,6 +108,10 @@ const (
 	// never a token, never the gateway nonce.
 	GatewayProviderRouted = "gateway.provider_routed"
 	GatewayStartFailed    = "gateway.start_failed"
+	CodexApprovalMinted   = "codex_approval.minted"
+	CodexPromptObserved   = "codex_approval.prompt_observed"
+	CodexApprovalRedeemed = "codex_approval.redeemed"
+	CodexApprovalRejected = "codex_approval.rejected"
 )
 
 // Event is one audit log entry.

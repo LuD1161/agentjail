@@ -17,6 +17,7 @@ var defaultLookPath = exec.LookPath
 
 // Codex is the agent implementation for OpenAI's Codex CLI.
 // It wires the agentjail policy and lifecycle hooks into ~/.codex/hooks.json,
+// installs the exact approval-broker rule under ~/.codex/rules/,
 // enables features.hooks in ~/.codex/config.toml (strict safe-mode only),
 // and prints the manual trust instruction (hook trust cannot be persisted).
 type Codex struct{}
@@ -57,6 +58,9 @@ func (Codex) Install(env Env) error {
 	if err := os.MkdirAll(filepath.Join(env.Home, ".codex"), 0o700); err != nil {
 		return fmt.Errorf("install codex: mkdir ~/.codex: %w", err)
 	}
+	if err := ensureCodexExecPolicy(env); err != nil {
+		return fmt.Errorf("install codex: approval rule: %w", err)
+	}
 
 	// Step 1 — merge hooks.json entry.
 	if err := codexMergeHooksJSON(env); err != nil {
@@ -74,14 +78,14 @@ func (Codex) Install(env Env) error {
 	return nil
 }
 
-// Uninstall removes the agentjail hooks.json entry (command == env.HookBin).
-// It leaves features.hooks and trust state untouched. Idempotent.
+// Uninstall removes the agentjail hooks.json entry and its byte-identical
+// managed approval rule. It leaves features.hooks and trust state untouched.
 func (Codex) Uninstall(env Env) error {
 	hooksPath := filepath.Join(env.Home, ".codex", "hooks.json")
 
 	existing, err := os.ReadFile(hooksPath)
 	if os.IsNotExist(err) {
-		return nil
+		return removeCodexExecPolicy(env)
 	}
 	if err != nil {
 		return fmt.Errorf("uninstall codex: read hooks.json: %w", err)
@@ -92,17 +96,24 @@ func (Codex) Uninstall(env Env) error {
 		return fmt.Errorf("uninstall codex: parse hooks.json: %w", err)
 	}
 	if !changed {
-		return nil
+		return removeCodexExecPolicy(env)
 	}
 
-	return writeFileAtomic(hooksPath, updated, 0o600)
+	if err := writeFileAtomic(hooksPath, updated, 0o600); err != nil {
+		return err
+	}
+	return removeCodexExecPolicy(env)
 }
 
-// Status reports hooks.json entry presence, features.hooks enablement, and the
-// permanent trust degraded note (trust cannot be persisted by an installer).
+// Status reports managed-rule and hooks.json presence, features.hooks
+// enablement, and the permanent trust degraded note.
 func (Codex) Status(env Env) Status {
 	var notes []string
 	installed := true
+	if !codexExecPolicyInstalled(env) {
+		installed = false
+		notes = append(notes, "AgentJail approval rule missing or locally changed")
+	}
 
 	// Check hooks.json.
 	hooksPath := filepath.Join(env.Home, ".codex", "hooks.json")

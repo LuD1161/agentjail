@@ -434,6 +434,22 @@ Codex and Cursor support kept only the old Claude wrapper after updating.
   swap, using the same target and consent contract as install. See
   ADR 0062-path-shim-consent-is-the-rc-block.
 
+## 30. A rewritten command is not evidence of approval
+
+Codex applies `PreToolUse` input rewrites before it considers execpolicy. A
+rewritten approval-broker command therefore runs under `--ignore-rules` without
+emitting `PermissionRequest`; a test that only covered an approved prompt could
+mistake that rewrite for user authorization. A static allow rule would make the
+same bypass permanent.
+
+- **Rule:** minting a challenge and seeing a native prompt are distinct states.
+  Redeem only a one-use challenge that the matching `PermissionRequest` armed;
+  cancel, bypassed rules, replay, expiry, later tool calls, and unverifiable
+  process ancestry must deny.
+- **Rule:** test the installed Codex version with approve, cancel, and
+  `--ignore-rules` paths. A hook-schema unit test cannot establish this ordering.
+  See ADR 0118-codex-approval-broker.
+
 ---
 
 ## Testing gotchas
