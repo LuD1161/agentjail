@@ -105,16 +105,15 @@ For the live Codex approval scenario, opt in to copying only the current
 Codex `auth.json` into the disposable guest:
 
 ```sh
-test/testbed/testbed.sh provision codex-approval --worktree . --with-codex
-test/testbed/testbed.sh test codex-approval codex-approval \
-  --codex-auth "$HOME/.codex/auth.json"
+test/testbed/run-codex-approval-gate.sh
 ```
 
 This path pins Codex CLI 0.146.0. Authentication is copied immediately before
 the scenario rather than during provisioning, and both the guest scenario and
 host runner remove it afterward. It does not copy host Codex config, plugins,
-MCP definitions, or sessions. Do not record or publish the guest filesystem
-while credentials are present.
+MCP definitions, or sessions. The complete host-side transcript is written to
+the ignored `dist/codex-approval-gate.log` file. Do not record or publish the
+guest filesystem while credentials are present.
 
 ---
 

@@ -5,6 +5,7 @@ set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 
 AJ="$HOME/.agentjail/bin/agentjail"
+CODEX_REAL="$(command -v codex 2>/dev/null || true)"
 PROJECT="$HOME/work/codex-approval"
 REMOTE="$HOME/work/remotes/codex-approval.git"
 SESSION="codex-approval-$RANDOM"
@@ -19,19 +20,22 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+finish_and_exit() {
+    scn_finish
+    exit $?
+}
+
 if [ ! -f /tmp/codex-auth.json ]; then
     scn_fail "disposable Codex auth was explicitly provided"
-    scn_finish
-    exit 0
+    finish_and_exit
 fi
 mkdir -p "$HOME/.codex"
 chmod 700 "$HOME/.codex"
 install -m 0600 /tmp/codex-auth.json "$HOME/.codex/auth.json"
 rm -f /tmp/codex-auth.json
-if [ "$(codex --version 2>/dev/null)" != "$CODEX_VERSION" ]; then
+if [ -z "$CODEX_REAL" ] || [ "$("$CODEX_REAL" --version 2>/dev/null)" != "$CODEX_VERSION" ]; then
     scn_fail "installed Codex version is $CODEX_VERSION"
-    scn_finish
-    exit 0
+    finish_and_exit
 fi
 scn_ok "installed Codex version is $CODEX_VERSION"
 
@@ -50,16 +54,33 @@ branch_exists() {
     git --git-dir="$REMOTE" show-ref --verify --quiet "refs/heads/$1"
 }
 
-wait_for_pane() {
-    local pattern="$1" i output
-    for i in $(seq 1 180); do
-        output="$(tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null || true)"
-        if printf '%s' "$output" | grep -Eq "$pattern"; then
+wait_for_approval_prompt() {
+    local i output
+    for i in $(seq 1 60); do
+        output="$(tmux capture-pane -p -t "$SESSION:0.0" 2>/dev/null || true)"
+        if printf '%s' "$output" | grep -q "Press enter to continue"; then
+            echo "  INFO  acknowledging Codex first-run continuation screen"
+            tmux send-keys -t "$SESSION:0.0" Enter
+            sleep 2
+            continue
+        fi
+        if printf '%s' "$output" | grep -Eq "$PROMPT_MARKER"; then
             return 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+            echo "  INFO  waiting for Codex native approval prompt (${i}s/60s)"
         fi
         sleep 1
     done
     return 1
+}
+
+print_sanitized_pane() {
+    echo "  Codex pane (challenge redacted):"
+    tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null \
+        | sed -E 's/[A-Za-z0-9_-]{43}/<challenge>/g' \
+        | tail -40 \
+        | sed 's/^/    /'
 }
 
 start_interactive_push() {
@@ -72,18 +93,21 @@ start_interactive_push() {
 
 APPROVE_BRANCH="agentjail-approval-approve"
 start_interactive_push "$APPROVE_BRANCH"
-if wait_for_pane "$PROMPT_MARKER"; then
+if wait_for_approval_prompt; then
     scn_ok "AgentJail ask opens Codex native approval prompt"
     tmux send-keys -t "$SESSION:0.0" "1" Enter
 else
     scn_fail "AgentJail ask opens Codex native approval prompt"
+    print_sanitized_pane
+    finish_and_exit
 fi
-if wait_for_pane "agentjail-approval-approve"; then
-    for _ in $(seq 1 60); do
-        branch_exists "$APPROVE_BRANCH" && break
-        sleep 1
-    done
-fi
+for i in $(seq 1 60); do
+    branch_exists "$APPROVE_BRANCH" && break
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "  INFO  waiting for approved branch on local remote (${i}s/60s)"
+    fi
+    sleep 1
+done
 if branch_exists "$APPROVE_BRANCH"; then
     scn_ok "approved prompt pushes the exact requested branch"
 else
@@ -93,7 +117,7 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 DECLINE_BRANCH="agentjail-approval-decline"
 start_interactive_push "$DECLINE_BRANCH"
-if wait_for_pane "$PROMPT_MARKER"; then
+if wait_for_approval_prompt; then
     scn_ok "decline path reaches the same native prompt"
     tmux send-keys -t "$SESSION:0.0" "3" Enter
     sleep 5
