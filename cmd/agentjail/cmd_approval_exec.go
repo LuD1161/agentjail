@@ -25,7 +25,7 @@ var approvalExecCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runApprovalExecCommand(cmd, approvalexec.ChallengeID(approvalChallenge), approvalOperation)
+		return runApprovalExecCommand(cmd, approvalexec.ChallengeID(approvalChallenge), approvalexec.Operation(approvalOperation))
 	},
 }
 
@@ -37,11 +37,13 @@ func init() {
 	rootCmd.AddCommand(approvalExecCmd)
 }
 
-func runApprovalExec(challengeID approvalexec.ChallengeID, operation string) error {
-	if operation != approvalexec.GitPushOperation {
+func runApprovalExec(challengeID approvalexec.ChallengeID, operation approvalexec.Operation) error {
+	if !approvalexec.ValidOperation(operation) {
 		return fmt.Errorf("agentjail approval-exec: unsupported operation")
 	}
-	if _, ok := approvalexec.ParseBrokerCommand(approvalexec.BrokerCommand(challengeID)); !ok {
+	invocation := approvalexec.BrokerInvocation{Operation: operation, ChallengeID: challengeID}
+	parsed, ok := approvalexec.ParseBrokerCommand(approvalexec.BrokerCommand(invocation))
+	if !ok || parsed != invocation {
 		return fmt.Errorf("agentjail approval-exec: malformed challenge")
 	}
 	conn, err := net.DialTimeout("unix", wire.DefaultSocketPath(), 500*time.Millisecond)
@@ -53,7 +55,7 @@ func runApprovalExec(challengeID approvalexec.ChallengeID, operation string) err
 		return fmt.Errorf("agentjail approval-exec: set deadline: %w", err)
 	}
 	if err := json.NewEncoder(conn).Encode(approvalexec.WireRedeemRequest{
-		Type: approvalexec.RedeemRequestType, ChallengeID: challengeID,
+		Type: approvalexec.RedeemRequestType, ChallengeID: challengeID, Operation: operation,
 	}); err != nil {
 		return fmt.Errorf("agentjail approval-exec: redeem: %w", err)
 	}
@@ -89,7 +91,7 @@ func approvalExecShell(getenv func(string) string) string {
 	return "/bin/sh"
 }
 
-func runApprovalExecCommand(cmd *cobra.Command, challengeID approvalexec.ChallengeID, operation string) error {
+func runApprovalExecCommand(cmd *cobra.Command, challengeID approvalexec.ChallengeID, operation approvalexec.Operation) error {
 	err := runApprovalExec(challengeID, operation)
 	if err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), err)

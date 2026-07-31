@@ -21,9 +21,11 @@ type TurnID string
 type ToolUseID string
 type Command string
 type State string
+type Operation string
 
 const (
-	GitPushOperation = "git-push"
+	GitPushOperation      Operation = "git-push"
+	ShellCommandOperation Operation = "shell-command"
 
 	StatePending         State = "pending"
 	StatePromptObserved  State = "prompt_observed"
@@ -47,6 +49,7 @@ type MintRequest struct {
 	SessionID SessionID
 	TurnID    TurnID
 	ToolUseID ToolUseID
+	Operation Operation
 	Command   Command
 	CWD       string
 	AgentPID  int
@@ -56,6 +59,7 @@ type MintRequest struct {
 
 type ObserveRequest struct {
 	ChallengeID ChallengeID
+	Operation   Operation
 	SessionID   SessionID
 	TurnID      TurnID
 	CWD         string
@@ -65,6 +69,7 @@ type ObserveRequest struct {
 
 type Metadata struct {
 	ChallengeID ChallengeID
+	Operation   Operation
 	SessionID   SessionID
 	TurnID      TurnID
 	ToolUseID   ToolUseID
@@ -77,6 +82,7 @@ type Metadata struct {
 
 type RedeemRequest struct {
 	ChallengeID     ChallengeID
+	Operation       Operation
 	VerifiedSession SessionID
 	PeerChainFresh  bool
 	CurrentEpoch    uint64
@@ -84,11 +90,33 @@ type RedeemRequest struct {
 }
 
 type Redemption struct {
+	Operation Operation
 	Command   Command
 	CWD       string
 	ToolUseID ToolUseID
 	SessionID SessionID
 	RuleID    string
+}
+
+// BrokerInvocation is the exact, static command shape Codex's managed rule
+// may prompt for. It never includes the original shell command.
+type BrokerInvocation struct {
+	Operation   Operation
+	ChallengeID ChallengeID
+}
+
+func validOperation(operation Operation) bool {
+	switch operation {
+	case GitPushOperation, ShellCommandOperation:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidOperation reports whether operation has an exact broker command shape.
+func ValidOperation(operation Operation) bool {
+	return validOperation(operation)
 }
 
 type challenge struct {
@@ -143,6 +171,7 @@ func (m *Manager) CurrentEpoch(sessionID SessionID) uint64 {
 
 func (m *Manager) Mint(req MintRequest) (Metadata, error) {
 	if req.SessionID == "" || req.TurnID == "" || req.ToolUseID == "" ||
+		!validOperation(req.Operation) ||
 		req.Command == "" || req.CWD == "" || req.AgentPID <= 0 {
 		return Metadata{}, fmt.Errorf("mint approval challenge: %w", ErrBinding)
 	}
@@ -172,6 +201,7 @@ func (m *Manager) Mint(req MintRequest) (Metadata, error) {
 	}
 	meta := Metadata{
 		ChallengeID: id,
+		Operation:   req.Operation,
 		SessionID:   req.SessionID,
 		TurnID:      req.TurnID,
 		ToolUseID:   req.ToolUseID,
@@ -211,7 +241,7 @@ func (m *Manager) ObservePrompt(req ObserveRequest) (Metadata, error) {
 	if ch.State != StatePending {
 		return Metadata{}, ErrInvalidState
 	}
-	if ch.SessionID != req.SessionID || ch.TurnID != req.TurnID ||
+	if ch.Operation != req.Operation || ch.SessionID != req.SessionID || ch.TurnID != req.TurnID ||
 		ch.CWD != req.CWD || req.FreshAfter == 0 {
 		delete(m.challenges, req.ChallengeID)
 		return Metadata{}, ErrBinding
@@ -252,37 +282,28 @@ func (m *Manager) Redeem(req RedeemRequest) (Redemption, error) {
 	if ch.State != StatePromptObserved {
 		return Redemption{}, ErrInvalidState
 	}
-	if ch.SessionID != req.VerifiedSession || ch.epoch != req.CurrentEpoch {
+	if ch.Operation != req.Operation || ch.SessionID != req.VerifiedSession || ch.epoch != req.CurrentEpoch {
 		return Redemption{}, ErrBinding
 	}
 	if !req.PeerChainFresh {
 		return Redemption{}, ErrStaleExecution
 	}
 	return Redemption{
-		Command: ch.command, CWD: ch.CWD, ToolUseID: ch.ToolUseID,
+		Operation: ch.Operation, Command: ch.command, CWD: ch.CWD, ToolUseID: ch.ToolUseID,
 		SessionID: ch.SessionID, RuleID: ch.RuleID,
 	}, nil
 }
 
-func BrokerCommand(id ChallengeID) string {
-	return "agentjail approval-exec --operation " + GitPushOperation + " --challenge " + string(id)
+func BrokerCommand(invocation BrokerInvocation) string {
+	return "agentjail approval-exec --operation " + string(invocation.Operation) + " --challenge " + string(invocation.ChallengeID)
 }
 
-func ParseBrokerCommand(command string) (ChallengeID, bool) {
+func ParseBrokerCommand(command string) (BrokerInvocation, bool) {
 	fields := strings.Fields(command)
 	if len(fields) != 6 || fields[0] != "agentjail" || fields[1] != "approval-exec" ||
-		fields[2] != "--operation" || fields[3] != GitPushOperation ||
+		fields[2] != "--operation" || !validOperation(Operation(fields[3])) ||
 		fields[4] != "--challenge" || !challengePattern.MatchString(fields[5]) {
-		return "", false
+		return BrokerInvocation{}, false
 	}
-	return ChallengeID(fields[5]), true
-}
-
-func SupportsRule(ruleID string) bool {
-	switch ruleID {
-	case "command_policy/confirm-git-push", "command_policy/confirm-git-push-force":
-		return true
-	default:
-		return false
-	}
+	return BrokerInvocation{Operation: Operation(fields[3]), ChallengeID: ChallengeID(fields[5])}, true
 }

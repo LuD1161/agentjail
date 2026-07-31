@@ -5,6 +5,7 @@ const RedeemRequestType = "codex_approval_redeem"
 type WireRedeemRequest struct {
 	Type        string      `json:"type"`
 	ChallengeID ChallengeID `json:"challenge_id"`
+	Operation   Operation   `json:"operation"`
 }
 
 type WireRedeemResponse struct {
