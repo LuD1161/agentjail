@@ -176,8 +176,16 @@ func TestRenderPathShimTargetsAgentCommand(t *testing.T) {
 				}
 			}
 			if target.Command == "codex" {
-				if !strings.Contains(got, `--yolo`) || !strings.Contains(got, `--dangerously-bypass-approvals-and-sandbox`) {
-					t.Error("Codex shim must translate legacy --yolo to the current bypass flag")
+				for _, want := range []string{
+					`--yolo`,
+					`--dangerously-bypass-approvals-and-sandbox`,
+					`--sandbox danger-full-access`,
+					`sandbox_approval = false, rules = true`,
+					`approvals_reviewer="user"`,
+				} {
+					if !strings.Contains(got, want) {
+						t.Errorf("Codex shim missing approval-compatibility setting %q", want)
+					}
 				}
 			} else if strings.Contains(got, "dangerously-bypass-approvals-and-sandbox") {
 				t.Errorf("non-Codex shim unexpectedly contains Codex --yolo compatibility")

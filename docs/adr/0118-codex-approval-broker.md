@@ -41,6 +41,12 @@ subcommand; the policy contract must therefore describe executable intent, not
 surface spelling. The effect-boundary transport broker is tracked separately in
 AGE-269.
 
+The installed Codex `0.146.0` also maps
+`--dangerously-bypass-approvals-and-sandbox` to `approval_policy=never`. That
+mode auto-rejects every execpolicy prompt, including AgentJail's exact broker
+rule. Broad `on-request` is not an equivalent replacement: it also enables
+sandbox, MCP, request-permission, and skill-script approval categories.
+
 ## Decision
 
 For a Codex Bash `PreToolUse` canonical `ask`, and only when both hook and
@@ -79,6 +85,15 @@ broker argv and daemon socket request, and must never be reused as authority.
 This amends ADR 0117-codex-ask-boundary for eligible Bash asks. All other Codex
 PreToolUse asks remain fail-closed denies.
 
+When the opt-in AgentJail PATH shim receives Codex's bypass flag (or its legacy
+`--yolo` spelling) as the leading global option, it keeps the Codex sandbox at
+`danger-full-access` but replaces the all-or-nothing approval setting with a
+granular policy. Only execpolicy-rule prompts remain interactive; sandbox, MCP
+elicitation, `request_permissions`, and skill-script prompts auto-reject, and
+the reviewer remains the user. This preserves the externally sandboxed launch
+flow while leaving a native approval boundary for AgentJail's exact managed
+rule.
+
 The daemon parses Bash into executable invocations and classifies Git operations
 before Rego evaluation. `command_intents` carries one of the typed remote-update
 shapes: normal, forced default branch, forced explicit topic, or forced implicit
@@ -89,7 +104,7 @@ those intents and no longer scans raw command text for Git remote updates.
 ## Consequences
 
 Codex can present its native approval UI for an AgentJail Bash `ask` without
-changing its default permission policy. The prompt identifies the AgentJail
+changing unrelated permission categories. The prompt identifies the AgentJail
 approval operation rather than displaying the original command, which is an
 intentional confidentiality trade-off until Codex exposes a safe display-only
 field. The bridge is not a general approval primitive for MCP, file tools, or
@@ -145,3 +160,7 @@ the bridge capability retain the 45 ms ceiling.
 9. Text-only mentions in another executable's arguments do not produce a Git
    remote-update intent, while repeated global options and branch-aware force
    forms preserve their deny/ask/allow outcomes.
+10. Launching the AgentJail Codex shim with
+    `--dangerously-bypass-approvals-and-sandbox` keeps Codex at
+    `danger-full-access`, auto-rejects every non-rule approval category, and
+    surfaces the broker's native execpolicy prompt to the user.

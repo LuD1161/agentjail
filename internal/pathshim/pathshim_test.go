@@ -59,6 +59,90 @@ func TestRenderedTargetsAreValidShell(t *testing.T) {
 	}
 }
 
+func TestCodexBypassFlagKeepsOnlyRuleApprovalsInteractive(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "current bypass spelling",
+			args: []string{"--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"},
+			want: append(codexAgentJailApprovalArgs(), "--dangerously-bypass-hook-trust"),
+		},
+		{
+			name: "legacy yolo spelling",
+			args: []string{"--yolo", "--search"},
+			want: append(codexAgentJailApprovalArgs(), "--search"),
+		},
+		{
+			name: "ordinary arguments pass through",
+			args: []string{"--sandbox", "read-only"},
+			want: []string{"--sandbox", "read-only"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runRenderedCodexShim(t, tt.args)
+			if strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Fatalf("argv = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func codexAgentJailApprovalArgs() []string {
+	return []string{
+		"--sandbox", "danger-full-access",
+		"-c", "approval_policy={ granular = { sandbox_approval = false, rules = true, mcp_elicitations = false, request_permissions = false, skill_approval = false } }",
+		"-c", `approvals_reviewer="user"`,
+	}
+}
+
+func runRenderedCodexShim(t *testing.T, args []string) []string {
+	t.Helper()
+	root := t.TempDir()
+	shimDir := filepath.Join(root, "shim")
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	capture := filepath.Join(root, "argv")
+	shield := filepath.Join(root, "agentjail-shield")
+	if err := os.WriteFile(shield, []byte("#!/bin/sh\n[ \"$1\" = \"--\" ] || exit 64\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realCodex := filepath.Join(realDir, "codex")
+	if err := os.WriteFile(realCodex, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	shim := filepath.Join(shimDir, "codex")
+	content := Render(Target{Command: "codex", DisplayName: "Codex"}, shield, shimDir, shim)
+	if err := os.WriteFile(shim, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(shim, args...)
+	cmd.Env = append(os.Environ(),
+		"CAPTURE_ARGS="+capture,
+		"PATH="+shimDir+":"+realDir+":/usr/bin:/bin",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run shim: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+}
+
 func installTestShield(t *testing.T, home string) string {
 	t.Helper()
 	binDir := filepath.Join(home, ".agentjail", "bin")

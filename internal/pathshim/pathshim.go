@@ -162,12 +162,17 @@ func AddToShellProfile(home, binDir string) error {
 // Render produces one fail-open wrapper. See ADR 0063-shim-fails-open-uninstall-is-total.
 func Render(target Target, shieldBin, shimDir, shimPath string) string {
 	commandUpper := strings.ToUpper(target.Command)
-	codexYoloCompat := ""
+	codexApprovalCompat := ""
 	if target.Command == "codex" {
-		codexYoloCompat = `# Preserve Codex's legacy --yolo spelling while the outer shield stays active.
-if [ "${1:-}" = "--yolo" ]; then
+		codexApprovalCompat = `# Keep Codex unsandboxed while preserving AgentJail's exact execpolicy prompt.
+# See ADR 0118-codex-approval-broker.
+if [ "${1:-}" = "--yolo" ] || [ "${1:-}" = "--dangerously-bypass-approvals-and-sandbox" ]; then
     shift
-    set -- --dangerously-bypass-approvals-and-sandbox "$@"
+    set -- \
+        --sandbox danger-full-access \
+        -c 'approval_policy={ granular = { sandbox_approval = false, rules = true, mcp_elicitations = false, request_permissions = false, skill_approval = false } }' \
+        -c 'approvals_reviewer="user"' \
+        "$@"
 fi
 
 `
@@ -219,5 +224,5 @@ exec "$SHIELD" -- "$REAL_%s" "$@"
 
 `, target.Command, shieldBin, shimDir, target.Command, commandUpper, commandUpper,
 		target.Command, shimDir, target.DisplayName, shimPath, commandUpper, shimPath,
-		shimPath, codexYoloCompat, target.Command, shimPath, commandUpper, commandUpper)
+		shimPath, codexApprovalCompat, target.Command, shimPath, commandUpper, commandUpper)
 }

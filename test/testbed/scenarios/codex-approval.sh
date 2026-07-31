@@ -5,7 +5,7 @@ set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 
 AJ="$HOME/.agentjail/bin/agentjail"
-CODEX_REAL="$(command -v codex 2>/dev/null || true)"
+CODEX_REAL="$HOME/.agentjail/bin/codex"
 PROJECT="$HOME/work/codex-approval"
 REMOTE="$HOME/work/remotes/codex-approval.git"
 SESSION="codex-approval-$RANDOM"
@@ -33,7 +33,8 @@ mkdir -p "$HOME/.codex"
 chmod 700 "$HOME/.codex"
 install -m 0600 /tmp/codex-auth.json "$HOME/.codex/auth.json"
 rm -f /tmp/codex-auth.json
-if [ -z "$CODEX_REAL" ] || [ "$("$CODEX_REAL" --version 2>/dev/null)" != "$CODEX_VERSION" ]; then
+CODEX_VERSION_OUTPUT="$("$CODEX_REAL" --version 2>/dev/null || true)"
+if [ ! -x "$CODEX_REAL" ] || ! printf '%s\n' "$CODEX_VERSION_OUTPUT" | grep -Fq "$CODEX_VERSION"; then
     scn_fail "installed Codex version is $CODEX_VERSION"
     finish_and_exit
 fi
@@ -88,7 +89,7 @@ start_interactive_push() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     tmux new-session -d -s "$SESSION" -x 180 -y 48
     tmux send-keys -t "$SESSION:0.0" \
-        "cd '$PROJECT' && '$AJ' run -- codex --no-alt-screen --dangerously-bypass-hook-trust -a on-request -s workspace-write -C '$PROJECT' 'Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch'" Enter
+        "cd '$PROJECT' && '$CODEX_REAL' --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch'" Enter
 }
 
 APPROVE_BRANCH="agentjail-approval-approve"
@@ -135,7 +136,7 @@ NEVER_BRANCH="agentjail-approval-never"
 NEVER_LOG="/tmp/codex-approval-never.log"
 (
     cd "$PROJECT" || exit 1
-    exec "$AJ" run -- codex -a never \
+    exec "$CODEX_REAL" -a never \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
         exec --ephemeral \
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$NEVER_BRANCH"
@@ -175,7 +176,7 @@ IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
 (
     cd "$PROJECT" || exit 1
-    exec "$AJ" run -- codex \
+    exec "$CODEX_REAL" \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
         exec --ephemeral --ignore-rules \
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$IGNORE_BRANCH"

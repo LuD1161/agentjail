@@ -255,6 +255,8 @@ The padlock only appears when both are live. When agentjail is uninstalled the b
 
 Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the persistent AgentJail badge. Instead, AgentJail's `SessionStart` and `Stop` hooks display one of `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive`; `agentjail status` and `agentjail doctor` remain available for an on-demand check.
 
+When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. AgentJail `ask` decisions can therefore use Codex's native prompt without re-enabling sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0118](./docs/adr/0118-codex-approval-broker.md)).
+
 <details>
 <summary><b>More install options</b></summary>
 

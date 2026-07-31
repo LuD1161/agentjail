@@ -117,6 +117,14 @@ if [ "$(uname -s)" = "Darwin" ] && [ -d "$HOME/.agentjail/bin" ]; then
     xattr -dr com.apple.quarantine "$HOME/.agentjail/bin" 2>/dev/null || true
 fi
 
+# The Codex approval matrix models users who launch through the opt-in PATH
+# shim. This is a separate consented install action, not a second base install.
+# See ADR 0118-codex-approval-broker.
+if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
+    log "installing the opt-in Codex PATH shim for approval compatibility"
+    "$HOME/.agentjail/bin/agentjail" install --with-path-shim
+fi
+
 # ---- 3a. scoped AppArmor userns profile (modern Ubuntu, restriction LEFT ON) --
 # Load the per-binary profile so --tunnel works without weakening the machine.
 # Non-restricted hosts (Debian/Fedora/older Ubuntu) skip this entirely. Consent

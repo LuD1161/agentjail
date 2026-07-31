@@ -501,6 +501,20 @@ the remote stayed unchanged, and the negative test appeared to pass.
   a usage error and a security denial are different outcomes. See ADR
   0118-codex-approval-broker.
 
+## 35. A convenience flag can collapse an integration seam
+
+Codex's combined bypass flag disables both its sandbox and every native
+approval prompt. AgentJail still classified `git push` as `ask`, but Codex
+auto-rejected the broker rule because the session approval policy was `never`.
+Replacing it with broad `on-request` would have silently re-enabled unrelated
+approval categories.
+
+- **Rule:** decompose umbrella flags at integration boundaries and preserve
+  each intended dimension independently.
+- **Rule:** test the user's real launcher arguments, not an easier approval
+  mode; assert both the enabled prompt category and every category that must
+  remain disabled. See ADR 0118-codex-approval-broker and AGE-263.
+
 ---
 
 ## Testing gotchas
