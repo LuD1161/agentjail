@@ -13,7 +13,7 @@ A safety rail for Claude Code, Codex, and Cursor. <br>
 Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v1.2.0](https://img.shields.io/badge/v1.2.0-released-orange)
+&nbsp;![v1.3.0](https://img.shields.io/badge/v1.3.0-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v1.3.0** | Jul 31, 2026 | Codex 0.146 natively approves every effective Bash `ask` — including user-authored custom rules — through a one-use, fail-closed `shell-command` broker; non-Bash asks remain fail-closed. Git remote updates are classified from parsed executable arguments, including `git -C`, and bypass mode preserves the Bash approval boundary while other approval categories stay rejected. |
 | **v1.2.0** | Jul 29, 2026 | `agentjail stats` summarizes final outcomes, policy denies, per-agent activity, latency, and recording gaps. Manual and daemon updates now restore the complete opt-in PATH shim set for Claude Code, Codex, and Cursor. |
 | **v1.1.0** | Jul 27, 2026 | Codex and Cursor join Claude Code under default OS-sandbox activation and typed policy adapters. Codex displays truthful enforcement state at session boundaries, Cursor gets a persistent protection badge, and custom Rego extensions are constrained to candidate rules. |
 | **v1.0.0** | Jul 21, 2026 | Network visibility ships on **Linux and macOS**: capture your agent's LLM traffic (Claude `/v1/messages`, bodies) and enforce per-host network policy through the transparent tunnel (MITM, HTTP/2 + gRPC, opt-in IPv6). On macOS the LLM call is captured with **no system extension** via a base-URL capture gateway. Real-agent capture on the installed build. Network UI tab. Consolidated network flag precedence + `doctor` sourcing. |

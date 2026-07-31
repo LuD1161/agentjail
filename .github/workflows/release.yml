@@ -233,8 +233,8 @@ jobs:
         id: changelog
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          # Extract everything from the ## $VERSION line to the next ## line (exclusive).
-          BODY=$(awk "/^## ${VERSION}[ $]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          # Extract everything from the ## $VERSION line to the next version heading.
+          BODY=$(awk "/^## ${VERSION}[ $]/{found=1; next} found && /^## v[0-9]/{exit} found{print}" CHANGELOG.md)
           if [ -z "$BODY" ]; then
             BODY="Release ${VERSION}. See CHANGELOG.md for details."
           fi

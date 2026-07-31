@@ -4,6 +4,39 @@
 
 ## Unreleased
 
+## v1.3.0 - 2026-07-31
+
+![v1.3.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.3.0-summary.svg)
+
+## TL;DR
+
+- **Route every effective Codex `PreToolUse` Bash `ask` through native approval**, including user-authored custom-policy asks, with a one-use `shell-command` broker.
+- **Keep non-Bash Codex asks fail closed** while preserving their canonical policy decision for records and diagnostics.
+- **Classify Git remote updates from parsed executable arguments**, including `git -C`, rather than matching words in raw shell text.
+- **Preserve a human approval boundary in bypass mode** while Codex remains at `danger-full-access` and unrelated approval categories stay rejected.
+
+### Added
+
+- **Codex Bash native approval transport** (ADR 0119-command-approval-transport): every effective Codex `PreToolUse` Bash `ask` opens Codex's native prompt through an exact, ownership-safe managed execpolicy rule. This includes core, library, AWS-posture, resolver-default, project, and user-authored custom-policy asks; Codex 0.146 is verified.
+- **Typed `shell-command` broker**: the fixed broker command carries only the operation and opaque one-use challenge, while AgentJail displays the bounded, redacted effective shell command immediately before Codex's native prompt.
+- **Parsed Git remote-update intents**: policy evaluates typed executable Git-push intent, including documented global options, push options, and branch-aware force forms.
+
+### Changed
+
+- **Codex bypass-flag handling**: the opt-in PATH shim recognizes `--dangerously-bypass-approvals-and-sandbox` and `--yolo` as leading Codex options, keeps Codex at `danger-full-access`, and leaves only execpolicy-rule prompts interactive. Sandbox, MCP, `request_permissions`, and skill-script approval categories remain auto-rejected.
+- **Approval transport now follows the effective Bash `ask` action**, rather than a built-in rule allowlist; non-Bash asks retain the fail-closed Codex adapter behavior.
+- **Git-push policy matching** now follows the executed invocation rather than raw phrase matching, preventing inert argument text from being treated as a remote update.
+
+### Fixed
+
+- **Cold bridge decisions** retain the broker rewrite under the bridge-specific daemon deadline instead of falling back to the original command during a healthy but slower approval decision.
+- **Approval prompt context** now shows the redacted effective shell command immediately before the native Codex prompt.
+
+### Security
+
+- **Approval redemption is fail closed**: declining the prompt, `approval_policy=never`, `--ignore-rules`, a missing managed rule, replay, expiry, daemon restart, version skew, or unverifiable process ancestry cannot execute the original command.
+- **Broker authorization is bound and one-use**: a redemption requires the typed operation, active Codex session, unchanged tool-call epoch, same-UID peer, and fresh descendant process chain; an operation mismatch burns the challenge. Challenge references are non-reversible and original command text is not added to broker logs or audit detail.
+
 ## v1.2.0 - 2026-07-29
 
 ![v1.2.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.2.0-summary.svg)
