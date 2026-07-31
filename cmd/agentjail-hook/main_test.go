@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/approvalexec"
+	"github.com/LuD1161/agentjail/internal/wire"
 )
 
 // buildHook compiles the hook binary into dir and returns its path.
@@ -371,6 +372,103 @@ func TestCodexHook_AllowNoStdout(t *testing.T) {
 	}
 	if len(stdout) != 0 {
 		t.Errorf("expected empty stdout for Codex allow, got %q", stdout)
+	}
+}
+
+func TestSendAndReceive_CodexColdApprovalResponse(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
+
+	serverDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(server)
+		if !scanner.Scan() {
+			serverDone <- scanner.Err()
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		serverDone <- json.NewEncoder(server).Encode(daemonResponse{
+			Action:              "ask",
+			Reason:              "requires human review",
+			RuleID:              "command_policy/confirm-git-push",
+			CodexApprovalBridge: true,
+			ApprovalChallenge:   strings.Repeat("A", 43),
+		})
+	}()
+
+	resp, err := sendAndReceive(client, daemonRequest{
+		Agent:        "codex",
+		Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1},
+	})
+	if err != nil {
+		t.Fatalf("healthy delayed response was misclassified as daemon outage: %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("stub daemon: %v", err)
+	}
+	if !resp.CodexApprovalBridge || resp.Action != "ask" {
+		t.Errorf("response=%+v, want bridge ask", resp)
+	}
+}
+
+func TestSendAndReceive_LegacyDeadlineRemainsBounded(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
+
+	go func() {
+		scanner := bufio.NewScanner(server)
+		if !scanner.Scan() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		_ = json.NewEncoder(server).Encode(daemonResponse{Action: "allow"})
+	}()
+
+	if _, err := sendAndReceive(client, daemonRequest{Agent: "claude"}); err == nil {
+		t.Fatal("legacy request exceeded its 45 ms ceiling without timing out")
+	}
+}
+
+func TestRoundTripDeadline(t *testing.T) {
+	tests := []struct {
+		name string
+		req  daemonRequest
+		want time.Duration
+	}{
+		{
+			name: "bridge-capable codex",
+			req: daemonRequest{
+				Agent:        "codex",
+				Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1},
+			},
+			want: codexApprovalRoundTripDeadline,
+		},
+		{
+			name: "codex without bridge",
+			req:  daemonRequest{Agent: "codex"},
+			want: defaultRoundTripDeadline,
+		},
+		{
+			name: "other agent advertising capability",
+			req: daemonRequest{
+				Agent:        "claude",
+				Capabilities: []string{wire.CapabilityCodexApprovalBridgeV1},
+			},
+			want: defaultRoundTripDeadline,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := roundTripDeadline(tt.req); got != tt.want {
+				t.Errorf("roundTripDeadline()=%s, want %s", got, tt.want)
+			}
+		})
 	}
 }
 

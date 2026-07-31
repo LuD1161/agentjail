@@ -450,6 +450,19 @@ same bypass permanent.
   `--ignore-rules` paths. A hook-schema unit test cannot establish this ordering.
   See ADR 0118-codex-approval-broker.
 
+## 30. A latency target is not an availability deadline
+
+The Codex SessionStart hook could connect to a healthy daemon, but the first
+`git push` evaluation exceeded the hook's 45 ms round-trip deadline. The hook
+reported the daemon as unavailable and failed open, so Codex displayed its own
+prompt for the original command instead of AgentJail's opaque approval broker.
+Warm latency tests and profile-shape tests remained green.
+
+- **Rule:** keep the normal latency target separate from the timeout that
+  classifies a dependency as unavailable.
+- **Rule:** compatibility gates must exercise the first cold policy decision,
+  not only warmed cache hits. See ADR 0118-codex-approval-broker.
+
 ---
 
 ## Testing gotchas

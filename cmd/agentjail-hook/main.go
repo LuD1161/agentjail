@@ -26,8 +26,8 @@
 // Protocol: newline-delimited JSON over Unix domain socket. Details in
 // agentpolicy/docs/DECISION_RPC.md.
 //
-// Architecture note: stdlib-only; no external deps; <50 ms wall-time budget.
-// Dial timeout is 30 ms so a missing daemon does not block the agent.
+// Architecture note: stdlib-only; no external deps; typical p95 target <50 ms.
+// Dial timeout is 30 ms; healthy-response ceilings are request-specific.
 package main
 
 import (
@@ -715,11 +715,27 @@ func dialDaemon(sockPath string) (net.Conn, error) {
 	return net.DialTimeout("unix", sockPath, 30*time.Millisecond)
 }
 
+const (
+	defaultRoundTripDeadline       = 45 * time.Millisecond
+	codexApprovalRoundTripDeadline = 250 * time.Millisecond
+)
+
+func roundTripDeadline(req daemonRequest) time.Duration {
+	if req.Agent == "codex" {
+		for _, capability := range req.Capabilities {
+			if capability == wire.CapabilityCodexApprovalBridgeV1 {
+				return codexApprovalRoundTripDeadline
+			}
+		}
+	}
+	return defaultRoundTripDeadline
+}
+
 // sendAndReceive sends req to conn and reads the daemon response.
 func sendAndReceive(conn net.Conn, req daemonRequest) (daemonResponse, error) {
-	// Set an overall deadline for the daemon round-trip.
-	// 45 ms leaves headroom below the 50 ms wall-time budget.
-	if err := conn.SetDeadline(time.Now().Add(45 * time.Millisecond)); err != nil {
+	// Cold approval evaluation includes policy plus process attestation.
+	// Keep its availability ceiling distinct from the latency target. See ADR 0118-codex-approval-broker.
+	if err := conn.SetDeadline(time.Now().Add(roundTripDeadline(req))); err != nil {
 		// Non-fatal — continue without deadline.
 		fmt.Fprintf(os.Stderr, "agentjail-hook: set deadline: %v\n", err)
 	}

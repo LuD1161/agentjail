@@ -677,7 +677,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			if isClientGone(encErr) {
 				// The caller (e.g. agentjail-hook) closed the connection before we
 				// finished writing — expected whenever eval exceeds the hook's
-				// fail-open deadline (~45 ms). The hook has already fallen open;
+				// request-specific deadline. The hook has already fallen open;
 				// this is a benign race, not a daemon fault, so keep it out of the
 				// Info-level log that `agentjail logs` surfaces.
 				slog.Debug("response not delivered: client disconnected", "req_id", req.ID, "err", encErr)

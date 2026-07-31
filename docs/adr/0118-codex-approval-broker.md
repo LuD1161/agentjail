@@ -89,6 +89,13 @@ not expose the original per-call shell/login selection in the hook contract, so
 the live compatibility matrix must cover shell syntax and initialization; an
 unverified dialect is a release blocker rather than a reason to guess.
 
+Bridge-capable Codex hook requests use a 250 ms daemon round-trip ceiling while
+the 50 ms end-to-end latency target remains unchanged. A cold request combines
+policy evaluation with process-ancestry work; treating a healthy response after
+45 ms as an outage fails open and lets Codex evaluate the original command
+instead of the opaque broker rewrite. Legacy clients and Codex hooks without
+the bridge capability retain the 45 ms ceiling.
+
 ## Acceptance Criteria
 
 1. A canonical Codex Bash `ask` such as `git push` yields Codex's native prompt

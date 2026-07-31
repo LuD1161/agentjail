@@ -21,11 +21,12 @@ stance). Phase 3 (auto-recovery) is a separate follow-up — see
 ## Context
 
 When `agentjail-hook` cannot reach the daemon within its dial/round-trip
-budget (~30 ms dial / 45 ms round-trip), it currently **fails open**: the tool
-call is allowed, a `fail_open` telemetry event fires, and a one-time stderr
-warning is printed (gated by the `~/.agentjail/fail-open-warned` sentinel, which
-the daemon now re-arms on startup — see the U2 fix). This matches the prior
-"never block the agent" stance.
+budget (~30 ms dial / 45 ms legacy round-trip), it currently **fails open**:
+the tool call is allowed, a `fail_open` telemetry event fires, and a one-time
+stderr warning is printed (gated by the `~/.agentjail/fail-open-warned`
+sentinel, which the daemon now re-arms on startup — see the U2 fix). This
+matches the prior "never block the agent" stance. Bridge-capable Codex requests
+use a 250 ms healthy-response ceiling; see ADR 0118-codex-approval-broker.
 
 Two problems with a single hard-coded policy:
 
