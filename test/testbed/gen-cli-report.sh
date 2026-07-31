@@ -294,7 +294,7 @@ cat <<REC
     <div class="note">The suite runs inside a persistent <b>Lima</b> QEMU VM that behaves like a real
       end-user machine — a full Ubuntu kernel, <b>systemd</b>, user namespaces for the shield, no Go
       toolchain, no host mounts. agentjail is installed the way a human would: a release tarball fed to
-      the shipped <b>install.sh</b>, then <code>agentjail install --for claude-code</code>. This is the
+      the shipped <b>install.sh</b> once, with daemon and hook readiness verified immediately. This is the
       Linux half of the release gate (<code>make e2e-release</code>).</div>
   </section>
 

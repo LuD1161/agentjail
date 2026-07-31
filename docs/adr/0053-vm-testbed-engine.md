@@ -31,8 +31,10 @@ like a real end-user machine:
   cloud image, no host mounts, `limactl snapshot` golden tag for reset.
 - **macOS:** Tart on Apple-Silicon, golden `.tart` image, instant APFS clones.
 - **Install path under test is the shipped one:** `make dist-tarball` builds a
-  release-layout tarball fed to `install.sh` via its `LOCAL_TARBALL=` seam,
-  then `agentjail install --for claude-code`. Never a source build in-guest.
+  release-layout tarball fed to `install.sh` via its `LOCAL_TARBALL=` seam.
+  The piped installer wires all detected agents once; provisioning immediately
+  verifies daemon and hook readiness without a second install masking the first
+  result. Never a source build in-guest.
 - **Shell scripts, not a framework:** `testbed.sh` verbs
   (create/provision/ssh/test/gate/snapshot/reset/destroy) with a per-driver
   split (lima|tart) selected by host OS. Promotion to Go/YAML/CI is deferred

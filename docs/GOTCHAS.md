@@ -450,7 +450,7 @@ same bypass permanent.
   `--ignore-rules` paths. A hook-schema unit test cannot establish this ordering.
   See ADR 0118-codex-approval-broker.
 
-## 30. A latency target is not an availability deadline
+## 31. A latency target is not an availability deadline
 
 The Codex SessionStart hook could connect to a healthy daemon, but the first
 `git push` evaluation exceeded the hook's 45 ms round-trip deadline. The hook
@@ -462,6 +462,19 @@ Warm latency tests and profile-shape tests remained green.
   classifies a dependency as unavailable.
 - **Rule:** compatibility gates must exercise the first cold policy decision,
   not only warmed cache hits. See ADR 0118-codex-approval-broker.
+
+## 32. A reinstall is not a clean-install test
+
+The clean-VM provisioner ran the shipped `install.sh`, then redundantly ran
+`agentjail install --for claude-code` and `agentjail install --for codex`.
+Those extra installs restarted launchd, so the gate could observe a temporarily
+stopped daemon and still pass after the supervisor recovered.
+
+- **Rule:** an end-to-end install gate executes the documented user path once
+  and immediately verifies the resulting daemon and hook state.
+- **Rule:** test reinstall and idempotence separately; recovery must not repair
+  the state whose first-install behavior the gate claims to prove. See ADR
+  0053-vm-testbed-engine.
 
 ---
 

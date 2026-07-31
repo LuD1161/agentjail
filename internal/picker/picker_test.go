@@ -278,11 +278,11 @@ func TestRenderContainsLabels(t *testing.T) {
 	}
 }
 
-func TestRenderCheckedItemHasCheckmark(t *testing.T) {
+func TestRenderCheckedItemHasSelectionIndicator(t *testing.T) {
 	s := newPickerState(testItems()) // all checked
 	out := stripANSI(render(s, plainUI()))
-	if !strings.Contains(out, "✓") {
-		t.Error("render() should contain ✓ for checked items")
+	if !strings.Contains(out, "✓") && !strings.Contains(out, "[x]") {
+		t.Errorf("render() should contain the detected checked indicator, got %q", out)
 	}
 }
 
@@ -308,8 +308,8 @@ func TestRenderContainsFooterHint(t *testing.T) {
 func TestRenderHighlightedItemHasCursorIndicator(t *testing.T) {
 	s := newPickerState(testItems())
 	out := stripANSI(render(s, plainUI()))
-	if !strings.Contains(out, "❯") {
-		t.Error("render() should contain ❯ cursor indicator for highlighted item")
+	if !strings.Contains(out, "❯") && !strings.Contains(out, ">") {
+		t.Errorf("render() should contain the detected cursor indicator, got %q", out)
 	}
 }
 

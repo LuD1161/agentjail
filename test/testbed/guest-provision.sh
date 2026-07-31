@@ -117,15 +117,6 @@ if [ "$(uname -s)" = "Darwin" ] && [ -d "$HOME/.agentjail/bin" ]; then
     xattr -dr com.apple.quarantine "$HOME/.agentjail/bin" 2>/dev/null || true
 fi
 
-# install.sh already ran `agentjail install` (non-tty wires all detected
-# agents). Re-run explicitly for claude-code to be deterministic + idempotent.
-log "agentjail install --for claude-code"
-"$HOME/.agentjail/bin/agentjail" install --for claude-code || true
-if command -v codex >/dev/null 2>&1; then
-    log "agentjail install --for codex"
-    "$HOME/.agentjail/bin/agentjail" install --for codex
-fi
-
 # ---- 3a. scoped AppArmor userns profile (modern Ubuntu, restriction LEFT ON) --
 # Load the per-binary profile so --tunnel works without weakening the machine.
 # Non-restricted hosts (Debian/Fedora/older Ubuntu) skip this entirely. Consent
@@ -163,5 +154,24 @@ fi
 # ---- Verify -------------------------------------------------------------------
 
 log "verification:"
-"$HOME/.agentjail/bin/agentjail" status || true
+status_output="$("$HOME/.agentjail/bin/agentjail" status)"
+printf '%s\n' "$status_output"
+
+# The shipped installer must leave the machine usable immediately. Running a
+# second install here would test reinstall recovery, not the clean user path.
+# See ADR 0053-vm-testbed-engine.
+if ! printf '%s\n' "$status_output" | grep -q 'daemon.*running' \
+    || printf '%s\n' "$status_output" | grep -q 'daemon.*not running'; then
+    log "verification failed: the clean install did not leave the daemon running"
+    exit 1
+fi
+if ! printf '%s\n' "$status_output" | grep -q 'Claude Code.*installed'; then
+    log "verification failed: the clean install did not wire Claude Code"
+    exit 1
+fi
+if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ] \
+    && ! printf '%s\n' "$status_output" | grep -q 'Codex.*installed'; then
+    log "verification failed: the clean install did not wire Codex"
+    exit 1
+fi
 log "done. This box now looks like a fresh dev machine with agentjail + Claude Code."

@@ -7,8 +7,10 @@ agentjail install — and the host is never polluted.
 
 agentjail is always installed **through the real user path**: a release-layout
 tarball (`make dist-tarball`) fed to the shipped `install.sh` via its
-`LOCAL_TARBALL=` seam, then `agentjail install --for claude-code`. Claude Code
-is installed via npm, like a human would.
+`LOCAL_TARBALL=` seam. The installer wires every detected agent once, exactly
+as a piped end-user install does; the testbed does not run a second install to
+repair or alter that result. Claude Code is installed via npm, like a human
+would.
 
 ## Status / division of work
 
@@ -84,7 +86,8 @@ runs `guest-provision.sh` inside the guest, which:
 
 1. installs Claude Code (`npm i -g @anthropic-ai/claude-code`),
 2. seeds the login token if `~/.agentjail-testbed/token` exists on the host,
-3. runs `install.sh` with `LOCAL_TARBALL=`, then `agentjail install --for claude-code`,
+3. runs `install.sh` with `LOCAL_TARBALL=` once and fails unless that single
+   install leaves the daemon running and every detected agent wired,
 4. creates a seed project `~/work/demo` (git repo with an `origin` → allowed
    local bare remote and an `exfil` → forbidden remote, plus a dirty file).
 

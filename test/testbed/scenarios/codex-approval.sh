@@ -119,7 +119,7 @@ DECLINE_BRANCH="agentjail-approval-decline"
 start_interactive_push "$DECLINE_BRANCH"
 if wait_for_approval_prompt; then
     scn_ok "decline path reaches the same native prompt"
-    tmux send-keys -t "$SESSION:0.0" "3" Enter
+    tmux send-keys -t "$SESSION:0.0" Escape
     sleep 5
 else
     scn_fail "decline path reaches the same native prompt"
@@ -135,10 +135,24 @@ IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
 (
     cd "$PROJECT" || exit 1
-    "$AJ" run -- codex exec --ephemeral --ignore-rules \
+    exec "$AJ" run -- codex exec --ephemeral --ignore-rules \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
         "Run exactly this command once and then stop: git push origin HEAD:refs/heads/$IGNORE_BRANCH"
-) >"$IGNORE_LOG" 2>&1 || true
+) >"$IGNORE_LOG" 2>&1 &
+IGNORE_PID=$!
+for i in $(seq 1 60); do
+    kill -0 "$IGNORE_PID" 2>/dev/null || break
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "  INFO  waiting for --ignore-rules rejection (${i}s/60s)"
+    fi
+    sleep 1
+done
+if kill -0 "$IGNORE_PID" 2>/dev/null; then
+    echo "  INFO  stopping timed-out --ignore-rules probe"
+    pkill -TERM -P "$IGNORE_PID" 2>/dev/null || true
+    kill -TERM "$IGNORE_PID" 2>/dev/null || true
+fi
+wait "$IGNORE_PID" 2>/dev/null || true
 if branch_exists "$IGNORE_BRANCH"; then
     scn_fail "--ignore-rules cannot redeem the unobserved challenge"
 else
