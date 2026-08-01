@@ -131,8 +131,9 @@ model than subsequent updates:
 - SHA256 of the downloaded binary is verified against `SHA256SUMS`.
 - `SHA256SUMS.minisig` is verified against the embedded public key using
   `go-minisign`. **Both checks must pass**; either failure aborts the update.
-- The old binary is preserved at `<path>.bak` until the new binary starts
-  successfully.
+- The binaries and role paths are snapshotted until the new daemon starts
+  successfully. Activation failure restores their exact prior file, symlink,
+  absence, and permission state before restarting the restored daemon.
 
 ### 6. Agent self-protection
 

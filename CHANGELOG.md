@@ -13,6 +13,23 @@
 - **Cost dashboard contract**: the local UI can consume the same typed report,
   including unique session totals and per-model input/output token counts.
 
+### Fixed
+
+- **Transactional manual updates**: Linux now activates swapped binaries by
+  restarting the supervised daemon; activation failure restores the exact
+  prior binary and role-path state, then restarts the restored daemon.
+- **Headless systemd recovery**: daemon restart derives a missing user-bus
+  environment only after validating the runtime directory and bus socket are
+  owned by the current user and have safe types and permissions.
+- **Daemon version attestation**: `agentjail doctor` compares the installed CLI
+  with the running daemon and repairs stale or pre-version-reporting processes.
+
+### Security
+
+- **Human-only daemon recovery**: CLI and direct systemd restart paths are
+  permanently policy-locked, mirrored by degraded offline enforcement, and
+  the CLI requires control-token access plus typed confirmation on `/dev/tty`.
+
 ## v1.3.0 - 2026-07-31
 
 ![v1.3.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.3.0-summary.svg)

@@ -117,6 +117,19 @@ restarts would have appended 18 times, so an empty crash.log means the daemon
 genuinely wrote nothing to stdout/stderr — which is what a clean `exit(0)` looks
 like, and is consistent with the ADR 0070 handoff being the root cause.
 
+**D7 — manual update includes supervised activation and version attestation.**
+The daemon-side auto-updater still exits cleanly and relies on the verified
+supervisor policy. The human-run updater is a separate process: after swapping
+binaries it explicitly restarts the service on both platforms. On Linux, a
+missing systemd user-bus environment may be reconstructed only after validating
+the current user's runtime directory and Unix socket ownership and types.
+
+The swap is not committed until the supervisor restart command succeeds. If it
+fails, update restores the exact previous binaries and role paths and asks the
+supervisor to restart that restored generation. Separately, doctor compares a
+versioned ping with the installed CLI; a mismatch or an older daemon that cannot
+report a version is a repairable failure, not healthy liveness.
+
 ## Consequences
 
 - The AGE-233 population is repaired on their next `agentjail update` — the same

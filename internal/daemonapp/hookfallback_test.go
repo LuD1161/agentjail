@@ -27,8 +27,8 @@ func TestCompileOfflineRulesUsesHomeDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compileOfflineRules: %v", err)
 	}
-	if len(rules) != 3 {
-		t.Fatalf("expected 3 offline rules, got %d", len(rules))
+	if len(rules) != 4 {
+		t.Fatalf("expected 4 offline rules, got %d", len(rules))
 	}
 
 	byRuleID := map[string]wire.OfflineRule{}
@@ -66,18 +66,26 @@ func TestCompileOfflineRulesUsesHomeDir(t *testing.T) {
 		t.Errorf("agentjail_secrets PathPrefixes = %v, want to include %s", secretsRule.PathPrefixes, wantSecretsKey)
 	}
 
-	mutationRule, ok := byRuleID["command_policy/no-policy-mutation"]
-	if !ok {
-		t.Fatal("missing command_policy/no-policy-mutation offline rule")
+	var agentjailMutation, systemctlMutation *wire.OfflineRule
+	for i := range rules {
+		if rules[i].RuleID != "command_policy/no-policy-mutation" || len(rules[i].Binaries) == 0 {
+			continue
+		}
+		switch rules[i].Binaries[0] {
+		case "agentjail":
+			agentjailMutation = &rules[i]
+		case "systemctl":
+			systemctlMutation = &rules[i]
+		}
 	}
-	if mutationRule.Kind != wire.OfflineRuleKindCommandMutation {
-		t.Errorf("no-policy-mutation kind = %q, want command_mutation", mutationRule.Kind)
+	if agentjailMutation == nil || systemctlMutation == nil {
+		t.Fatalf("missing command mutation mirrors: agentjail=%v systemctl=%v", agentjailMutation != nil, systemctlMutation != nil)
 	}
-	if len(mutationRule.Binaries) == 0 || mutationRule.Binaries[0] != "agentjail" {
-		t.Errorf("no-policy-mutation Binaries = %v, want [agentjail]", mutationRule.Binaries)
+	if agentjailMutation.Kind != wire.OfflineRuleKindCommandMutation || systemctlMutation.Kind != wire.OfflineRuleKindCommandMutation {
+		t.Error("no-policy-mutation mirrors must use command_mutation")
 	}
-	if len(mutationRule.Patterns) == 0 {
-		t.Error("no-policy-mutation Patterns should be non-empty")
+	if len(agentjailMutation.Patterns) == 0 || len(systemctlMutation.Patterns) == 0 {
+		t.Error("no-policy-mutation mirrors must have patterns")
 	}
 }
 
@@ -115,8 +123,8 @@ func TestWriteHookFallbackDegradedLevelHasOfflineRules(t *testing.T) {
 	if fb.Level != "degraded" {
 		t.Errorf("Level = %q, want degraded", fb.Level)
 	}
-	if len(fb.OfflineRules) != 3 {
-		t.Errorf("expected 3 offline rules at degraded level, got %d", len(fb.OfflineRules))
+	if len(fb.OfflineRules) != 4 {
+		t.Errorf("expected 4 offline rules at degraded level, got %d", len(fb.OfflineRules))
 	}
 }
 

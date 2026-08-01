@@ -339,6 +339,18 @@ _is_policy_mutation if {
 	regex.match(`\bupdate\b`, cmd)
 }
 
+_is_policy_mutation if {
+	# Daemon restart crosses the human-only control boundary (ADR 0067-control-plane-token-auth).
+	_mentions_agentjail
+	regex.match(`\bdaemon\s+restart\b`, cmd)
+}
+
+_is_policy_mutation if {
+	# Direct supervisor restart is the same protected control action.
+	input.command_binaries[_] == "systemctl"
+	regex.match(`\bsystemctl\b[\s\S]*\brestart\b[\s\S]*\bagentjail-daemon(\.service)?\b`, cmd)
+}
+
 # defense-in-depth: the hard boundary is the agent-unreachable netproxy
 # control socket (ADR 0042); regex here is bypassable. The socket is what
 # actually prevents an agent from approving/denying its own runtime host

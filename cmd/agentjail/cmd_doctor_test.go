@@ -203,6 +203,34 @@ func TestDaemonLivenessCheckGatesRepair(t *testing.T) {
 	}
 }
 
+func TestDaemonVersionCheckDetectsSkew(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		liveness  daemonLiveness
+		running   string
+		installed string
+		status    checkStatus
+		repair    repairID
+	}{
+		{name: "matching", liveness: daemonHealthy, running: "v1.3.0", installed: "v1.3.0", status: statusOK},
+		{name: "stale", liveness: daemonHealthy, running: "v1.2.0", installed: "v1.3.0", status: statusFail, repair: repairDaemon},
+		{name: "old protocol", liveness: daemonHealthy, installed: "v1.3.0", status: statusFail, repair: repairDaemon},
+		{name: "offline", liveness: daemonNoListener, installed: "v1.3.0", status: statusSkip},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := daemonVersionCheck(tc.liveness, tc.running, tc.installed)
+			if got.status != tc.status || got.repair != tc.repair {
+				t.Fatalf("check = %#v, want status=%q repair=%q", got, tc.status, tc.repair)
+			}
+		})
+	}
+}
+
 // A shim the user never opted into must never be installed by a repair.
 func TestPathShimRepairIsGatedOnRecordedConsent(t *testing.T) {
 	home := t.TempDir()

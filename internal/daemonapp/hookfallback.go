@@ -152,6 +152,16 @@ func compileOfflineRules() ([]wire.OfflineRule, error) {
 				`\b(trust|untrust)\b`,
 				`--persist\b`,
 				`\bupdate\b`,
+				`\bdaemon\s+restart\b`,
+			},
+		},
+		{
+			Kind:     wire.OfflineRuleKindCommandMutation,
+			RuleID:   "command_policy/no-policy-mutation",
+			Reason:   "restarting the agentjail daemon is denied offline (daemon unreachable, the control boundary is permanently locked)",
+			Binaries: []string{"systemctl"},
+			Patterns: []string{
+				`\bsystemctl\b[\s\S]*\brestart\b[\s\S]*\bagentjail-daemon(\.service)?\b`,
 			},
 		},
 	}, nil

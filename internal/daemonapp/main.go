@@ -520,7 +520,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 				case wire.ControlOpPing:
 					// Side-effect-free liveness probe for the single-instance
 					// guard (see singleton.go). Reply OK and do nothing else.
-					_ = enc.Encode(wire.ControlResponse{OK: true})
+					_ = enc.Encode(wire.ControlResponse{OK: true, Version: buildinfo.Version})
 				default:
 					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unknown control op: " + creq.Op})
 				}

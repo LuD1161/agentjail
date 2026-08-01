@@ -247,8 +247,9 @@ type ControlRequest struct {
 // Rego compile error) so the caller can surface it instead of silently
 // assuming the reload took effect.
 type ControlResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 // EvalOne is the reusable daemon RPC client for agentjail CLI callers.

@@ -33,6 +33,62 @@ func disableSignatureVerification(t *testing.T) {
 	saved := selfupdate.SigningPubKey
 	selfupdate.SigningPubKey = ""
 	t.Cleanup(func() { selfupdate.SigningPubKey = saved })
+
+	savedRestart := updateRestartDaemonFn
+	updateRestartDaemonFn = func(string) error { return nil }
+	t.Cleanup(func() { updateRestartDaemonFn = savedRestart })
+
+	savedHome := updateHomeDirFn
+	home := t.TempDir()
+	updateHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { updateHomeDirFn = savedHome })
+}
+
+func setUpdateRestartDaemon(t *testing.T, restart func(string) error) {
+	t.Helper()
+	saved := updateRestartDaemonFn
+	updateRestartDaemonFn = restart
+	t.Cleanup(func() { updateRestartDaemonFn = saved })
+}
+
+func configureFakeUpdate(t *testing.T, bins []string) string {
+	t.Helper()
+	disableSignatureVerification(t)
+	srcDir := t.TempDir()
+	installDir := t.TempDir()
+	tarball := "agentjail-v2.0.0-linux-amd64.tar.gz"
+	tarballPath, hashHex, _ := makeFakeTarball(t, srcDir, tarball, bins)
+	tarballBytes, err := os.ReadFile(tarballPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sumsContent := fmt.Sprintf("%s  %s\n", hashHex, tarball)
+
+	assetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "SHA256SUMS"):
+			_, _ = w.Write([]byte(sumsContent))
+		case strings.HasSuffix(r.URL.Path, tarball):
+			_, _ = w.Write(tarballBytes)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(assetServer.Close)
+
+	versionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(fakeRelease{TagName: "v2.0.0"})
+	}))
+	t.Cleanup(versionServer.Close)
+	setCheckerURL(t, versionServer.URL)
+
+	savedVersion := buildinfo.Version
+	buildinfo.Version = "v1.0.0"
+	t.Cleanup(func() { buildinfo.Version = savedVersion })
+	savedURLBase := updateURLBaseFn
+	updateURLBaseFn = func(string) string { return assetServer.URL }
+	t.Cleanup(func() { updateURLBaseFn = savedURLBase })
+	return installDir
 }
 
 // makeFakeTarball creates a minimal .tar.gz in destDir containing the given
@@ -667,6 +723,86 @@ func TestPerformUpdate_RollbackOnSwapFailure(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(installDir, "agentjail"))
 	if string(got) != "fake-binary:agentjail" {
 		t.Errorf("agentjail content after update = %q, want %q", got, "fake-binary:agentjail")
+	}
+}
+
+func TestPerformUpdate_LinuxRestartsDaemon(t *testing.T) {
+	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
+	var targets []string
+	setUpdateRestartDaemon(t, func(target string) error {
+		targets = append(targets, target)
+		return nil
+	})
+
+	if code := performUpdate(installDir, "linux", "amd64", false); code != 0 {
+		t.Fatalf("performUpdate() = %d, want 0", code)
+	}
+	if len(targets) != 1 || targets[0] != systemdUnitFilename {
+		t.Fatalf("restart targets = %v, want [%s]", targets, systemdUnitFilename)
+	}
+}
+
+func TestPerformUpdate_RestartFailureRestoresInstallAndOldDaemon(t *testing.T) {
+	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
+	oldBinaries := map[string]string{
+		"agentjail":      "old-agentjail",
+		"agentjail-hook": "old-hook",
+	}
+	for name, content := range oldBinaries {
+		if err := os.WriteFile(filepath.Join(installDir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("previous-agentjail", filepath.Join(installDir, "agentjail-daemon")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "agentjail-shield"), []byte("old-shield"), 0o701); err != nil {
+		t.Fatal(err)
+	}
+
+	restarts := 0
+	setUpdateRestartDaemon(t, func(target string) error {
+		if target != systemdUnitFilename {
+			t.Fatalf("restart target = %q, want %q", target, systemdUnitFilename)
+		}
+		restarts++
+		if restarts == 1 {
+			return fmt.Errorf("new daemon rejected")
+		}
+		return nil
+	})
+
+	if code := performUpdate(installDir, "linux", "amd64", false); code != 1 {
+		t.Fatalf("performUpdate() = %d, want 1", code)
+	}
+	if restarts != 2 {
+		t.Fatalf("restart calls = %d, want 2 (updated then restored daemon)", restarts)
+	}
+	for name, want := range oldBinaries {
+		got, err := os.ReadFile(filepath.Join(installDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	if target, err := os.Readlink(filepath.Join(installDir, "agentjail-daemon")); err != nil || target != "previous-agentjail" {
+		t.Errorf("restored daemon link = %q, %v; want previous-agentjail", target, err)
+	}
+	shield := filepath.Join(installDir, "agentjail-shield")
+	if got, err := os.ReadFile(shield); err != nil || string(got) != "old-shield" {
+		t.Errorf("restored shield = %q, %v; want old-shield", got, err)
+	}
+	if info, err := os.Stat(shield); err != nil {
+		t.Errorf("stat restored shield: %v", err)
+	} else if info.Mode().Perm() != 0o701 {
+		t.Errorf("restored shield mode = %v, want 0701", info.Mode().Perm())
+	}
+	for _, name := range []string{"agentjail-netproxy", "agentjail-secrets"} {
+		if _, err := os.Lstat(filepath.Join(installDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s exists after rollback; want original absence (err=%v)", name, err)
+		}
 	}
 }
 

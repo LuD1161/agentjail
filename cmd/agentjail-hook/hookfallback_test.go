@@ -153,7 +153,7 @@ func TestPathUnderPrefix(t *testing.T) {
 func TestMatchesCommandMutationRule(t *testing.T) {
 	rule := wire.OfflineRule{
 		Binaries: []string{"agentjail"},
-		Patterns: []string{`\bpolicy\s+(disable|enable|add|remove)\b`},
+		Patterns: []string{`\bpolicy\s+(disable|enable|add|remove)\b`, `\bdaemon\s+restart\b`},
 	}
 	cases := []struct {
 		cmd  string
@@ -164,10 +164,33 @@ func TestMatchesCommandMutationRule(t *testing.T) {
 		{"agentjail policy list", false},
 		{"echo hi", false},
 		{"/usr/local/bin/agentjail policy disable foo", true},
+		{"agentjail daemon restart", true},
+		{"agentjail daemon status", false},
+		{`printf '%s' "agentjail daemon restart"`, false},
 	}
 	for _, c := range cases {
 		got := matchesCommandMutationRule(rule, map[string]interface{}{"command": c.cmd})
 		if got != c.want {
+			t.Errorf("matchesCommandMutationRule(%q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+}
+
+func TestMatchesSystemctlDaemonRestartRule(t *testing.T) {
+	rule := wire.OfflineRule{
+		Binaries: []string{"systemctl"},
+		Patterns: []string{`\bsystemctl\b[\s\S]*\brestart\b[\s\S]*\bagentjail-daemon(\.service)?\b`},
+	}
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"systemctl --user restart agentjail-daemon.service", true},
+		{"systemctl --user restart another.service", false},
+		{`printf '%s' "systemctl --user restart agentjail-daemon.service"`, false},
+	}
+	for _, c := range cases {
+		if got := matchesCommandMutationRule(rule, map[string]interface{}{"command": c.cmd}); got != c.want {
 			t.Errorf("matchesCommandMutationRule(%q) = %v, want %v", c.cmd, got, c.want)
 		}
 	}
@@ -199,7 +222,14 @@ func offlineRulesFixture(home string) []wire.OfflineRule {
 			RuleID:   "command_policy/no-policy-mutation",
 			Reason:   "no self-mutation",
 			Binaries: []string{"agentjail"},
-			Patterns: []string{`\bpolicy\s+(disable|enable|add|remove)\b`},
+			Patterns: []string{`\bpolicy\s+(disable|enable|add|remove)\b`, `\bdaemon\s+restart\b`},
+		},
+		{
+			Kind:     wire.OfflineRuleKindCommandMutation,
+			RuleID:   "command_policy/no-policy-mutation",
+			Reason:   "no direct supervisor restart",
+			Binaries: []string{"systemctl"},
+			Patterns: []string{`\bsystemctl\b[\s\S]*\brestart\b[\s\S]*\bagentjail-daemon(\.service)?\b`},
 		},
 	}
 }
@@ -429,6 +459,26 @@ func TestHookE2E_DegradedDeniesLockedRuleAttacks(t *testing.T) {
 		stdin := makeStdinJSON("Bash", map[string]interface{}{
 			"command": "sh -c 'agentjail policy disable no-sudo'",
 		}, "session-degraded-3")
+		_, stderr, code := runHook(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + nonexistentSock})
+		if code != 2 {
+			t.Errorf("expected exit 2 (deny), got %d; stderr=%q", code, stderr)
+		}
+	})
+
+	t.Run("bash daemon restart denied", func(t *testing.T) {
+		stdin := makeStdinJSON("Bash", map[string]interface{}{
+			"command": "agentjail daemon restart",
+		}, "session-degraded-restart")
+		_, stderr, code := runHook(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + nonexistentSock})
+		if code != 2 {
+			t.Errorf("expected exit 2 (deny), got %d; stderr=%q", code, stderr)
+		}
+	})
+
+	t.Run("bash systemctl daemon restart denied", func(t *testing.T) {
+		stdin := makeStdinJSON("Bash", map[string]interface{}{
+			"command": "systemctl --user restart agentjail-daemon.service",
+		}, "session-degraded-systemctl-restart")
 		_, stderr, code := runHook(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + nonexistentSock})
 		if code != 2 {
 			t.Errorf("expected exit 2 (deny), got %d; stderr=%q", code, stderr)

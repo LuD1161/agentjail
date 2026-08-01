@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/daemonapp"
 	"github.com/LuD1161/agentjail/internal/netproxyapp"
 	"github.com/LuD1161/agentjail/internal/secretsapp"
@@ -12,19 +13,27 @@ import (
 )
 
 var (
-	roleUserHomeDir   = os.UserHomeDir
-	roleRestartDaemon = restartDaemonViaSupervisor
+	roleUserHomeDir      = os.UserHomeDir
+	roleAuthorizeRestart = authorizeDaemonRestart
+	roleConfirmRestart   = confirmDaemonRestart
+	roleRestartDaemon    = restartDaemonViaSupervisor
 )
 
-// runDaemonRole reserves the human-facing restart verb before forwarding
-// process-role arguments to daemonapp. A bare positional "restart" used to
-// be ignored by daemonapp, starting an unconfigured daemon that served the
-// resolver default instead of the installed rule bundle.
+// Restart is a protected control action, not a daemon process argument.
+// See ADR 0067-control-plane-token-auth and GOTCHAS #25.
 func runDaemonRole(args []string) int {
 	if len(args) == 1 && args[0] == "restart" {
 		home, err := roleUserHomeDir()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail daemon restart: determine home: %v\n", err)
+			return 1
+		}
+		if err := roleAuthorizeRestart(home); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail daemon restart: REFUSED — %v\n", err)
+			fmt.Fprintln(os.Stderr, "  Run this command from a human-controlled host terminal outside the shielded agent session.")
+			return 1
+		}
+		if !roleConfirmRestart() {
 			return 1
 		}
 		if err := roleRestartDaemon(home); err != nil {
@@ -35,6 +44,22 @@ func runDaemonRole(args []string) int {
 		return 0
 	}
 	return daemonapp.Run(args)
+}
+
+func authorizeDaemonRestart(home string) error {
+	if _, err := ctlauth.LoadForHome(home); err != nil {
+		return fmt.Errorf("control authorization unavailable: %w", err)
+	}
+	return nil
+}
+
+func confirmDaemonRestart() bool {
+	return requireInteractiveConfirm(
+		"agentjail daemon restart: REFUSED — no interactive terminal detected.\n"+
+			"  Run this command from a human-controlled host terminal.\n",
+		"\n  Restart the AgentJail policy daemon? Pending approvals will be cancelled.\n"+
+			"  Type 'y' to confirm, anything else to cancel: ",
+	)
 }
 
 // roleCommands registers hidden `agentjail <role> ...` subcommands that

@@ -372,7 +372,10 @@ Session IDs accept short prefixes -- copy the 8-char ID from `--list` and use it
 agentjail update
 ```
 
-Downloads the latest release, verifies SHA-256, atomically swaps binaries, restarts the daemon. Requires an interactive terminal (agents can't self-update). No-op when already current.
+Downloads the latest release, verifies SHA-256, atomically swaps binaries, and
+restarts the daemon. If activation fails, it restores the previous binaries,
+role paths, and permissions, then restarts the restored daemon. Requires an
+interactive terminal (agents can't self-update). No-op when already current.
 
 ### Daemon Auto-Update
 
@@ -682,6 +685,12 @@ the old one-time warning. The daemon compiles the current level (and, for
 startup and every config reload; a missing or unreadable sidecar falls back to
 `allow`, since a daemon that never started has published no rules to enforce —
 `degraded` protects you from a daemon that *died*, not one that never ran.
+
+Daemon restart is a human control action: the CLI requires access to the
+shield-protected control token and typed confirmation on `/dev/tty`. AgentJail
+also permanently denies both `agentjail daemon restart` and a direct
+`systemctl --user restart agentjail-daemon.service` from agent tool calls,
+including while the policy daemon is offline in `degraded` mode.
 
 ### Monitor mode — see what it would block, before it blocks anything
 

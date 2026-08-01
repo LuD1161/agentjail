@@ -9,9 +9,8 @@
 //
 // Platform notes:
 //   - macOS: daemon is managed via launchd (launchctlUnload / launchctlLoad).
-//   - Linux: daemon stop/restart is skipped (no launchd); binaries are still
-//     swapped atomically. The daemon must be restarted manually or via the
-//     user's init system.
+//   - Linux: daemon is restarted through its systemd user service after the
+//     binary swap.
 //
 // Binary list: agentjail, agentjail-hook (mirrors install.sh and
 // selfupdate.UpdateBinaries). agentjail-daemon, agentjail-shield,
@@ -28,6 +27,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,6 +47,14 @@ import (
 var updateURLBaseFn = selfupdate.UpdateURLBase
 
 var updateHomeDirFn = os.UserHomeDir
+var updateRestartDaemonFn = selfupdate.RestartDaemon
+
+type updatePathBackup struct {
+	name       string
+	existed    bool
+	mode       os.FileMode
+	linkTarget string
+}
 
 // defaultUpdateInstallDir returns the binary installation directory, honouring
 // AGENTJAIL_HOME (default: ~/.agentjail/bin).
@@ -312,20 +320,14 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	}
 	defer os.RemoveAll(backupDir)
 
-	// Copy existing binaries to backup dir.
-	backed := []string{}
-	for _, binName := range selfupdate.UpdateBinaries {
-		existing := filepath.Join(installDir, binName)
-		if _, err := os.Stat(existing); os.IsNotExist(err) {
-			continue // not installed yet — nothing to back up
+	backupNames := append(append([]string{}, selfupdate.UpdateBinaries...), selfupdate.RoleNames...)
+	backups, err := backupUpdatePaths(installDir, backupDir, backupNames)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail update: back up installed files: %v\n", err)
+		if goos == "darwin" && plistPath != "" {
+			_ = selfupdate.LaunchctlLoad(plistPath)
 		}
-		backupDst := filepath.Join(backupDir, binName)
-		if copyErr := selfupdate.CopyFile(existing, backupDst); copyErr != nil {
-			fmt.Fprintf(os.Stderr, "  warning: could not back up %s: %v\n", binName, copyErr)
-			// Non-fatal: proceed without backup for this binary.
-			continue
-		}
-		backed = append(backed, binName)
+		return 1
 	}
 
 	// Step 8: atomically replace each binary in the install directory.
@@ -357,16 +359,9 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	}
 
 	if swapErr != nil {
-		// Rollback: restore backups for all already-swapped binaries.
 		fmt.Fprintln(os.Stderr, "  rolling back installed binaries…")
-		for _, binName := range swapped {
-			backupSrc := filepath.Join(backupDir, binName)
-			dst := filepath.Join(installDir, binName)
-			if _, statErr := os.Stat(backupSrc); statErr == nil {
-				if restoreErr := selfupdate.AtomicReplaceBinary(backupSrc, dst); restoreErr != nil {
-					fmt.Fprintf(os.Stderr, "  warning: rollback of %s failed: %v\n", binName, restoreErr)
-				}
-			}
+		if restoreErr := restoreUpdatePaths(installDir, backupDir, backups); restoreErr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: rollback failed: %v\n", restoreErr)
 		}
 		if goos == "darwin" && plistPath != "" {
 			_ = selfupdate.LaunchctlLoad(plistPath)
@@ -388,11 +383,10 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	}
 	reassertUpdatedPathShim(installDir)
 
-	// Step 8c: the updater hands the daemon back to its supervisor with exit(0)
-	// (ADR 0070), so verify the DEPLOYED definition will catch it before relying
-	// on it — installs predating Restart=always have on-failure on disk and
-	// strand the daemon. See ADR 0088-deployed-supervisor-verified.
-	if home, herr := os.UserHomeDir(); herr == nil {
+	// Step 8c: keep the deployed definition ready for daemon-side updates, which
+	// use the exit-0 handoff. See ADR 0088-deployed-supervisor-verified.
+	home, homeErr := updateHomeDirFn()
+	if homeErr == nil {
 		repaired, err := ensureDaemonRestartPolicy(home)
 		switch {
 		case err != nil:
@@ -409,24 +403,24 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 		}
 	}
 
-	// Step 9: restart the daemon.
+	// Step 9: restart the daemon. Activation is part of the update transaction:
+	// a release is not installed successfully until its daemon is running.
 	if goos == "darwin" && plistPath != "" {
 		if err := selfupdate.LaunchctlLoad(plistPath); err != nil {
-			// Daemon restart failed — rollback and restore old daemon.
-			fmt.Fprintf(os.Stderr, "  warning: could not restart daemon: %v; rolling back…\n", err)
-			for _, binName := range backed {
-				backupSrc := filepath.Join(backupDir, binName)
-				dst := filepath.Join(installDir, binName)
-				if restoreErr := selfupdate.AtomicReplaceBinary(backupSrc, dst); restoreErr != nil {
-					fmt.Fprintf(os.Stderr, "  warning: rollback of %s failed: %v\n", binName, restoreErr)
-				}
-			}
-			_ = selfupdate.LaunchctlLoad(plistPath)
+			return rollbackFailedDaemonRestart(installDir, backupDir, backups, err, func() error {
+				return selfupdate.LaunchctlLoad(plistPath)
+			})
 		} else {
 			fmt.Println("🔄  daemon restarted")
 		}
-	} else if goos != "darwin" {
-		fmt.Println("⚠️   restart the agentjail daemon manually (non-macOS)")
+	} else if goos == "linux" {
+		target := systemdUnitFilename
+		if err := updateRestartDaemonFn(target); err != nil {
+			return rollbackFailedDaemonRestart(installDir, backupDir, backups, err, func() error {
+				return updateRestartDaemonFn(target)
+			})
+		}
+		fmt.Println("🔄  daemon restarted")
 	}
 
 	fmt.Printf("✅  updated %d binaries  %s → %s\n", installed, current, latest)
@@ -448,6 +442,97 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	}
 
 	return 0
+}
+
+func backupUpdatePaths(installDir, backupDir string, names []string) ([]updatePathBackup, error) {
+	backups := make([]updatePathBackup, 0, len(names))
+	for _, name := range names {
+		src := filepath.Join(installDir, name)
+		info, err := os.Lstat(src)
+		if os.IsNotExist(err) {
+			backups = append(backups, updatePathBackup{name: name})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s: %w", name, err)
+		}
+
+		backup := updatePathBackup{name: name, existed: true, mode: info.Mode()}
+		if info.Mode()&os.ModeSymlink != 0 {
+			backup.linkTarget, err = os.Readlink(src)
+			if err != nil {
+				return nil, fmt.Errorf("read link %s: %w", name, err)
+			}
+		} else if info.Mode().IsRegular() {
+			if err := selfupdate.CopyFile(src, filepath.Join(backupDir, name)); err != nil {
+				return nil, fmt.Errorf("copy %s: %w", name, err)
+			}
+		} else {
+			return nil, fmt.Errorf("%s has unsupported mode %s", name, info.Mode())
+		}
+		backups = append(backups, backup)
+	}
+	return backups, nil
+}
+
+func restoreUpdatePaths(installDir, backupDir string, backups []updatePathBackup) error {
+	var restoreErrs []error
+	for _, backup := range backups {
+		dst := filepath.Join(installDir, backup.name)
+		if !backup.existed {
+			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+				restoreErrs = append(restoreErrs, fmt.Errorf("remove %s: %w", backup.name, err))
+			}
+			continue
+		}
+		if backup.mode&os.ModeSymlink != 0 {
+			if err := atomicReplaceSymlink(dst, backup.linkTarget); err != nil {
+				restoreErrs = append(restoreErrs, fmt.Errorf("restore link %s: %w", backup.name, err))
+			}
+			continue
+		}
+		if err := selfupdate.AtomicReplaceBinary(filepath.Join(backupDir, backup.name), dst); err != nil {
+			restoreErrs = append(restoreErrs, fmt.Errorf("restore %s: %w", backup.name, err))
+			continue
+		}
+		if err := os.Chmod(dst, backup.mode.Perm()); err != nil {
+			restoreErrs = append(restoreErrs, fmt.Errorf("restore mode for %s: %w", backup.name, err))
+		}
+	}
+	return errors.Join(restoreErrs...)
+}
+
+func atomicReplaceSymlink(dst, target string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".agentjail-link-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Remove(tmpPath); err != nil {
+		return err
+	}
+	defer os.Remove(tmpPath)
+	if err := os.Symlink(target, tmpPath); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, dst)
+}
+
+func rollbackFailedDaemonRestart(installDir, backupDir string, backups []updatePathBackup, restartErr error, restartOld func() error) int {
+	fmt.Fprintf(os.Stderr, "  warning: could not restart updated daemon: %v; rolling back…\n", restartErr)
+	if err := restoreUpdatePaths(installDir, backupDir, backups); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: rollback failed: %v\n", err)
+	}
+	if restartOld != nil {
+		if err := restartOld(); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not restart previous daemon after rollback: %v\n", err)
+		}
+	}
+	return 1
 }
 
 func reassertUpdatedPathShim(installDir string) {

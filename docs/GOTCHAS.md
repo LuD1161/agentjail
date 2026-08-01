@@ -387,6 +387,9 @@ flags, not the recovery command shown to users.
 
 - **Rule:** reserve and test every human-facing verb before forwarding role
   arguments; recovery instructions are executable security surface, not prose.
+- **Rule:** recovery is a protected control action. Require an agent-inaccessible
+  credential and a real terminal confirmation, then lock both the friendly CLI
+  and direct supervisor forms in online and degraded-offline policy.
 
 ## 26. Shell text is not all executable shell
 
@@ -556,6 +559,20 @@ the adapter behavior that `ask` promises.
 - **Rule:** compatibility tests need an unknown custom `ask` rule. A matrix
   containing only built-in rules cannot prove the adapter is policy-agnostic.
   See ADR 0119-command-approval-transport.
+
+## 39. Swapped binaries are not an activated update
+
+The manual updater replaced the Linux binaries and reported success without
+restarting the running daemon. Unit tests verified the files, so they stayed
+green while the old process kept serving old policy and approval behavior.
+Even a socket-only doctor check called that stale process healthy.
+
+- **Rule:** update is a transaction over both disk and the supervised process:
+  restart after the swap, restore the exact prior paths on activation failure,
+  and restart the restored daemon.
+- **Rule:** health protocols report their running version, and diagnostics
+  compare it with the installed CLI. Liveness alone cannot attest deployment.
+  See ADR 0088-deployed-supervisor-verified.
 
 ---
 

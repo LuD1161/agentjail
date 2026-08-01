@@ -971,6 +971,50 @@ test_mutation_guard_status_not_denied if {
 	d.rule_id != "command_policy/no-policy-mutation"
 }
 
+test_mutation_guard_daemon_restart_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail daemon restart",
+		["agentjail"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+test_mutation_guard_daemon_status_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"agentjail daemon status",
+		["agentjail"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+test_mutation_guard_restart_prose_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		`printf '%s\n' "agentjail daemon restart"`,
+		["printf"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+test_mutation_guard_systemctl_restart_daemon_deny if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"systemctl --user restart agentjail-daemon.service",
+		["systemctl"])
+	d.action == "deny"
+	d.rule_id == "command_policy/no-policy-mutation"
+}
+
+test_mutation_guard_systemctl_restart_unrelated_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		"systemctl --user restart my-dev-server.service",
+		["systemctl"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
+test_mutation_guard_systemctl_restart_prose_not_denied if {
+	d := agentjail.decision with input as bash_input_with_binaries(
+		`printf '%s\n' "systemctl --user restart agentjail-daemon.service"`,
+		["printf"])
+	d.rule_id != "command_policy/no-policy-mutation"
+}
+
 # POSITIVE: agentjail update → deny (defense-in-depth alongside TTY gate)
 test_mutation_guard_update_deny if {
 	d := agentjail.decision with input as bash_input_with_binaries(

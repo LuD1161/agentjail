@@ -169,8 +169,8 @@ func TestControlOpPing_RepliesOKNoSideEffects(t *testing.T) {
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.OK || resp.Error != "" {
-		t.Fatalf("ping response = %+v, want {OK:true}", resp)
+	if !resp.OK || resp.Error != "" || resp.Version == "" {
+		t.Fatalf("ping response = %+v, want ok with a version", resp)
 	}
 	// Side-effect-free: no decision should have been recorded.
 	_ = srv // srv has no eventStore in newTestServer; presence asserted by no panic

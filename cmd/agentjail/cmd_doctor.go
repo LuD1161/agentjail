@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/sshagent"
@@ -311,26 +312,31 @@ const doctorPingTimeout = 500 * time.Millisecond
 // dial-and-close reads as healthy. Callers pass their own budget.
 // See ADR 0086-doctor-repairs-diagnosed.
 func probeDaemon(sockPath string, timeout time.Duration) (daemonLiveness, error) {
+	liveness, _, err := probeDaemonDetails(sockPath, timeout)
+	return liveness, err
+}
+
+func probeDaemonDetails(sockPath string, timeout time.Duration) (daemonLiveness, string, error) {
 	if _, err := os.Stat(sockPath); err != nil {
-		return daemonSocketAbsent, err
+		return daemonSocketAbsent, "", err
 	}
 	conn, err := net.DialTimeout("unix", sockPath, timeout)
 	if err != nil {
-		return daemonNoListener, err
+		return daemonNoListener, "", err
 	}
 	defer conn.Close() //nolint:errcheck
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := json.NewEncoder(conn).Encode(wire.ControlRequest{Type: wire.ControlType, Op: wire.ControlOpPing}); err != nil {
-		return daemonUnresponsive, err
+		return daemonUnresponsive, "", err
 	}
 	var resp wire.ControlResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return daemonUnresponsive, err
+		return daemonUnresponsive, "", err
 	}
 	if !resp.OK {
-		return daemonUnresponsive, fmt.Errorf("daemon replied not ok: %s", resp.Error)
+		return daemonUnresponsive, "", fmt.Errorf("daemon replied not ok: %s", resp.Error)
 	}
-	return daemonHealthy, nil
+	return daemonHealthy, resp.Version, nil
 }
 
 // daemonLivenessCheck maps a probe result to a check. Pure, so the repair gate
@@ -367,8 +373,33 @@ func daemonSocketCheck(home string) doctorCheck {
 	return daemonLivenessCheck(l, sockPath, err)
 }
 
+func daemonVersionCheck(l daemonLiveness, runningVersion, installedVersion string) doctorCheck {
+	if l != daemonHealthy {
+		return doctorCheck{label: "Version", status: statusSkip, detail: "unavailable until the daemon answers ping"}
+	}
+	if runningVersion == "" {
+		return doctorCheck{
+			label: "Version", status: statusFail, repair: repairDaemon,
+			detail: "running daemon predates version reporting — restart required",
+		}
+	}
+	if runningVersion != installedVersion {
+		return doctorCheck{
+			label: "Version", status: statusFail, repair: repairDaemon,
+			detail: fmt.Sprintf("running %s, installed %s — restart required", runningVersion, installedVersion),
+		}
+	}
+	return doctorCheck{label: "Version", status: statusOK, detail: runningVersion}
+}
+
 func checkDaemon(home string) []doctorCheck {
-	return []doctorCheck{daemonSocketCheck(home), serviceRestartPolicyCheck(home)}
+	sockPath := daemonSocketPath(home)
+	liveness, runningVersion, err := probeDaemonDetails(sockPath, doctorPingTimeout)
+	return []doctorCheck{
+		daemonLivenessCheck(liveness, sockPath, err),
+		daemonVersionCheck(liveness, runningVersion, buildinfo.Version),
+		serviceRestartPolicyCheck(home),
+	}
 }
 
 // serviceRestartPolicyCheck reads the DEPLOYED definition, never the template:
@@ -914,9 +945,12 @@ func recheckDaemonAfterRestart(home string) doctorCheck {
 	sockPath := daemonSocketPath(home)
 	deadline := time.Now().Add(daemonRepairWait)
 	for {
-		l, err := probeDaemon(sockPath, doctorPingTimeout)
+		l, version, err := probeDaemonDetails(sockPath, doctorPingTimeout)
 		if l == daemonHealthy || !time.Now().Before(deadline) {
-			return daemonLivenessCheck(l, sockPath, err)
+			if l != daemonHealthy {
+				return daemonLivenessCheck(l, sockPath, err)
+			}
+			return daemonVersionCheck(l, version, buildinfo.Version)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
