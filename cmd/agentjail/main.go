@@ -166,6 +166,7 @@ func usage(w io.Writer) {
 		"agentjail doctor",
 		"agentjail try \"rm -rf /\"",
 		"agentjail logs --action=deny --since=1h",
+		"agentjail cost --period 7d",
 		"agentjail policy enable no_shell_init_write",
 		"agentjail mcp allow filesystem",
 	}

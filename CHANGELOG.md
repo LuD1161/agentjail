@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Local cost analytics**: `agentjail cost` summarizes Claude Code, Codex, and OpenCode
+  spend by project and model, with JSON output, token efficiency, and optional
+  daily/per-project budget alerts backed by bundled Gryph pricing (ADR
+  0120-bundled-model-pricing).
+- **Cost dashboard contract**: the local UI can consume the same typed report,
+  including unique session totals and per-model input/output token counts.
+
 ## v1.3.0 - 2026-07-31
 
 ![v1.3.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.3.0-summary.svg)

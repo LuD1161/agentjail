@@ -1,0 +1,221 @@
+package costanalytics
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// ClaudeCodeReader reads Claude Code session transcripts without retaining
+// conversation content.
+type ClaudeCodeReader struct {
+	projectsDir string
+}
+
+// transcriptLine represents a single line in a Claude Code session JSONL file.
+type transcriptLine struct {
+	Type      string `json:"type"`
+	CWD       string `json:"cwd"`
+	Timestamp string `json:"timestamp"`
+	Message   struct {
+		Model string `json:"model"`
+		Usage *struct {
+			InputTokens              int64 `json:"input_tokens"`
+			OutputTokens             int64 `json:"output_tokens"`
+			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	} `json:"message"`
+}
+
+// modelTokens aggregates token counts for a single model within a session.
+type modelTokens struct {
+	input      int64
+	output     int64
+	cacheRead  int64
+	cacheWrite int64
+}
+
+func NewClaudeCodeReader() *ClaudeCodeReader {
+	home, _ := os.UserHomeDir()
+	return &ClaudeCodeReader{projectsDir: filepath.Join(home, ".claude", "projects")}
+}
+
+func (c *ClaudeCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) {
+	pattern := filepath.Join(c.projectsDir, "*", "*.jsonl")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("glob claude sessions: %w", err)
+	}
+
+	var sessions []SessionCost
+	var readErrs []error
+	for _, path := range matches {
+		// Skip plugin/internal directories (e.g. claude-mem observer sessions)
+		dir := filepath.Base(filepath.Dir(path))
+		if strings.Contains(dir, "claude-mem") || strings.Contains(dir, "observer") {
+			continue
+		}
+
+		info, err := os.Stat(path)
+		if err != nil {
+			readErrs = append(readErrs, fmt.Errorf("stat Claude transcript %s: %w", path, err))
+			continue
+		}
+		if info.ModTime().Before(since) {
+			continue
+		}
+
+		sc, err := c.parseSessionFile(path)
+		if err != nil {
+			readErrs = append(readErrs, err)
+			continue
+		}
+		sessions = append(sessions, sc...)
+	}
+
+	return sessions, errors.Join(readErrs...)
+}
+
+func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open Claude transcript %s: %w", path, err)
+	}
+	defer f.Close()
+
+	// Extract session ID from filename (without .jsonl)
+	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+
+	// Extract project name from path: .../projects/<project>/sessions/<file>
+	project := extractProjectFromPath(path)
+	var startedAt time.Time
+
+	// Aggregate tokens per model
+	perModel := make(map[string]*modelTokens)
+
+	reader := bufio.NewReader(f)
+	for {
+		encoded, readErr := reader.ReadBytes('\n')
+		if len(encoded) == 0 && readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("read Claude transcript %s: %w", path, readErr)
+		}
+		var line transcriptLine
+		if err := json.Unmarshal(encoded, &line); err == nil {
+			if line.CWD != "" {
+				project = line.CWD
+			}
+			if ts, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil && (startedAt.IsZero() || ts.Before(startedAt)) {
+				startedAt = ts
+			}
+			if line.Type == "assistant" && line.Message.Usage != nil {
+				model := line.Message.Model
+				if model == "" {
+					model = "(unknown)"
+				}
+
+				mt, ok := perModel[model]
+				if !ok {
+					mt = &modelTokens{}
+					perModel[model] = mt
+				}
+				mt.input += line.Message.Usage.InputTokens
+				mt.output += line.Message.Usage.OutputTokens
+				mt.cacheRead += line.Message.Usage.CacheReadInputTokens
+				mt.cacheWrite += line.Message.Usage.CacheCreationInputTokens
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("read Claude transcript %s: %w", path, readErr)
+		}
+	}
+
+	if len(perModel) == 0 {
+		return nil, nil
+	}
+
+	// Get file mod time as session start time
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if startedAt.IsZero() {
+		startedAt = info.ModTime()
+	}
+	models := make([]string, 0, len(perModel))
+	for model := range perModel {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	results := make([]SessionCost, 0, len(models))
+	for _, model := range models {
+		mt := perModel[model]
+		cost := ComputeCostFromTokens(Model(model), mt.input, mt.output, mt.cacheRead, mt.cacheWrite)
+		results = append(results, SessionCost{
+			Source:       SourceClaudeCode,
+			SessionID:    SessionID(sessionID),
+			Agent:        AgentClaudeCode,
+			Model:        Model(model),
+			Project:      Project(project),
+			CostUSD:      cost,
+			InputTokens:  mt.input,
+			OutputTokens: mt.output,
+			CacheRead:    mt.cacheRead,
+			CacheWrite:   mt.cacheWrite,
+			StartedAt:    startedAt,
+		})
+	}
+
+	return results, nil
+}
+
+// extractProjectFromPath is a fallback for transcript records without cwd.
+func extractProjectFromPath(path string) string {
+	dir := filepath.Dir(path)
+	encoded := filepath.Base(dir)
+	if encoded == "" || encoded == "." {
+		return ""
+	}
+
+	parts := strings.Split(encoded, "-")
+	if len(parts) < 2 {
+		return encoded
+	}
+
+	candidate := ""
+	for i := 1; i < len(parts); i++ {
+		if candidate == "" {
+			candidate = "/" + parts[i]
+		} else {
+			trySlash := candidate + "/" + parts[i]
+			tryDash := candidate + "-" + parts[i]
+			if _, err := os.Stat(trySlash); err == nil {
+				candidate = trySlash
+			} else if _, err := os.Stat(tryDash); err == nil {
+				candidate = tryDash
+			} else {
+				candidate = trySlash
+			}
+		}
+	}
+
+	return candidate
+}
+
+func (c *ClaudeCodeReader) Close() error {
+	return nil
+}

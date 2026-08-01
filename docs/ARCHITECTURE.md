@@ -403,6 +403,36 @@ See [ADR 0033](adr/0033-unified-audit-log.md) for the full decision record.
 
 ---
 
+## Cost Analytics
+
+`agentjail cost` and the local UI summarize spend from typed, read-only source
+adapters. Claude Code usage is parsed from `~/.claude/projects/*/*.jsonl`, Codex
+usage from `~/.codex/sessions`, and OpenCode usage from its separate SQLite
+database. The readers retain only session identity, project/model attribution,
+token totals, recorded or
+computed cost, and start time—never conversation content.
+
+Model costs are computed offline through Gryph's bundled pricing provider (ADR
+0120-bundled-model-pricing). OpenCode's own non-zero recorded cost takes
+precedence. Missing optional sources are ignored; malformed available sources
+are reported as warnings without affecting enforcement.
+
+Budget alerts come from the global `cost` section of `policy.yaml`:
+
+```yaml
+cost:
+  daily_budget: 25
+  alert_threshold: 0.8
+  project_budgets:
+    "~/Repos/production-api": 10
+```
+
+These values are reporting settings, not OPA policy data. Trusted project
+overlays cannot change them. The shared report contract powers the CLI and
+`GET /api/cost/summary?period=7d&project=<dir>`.
+
+---
+
 ## Local UI
 
 `agentjail ui` starts a loopback-only HTTP server backed by the SQLite store.

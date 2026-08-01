@@ -18,6 +18,7 @@ require (
 	github.com/jedisct1/go-minisign v0.0.0-20260527172527-a09352b57a22
 	github.com/muesli/termenv v0.16.0
 	github.com/open-policy-agent/opa v1.16.2
+	github.com/safedep/gryph v0.7.0
 	github.com/spf13/cobra v1.10.2
 	github.com/vishvananda/netlink v1.3.1
 	go.yaml.in/yaml/v3 v3.0.4

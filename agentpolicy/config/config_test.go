@@ -706,6 +706,54 @@ func TestLoadOrDefaultMissingFile(t *testing.T) {
 	}
 }
 
+func TestCostConfigMergeAndProjectOverlay(t *testing.T) {
+	base := Default()
+	base.Cost = CostConfig{
+		DailyBudget:    25,
+		ProjectBudgets: map[string]float64{"~/work": 10},
+		AlertThreshold: 0.8,
+	}
+	overlay := &PolicyConfig{Cost: CostConfig{
+		DailyBudget:    50,
+		ProjectBudgets: map[string]float64{"~/work": 20, "~/other": 5},
+		AlertThreshold: 0.9,
+	}}
+
+	merged := Merge(base, overlay)
+	if merged.Cost.DailyBudget != 50 || merged.Cost.AlertThreshold != 0.9 {
+		t.Fatalf("global cost merge = %+v", merged.Cost)
+	}
+	if got := merged.Cost.ProjectBudgets["~/work"]; got != 20 {
+		t.Fatalf("global project budget = %v, want 20", got)
+	}
+
+	project := MergeProjectOverlay(base, overlay)
+	if project.Cost.DailyBudget != 25 || project.Cost.AlertThreshold != 0.8 {
+		t.Fatalf("project overlay changed global cost settings: %+v", project.Cost)
+	}
+	if got := project.Cost.ProjectBudgets["~/work"]; got != 10 {
+		t.Fatalf("project overlay changed project budget: %v", got)
+	}
+}
+
+func TestCostConfigValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "negative daily", yaml: "cost:\n  daily_budget: -1\n"},
+		{name: "threshold over one", yaml: "cost:\n  alert_threshold: 1.1\n"},
+		{name: "negative project", yaml: "cost:\n  project_budgets:\n    ~/work: -2\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := decode(strings.NewReader(tt.yaml)); err == nil {
+				t.Fatal("decode succeeded, want validation error")
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ToOPAData()
 // ---------------------------------------------------------------------------

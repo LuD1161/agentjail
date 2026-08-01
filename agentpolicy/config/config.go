@@ -41,6 +41,7 @@ type PolicyConfig struct {
 	Secrets     SecretsConfig      `yaml:"secrets"`
 	Credentials []CredentialConfig `yaml:"credentials"`
 	Skills      SkillsConfig       `yaml:"skills"`
+	Cost        CostConfig         `yaml:"cost"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -77,6 +78,14 @@ type PolicyConfig struct {
 // records what it would have done. It governs the daemon-reachable path only;
 // DaemonUnreachableLevel is the independent axis for when the daemon is gone.
 type EnforcementMode string
+
+// CostConfig controls informational spend alerts outside OPA enforcement.
+// A zero budget disables that limit; AlertThreshold defaults to 0.8.
+type CostConfig struct {
+	DailyBudget    float64            `yaml:"daily_budget"`
+	ProjectBudgets map[string]float64 `yaml:"project_budgets"`
+	AlertThreshold float64            `yaml:"alert_threshold"`
+}
 
 const (
 	// EnforcementEnforce acts on the verdict: deny blocks, ask prompts.
@@ -605,7 +614,25 @@ func decode(r io.Reader) (*PolicyConfig, error) {
 	if err := validateEnforcement(cfg.Enforcement); err != nil {
 		return cfg, err
 	}
+	if err := validateCost(cfg.Cost); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+func validateCost(cost CostConfig) error {
+	if cost.DailyBudget < 0 {
+		return errors.New("cost.daily_budget must not be negative")
+	}
+	if cost.AlertThreshold < 0 || cost.AlertThreshold > 1 {
+		return errors.New("cost.alert_threshold must be between 0 and 1")
+	}
+	for project, budget := range cost.ProjectBudgets {
+		if budget < 0 {
+			return fmt.Errorf("cost.project_budgets[%q] must not be negative", project)
+		}
+	}
+	return nil
 }
 
 // Default returns a PolicyConfig with sensible out-of-box settings.
@@ -679,6 +706,10 @@ func Default() *PolicyConfig {
 			Allowed: []string{},
 			Blocked: []string{},
 			Ask:     []string{},
+		},
+		Cost: CostConfig{
+			ProjectBudgets: map[string]float64{},
+			AlertThreshold: 0.8,
 		},
 		// DaemonUnreachable: degraded by default — the offline denials are a
 		// subset of the permanently-locked online rules, so no working call is
@@ -877,6 +908,27 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 	}
 	for k, v := range overlay.AWS.Resources {
 		result.AWS.Resources[k] = v
+	}
+
+	// Project overlays cannot change global reporting budgets.
+	if overlay.Cost.DailyBudget > 0 {
+		result.Cost.DailyBudget = overlay.Cost.DailyBudget
+	} else {
+		result.Cost.DailyBudget = base.Cost.DailyBudget
+	}
+	if overlay.Cost.AlertThreshold > 0 {
+		result.Cost.AlertThreshold = overlay.Cost.AlertThreshold
+	} else if base.Cost.AlertThreshold > 0 {
+		result.Cost.AlertThreshold = base.Cost.AlertThreshold
+	} else {
+		result.Cost.AlertThreshold = 0.8
+	}
+	result.Cost.ProjectBudgets = make(map[string]float64, len(base.Cost.ProjectBudgets)+len(overlay.Cost.ProjectBudgets))
+	for project, budget := range base.Cost.ProjectBudgets {
+		result.Cost.ProjectBudgets[project] = budget
+	}
+	for project, budget := range overlay.Cost.ProjectBudgets {
+		result.Cost.ProjectBudgets[project] = budget
 	}
 
 	// Secrets.EnvBlocklist
