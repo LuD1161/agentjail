@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/store"
+	"github.com/LuD1161/agentjail/internal/ui"
 	"golang.org/x/term"
 )
 
@@ -339,7 +340,7 @@ func runLogs(args []string) int {
 	}
 
 	// Determine color: enabled when stdout is a TTY and --no-color not set.
-	useColor := !*noColor && term.IsTerminal(int(os.Stdout.Fd()))
+	useColor := !*noColor && ui.ColorEnabled() && term.IsTerminal(int(os.Stdout.Fd()))
 
 	// Rich mode: enabled on a TTY in follow mode when --basic is not set and
 	// stdout is not being piped. If the terminal is < 10 rows tall, richState

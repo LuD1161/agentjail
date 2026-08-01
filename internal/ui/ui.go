@@ -25,6 +25,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
@@ -70,6 +71,18 @@ var asciiGlyphs = glyphs{
 // envLookup is the environment variable lookup function used by detectGlyphs.
 // Tests replace this to inject arbitrary environments without touching os.Getenv.
 var envLookup func(string) string = os.Getenv
+
+var noColor atomic.Bool
+
+// SetNoColor controls the process-wide CLI color override.
+func SetNoColor(disabled bool) {
+	noColor.Store(disabled)
+}
+
+// ColorEnabled reports whether human-readable output may use color.
+func ColorEnabled() bool {
+	return !noColor.Load() && envLookup("NO_COLOR") == ""
+}
 
 // detectGlyphs returns the appropriate glyph set based on the environment.
 // The axes are:
@@ -189,6 +202,9 @@ type UI struct {
 // writers automatically get the ASCII/plain profile) and the glyph set is
 // detected from the environment via detectGlyphs().
 func New(w io.Writer) *UI {
+	if !ColorEnabled() {
+		return NewNoColor(w)
+	}
 	r := lipgloss.NewRenderer(w)
 	return &UI{r: r, g: detectGlyphs()}
 }

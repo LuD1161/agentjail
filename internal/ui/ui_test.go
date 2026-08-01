@@ -691,6 +691,24 @@ func TestNewNoColor_NoEscapeSequences(t *testing.T) {
 	}
 }
 
+func TestSetNoColorDisablesSharedRendererPolicy(t *testing.T) {
+	originalLookup := envLookup
+	envLookup = func(string) string { return "" }
+	SetNoColor(false)
+	t.Cleanup(func() {
+		envLookup = originalLookup
+		SetNoColor(false)
+	})
+
+	if !ColorEnabled() {
+		t.Fatal("ColorEnabled() = false before override")
+	}
+	SetNoColor(true)
+	if ColorEnabled() {
+		t.Fatal("ColorEnabled() = true after SetNoColor(true)")
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: Replay TUI rendering
 // --------------------------------------------------------------------------

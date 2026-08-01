@@ -43,7 +43,7 @@ func runReplay(args []string) int {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	useColor := !*noColor && term.IsTerminal(int(os.Stdout.Fd()))
+	useColor := !*noColor && ui.ColorEnabled() && term.IsTerminal(int(os.Stdout.Fd()))
 	if *list {
 		return replayListSessions(ctx, st, useColor)
 	}
@@ -75,7 +75,7 @@ func runReplay(args []string) int {
 
 	// TUI mode
 	var u *ui.UI
-	if os.Getenv("NO_COLOR") != "" || *noColor {
+	if !ui.ColorEnabled() || *noColor {
 		u = ui.NewNoColor(os.Stdout)
 	} else {
 		u = ui.New(os.Stdout)

@@ -68,6 +68,9 @@ bucket, so the orchestrator can react correctly to each case:
 
 **Capability handling** treats color and glyphs as independent axes:
 - `NO_COLOR` disables *color only*; glyphs stay Unicode.
+- The persistent `agentjail --no-color <command>` flag applies the same
+  color-only override to every human-readable CLI renderer. Command-local
+  `--no-color` flags remain accepted where they predate the global flag.
 - `TERM=dumb` or a non-UTF-8 locale downgrades glyphs and borders to ASCII.
 - Detection lives in one function (`detectGlyphs()` in `internal/ui`),
   overridable in tests, and is the single place capability is decided.

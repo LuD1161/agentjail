@@ -143,6 +143,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, u.Section("Usage"))
 	fmt.Fprintln(w, bodyIndent+"agentjail <command> [flags]")
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, u.Section("Global Flags"))
+	fmt.Fprintln(w, bodyIndent+u.KeyValue("--agent <slug>", "Attribute the command to an agent", ""))
+	fmt.Fprintln(w, bodyIndent+u.KeyValue("--no-color", "Disable color in human-readable output", ""))
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Commands"))
 
 	cmds, maintenance := commandLists(rootCmd)

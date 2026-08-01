@@ -361,7 +361,7 @@ The TUI provides vim-like navigation for browsing session decisions:
 
 Session IDs accept short prefixes -- copy the 8-char ID from `--list` and use it directly.
 
-`--basic` forces plain text output. The TUI also falls back to plain text automatically when piped, on `TERM=dumb`, or when the terminal is too small. `NO_COLOR=1` keeps the TUI interactive but disables color.
+`--basic` forces plain text output. The TUI also falls back to plain text automatically when piped, on `TERM=dumb`, or when the terminal is too small. `NO_COLOR=1` keeps the TUI interactive but disables color. Use `agentjail --no-color <command>` to disable color consistently for any human-readable CLI report.
 
 </details>
 

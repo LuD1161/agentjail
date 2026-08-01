@@ -3,12 +3,16 @@ package main
 import (
 	"os"
 
+	"github.com/LuD1161/agentjail/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 // agentSlug is set by the persistent --agent flag and is available to all
 // subcommands (including legacy pass-through wrappers).
-var agentSlug string
+var (
+	agentSlug     string
+	noColorOutput bool
+)
 
 // updateCleanup is the wait function returned by maybeRunUpdateCheck(). It is
 // stored here so PersistentPreRun can start the goroutine and PersistentPostRun
@@ -23,6 +27,7 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		ui.SetNoColor(noColorOutput)
 		// Mirror main.go: record feature usage for every command except telemetry.
 		if cmd.Name() != "telemetry" && cmd.Name() != "approval-exec" {
 			recordFeatureUsed(cmd.Name())
@@ -44,6 +49,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	// Persistent --agent flag mirrors the old parseTopLevelFlags handling.
 	rootCmd.PersistentFlags().StringVar(&agentSlug, "agent", "", "Agent slug")
+	rootCmd.PersistentFlags().BoolVar(&noColorOutput, "no-color", false, "Disable color in human-readable output")
 
 	// Show the legacy styled usage when the user runs `agentjail` with no
 	// args. Assigned in init() (rather than inline in the var literal above)

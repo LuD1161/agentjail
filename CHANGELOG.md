@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+### Added
+
+- **Global color control**: human-readable commands use the shared terminal
+  palette by default and accept `agentjail --no-color <command>` as a
+  process-wide color override while preserving Unicode structure.
+
 ### Fixed
 
 - **Current-model cost estimates**: price GPT-5.6 Sol/Terra and Claude Opus
