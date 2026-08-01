@@ -441,6 +441,46 @@ func (u *UI) KeyValue(label, value, badge string) string {
 	return row
 }
 
+// StatusRow renders one diagnostic result with an aligned label and detail.
+// Supported kinds are ok, warn, fail, and skip.
+//
+//	✓ Socket                         daemon answered ping
+//	● ssh-agent                      no identities loaded
+func (u *UI) StatusRow(kind, label, detail string, labelWidth int) string {
+	label = sanitize(label)
+	detail = sanitize(detail)
+	if labelWidth < 0 {
+		labelWidth = 0
+	}
+
+	var fg, glyph string
+	switch kind {
+	case "ok":
+		fg, glyph = colorGreen, u.g.ok
+	case "warn":
+		fg, glyph = colorYellow, u.g.bullet
+	case "fail":
+		fg, glyph = colorRed, u.g.fail
+	default:
+		fg = colorDim
+		if u.g.useUTF8 {
+			glyph = "−"
+		} else {
+			glyph = "-"
+		}
+	}
+
+	statusStyle := u.r.NewStyle().
+		Foreground(lipgloss.Color(fg)).
+		Bold(kind != "skip")
+	detailStyle := u.r.NewStyle().Foreground(lipgloss.Color(colorWhite))
+	row := statusStyle.Render(glyph + " " + fmt.Sprintf("%-*s", labelWidth, label))
+	if detail != "" {
+		row += "  " + detailStyle.Render(detail)
+	}
+	return row
+}
+
 // Option renders a single selectable row for an interactive picker list.
 // It is intended to be used inside a Bubble Tea View() method.
 //

@@ -277,6 +277,47 @@ func TestKeyValue(t *testing.T) {
 	}
 }
 
+func TestStatusRow(t *testing.T) {
+	u := plainUTF8UI()
+	tests := []struct {
+		kind  string
+		glyph string
+	}{
+		{kind: "ok", glyph: "✓"},
+		{kind: "warn", glyph: "●"},
+		{kind: "fail", glyph: "✗"},
+		{kind: "skip", glyph: "−"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			out := u.StatusRow(tt.kind, "Socket", "daemon answered ping", 30)
+			for _, want := range []string{tt.glyph, "Socket", "daemon answered ping"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("StatusRow(%q) missing %q: %q", tt.kind, want, out)
+				}
+			}
+		})
+	}
+}
+
+func TestStatusRowASCII(t *testing.T) {
+	u := plainASCIIUI()
+	if out := u.StatusRow("ok", "Socket", "ready", 10); !strings.Contains(out, "[x]") {
+		t.Errorf("ASCII ok row missing fallback glyph: %q", out)
+	}
+	if out := u.StatusRow("skip", "Socket", "not detected", 10); !strings.HasPrefix(out, "-") {
+		t.Errorf("ASCII skip row missing fallback glyph: %q", out)
+	}
+}
+
+func TestStatusRowSanitizesDynamicText(t *testing.T) {
+	u := plainUTF8UI()
+	out := u.StatusRow("fail", "fake\nrow", "\x1b[31mspoof", 12)
+	if strings.Contains(out, "\n") || strings.Contains(out, "\x1b") {
+		t.Errorf("StatusRow allowed terminal injection: %q", out)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: capability matrix
 // --------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/sshagent"
+	"github.com/LuD1161/agentjail/internal/ui"
 	"github.com/LuD1161/agentjail/internal/wire"
 	"github.com/spf13/cobra"
 )
@@ -109,11 +110,15 @@ func runDoctor(mode repairMode) int {
 
 	var repairable []doctorCheck
 	otherFailures, gatingRepairs := 0, 0
+	u := ui.New(os.Stdout)
+
+	fmt.Fprintln(os.Stdout, u.Header("AgentJail Doctor", "system health & protection", runtime.GOOS+"/"+runtime.GOARCH))
+	fmt.Fprintln(os.Stdout)
 
 	for _, s := range doctorSections() {
-		fmt.Fprintln(os.Stdout, s.name)
+		fmt.Fprintln(os.Stdout, u.Section(doctorSectionTitle(u, s.name)))
 		for _, c := range s.run(home) {
-			printCheck(c)
+			printCheck(u, c)
 			if c.status != statusFail {
 				continue
 			}
@@ -144,7 +149,7 @@ func runDoctor(mode repairMode) int {
 		return 1
 	}
 
-	fmt.Fprintln(os.Stdout, "All checks passed.")
+	fmt.Fprintln(os.Stdout, u.Badge("ok", "All checks passed."))
 	return 0
 }
 
@@ -152,6 +157,7 @@ func runDoctor(mode repairMode) int {
 // independently. The reported state is the observed post-repair state, never
 // the repair's own return value (ADR 0086-doctor-repairs-diagnosed).
 func runRepairPass(home string, reg map[repairID]repairAction, repairable []doctorCheck, otherFailures int) int {
+	u := ui.New(os.Stdout)
 	if len(repairable) == 0 {
 		if otherFailures > 0 {
 			fmt.Fprintln(os.Stdout, "Nothing here is safely repairable — run `agentjail install --all` to fix issues.")
@@ -161,23 +167,23 @@ func runRepairPass(home string, reg map[repairID]repairAction, repairable []doct
 		return 0
 	}
 
-	fmt.Fprintln(os.Stdout, "Repair")
+	fmt.Fprintln(os.Stdout, u.Section(u.Emoji("🪛  ")+"Repair"))
 	allRepaired := true
 	for _, c := range repairable {
 		act, ok := reg[c.repair]
 		if !ok {
-			printCheck(doctorCheck{label: c.label, status: statusFail, detail: fmt.Sprintf("no repair registered for %q", c.repair)})
+			printCheck(u, doctorCheck{label: c.label, status: statusFail, detail: fmt.Sprintf("no repair registered for %q", c.repair)})
 			allRepaired = false
 			continue
 		}
 		fmt.Fprintf(os.Stdout, "  ->    %s\n", act.label)
 		if err := act.apply(home); err != nil {
-			printCheck(doctorCheck{label: c.label, status: statusFail, detail: fmt.Sprintf("repair FAILED: %v", err)})
+			printCheck(u, doctorCheck{label: c.label, status: statusFail, detail: fmt.Sprintf("repair FAILED: %v", err)})
 			allRepaired = false
 			continue
 		}
 		post := act.recheck(home)
-		printCheck(post)
+		printCheck(u, post)
 		if post.status != statusOK {
 			allRepaired = false
 		}
@@ -196,23 +202,26 @@ func runRepairPass(home string, reg map[repairID]repairAction, repairable []doct
 	return 0
 }
 
-func printCheck(c doctorCheck) {
-	var marker string
-	switch c.status {
-	case statusOK:
-		marker = "  [ok]  "
-	case statusWarn:
-		marker = "  [!]   "
-	case statusFail:
-		marker = "  [ERR] "
-	case statusSkip:
-		marker = "  [-]   "
+func printCheck(u *ui.UI, c doctorCheck) {
+	kind := string(c.status)
+	if c.status == statusSkip {
+		kind = "skip"
 	}
-	if c.detail != "" {
-		fmt.Fprintf(os.Stdout, "%s%-30s %s\n", marker, c.label, c.detail)
-	} else {
-		fmt.Fprintf(os.Stdout, "%s%s\n", marker, c.label)
+	fmt.Fprintln(os.Stdout, "  "+u.StatusRow(kind, c.label, c.detail, 30))
+}
+
+func doctorSectionTitle(u *ui.UI, name string) string {
+	emoji := map[string]string{
+		"Platform":             "🖥  ",
+		"Shield":               "🛡  ",
+		"Network Interception": "🌐  ",
+		"Daemon":               "⚙  ",
+		"Protection":           "🔒  ",
+		"Hooks":                "🪝  ",
+		"Launch Integration":   "🚀  ",
+		"SSH":                  "🔑  ",
 	}
+	return u.Emoji(emoji[name]) + name
 }
 
 func checkPlatform() []doctorCheck {

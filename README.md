@@ -600,6 +600,9 @@ agentjail sees only destination IP, SNI, and byte counts, and **HTTP(S) policy
 templates cannot match** (database and SSH rules still apply).
 
 Run `agentjail doctor` to see the current posture without launching an agent.
+Its terminal-aware report uses the same branded colors and status glyphs on
+Linux and macOS, including over SSH and inside tmux; redirected output remains
+plain, while `NO_COLOR` disables color without removing Unicode structure.
 
 **macOS** reaches the same place by a different road: instead of network
 namespaces (which macOS lacks) the tunnel runs as a NETransparentProxy system
