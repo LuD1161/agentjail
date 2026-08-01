@@ -78,8 +78,8 @@ func runStats(args []string) int {
 
 const statsRule = "─────────────────────────────────────────────────────────────────────────"
 
-// renderStats prints the human-readable report. Dependency-light on purpose
-// (no internal/ui): plain fmt + block-glyph bars, matching the CLI convention.
+// renderStats prints the human-readable report with the shared CLI palette.
+// See ADR 0008-readopt-charm-tui-styling.
 func renderStats(w io.Writer, rep store.StatsReport, since string, topN int) {
 	renderStatsWithUI(w, rep, since, topN, ui.New(w))
 }
