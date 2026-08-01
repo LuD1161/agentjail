@@ -64,6 +64,19 @@ const (
 	// here is necessary but not sufficient: on Linux the agent can reach this
 	// socket too, so CtlToken is what actually gates it (ADR 0069).
 	ReqDaemonReload RequestType = "daemon_reload"
+	// ReqUpdateAudit records a completed or recovered manual update through the
+	// daemon-owned audit store. Control-socket only; CtlToken required.
+	ReqUpdateAudit RequestType = "update_audit"
+)
+
+// UpdateAuditStatus is the fixed outcome vocabulary for manual-update audit
+// events. The daemon maps each value to its own audit event type.
+type UpdateAuditStatus string
+
+const (
+	UpdateAuditCompleted      UpdateAuditStatus = "completed"
+	UpdateAuditRolledBack     UpdateAuditStatus = "rolled_back"
+	UpdateAuditRollbackFailed UpdateAuditStatus = "rollback_failed"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
@@ -72,13 +85,16 @@ type Request struct {
 	// CtlToken authenticates the caller as a process outside the sandbox. Every
 	// verb served on daemon-ctl.sock requires it (ADR 0069). ReqGrantRequest is
 	// exempt: it is the agent's own verb and is served on daemon.sock.
-	CtlToken  string `json:"ctl_token,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	CWD       string `json:"cwd,omitempty"`
-	Host      string `json:"host,omitempty"`
-	TTLMs     int64  `json:"ttl_ms,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-	GrantID   string `json:"grant_id,omitempty"`
+	CtlToken      string            `json:"ctl_token,omitempty"`
+	SessionID     string            `json:"session_id,omitempty"`
+	CWD           string            `json:"cwd,omitempty"`
+	Host          string            `json:"host,omitempty"`
+	TTLMs         int64             `json:"ttl_ms,omitempty"`
+	Reason        string            `json:"reason,omitempty"`
+	GrantID       string            `json:"grant_id,omitempty"`
+	UpdateStatus  UpdateAuditStatus `json:"update_status,omitempty"`
+	UpdateVersion string            `json:"update_version,omitempty"`
+	UpdateOS      string            `json:"update_os,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).

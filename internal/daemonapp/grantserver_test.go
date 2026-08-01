@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -17,6 +18,16 @@ import (
 // testCtlToken is the injected control token for tests. Injecting it keeps the
 // suite off the real ~/.agentjail/control.token.
 const testCtlToken = "test-control-token"
+
+type updateAuditEmitter struct {
+	events []audit.Event
+	err    error
+}
+
+func (e *updateAuditEmitter) Emit(_ context.Context, event audit.Event) error {
+	e.events = append(e.events, event)
+	return e.err
+}
 
 // shortTempDir returns a short-lived temp directory whose path stays well
 // under the ~104-byte sockaddr_un limit (unlike t.TempDir(), which embeds the
@@ -157,6 +168,36 @@ func TestGrantServerE2E_UnboundGrantApproveRejected(t *testing.T) {
 	grants := registry.ListPending()
 	if len(grants) != 1 {
 		t.Errorf("expected grant to be rolled back to pending, got %d", len(grants))
+	}
+}
+
+func TestGrantServerE2E_UpdateAudit(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	ctlSock := filepath.Join(tmpDir, "daemon-ctl.sock")
+	emitter := &updateAuditEmitter{}
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), emitter, false, nil, nil)
+	if err != nil {
+		t.Fatalf("newGrantServer: %v", err)
+	}
+	defer gs.close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go gs.serveCtl(ctx)
+
+	if err := grantctl.UpdateAudit(ctlSock, testCtlToken, grantctl.UpdateAuditCompleted, "v1.4.0", "linux", time.Second); err != nil {
+		t.Fatalf("UpdateAudit: %v", err)
+	}
+	if len(emitter.events) != 1 {
+		t.Fatalf("emitted events = %d, want 1", len(emitter.events))
+	}
+	event := emitter.events[0]
+	if event.EventType != audit.UpdateCompleted || event.Actor != "cli" {
+		t.Errorf("event = %+v, want completed CLI update audit", event)
+	}
+	wantDetail := map[string]string{"version": "v1.4.0", "os": "linux", "status": "completed"}
+	if !reflect.DeepEqual(event.Detail, wantDetail) {
+		t.Errorf("detail = %#v, want %#v", event.Detail, wantDetail)
 	}
 }
 

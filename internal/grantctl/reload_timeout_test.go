@@ -100,3 +100,38 @@ func TestDaemonReload_AbsentDaemonStillFailsFast(t *testing.T) {
 		t.Errorf("absent daemon should fail fast on the dial budget, took %v", elapsed)
 	}
 }
+
+func TestUpdateAudit_EncodesTypedOutcome(t *testing.T) {
+	sock := shortSock(t, "ctl.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	received := make(chan Request, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		var req Request
+		if json.NewDecoder(conn).Decode(&req) != nil {
+			return
+		}
+		received <- req
+		_ = json.NewEncoder(conn).Encode(Response{OK: true})
+	}()
+
+	if err := UpdateAudit(sock, "ctl-tok", UpdateAuditCompleted, "v1.4.0", "linux", time.Second); err != nil {
+		t.Fatalf("UpdateAudit: %v", err)
+	}
+	got := <-received
+	if got.Type != ReqUpdateAudit || got.CtlToken != "ctl-tok" {
+		t.Fatalf("request = %+v, want authenticated update audit", got)
+	}
+	if got.UpdateStatus != UpdateAuditCompleted || got.UpdateVersion != "v1.4.0" || got.UpdateOS != "linux" {
+		t.Errorf("update audit fields = %+v", got)
+	}
+}

@@ -574,7 +574,21 @@ Even a socket-only doctor check called that stale process healthy.
   compare it with the installed CLI. Liveness alone cannot attest deployment.
   See ADR 0088-deployed-supervisor-verified.
 
-## 40. A test home must not overlap an allowed root
+## 40. A successful restart command is not an activated daemon
+
+The updater treated a zero exit from launchctl or systemctl as activation, while
+the old daemon could still own the socket or the new daemon could fail before
+serving. A test supervisor also waited for its own helper to become healthy, so
+the production path never had to prove the release version.
+
+- **Rule:** the update transaction ends only after a bounded versioned ping
+  reports the newly installed release; a timeout or mismatch restores and
+  restarts the prior generation.
+- **Rule:** never trust inherited user-bus variables or `PATH` when restarting
+  the policy daemon. Reconstruct and validate the same-user runtime bus first.
+  See ADR 0088-deployed-supervisor-verified.
+
+## 41. A test home must not overlap an allowed root
 
 The shield smoke test first inherited the real shield-protected home, so the
 inner shield exited before enforcement and the deny fixture passed for the

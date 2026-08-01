@@ -124,11 +124,22 @@ binaries it explicitly restarts the service on both platforms. On Linux, a
 missing systemd user-bus environment may be reconstructed only after validating
 the current user's runtime directory and Unix socket ownership and types.
 
-The swap is not committed until the supervisor restart command succeeds. If it
-fails, update restores the exact previous binaries and role paths and asks the
-supervisor to restart that restored generation. Separately, doctor compares a
-versioned ping with the installed CLI; a mismatch or an older daemon that cannot
-report a version is a repairable failure, not healthy liveness.
+The swap is not committed until the supervisor restart command succeeds **and a
+versioned daemon ping reports the release version that was just installed**.
+This makes a successful control command insufficient on its own: a stale,
+unhealthy, or incorrectly targeted service is an activation failure. If either
+step fails, update restores the exact previous binaries and role paths and asks
+the supervisor to restart and attest that restored generation. On macOS,
+failure to determine the home, unload, or reload the LaunchAgent aborts the
+transaction; it is never downgraded to an unchecked binary-only update.
+
+On Linux the update invokes the trusted absolute `systemctl` path and replaces
+rather than inherits the two user-bus environment variables. The expected
+`/run/user/<uid>` directory and its `bus` socket must be owned by the invoking
+uid with safe types and permissions before the restart is attempted. Separately,
+doctor compares a versioned ping with the installed CLI; a mismatch or an older
+daemon that cannot report a version is a repairable failure, not healthy
+liveness.
 
 ## Consequences
 

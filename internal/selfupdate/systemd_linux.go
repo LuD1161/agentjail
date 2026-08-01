@@ -12,51 +12,54 @@ import (
 	"syscall"
 )
 
+const systemctlPath = "/usr/bin/systemctl"
+
 // SystemdRestart restarts the agentjail daemon via systemd user service.
 func SystemdRestart(unit string) error {
+	return systemdUserCommand("restart", unit)
+}
+
+// SystemdDaemonReload makes the user manager re-read service definitions.
+func SystemdDaemonReload() error {
+	return systemdUserCommand("daemon-reload")
+}
+
+func systemdUserCommand(args ...string) error {
 	uid := os.Getuid()
 	env, err := systemdUserEnvironment(os.Environ(), uid, filepath.Join("/run/user", strconv.Itoa(uid)))
 	if err != nil {
 		return fmt.Errorf("systemctl --user environment: %w", err)
 	}
-	cmd := exec.Command("systemctl", "--user", "restart", unit)
+	cmd := exec.Command(systemctlPath, append([]string{"--user"}, args...)...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("systemctl --user restart %s: %s: %w", unit, out, err)
+		return fmt.Errorf("systemctl --user %s: %s: %w", strings.Join(args, " "), out, err)
 	}
 	return nil
 }
 
-func systemdUserEnvironment(environ []string, uid int, defaultRuntimeDir string) ([]string, error) {
-	runtimeDir, hasRuntimeDir := environmentValue(environ, "XDG_RUNTIME_DIR")
-	busAddress, hasBusAddress := environmentValue(environ, "DBUS_SESSION_BUS_ADDRESS")
-	if hasRuntimeDir && hasBusAddress {
-		return environ, nil
-	}
-
-	if !hasRuntimeDir {
-		runtimeDir = defaultRuntimeDir
-	}
-	if err := validateUserRuntimeDir(runtimeDir, uid); err != nil {
+func systemdUserEnvironment(environ []string, uid int, expectedRuntimeDir string) ([]string, error) {
+	if err := validateUserRuntimeDir(expectedRuntimeDir, uid); err != nil {
 		return nil, err
 	}
 
-	busPath := filepath.Join(runtimeDir, "bus")
-	if !hasBusAddress {
-		if err := validateUserBusSocket(busPath, uid); err != nil {
-			return nil, err
-		}
-		busAddress = "unix:path=" + busPath
+	busPath := filepath.Join(expectedRuntimeDir, "bus")
+	if err := validateUserBusSocket(busPath, uid); err != nil {
+		return nil, err
 	}
 
-	completed := append([]string(nil), environ...)
-	if !hasRuntimeDir {
-		completed = append(completed, "XDG_RUNTIME_DIR="+runtimeDir)
+	completed := make([]string, 0, len(environ)+2)
+	for _, entry := range environ {
+		if strings.HasPrefix(entry, "XDG_RUNTIME_DIR=") || strings.HasPrefix(entry, "DBUS_SESSION_BUS_ADDRESS=") {
+			continue
+		}
+		completed = append(completed, entry)
 	}
-	if !hasBusAddress {
-		completed = append(completed, "DBUS_SESSION_BUS_ADDRESS="+busAddress)
-	}
+	completed = append(completed,
+		"XDG_RUNTIME_DIR="+expectedRuntimeDir,
+		"DBUS_SESSION_BUS_ADDRESS=unix:path="+busPath,
+	)
 	return completed, nil
 }
 

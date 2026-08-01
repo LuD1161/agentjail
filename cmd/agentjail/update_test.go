@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,10 @@ func disableSignatureVerification(t *testing.T) {
 	updateRestartDaemonFn = func(string) error { return nil }
 	t.Cleanup(func() { updateRestartDaemonFn = savedRestart })
 
+	savedAttest := updateAttestDaemonFn
+	updateAttestDaemonFn = func(string, string) error { return nil }
+	t.Cleanup(func() { updateAttestDaemonFn = savedAttest })
+
 	savedHome := updateHomeDirFn
 	home := t.TempDir()
 	updateHomeDirFn = func() (string, error) { return home, nil }
@@ -51,6 +56,36 @@ func setUpdateRestartDaemon(t *testing.T, restart func(string) error) {
 	t.Cleanup(func() { updateRestartDaemonFn = saved })
 }
 
+func setUpdateLaunchctl(t *testing.T, unload, load func(string) error) {
+	t.Helper()
+	savedUnload, savedLoad := updateLaunchctlUnloadFn, updateLaunchctlLoadFn
+	updateLaunchctlUnloadFn, updateLaunchctlLoadFn = unload, load
+	t.Cleanup(func() {
+		updateLaunchctlUnloadFn, updateLaunchctlLoadFn = savedUnload, savedLoad
+	})
+}
+
+func setUpdateEnsureRoleSymlinks(t *testing.T, ensure func(string) error) {
+	t.Helper()
+	saved := updateEnsureRoleSymlinksFn
+	updateEnsureRoleSymlinksFn = ensure
+	t.Cleanup(func() { updateEnsureRoleSymlinksFn = saved })
+}
+
+func setUpdateDaemonAttester(t *testing.T, attest func(string, string) error) {
+	t.Helper()
+	saved := updateAttestDaemonFn
+	updateAttestDaemonFn = attest
+	t.Cleanup(func() { updateAttestDaemonFn = saved })
+}
+
+func setUpdateDaemonSocketPath(t *testing.T, socketPath func(string) string) {
+	t.Helper()
+	saved := updateDaemonSocketPathFn
+	updateDaemonSocketPathFn = socketPath
+	t.Cleanup(func() { updateDaemonSocketPathFn = saved })
+}
+
 func configureFakeUpdate(t *testing.T, bins []string) string {
 	t.Helper()
 	disableSignatureVerification(t)
@@ -62,7 +97,13 @@ func configureFakeUpdate(t *testing.T, bins []string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sumsContent := fmt.Sprintf("%s  %s\n", hashHex, tarball)
+	darwinTarball := "agentjail-v2.0.0-darwin-amd64.tar.gz"
+	darwinTarballPath, darwinHashHex, _ := makeFakeTarball(t, srcDir, darwinTarball, bins)
+	darwinTarballBytes, err := os.ReadFile(darwinTarballPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sumsContent := fmt.Sprintf("%s  %s\n%s  %s\n", hashHex, tarball, darwinHashHex, darwinTarball)
 
 	assetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -70,6 +111,8 @@ func configureFakeUpdate(t *testing.T, bins []string) string {
 			_, _ = w.Write([]byte(sumsContent))
 		case strings.HasSuffix(r.URL.Path, tarball):
 			_, _ = w.Write(tarballBytes)
+		case strings.HasSuffix(r.URL.Path, darwinTarball):
+			_, _ = w.Write(darwinTarballBytes)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -803,6 +846,100 @@ func TestPerformUpdate_RestartFailureRestoresInstallAndOldDaemon(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(installDir, name)); !os.IsNotExist(err) {
 			t.Errorf("%s exists after rollback; want original absence (err=%v)", name, err)
 		}
+	}
+}
+
+func TestPerformUpdate_RoleSymlinkFailureRestoresEveryPath(t *testing.T) {
+	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
+	if err := os.WriteFile(filepath.Join(installDir, "agentjail"), []byte("old-agentjail"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rolePath := filepath.Join(installDir, "agentjail-daemon")
+	if err := os.Symlink("previous-agentjail", rolePath); err != nil {
+		t.Fatal(err)
+	}
+	setUpdateEnsureRoleSymlinks(t, func(dir string) error {
+		if err := os.Remove(filepath.Join(dir, "agentjail-daemon")); err != nil {
+			return err
+		}
+		if err := os.Symlink("agentjail", filepath.Join(dir, "agentjail-daemon")); err != nil {
+			return err
+		}
+		return errors.New("injected role reconciliation failure")
+	})
+
+	if code := performUpdate(installDir, "linux", "amd64", false); code != 1 {
+		t.Fatalf("performUpdate() = %d, want 1", code)
+	}
+	got, err := os.ReadFile(filepath.Join(installDir, "agentjail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old-agentjail" {
+		t.Fatalf("agentjail = %q, want restored old binary", got)
+	}
+	if target, err := os.Readlink(rolePath); err != nil || target != "previous-agentjail" {
+		t.Fatalf("restored role link = %q, %v; want previous-agentjail", target, err)
+	}
+}
+
+func TestPerformUpdate_DarwinUnloadFailureDoesNotSwap(t *testing.T) {
+	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
+	old := []byte("old-agentjail")
+	if err := os.WriteFile(filepath.Join(installDir, "agentjail"), old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loads := 0
+	setUpdateLaunchctl(t,
+		func(string) error { return errors.New("cannot unload LaunchAgent") },
+		func(string) error { loads++; return nil },
+	)
+
+	if code := performUpdate(installDir, "darwin", "amd64", false); code != 1 {
+		t.Fatalf("performUpdate() = %d, want 1", code)
+	}
+	got, err := os.ReadFile(filepath.Join(installDir, "agentjail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(old) {
+		t.Fatalf("agentjail = %q, want unchanged %q", got, old)
+	}
+	if loads != 0 {
+		t.Fatalf("LaunchctlLoad calls = %d, want 0 after failed unload", loads)
+	}
+}
+
+func TestPerformUpdate_DarwinLoadFailureRollsBack(t *testing.T) {
+	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
+	old := []byte("old-agentjail")
+	if err := os.WriteFile(filepath.Join(installDir, "agentjail"), old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loads := 0
+	setUpdateLaunchctl(t,
+		func(string) error { return nil },
+		func(string) error {
+			loads++
+			if loads == 1 {
+				return errors.New("cannot load updated LaunchAgent")
+			}
+			return nil
+		},
+	)
+
+	if code := performUpdate(installDir, "darwin", "amd64", false); code != 1 {
+		t.Fatalf("performUpdate() = %d, want 1", code)
+	}
+	got, err := os.ReadFile(filepath.Join(installDir, "agentjail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(old) {
+		t.Fatalf("agentjail = %q, want restored %q", got, old)
+	}
+	if loads != 2 {
+		t.Fatalf("LaunchctlLoad calls = %d, want 2 (updated then restored)", loads)
 	}
 }
 

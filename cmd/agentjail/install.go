@@ -2139,8 +2139,8 @@ func reloadDaemonService(home string) error {
 		// No session to hold stale state; the corrected unit is read at next login.
 		return nil
 	}
-	if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
-		return fmt.Errorf("systemctl --user daemon-reload: %w: %s", err, strings.TrimSpace(string(out)))
+	if err := selfupdate.SystemdDaemonReload(); err != nil {
+		return fmt.Errorf("systemctl --user daemon-reload: %w", err)
 	}
 	return nil
 }

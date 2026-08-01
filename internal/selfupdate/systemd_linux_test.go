@@ -31,37 +31,44 @@ func TestSystemdUserEnvironmentDerivesMissingValues(t *testing.T) {
 	}
 }
 
-func TestSystemdUserEnvironmentPreservesExplicitValues(t *testing.T) {
-	original := []string{
-		"PATH=/usr/bin",
-		"XDG_RUNTIME_DIR=/explicit/runtime",
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=/explicit/bus",
-	}
-	env, err := systemdUserEnvironment(original, os.Getuid(), "/path/that/does/not/exist")
-	if err != nil {
-		t.Fatalf("systemdUserEnvironment: %v", err)
-	}
-	if strings.Join(env, "\x00") != strings.Join(original, "\x00") {
-		t.Fatalf("environment changed: got %q, want %q", env, original)
-	}
-}
-
-func TestSystemdUserEnvironmentPreservesExplicitEmptyValues(t *testing.T) {
-	original := []string{"XDG_RUNTIME_DIR=", "DBUS_SESSION_BUS_ADDRESS="}
-	env, err := systemdUserEnvironment(original, os.Getuid(), "/path/that/does/not/exist")
-	if err != nil {
-		t.Fatalf("systemdUserEnvironment: %v", err)
-	}
-	if strings.Join(env, "\x00") != strings.Join(original, "\x00") {
-		t.Fatalf("environment changed: got %q, want %q", env, original)
-	}
-}
-
-func TestSystemdUserEnvironmentDerivesBusFromExplicitRuntimeDir(t *testing.T) {
+func TestSystemdUserEnvironmentReconstructsExplicitValues(t *testing.T) {
 	runtimeDir, cleanup := userRuntimeFixture(t)
 	defer cleanup()
 
-	env, err := systemdUserEnvironment([]string{"XDG_RUNTIME_DIR=" + runtimeDir}, os.Getuid(), "/unused")
+	env, err := systemdUserEnvironment([]string{
+		"PATH=/usr/bin",
+		"XDG_RUNTIME_DIR=/explicit/runtime",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/explicit/bus",
+	}, os.Getuid(), runtimeDir)
+	if err != nil {
+		t.Fatalf("systemdUserEnvironment: %v", err)
+	}
+	if got, _ := environmentValue(env, "XDG_RUNTIME_DIR"); got != runtimeDir {
+		t.Fatalf("XDG_RUNTIME_DIR = %q, want %q", got, runtimeDir)
+	}
+	if got, _ := environmentValue(env, "DBUS_SESSION_BUS_ADDRESS"); got != "unix:path="+filepath.Join(runtimeDir, "bus") {
+		t.Fatalf("DBUS_SESSION_BUS_ADDRESS = %q, want trusted user bus", got)
+	}
+}
+
+func TestSystemdUserEnvironmentReplacesExplicitEmptyValues(t *testing.T) {
+	runtimeDir, cleanup := userRuntimeFixture(t)
+	defer cleanup()
+
+	env, err := systemdUserEnvironment([]string{"XDG_RUNTIME_DIR=", "DBUS_SESSION_BUS_ADDRESS="}, os.Getuid(), runtimeDir)
+	if err != nil {
+		t.Fatalf("systemdUserEnvironment: %v", err)
+	}
+	if got, _ := environmentValue(env, "XDG_RUNTIME_DIR"); got != runtimeDir {
+		t.Fatalf("XDG_RUNTIME_DIR = %q, want %q", got, runtimeDir)
+	}
+}
+
+func TestSystemdUserEnvironmentUsesExpectedRuntimeDir(t *testing.T) {
+	runtimeDir, cleanup := userRuntimeFixture(t)
+	defer cleanup()
+
+	env, err := systemdUserEnvironment([]string{"XDG_RUNTIME_DIR=/untrusted/runtime"}, os.Getuid(), runtimeDir)
 	if err != nil {
 		t.Fatalf("systemdUserEnvironment: %v", err)
 	}
@@ -72,24 +79,9 @@ func TestSystemdUserEnvironmentDerivesBusFromExplicitRuntimeDir(t *testing.T) {
 	}
 }
 
-func TestSystemdUserEnvironmentPreservesExplicitBusAddress(t *testing.T) {
-	runtimeDir := filepath.Join(t.TempDir(), "runtime")
-	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	originalBus := "unix:path=/explicit/bus"
-
-	env, err := systemdUserEnvironment([]string{"DBUS_SESSION_BUS_ADDRESS=" + originalBus}, os.Getuid(), runtimeDir)
-	if err != nil {
-		t.Fatalf("systemdUserEnvironment: %v", err)
-	}
-	gotBus, ok := environmentValue(env, "DBUS_SESSION_BUS_ADDRESS")
-	if !ok || gotBus != originalBus {
-		t.Fatalf("DBUS_SESSION_BUS_ADDRESS = %q, %v; want %q, true", gotBus, ok, originalBus)
-	}
-	gotRuntime, ok := environmentValue(env, "XDG_RUNTIME_DIR")
-	if !ok || gotRuntime != runtimeDir {
-		t.Fatalf("XDG_RUNTIME_DIR = %q, %v; want %q, true", gotRuntime, ok, runtimeDir)
+func TestSystemctlUsesTrustedAbsolutePath(t *testing.T) {
+	if !filepath.IsAbs(systemctlPath) {
+		t.Fatalf("systemctl path %q is not absolute", systemctlPath)
 	}
 }
 

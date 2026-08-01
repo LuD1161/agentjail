@@ -108,6 +108,26 @@ func GrantDeny(sockPath, ctlToken, grantID string, timeout time.Duration) error 
 	return nil
 }
 
+// UpdateAudit records one terminal manual-update outcome through the daemon's
+// authenticated control socket. The daemon owns persistence, so CLI callers
+// never open the audit database for a write.
+func UpdateAudit(sockPath, ctlToken string, status UpdateAuditStatus, version, goos string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{
+		Type:          ReqUpdateAudit,
+		CtlToken:      ctlToken,
+		UpdateStatus:  status,
+		UpdateVersion: version,
+		UpdateOS:      goos,
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return &RefusedError{Op: ReqUpdateAudit, Reason: resp.Error}
+	}
+	return nil
+}
+
 // RefusedError reports that the round trip COMPLETED and the daemon answered
 // ok=false. It is distinct from a transport error on purpose: "the daemon
 // rejected your policy" and "no daemon answered" demand opposite responses from

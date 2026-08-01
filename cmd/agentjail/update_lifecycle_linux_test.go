@@ -23,6 +23,8 @@ const (
 	lifecycleHelperVersion = "AGENTJAIL_UPDATE_LIFECYCLE_VERSION"
 	lifecycleOldGeneration = "old-agentjail"
 	lifecycleNewGeneration = "fake-binary:agentjail"
+	lifecycleOldVersion    = "v1.0.0"
+	lifecycleNewVersion    = "v2.0.0"
 )
 
 // TestUpdateLifecycleDaemonHelper is the live process managed by
@@ -67,6 +69,7 @@ type liveUpdateSupervisor struct {
 	socketPath    string
 	process       *exec.Cmd
 	failNew       bool
+	staleNew      bool
 	restartSeen   []string
 	activatedPIDs []int
 }
@@ -110,7 +113,11 @@ func (s *liveUpdateSupervisor) restart(target string) error {
 	if s.failNew && generation == lifecycleNewGeneration {
 		return errors.New("injected activation failure")
 	}
-	return s.start(generation)
+	version := lifecycleOldVersion
+	if generation == lifecycleNewGeneration && !s.staleNew {
+		version = lifecycleNewVersion
+	}
+	return s.start(version)
 }
 
 func (s *liveUpdateSupervisor) start(version string) error {
@@ -124,17 +131,8 @@ func (s *liveUpdateSupervisor) start(version string) error {
 		return err
 	}
 	s.process = cmd
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		liveness, running, _ := probeDaemonDetails(s.socketPath, 100*time.Millisecond)
-		if liveness == daemonHealthy && running == version {
-			s.activatedPIDs = append(s.activatedPIDs, cmd.Process.Pid)
-			return nil
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	s.stop()
-	return errors.New("helper daemon did not answer a versioned ping")
+	s.activatedPIDs = append(s.activatedPIDs, cmd.Process.Pid)
+	return nil
 }
 
 func (s *liveUpdateSupervisor) stop() {
@@ -165,11 +163,13 @@ func TestPerformUpdateLiveActivation(t *testing.T) {
 	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
 	seedLiveUpdateInstall(t, installDir)
 	supervisor := newLiveUpdateSupervisor(t, installDir)
-	if err := supervisor.start(lifecycleOldGeneration); err != nil {
+	if err := supervisor.start(lifecycleOldVersion); err != nil {
 		t.Fatal(err)
 	}
 	oldPID := supervisor.activatedPIDs[0]
 	setUpdateRestartDaemon(t, supervisor.restart)
+	setUpdateDaemonAttester(t, attestDaemonVersion)
+	setUpdateDaemonSocketPath(t, func(string) string { return supervisor.socketPath })
 
 	if code := performUpdate(installDir, "linux", "amd64", false); code != 0 {
 		t.Fatalf("performUpdate() = %d, want 0", code)
@@ -181,8 +181,8 @@ func TestPerformUpdateLiveActivation(t *testing.T) {
 		t.Fatalf("activated PIDs = %v; want a distinct updated daemon", supervisor.activatedPIDs)
 	}
 	liveness, running, err := probeDaemonDetails(supervisor.socketPath, time.Second)
-	if err != nil || liveness != daemonHealthy || running != lifecycleNewGeneration {
-		t.Fatalf("updated daemon probe = (%v, %q, %v), want healthy %q", liveness, running, err, lifecycleNewGeneration)
+	if err != nil || liveness != daemonHealthy || running != lifecycleNewVersion {
+		t.Fatalf("updated daemon probe = (%v, %q, %v), want healthy %q", liveness, running, err, lifecycleNewVersion)
 	}
 }
 
@@ -191,11 +191,13 @@ func TestPerformUpdateLiveActivationFailureRollsBack(t *testing.T) {
 	seedLiveUpdateInstall(t, installDir)
 	supervisor := newLiveUpdateSupervisor(t, installDir)
 	supervisor.failNew = true
-	if err := supervisor.start(lifecycleOldGeneration); err != nil {
+	if err := supervisor.start(lifecycleOldVersion); err != nil {
 		t.Fatal(err)
 	}
 	oldPID := supervisor.activatedPIDs[0]
 	setUpdateRestartDaemon(t, supervisor.restart)
+	setUpdateDaemonAttester(t, attestDaemonVersion)
+	setUpdateDaemonSocketPath(t, func(string) string { return supervisor.socketPath })
 
 	if code := performUpdate(installDir, "linux", "amd64", false); code != 1 {
 		t.Fatalf("performUpdate() = %d, want 1", code)
@@ -208,8 +210,8 @@ func TestPerformUpdateLiveActivationFailureRollsBack(t *testing.T) {
 		t.Fatalf("activated PIDs = %v; want the restored daemon in a new process", supervisor.activatedPIDs)
 	}
 	liveness, running, err := probeDaemonDetails(supervisor.socketPath, time.Second)
-	if err != nil || liveness != daemonHealthy || running != lifecycleOldGeneration {
-		t.Fatalf("restored daemon probe = (%v, %q, %v), want healthy %q", liveness, running, err, lifecycleOldGeneration)
+	if err != nil || liveness != daemonHealthy || running != lifecycleOldVersion {
+		t.Fatalf("restored daemon probe = (%v, %q, %v), want healthy %q", liveness, running, err, lifecycleOldVersion)
 	}
 	for _, name := range selfupdate.UpdateBinaries {
 		generation, readErr := os.ReadFile(filepath.Join(installDir, name))
@@ -219,5 +221,37 @@ func TestPerformUpdateLiveActivationFailureRollsBack(t *testing.T) {
 		if name == "agentjail" && strings.TrimSpace(string(generation)) != lifecycleOldGeneration {
 			t.Errorf("restored agentjail = %q, want %q", generation, lifecycleOldGeneration)
 		}
+	}
+}
+
+func TestPerformUpdateLiveActivationVersionMismatchRollsBack(t *testing.T) {
+	installDir := configureFakeUpdate(t, selfupdate.UpdateBinaries)
+	seedLiveUpdateInstall(t, installDir)
+	supervisor := newLiveUpdateSupervisor(t, installDir)
+	supervisor.staleNew = true
+	if err := supervisor.start(lifecycleOldVersion); err != nil {
+		t.Fatal(err)
+	}
+	setUpdateRestartDaemon(t, supervisor.restart)
+	setUpdateDaemonAttester(t, attestDaemonVersion)
+	setUpdateDaemonSocketPath(t, func(string) string { return supervisor.socketPath })
+
+	if code := performUpdate(installDir, "linux", "amd64", false); code != 1 {
+		t.Fatalf("performUpdate() = %d, want 1", code)
+	}
+	wantRestarts := []string{lifecycleNewGeneration, lifecycleOldGeneration}
+	if strings.Join(supervisor.restartSeen, "\x00") != strings.Join(wantRestarts, "\x00") {
+		t.Fatalf("restart generations = %v, want %v", supervisor.restartSeen, wantRestarts)
+	}
+	liveness, running, err := probeDaemonDetails(supervisor.socketPath, time.Second)
+	if err != nil || liveness != daemonHealthy || running != lifecycleOldVersion {
+		t.Fatalf("restored daemon probe = (%v, %q, %v), want healthy %q", liveness, running, err, lifecycleOldVersion)
+	}
+	installed, err := os.ReadFile(filepath.Join(installDir, "agentjail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(installed)) != lifecycleOldGeneration {
+		t.Fatalf("restored agentjail = %q, want %q", installed, lifecycleOldGeneration)
 	}
 }

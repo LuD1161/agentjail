@@ -311,8 +311,41 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 		slog.Info("policy reloaded via grant control socket")
 		gs.reply(conn, grantctl.Response{OK: true})
 
+	case grantctl.ReqUpdateAudit:
+		eventType, ok := updateAuditEventType(req.UpdateStatus)
+		if !ok || req.UpdateVersion == "" || (req.UpdateOS != "linux" && req.UpdateOS != "darwin") {
+			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid update audit request"})
+			return
+		}
+		if err := gs.emitter.Emit(context.Background(), audit.Event{
+			EventType: eventType,
+			Actor:     "cli",
+			Detail: map[string]string{
+				"version": req.UpdateVersion,
+				"os":      req.UpdateOS,
+				"status":  string(req.UpdateStatus),
+			},
+		}); err != nil {
+			gs.reply(conn, grantctl.Response{OK: false, Error: "update audit unavailable"})
+			return
+		}
+		gs.reply(conn, grantctl.Response{OK: true})
+
 	default:
 		gs.reply(conn, grantctl.Response{OK: false, Error: fmt.Sprintf("unsupported grant control request %q", req.Type)})
+	}
+}
+
+func updateAuditEventType(status grantctl.UpdateAuditStatus) (string, bool) {
+	switch status {
+	case grantctl.UpdateAuditCompleted:
+		return audit.UpdateCompleted, true
+	case grantctl.UpdateAuditRolledBack:
+		return audit.UpdateRolledBack, true
+	case grantctl.UpdateAuditRollbackFailed:
+		return audit.UpdateRollbackFailed, true
+	default:
+		return "", false
 	}
 }
 

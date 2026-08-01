@@ -37,6 +37,8 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/pathshim"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/telemetry"
@@ -48,6 +50,18 @@ var updateURLBaseFn = selfupdate.UpdateURLBase
 
 var updateHomeDirFn = os.UserHomeDir
 var updateRestartDaemonFn = selfupdate.RestartDaemon
+var updateLaunchctlLoadFn = selfupdate.LaunchctlLoad
+var updateLaunchctlUnloadFn = selfupdate.LaunchctlUnload
+var updateEnsureRoleSymlinksFn = selfupdate.EnsureRoleSymlinks
+var updateAttestDaemonFn = attestDaemonVersion
+var updateDaemonSocketPathFn = daemonSocketPath
+var updateAuditFn = emitUpdateAudit
+
+const (
+	updateActivationTimeout      = 5 * time.Second
+	updateActivationProbeTimeout = 250 * time.Millisecond
+	updateAuditTimeout           = 3 * time.Second
+)
 
 type updatePathBackup struct {
 	name       string
@@ -295,17 +309,22 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 		return 1
 	}
 
+	// The service definition and control socket both live under the invoking
+	// user's home. Refuse to mutate binaries when their supervised activation
+	// target cannot be determined.
+	home, err := updateHomeDirFn()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail update: determine daemon home: %v\n", err)
+		return 1
+	}
+
 	// Step 6: stop the daemon before swapping its binary (macOS/launchd only).
 	plistPath := ""
 	if goos == "darwin" {
-		home, herr := os.UserHomeDir()
-		if herr == nil {
-			plistPath = filepath.Join(home, "Library", "LaunchAgents", plistFilename)
-			if err := selfupdate.LaunchctlUnload(plistPath); err != nil {
-				// Non-fatal — warn and continue; the rename is still atomic.
-				fmt.Fprintf(os.Stderr, "  warning: could not stop daemon: %v\n", err)
-				plistPath = "" // skip restart attempt
-			}
+		plistPath = filepath.Join(home, "Library", "LaunchAgents", plistFilename)
+		if err := updateLaunchctlUnloadFn(plistPath); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail update: stop daemon before update: %v\n", err)
+			return 1
 		}
 	}
 
@@ -313,8 +332,10 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	backupDir, err := os.MkdirTemp("", "agentjail-update-backup-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail update: create backup dir: %v\n", err)
-		if goos == "darwin" && plistPath != "" {
-			_ = selfupdate.LaunchctlLoad(plistPath)
+		if goos == "darwin" {
+			if reloadErr := updateLaunchctlLoadFn(plistPath); reloadErr != nil {
+				fmt.Fprintf(os.Stderr, "  warning: could not restore daemon after backup failure: %v\n", reloadErr)
+			}
 		}
 		return 1
 	}
@@ -324,8 +345,10 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	backups, err := backupUpdatePaths(installDir, backupDir, backupNames)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail update: back up installed files: %v\n", err)
-		if goos == "darwin" && plistPath != "" {
-			_ = selfupdate.LaunchctlLoad(plistPath)
+		if goos == "darwin" {
+			if reloadErr := updateLaunchctlLoadFn(plistPath); reloadErr != nil {
+				fmt.Fprintf(os.Stderr, "  warning: could not restore daemon after backup failure: %v\n", reloadErr)
+			}
 		}
 		return 1
 	}
@@ -333,8 +356,10 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 	// Step 8: atomically replace each binary in the install directory.
 	if err := os.MkdirAll(installDir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail update: mkdir %s: %v\n", installDir, err)
-		if goos == "darwin" && plistPath != "" {
-			_ = selfupdate.LaunchctlLoad(plistPath)
+		if goos == "darwin" {
+			if reloadErr := updateLaunchctlLoadFn(plistPath); reloadErr != nil {
+				fmt.Fprintf(os.Stderr, "  warning: could not restore daemon after directory failure: %v\n", reloadErr)
+			}
 		}
 		return 1
 	}
@@ -360,70 +385,52 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 
 	if swapErr != nil {
 		fmt.Fprintln(os.Stderr, "  rolling back installed binaries…")
-		if restoreErr := restoreUpdatePaths(installDir, backupDir, backups); restoreErr != nil {
-			fmt.Fprintf(os.Stderr, "  warning: rollback failed: %v\n", restoreErr)
-		}
-		if goos == "darwin" && plistPath != "" {
-			_ = selfupdate.LaunchctlLoad(plistPath)
-		}
-		return 1
+		return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, swapErr, daemonRollback(home, current, goos, plistPath))
 	}
 
 	// Step 8b: reconcile the four role symlinks (agentjail-daemon,
 	// agentjail-shield, agentjail-netproxy, agentjail-secrets) against the
-	// just-swapped agentjail binary. THE WATCHPOINT: this MUST run after the
-	// real agentjail binary lands in installDir, and must never be replaced
-	// with a direct copy/rename onto a role path — see
-	// selfupdate.EnsureRoleSymlinks for why. Non-fatal: the CLI itself is
-	// already updated at this point, so a symlink reconciliation failure is
-	// reported but does not fail the whole update (re-running `agentjail
-	// update --force` retries it).
-	if err := selfupdate.EnsureRoleSymlinks(installDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: could not reconcile role symlinks: %v\n", err)
+	// just-swapped agentjail binary. The role paths are part of the installed
+	// generation, so failure restores every path captured before the swap.
+	if err := updateEnsureRoleSymlinksFn(installDir); err != nil {
+		return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, fmt.Errorf("reconcile role symlinks: %w", err), daemonRollback(home, current, goos, plistPath))
 	}
 	reassertUpdatedPathShim(installDir)
 
 	// Step 8c: keep the deployed definition ready for daemon-side updates, which
 	// use the exit-0 handoff. See ADR 0088-deployed-supervisor-verified.
-	home, homeErr := updateHomeDirFn()
-	if homeErr == nil {
-		repaired, err := ensureDaemonRestartPolicy(home)
-		switch {
-		case err != nil:
-			fmt.Fprintf(os.Stderr, "  warning: could not refresh the daemon's supervisor definition: %v\n", err)
-		case repaired:
-			fmt.Println("🔧  supervisor definition repaired — it would not have restarted the daemon after a clean exit")
-			// On darwin the plist was unloaded at step 6; step 9's load reads the
-			// rewrite. Only systemd needs an explicit reload here.
-			if goos != "darwin" {
-				if err := reloadDaemonService(home); err != nil {
-					fmt.Fprintf(os.Stderr, "  warning: could not reload the supervisor definition: %v\n", err)
-				}
+	repaired, err := ensureDaemonRestartPolicy(home)
+	switch {
+	case err != nil:
+		return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, fmt.Errorf("refresh daemon supervisor definition: %w", err), daemonRollback(home, current, goos, plistPath))
+	case repaired:
+		fmt.Println("🔧  supervisor definition repaired — it would not have restarted the daemon after a clean exit")
+		// On darwin the plist was unloaded at step 6; step 9's load reads the
+		// rewrite. Only systemd needs an explicit reload here.
+		if goos != "darwin" {
+			if err := reloadDaemonService(home); err != nil {
+				return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, fmt.Errorf("reload daemon supervisor definition: %w", err), daemonRollback(home, current, goos, plistPath))
 			}
 		}
 	}
 
 	// Step 9: restart the daemon. Activation is part of the update transaction:
 	// a release is not installed successfully until its daemon is running.
-	if goos == "darwin" && plistPath != "" {
-		if err := selfupdate.LaunchctlLoad(plistPath); err != nil {
-			return rollbackFailedDaemonRestart(installDir, backupDir, backups, err, func() error {
-				return selfupdate.LaunchctlLoad(plistPath)
-			})
-		} else {
-			fmt.Println("🔄  daemon restarted")
+	if goos == "darwin" {
+		if err := activateDaemon(home, latest, func() error { return updateLaunchctlLoadFn(plistPath) }); err != nil {
+			return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, err, daemonRollback(home, current, goos, plistPath))
 		}
+		fmt.Println("🔄  daemon restarted and attested")
 	} else if goos == "linux" {
 		target := systemdUnitFilename
-		if err := updateRestartDaemonFn(target); err != nil {
-			return rollbackFailedDaemonRestart(installDir, backupDir, backups, err, func() error {
-				return updateRestartDaemonFn(target)
-			})
+		if err := activateDaemon(home, latest, func() error { return updateRestartDaemonFn(target) }); err != nil {
+			return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, err, daemonRollback(home, current, goos, plistPath))
 		}
-		fmt.Println("🔄  daemon restarted")
+		fmt.Println("🔄  daemon restarted and attested")
 	}
 
 	fmt.Printf("✅  updated %d binaries  %s → %s\n", installed, current, latest)
+	reportUpdateAudit(grantctl.UpdateAuditCompleted, latest, goos)
 
 	if cl := releaseInfo.Changelog; cl != "" {
 		fmt.Println()
@@ -522,17 +529,85 @@ func atomicReplaceSymlink(dst, target string) error {
 	return os.Rename(tmpPath, dst)
 }
 
-func rollbackFailedDaemonRestart(installDir, backupDir string, backups []updatePathBackup, restartErr error, restartOld func() error) int {
-	fmt.Fprintf(os.Stderr, "  warning: could not restart updated daemon: %v; rolling back…\n", restartErr)
+func activateDaemon(home, wantVersion string, restart func() error) error {
+	if err := restart(); err != nil {
+		return fmt.Errorf("restart daemon: %w", err)
+	}
+	if err := updateAttestDaemonFn(home, wantVersion); err != nil {
+		return fmt.Errorf("attest restarted daemon: %w", err)
+	}
+	return nil
+}
+
+func daemonRollback(home, oldVersion, goos, plistPath string) func() error {
+	if goos == "darwin" {
+		return func() error {
+			return activateDaemon(home, oldVersion, func() error { return updateLaunchctlLoadFn(plistPath) })
+		}
+	}
+	if goos == "linux" {
+		return func() error {
+			return activateDaemon(home, oldVersion, func() error { return updateRestartDaemonFn(systemdUnitFilename) })
+		}
+	}
+	return nil
+}
+
+func rollbackFailedUpdate(installDir, backupDir string, backups []updatePathBackup, version, goos string, cause error, restartOld func() error) int {
+	fmt.Fprintf(os.Stderr, "  warning: could not activate updated release: %v; rolling back…\n", cause)
+	rollbackSucceeded := true
 	if err := restoreUpdatePaths(installDir, backupDir, backups); err != nil {
 		fmt.Fprintf(os.Stderr, "  warning: rollback failed: %v\n", err)
+		rollbackSucceeded = false
 	}
 	if restartOld != nil {
 		if err := restartOld(); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: could not restart previous daemon after rollback: %v\n", err)
+			rollbackSucceeded = false
 		}
 	}
+	if rollbackSucceeded {
+		reportUpdateAudit(grantctl.UpdateAuditRolledBack, version, goos)
+	} else {
+		reportUpdateAudit(grantctl.UpdateAuditRollbackFailed, version, goos)
+	}
 	return 1
+}
+
+func emitUpdateAudit(status grantctl.UpdateAuditStatus, version, goos string) error {
+	token, err := ctlauth.Load()
+	if err != nil {
+		return err
+	}
+	return grantctl.UpdateAudit(grantctl.ControlSocketPath(), token, status, version, goos, updateAuditTimeout)
+}
+
+func reportUpdateAudit(status grantctl.UpdateAuditStatus, version, goos string) {
+	if err := updateAuditFn(status, version, goos); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not write update audit event: %v\n", err)
+	}
+}
+
+func attestDaemonVersion(home, wantVersion string) error {
+	deadline := time.Now().Add(updateActivationTimeout)
+	var lastErr error
+	for {
+		liveness, runningVersion, err := probeDaemonDetails(updateDaemonSocketPathFn(home), updateActivationProbeTimeout)
+		if err == nil && liveness == daemonHealthy && runningVersion == wantVersion {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else if liveness != daemonHealthy {
+			lastErr = fmt.Errorf("daemon liveness state %v", liveness)
+		} else {
+			lastErr = fmt.Errorf("daemon version %q, want %q", runningVersion, wantVersion)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("versioned daemon ping did not attest %s within %s: %w", wantVersion, updateActivationTimeout, lastErr)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func reassertUpdatedPathShim(installDir string) {

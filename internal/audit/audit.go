@@ -41,13 +41,15 @@ const (
 	// advice. See ADR 0092-persist-request-bodies (D5), AGE-254.
 	TunnelBodiesUnencrypted = "tunnel.bodies_unencrypted"
 	// Fixed vocabulary for TunnelBodiesUnencrypted's Detail["reason"].
-	TunnelKeysLocked = "keychain_locked"
-	TunnelKeysAbsent = "no_keychain"
-	TunnelKeysError  = "keyring_error"
-	DaemonStarted    = "daemon.started"
-	DaemonStopped    = "daemon.stopped"
-	DaemonFailopen   = "daemon.failopen"
-	UpdateCompleted  = "update.completed"
+	TunnelKeysLocked     = "keychain_locked"
+	TunnelKeysAbsent     = "no_keychain"
+	TunnelKeysError      = "keyring_error"
+	DaemonStarted        = "daemon.started"
+	DaemonStopped        = "daemon.stopped"
+	DaemonFailopen       = "daemon.failopen"
+	UpdateCompleted      = "update.completed"
+	UpdateRolledBack     = "update.rolled_back"
+	UpdateRollbackFailed = "update.rollback_failed"
 	// Session-aware netproxy control plane (per-session allowlists). A session
 	// lease is registered by the shield over the control socket and reaped on
 	// expiry regardless of traffic. Never put the session Token in Detail.
