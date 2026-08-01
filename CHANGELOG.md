@@ -47,6 +47,12 @@
 - **Human-only daemon recovery**: CLI and direct systemd restart paths are
   permanently policy-locked, mirrored by degraded offline enforcement, and
   the CLI requires control-token access plus typed confirmation on `/dev/tty`.
+- **Attested update activation**: manual updates now require a versioned daemon
+  ping before commit, audit terminal outcomes over the authenticated control
+  socket, and restore the prior generation on restart or attestation failure.
+- **Bounded local analytics**: transcript readers cap periods, files, records,
+  and JSONL line size; sanitize terminal metadata; and open OpenCode SQLite with
+  an enforced read-only URI plus `query_only`.
 
 ## v1.3.0 - 2026-07-31
 
