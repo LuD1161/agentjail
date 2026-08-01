@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+## v1.4.0 - 2026-07-31
+
+![v1.4.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.4.0-summary.svg)
+
+## TL;DR
+
+- **Analyze local Claude Code, Codex, and OpenCode costs** by project and model with bundled Gryph pricing, token efficiency, and budget alerts.
+- **Explore the same cost report in the local SPA** with session totals and input/output token breakdowns.
+- **Activate Linux updates transactionally** by restarting and attesting the new daemon, then restoring the exact prior installation if activation fails.
+- **Diagnose protection state faster** with a polished terminal report and explicit CLI/daemon version-skew repair.
+
 ### Added
 
 - **Local cost analytics**: `agentjail cost` summarizes Claude Code, Codex, and OpenCode
@@ -12,6 +23,13 @@
   0120-bundled-model-pricing).
 - **Cost dashboard contract**: the local UI can consume the same typed report,
   including unique session totals and per-model input/output token counts.
+- **Local Cost dashboard**: the SPA presents project, model, session, token,
+  spend, efficiency, and budget data without sending transcripts off-device.
+
+### Changed
+
+- **Doctor terminal report**: `agentjail doctor` now renders a concise,
+  structured health summary while preserving typed output for automation.
 
 ### Fixed
 
