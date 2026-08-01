@@ -135,11 +135,11 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           TARBALL="agentjail-${VERSION}-${{ matrix.platform }}.tar.gz"
           # Ship the project license + third-party attributions alongside the binaries.
-          cp LICENSE THIRD_PARTY_LICENSES dist/
+          cp LICENSE NOTICE THIRD_PARTY_LICENSES dist/
           cd dist
           tar -czf "../${TARBALL}" \
             agentjail agentjail-hook \
-            LICENSE THIRD_PARTY_LICENSES
+            LICENSE NOTICE THIRD_PARTY_LICENSES
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
@@ -255,6 +255,7 @@ jobs:
             dist/SHA256SUMS
             dist/SHA256SUMS.minisig
             LICENSE
+            NOTICE
             THIRD_PARTY_LICENSES
 
   # Push a generated binary formula to the Homebrew tap so `brew install

@@ -811,4 +811,11 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md). All commits are signed off (DCO) and
 
 ## License
 
-[Apache-2.0](./LICENSE) - explicit defensive patent grant.
+[Apache-2.0](./LICENSE) - explicit defensive patent grant. Third-party notices
+and license texts are provided in [`NOTICE`](./NOTICE) and
+[`THIRD_PARTY_LICENSES`](./THIRD_PARTY_LICENSES).
+
+AgentJail uses [Gryph](https://github.com/safedep/gryph) for offline model-name
+resolution and pricing estimates in `agentjail cost` and the local Cost
+dashboard. Gryph never receives transcript content or usage data from
+AgentJail; its bundled pricing catalog is evaluated locally.

@@ -412,10 +412,12 @@ database. The readers retain only session identity, project/model attribution,
 token totals, recorded or
 computed cost, and start time—never conversation content.
 
-Model costs are computed offline through Gryph's bundled pricing provider (ADR
-0120-bundled-model-pricing). OpenCode's own non-zero recorded cost takes
-precedence. Missing optional sources are ignored; malformed available sources
-are reported as warnings without affecting enforcement.
+Model costs are computed offline through
+[Gryph](https://github.com/safedep/gryph)'s bundled model-resolution and pricing
+provider (ADR 0120-bundled-model-pricing). AgentJail sends no transcript or
+usage data to Gryph. OpenCode's own non-zero recorded cost takes precedence.
+Missing optional sources are ignored; malformed available sources are reported
+as warnings without affecting enforcement.
 
 Budget alerts come from the global `cost` section of `policy.yaml`:
 

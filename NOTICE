@@ -1,0 +1,7 @@
+AgentJail
+Copyright 2026 AgentJail contributors
+
+AgentJail uses Gryph (https://github.com/safedep/gryph) to resolve model
+identifiers and calculate estimated Claude Code, Codex, and OpenCode costs
+from locally collected token-usage metadata. Gryph is licensed under the
+Apache License 2.0. Its license text is included in THIRD_PARTY_LICENSES.
