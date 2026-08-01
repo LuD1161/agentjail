@@ -3,6 +3,7 @@ package costanalytics
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -39,5 +40,27 @@ func TestClaudeCodeReaderUsesTranscriptCWDAndAggregatesUsage(t *testing.T) {
 	wantStart := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
 	if !got.StartedAt.Equal(wantStart) {
 		t.Fatalf("StartedAt = %s, want %s", got.StartedAt, wantStart)
+	}
+}
+
+func TestClaudeCodeReaderAcceptsLargeOpaqueRecordBeforeUsage(t *testing.T) {
+	projects := t.TempDir()
+	sessionDir := filepath.Join(projects, "-encoded-project")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sessionDir, "session-large.jsonl")
+	content := `{"type":"user","message":{"content":"` + strings.Repeat("x", (1<<20)+1) + `"}}` + "\n" +
+		`{"type":"assistant","cwd":"/real/project","timestamp":"2026-07-31T10:01:00Z","message":{"model":"claude-test","usage":{"input_tokens":10,"output_tokens":4}}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeCodeReader{projectsDir: projects}).ReadSessions(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].InputTokens != 10 || sessions[0].OutputTokens != 4 {
+		t.Fatalf("unexpected sessions: %+v", sessions)
 	}
 }

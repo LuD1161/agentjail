@@ -13,7 +13,7 @@ import (
 var errTranscriptFileLimit = errors.New("cost transcript file limit reached")
 
 const (
-	maxTranscriptLineBytes = 1 << 20
+	maxTranscriptLineBytes = 16 << 20
 	maxTranscriptFiles     = 10_000
 	maxSessionCosts        = 50_000
 	maxCostPeriod          = 90 * 24 * time.Hour

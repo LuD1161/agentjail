@@ -60,3 +60,7 @@ local fixture and treats all other records as opaque.
 - Cost readers cap report windows, files, records, and JSONL line size. They
   use a true read-only SQLite URI plus `query_only`, and surface limit or source
   errors as informational partial-report diagnostics.
+- JSONL records are bounded at 16 MiB. Live Claude Code and Codex verification
+  on 2026-08-01 found legitimate opaque conversation, compaction, and image
+  records as large as 7 MiB, so the earlier 1 MiB bound rejected valid session
+  files before their later usage records could be read.

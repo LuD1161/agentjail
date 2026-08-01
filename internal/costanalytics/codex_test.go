@@ -3,6 +3,7 @@ package costanalytics
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,24 @@ not-json
 {"timestamp":"2026-07-31T17:00:00Z","type":"session_meta","payload":{"session_id":"session-2","cwd":"/work/project"}}
 {"type":"future_record","payload":{"conversation_text":"must not be decoded"}}
 {"type":"event_msg","payload":{"type":"future_event","info":{"total_token_usage":{"total_tokens":99999}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":5,"total_tokens":45}}}}
+`)
+
+	sessions, err := NewCodexReaderAt(root).ReadSessions(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].InputTokens != 30 || sessions[0].OutputTokens != 5 {
+		t.Fatalf("unexpected sessions: %+v", sessions)
+	}
+}
+
+func TestCodexReaderAcceptsLargeOpaqueRecordBeforeUsage(t *testing.T) {
+	root := t.TempDir()
+	large := `{"type":"response_item","payload":{"type":"message","content":"` + strings.Repeat("x", (1<<20)+1) + `"}}`
+	writeCodexTranscript(t, root, "rollout-large.jsonl", large+`
+{"timestamp":"2026-07-31T17:00:00Z","type":"session_meta","payload":{"id":"session-large","cwd":"/work/project"}}
+{"type":"turn_context","payload":{"model":"gpt-5.4"}}
 {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":5,"total_tokens":45}}}}
 `)
 

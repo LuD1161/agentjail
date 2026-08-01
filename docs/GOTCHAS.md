@@ -612,6 +612,18 @@ open or create a writable database while ordinary read tests stayed green.
   test; a connection option is only a security control once the driver parsed it.
   See ADR 0120-bundled-model-pricing.
 
+## 43. A safety bound must admit real records
+
+The cost readers capped JSONL lines at 1 MiB after fixtures proved oversized
+records were rejected. Real Claude Code and Codex transcripts already contained
+valid 1–7 MiB conversation, compaction, and image records, so the scanner stopped
+before later usage snapshots and silently dropped whole sessions from totals.
+
+- **Rule:** measure the external contract before choosing a resource bound, and
+  keep a real-shape fixture above the old boundary. A hostile-input test proves
+  rejection works; it does not prove the accepted range is usable.
+  See ADR 0120-bundled-model-pricing.
+
 ---
 
 ## Testing gotchas
