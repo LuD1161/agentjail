@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Current-model cost estimates**: price GPT-5.6 Sol/Terra and Claude Opus
+  4.8/5 from officially verified rates, and include cache pricing for Claude
+  Opus 4.6 instead of reporting active sessions as `$0.00`.
+
 ## v1.4.0 - 2026-07-31
 
 ![v1.4.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.4.0-summary.svg)

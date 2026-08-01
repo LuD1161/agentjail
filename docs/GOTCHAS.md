@@ -624,6 +624,20 @@ before later usage snapshots and silently dropped whole sessions from totals.
   rejection works; it does not prove the accepted range is usable.
   See ADR 0120-bundled-model-pricing.
 
+## 44. A bundled catalog has a freshness boundary
+
+Cost tests checked two models already present in Gryph v0.7.0 while live agents
+used newer identifiers absent even from Gryph's current main catalog. Pricing
+lookup returned no match, the estimator converted that to `$0.00`, and millions
+of correctly parsed tokens looked free. The exact Claude Opus 4.6 catalog entry
+also carried zero cache rates even though the provider's `@default` variant had
+them, so its non-zero total still omitted cache spend.
+
+- **Rule:** test every model identifier emitted by current supported agents,
+  including cache reads and writes. A green catalog lookup for yesterday's
+  model does not attest today's report.
+  See ADR 0121-current-model-pricing.
+
 ---
 
 ## Testing gotchas

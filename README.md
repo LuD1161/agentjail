@@ -827,5 +827,7 @@ and license texts are provided in [`NOTICE`](./NOTICE) and
 
 AgentJail uses [Gryph](https://github.com/safedep/gryph) for offline model-name
 resolution and pricing estimates in `agentjail cost` and the local Cost
-dashboard. Gryph never receives transcript content or usage data from
-AgentJail; its bundled pricing catalog is evaluated locally.
+dashboard, supplemented by source-dated official rates for current agent models
+that have not reached Gryph's bundled catalog yet. Gryph never receives
+transcript content or usage data from AgentJail; all pricing is evaluated
+locally.
