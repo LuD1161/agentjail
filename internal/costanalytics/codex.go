@@ -1,11 +1,9 @@
 package costanalytics
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -86,6 +84,7 @@ func (c *CodexReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 
 	bySession := make(map[string]*codexSessionUsage)
 	var readErrs []error
+	transcriptFiles := 0
 	err := filepath.WalkDir(c.sessionsDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			readErrs = append(readErrs, fmt.Errorf("read Codex sessions %s: %w", path, walkErr))
@@ -97,6 +96,10 @@ func (c *CodexReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".jsonl") {
 			return nil
 		}
+		if transcriptFiles >= maxTranscriptFiles {
+			return errTranscriptFileLimit
+		}
+		transcriptFiles++
 
 		parsed, err := parseCodexSession(path)
 		if err != nil {
@@ -112,7 +115,9 @@ func (c *CodexReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	if err != nil {
+	if errors.Is(err, errTranscriptFileLimit) {
+		readErrs = append(readErrs, fmt.Errorf("Codex transcript file limit of %d reached", maxTranscriptFiles))
+	} else if err != nil {
 		return nil, fmt.Errorf("walk Codex sessions: %w", err)
 	}
 
@@ -165,56 +170,51 @@ func parseCodexSession(path string) (*codexSessionUsage, error) {
 		startedAt: info.ModTime(),
 	}
 	seenTimestamp := false
-	reader := bufio.NewReader(file)
-	for {
-		encoded, readErr := reader.ReadBytes('\n')
-		if len(encoded) > 0 {
-			var envelope codexEnvelope
-			if json.Unmarshal(encoded, &envelope) == nil {
-				if timestamp, err := time.Parse(time.RFC3339Nano, envelope.Timestamp); err == nil && (!seenTimestamp || timestamp.Before(state.startedAt)) {
-					state.startedAt = timestamp
-					seenTimestamp = true
+	scanner := newTranscriptScanner(file)
+	for scanner.Scan() {
+		encoded := scanner.Bytes()
+		var envelope codexEnvelope
+		if json.Unmarshal(encoded, &envelope) == nil {
+			if timestamp, err := time.Parse(time.RFC3339Nano, envelope.Timestamp); err == nil && (!seenTimestamp || timestamp.Before(state.startedAt)) {
+				state.startedAt = timestamp
+				seenTimestamp = true
+			}
+			switch envelope.Type {
+			case "session_meta":
+				var meta codexSessionMeta
+				if json.Unmarshal(envelope.Payload, &meta) == nil {
+					if meta.ID != "" {
+						state.sessionID = meta.ID
+					} else if meta.SessionID != "" {
+						state.sessionID = meta.SessionID
+					}
+					if meta.CWD != "" {
+						state.project = meta.CWD
+					}
 				}
-				switch envelope.Type {
-				case "session_meta":
-					var meta codexSessionMeta
-					if json.Unmarshal(envelope.Payload, &meta) == nil {
-						if meta.ID != "" {
-							state.sessionID = meta.ID
-						} else if meta.SessionID != "" {
-							state.sessionID = meta.SessionID
-						}
-						if meta.CWD != "" {
-							state.project = meta.CWD
-						}
+			case "turn_context":
+				var context codexTurnContext
+				if json.Unmarshal(envelope.Payload, &context) == nil && context.Model != "" {
+					state.model = context.Model
+				}
+			case "event_msg":
+				var event codexEvent
+				if json.Unmarshal(envelope.Payload, &event) == nil && event.Type == "token_count" && event.Info != nil && event.Info.TotalTokenUsage != nil {
+					usage := *event.Info.TotalTokenUsage
+					total := usage.TotalTokens
+					if total == 0 {
+						total = usage.InputTokens + usage.OutputTokens
 					}
-				case "turn_context":
-					var context codexTurnContext
-					if json.Unmarshal(envelope.Payload, &context) == nil && context.Model != "" {
-						state.model = context.Model
-					}
-				case "event_msg":
-					var event codexEvent
-					if json.Unmarshal(envelope.Payload, &event) == nil && event.Type == "token_count" && event.Info != nil && event.Info.TotalTokenUsage != nil {
-						usage := *event.Info.TotalTokenUsage
-						total := usage.TotalTokens
-						if total == 0 {
-							total = usage.InputTokens + usage.OutputTokens
-						}
-						if total >= state.maxTotal {
-							state.usage = usage
-							state.maxTotal = total
-						}
+					if total >= state.maxTotal {
+						state.usage = usage
+						state.maxTotal = total
 					}
 				}
 			}
 		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("read Codex transcript %s: %w", path, readErr)
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read Codex transcript %s: line exceeds %d bytes or is invalid: %w", path, maxTranscriptLineBytes, err)
 	}
 	return state, nil
 }

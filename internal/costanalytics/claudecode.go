@@ -1,11 +1,9 @@
 package costanalytics
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +55,10 @@ func (c *ClaudeCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) 
 
 	var sessions []SessionCost
 	var readErrs []error
+	if len(matches) > maxTranscriptFiles {
+		matches = matches[:maxTranscriptFiles]
+		readErrs = append(readErrs, fmt.Errorf("Claude transcript file limit of %d reached", maxTranscriptFiles))
+	}
 	for _, path := range matches {
 		// Skip plugin/internal directories (e.g. claude-mem observer sessions)
 		dir := filepath.Base(filepath.Dir(path))
@@ -78,7 +80,11 @@ func (c *ClaudeCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) 
 			readErrs = append(readErrs, err)
 			continue
 		}
-		sessions = append(sessions, sc...)
+		sessions, err = appendSessionCosts(sessions, sc)
+		if err != nil {
+			readErrs = append(readErrs, err)
+			break
+		}
 	}
 
 	return sessions, errors.Join(readErrs...)
@@ -101,15 +107,9 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 	// Aggregate tokens per model
 	perModel := make(map[string]*modelTokens)
 
-	reader := bufio.NewReader(f)
-	for {
-		encoded, readErr := reader.ReadBytes('\n')
-		if len(encoded) == 0 && readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("read Claude transcript %s: %w", path, readErr)
-		}
+	scanner := newTranscriptScanner(f)
+	for scanner.Scan() {
+		encoded := scanner.Bytes()
 		var line transcriptLine
 		if err := json.Unmarshal(encoded, &line); err == nil {
 			if line.CWD != "" {
@@ -135,12 +135,9 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 				mt.cacheWrite += line.Message.Usage.CacheCreationInputTokens
 			}
 		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("read Claude transcript %s: %w", path, readErr)
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read Claude transcript %s: line exceeds %d bytes or is invalid: %w", path, maxTranscriptLineBytes, err)
 	}
 
 	if len(perModel) == 0 {

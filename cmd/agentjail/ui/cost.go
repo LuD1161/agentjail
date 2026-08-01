@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
@@ -34,11 +33,12 @@ func (localCostProvider) Summary(_ context.Context, query CostQuery) (costanalyt
 	for _, err := range collectErrs {
 		slog.Debug("cost transcript source unavailable", "err", err)
 	}
+	reportSessions := sessions
 	if query.Project != "" {
-		sessions = costanalytics.FilterByProject(sessions, query.Project)
+		reportSessions = costanalytics.FilterByProject(sessions, query.Project)
 	}
 
-	report := costanalytics.Aggregate(sessions, costanalytics.Period(query.Period))
+	report := costanalytics.Aggregate(reportSessions, costanalytics.Period(query.Period))
 	alerts := []costanalytics.BudgetAlert{}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -78,11 +78,16 @@ func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, fmt.Sprintf("invalid period: %v", err), http.StatusBadRequest)
 		return
 	}
+	project := r.URL.Query().Get("project")
+	if len(project) > costanalytics.MaxProjectFilterBytes {
+		writeJSONError(w, "project filter is too long", http.StatusBadRequest)
+		return
+	}
 
 	report, alerts, err := s.costProvider.Summary(r.Context(), CostQuery{
 		Period:  period,
 		Since:   s.now().Add(-duration),
-		Project: r.URL.Query().Get("project"),
+		Project: project,
 	})
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("cost summary: %v", err), http.StatusServiceUnavailable)
@@ -103,16 +108,5 @@ func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseCostPeriod(value string) (time.Duration, error) {
-	if len(value) > 1 && value[len(value)-1] == 'd' {
-		days, err := strconv.Atoi(value[:len(value)-1])
-		if err != nil || days <= 0 {
-			return 0, fmt.Errorf("invalid period %q", value)
-		}
-		return time.Duration(days) * 24 * time.Hour, nil
-	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("invalid period %q", value)
-	}
-	return duration, nil
+	return costanalytics.ParsePeriod(value)
 }

@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
@@ -34,6 +34,10 @@ func runCost(args []string) int {
 		fmt.Fprintf(os.Stderr, "agentjail cost: --period: %v\n", err)
 		return 2
 	}
+	if len(*projectDir) > costanalytics.MaxProjectFilterBytes {
+		fmt.Fprintln(os.Stderr, "agentjail cost: --project is too long")
+		return 2
+	}
 
 	since := time.Now().Add(-period)
 	sessions, errs := costanalytics.CollectAll(since)
@@ -41,11 +45,12 @@ func runCost(args []string) int {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
+	reportSessions := sessions
 	if *projectDir != "" {
-		sessions = costanalytics.FilterByProject(sessions, *projectDir)
+		reportSessions = costanalytics.FilterByProject(sessions, *projectDir)
 	}
 
-	report := costanalytics.Aggregate(sessions, costanalytics.Period(*periodStr))
+	report := costanalytics.Aggregate(reportSessions, costanalytics.Period(*periodStr))
 
 	// Load policy config for budget checking.
 	policyPath, pathErr := policyConfigPath()
@@ -82,8 +87,11 @@ func runCost(args []string) int {
 }
 
 func printCostReport(r costanalytics.CostReport) {
-	u := ui.New(os.Stdout)
-	w := os.Stdout
+	printCostReportTo(os.Stdout, r)
+}
+
+func printCostReportTo(w io.Writer, r costanalytics.CostReport) {
+	u := ui.New(w)
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%s (last %s)\n", u.Section("Agent Cost Report"), r.Period)
@@ -95,7 +103,7 @@ func printCostReport(r costanalytics.CostReport) {
 		fmt.Fprintln(w, u.Section("By Project"))
 		for _, p := range r.ByProject {
 			fmt.Fprintf(w, "  %-45s $%-8.2f %3.0f%%   %d sessions\n",
-				truncateStr(string(p.Project), 45), p.CostUSD, p.Percent, p.SessionCount)
+				truncateStr(u.Sanitize(string(p.Project)), 45), p.CostUSD, p.Percent, p.SessionCount)
 		}
 		fmt.Fprintln(w)
 	}
@@ -104,7 +112,7 @@ func printCostReport(r costanalytics.CostReport) {
 		fmt.Fprintln(w, u.Section("By Model"))
 		for _, m := range r.ByModel {
 			fmt.Fprintf(w, "  %-30s $%-8.2f %3.0f%%   %s output tokens\n",
-				m.Model, m.CostUSD, m.Percent, formatTokens(m.OutputTokens))
+				u.Sanitize(string(m.Model)), m.CostUSD, m.Percent, formatTokens(m.OutputTokens))
 		}
 		fmt.Fprintln(w)
 	}
@@ -118,21 +126,7 @@ func printCostReport(r costanalytics.CostReport) {
 }
 
 func parsePeriod(s string) (time.Duration, error) {
-	if strings.HasSuffix(s, "d") {
-		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
-		if err != nil || days <= 0 {
-			return 0, fmt.Errorf("invalid period %q", s)
-		}
-		return time.Duration(days) * 24 * time.Hour, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid period %q: %w", s, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("period must be positive")
-	}
-	return d, nil
+	return costanalytics.ParsePeriod(s)
 }
 
 func formatTokens(n int64) string {
@@ -163,11 +157,12 @@ func printBudgetAlerts(status costanalytics.BudgetStatus) {
 
 	fmt.Fprintln(w, u.Section("Budget Alerts"))
 	for _, a := range status.Alerts {
+		message := u.Sanitize(a.Message)
 		switch a.Level {
 		case "exceeded":
-			fmt.Fprintf(w, "  %s %s\n", u.Badge("fail", "EXCEEDED:"), a.Message)
+			fmt.Fprintf(w, "  %s %s\n", u.Badge("fail", "EXCEEDED:"), message)
 		case "warning":
-			fmt.Fprintf(w, "  %s %s\n", u.Badge("warn", "WARNING:"), a.Message)
+			fmt.Fprintf(w, "  %s %s\n", u.Badge("warn", "WARNING:"), message)
 		}
 	}
 	fmt.Fprintln(w)

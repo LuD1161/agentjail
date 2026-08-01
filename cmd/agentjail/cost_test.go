@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/costanalytics"
 )
 
 func TestParsePeriod(t *testing.T) {
@@ -13,7 +17,10 @@ func TestParsePeriod(t *testing.T) {
 	}{
 		{input: "7d", want: 7 * 24 * time.Hour, ok: true},
 		{input: "24h", want: 24 * time.Hour, ok: true},
+		{input: "90d", want: 90 * 24 * time.Hour, ok: true},
 		{input: "0d"},
+		{input: "91d"},
+		{input: "999999999999999999999d"},
 		{input: "-1h"},
 		{input: "forever"},
 	}
@@ -27,5 +34,17 @@ func TestParsePeriod(t *testing.T) {
 				t.Fatalf("parsePeriod(%q) = %s, want %s", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrintCostReportSanitizesTranscriptMetadata(t *testing.T) {
+	var out bytes.Buffer
+	printCostReportTo(&out, costanalytics.CostReport{
+		Period:    "1d",
+		ByProject: []costanalytics.ProjectSummary{{Project: "project\x1b[2J", CostUSD: 1}},
+		ByModel:   []costanalytics.ModelSummary{{Model: "model\x1b]0;title\a", CostUSD: 1}},
+	})
+	if strings.Contains(out.String(), "\x1b") {
+		t.Fatalf("terminal escape survived report rendering: %q", out.String())
 	}
 }

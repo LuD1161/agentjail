@@ -588,6 +588,16 @@ were inaccessible before its test socket could appear.
 - **Rule:** assert both sides of enforcement. A deny-only fixture cannot prove
   the component started, and an allow-only fixture cannot prove it confined.
 
+## 42. A SQLite query suffix is not necessarily a read-only connection
+
+The OpenCode reader appended `?mode=ro` to a plain filesystem path. Modernc
+treated that as part of the path rather than a SQLite URI, so the driver could
+open or create a writable database while ordinary read tests stayed green.
+
+- **Rule:** use an explicit `file:` URI and deny writes with a write-attempt
+  test; a connection option is only a security control once the driver parsed it.
+  See ADR 0120-bundled-model-pricing.
+
 ---
 
 ## Testing gotchas

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,21 @@ func TestCostSummaryRejectsInvalidPeriod(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCostSummaryRejectsOversizedInputs(t *testing.T) {
+	srv := NewServer("", "", "", false, NewStore(), "")
+	for _, target := range []string{
+		"/api/cost/summary?period=91d",
+		"/api/cost/summary?project=" + strings.Repeat("x", costanalytics.MaxProjectFilterBytes+1),
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		srv.handleCostSummary(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want %d", target[:min(len(target), 32)], rec.Code, http.StatusBadRequest)
+		}
 	}
 }
 

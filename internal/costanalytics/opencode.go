@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,11 +32,20 @@ func NewOpenCodeReader(dbPath string) (*OpenCodeReader, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("opencode db not found: %w", err)
 	}
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite", openCodeReadOnlyURI(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open opencode db: %w", err)
 	}
 	return &OpenCodeReader{db: db}, nil
+}
+
+func openCodeReadOnlyURI(dbPath string) string {
+	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath)}
+	query := uri.Query()
+	query.Set("mode", "ro")
+	query.Add("_pragma", "query_only(1)")
+	uri.RawQuery = query.Encode()
+	return uri.String()
 }
 
 func (o *OpenCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) {
@@ -49,8 +59,9 @@ func (o *OpenCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 		       time_created
 		FROM session
 		WHERE time_created >= ?
-		ORDER BY time_created DESC`,
-		sinceMs)
+		ORDER BY time_created DESC
+		LIMIT ?`,
+		sinceMs, maxSessionCosts+1)
 	if err != nil {
 		return nil, fmt.Errorf("query opencode sessions: %w", err)
 	}
@@ -58,6 +69,9 @@ func (o *OpenCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 
 	var sessions []SessionCost
 	for rows.Next() {
+		if len(sessions) >= maxSessionCosts {
+			return sessions, fmt.Errorf("OpenCode session limit of %d reached", maxSessionCosts)
+		}
 		var (
 			id, dir        string
 			modelJSON      sql.NullString

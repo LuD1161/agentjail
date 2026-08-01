@@ -744,6 +744,9 @@ func TestCostConfigValidation(t *testing.T) {
 		{name: "negative daily", yaml: "cost:\n  daily_budget: -1\n"},
 		{name: "threshold over one", yaml: "cost:\n  alert_threshold: 1.1\n"},
 		{name: "negative project", yaml: "cost:\n  project_budgets:\n    ~/work: -2\n"},
+		{name: "nan daily", yaml: "cost:\n  daily_budget: .nan\n"},
+		{name: "infinite threshold", yaml: "cost:\n  alert_threshold: .inf\n"},
+		{name: "infinite project", yaml: "cost:\n  project_budgets:\n    ~/work: -.inf\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

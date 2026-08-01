@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -621,18 +622,31 @@ func decode(r io.Reader) (*PolicyConfig, error) {
 }
 
 func validateCost(cost CostConfig) error {
+	if !isFiniteCost(cost.DailyBudget) {
+		return errors.New("cost.daily_budget must be finite")
+	}
 	if cost.DailyBudget < 0 {
 		return errors.New("cost.daily_budget must not be negative")
+	}
+	if !isFiniteCost(cost.AlertThreshold) {
+		return errors.New("cost.alert_threshold must be finite")
 	}
 	if cost.AlertThreshold < 0 || cost.AlertThreshold > 1 {
 		return errors.New("cost.alert_threshold must be between 0 and 1")
 	}
 	for project, budget := range cost.ProjectBudgets {
+		if !isFiniteCost(budget) {
+			return fmt.Errorf("cost.project_budgets[%q] must be finite", project)
+		}
 		if budget < 0 {
 			return fmt.Errorf("cost.project_budgets[%q] must not be negative", project)
 		}
 	}
 	return nil
+}
+
+func isFiniteCost(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 // Default returns a PolicyConfig with sensible out-of-box settings.
