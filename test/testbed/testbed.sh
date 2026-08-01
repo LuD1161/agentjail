@@ -133,7 +133,11 @@ do_provision() {
     local token_file="$HOME/.agentjail-testbed/token"
     if [ -f "$token_file" ]; then
         log "seeding Claude Code OAuth token"
-        guest_push "$name" "$token_file" /tmp/claude-token
+        if ! guest_push "$name" "$token_file" /tmp/claude-token; then
+            guest_exec "$name" "rm -f /tmp/claude-token" || true
+            log "NOTE: $token_file exists but is unreadable — continuing without optional Claude login."
+            log "      Installed-policy scenarios still run; live-agent scenarios will SKIP."
+        fi
     else
         log "NOTE: no $token_file — Claude Code will be installed but not logged in."
         log "      Run 'claude setup-token' on the host and save the token there (chmod 600)."

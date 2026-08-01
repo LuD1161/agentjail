@@ -574,6 +574,20 @@ Even a socket-only doctor check called that stale process healthy.
   compare it with the installed CLI. Liveness alone cannot attest deployment.
   See ADR 0088-deployed-supervisor-verified.
 
+## 40. A test home must not overlap an allowed root
+
+The shield smoke test first inherited the real shield-protected home, so the
+inner shield exited before enforcement and the deny fixture passed for the
+wrong reason. Moving its home under `/tmp` fixed startup but made `~/.ssh`
+writable because Landlock deliberately grants all of `/tmp`. The SIGHUP
+subprocess had the first half of the same bug: its default log and DB paths
+were inaccessible before its test socket could appear.
+
+- **Rule:** subprocess tests get an explicit throwaway home; sandbox tests place
+  it outside every broad allow root, including `/tmp` and the launch CWD.
+- **Rule:** assert both sides of enforcement. A deny-only fixture cannot prove
+  the component started, and an allow-only fixture cannot prove it confined.
+
 ---
 
 ## Testing gotchas

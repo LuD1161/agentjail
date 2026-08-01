@@ -16,6 +16,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SHIELD_BIN="${REPO_ROOT}/agentjail-shield-smoke-$$"
+SMOKE_HOME=""
 PASS=0
 FAIL=0
 
@@ -37,6 +38,9 @@ cleanup() {
     rm -f "${SHIELD_BIN}"
     rm -f "${HOME}/.ssh/agentjail-shield-smoke" 2>/dev/null || true
     rm -f "/tmp/agentjail-shield-smoke-$$" 2>/dev/null || true
+    if [ -n "${SMOKE_HOME}" ]; then
+        rm -rf "${SMOKE_HOME}"
+    fi
 }
 trap cleanup EXIT
 
@@ -50,6 +54,20 @@ info "Building agentjail-shield..."
 (cd "${REPO_ROOT}" && go build -o "${SHIELD_BIN}" ./cmd/agentjail-shield/)
 info "Build: OK"
 echo ""
+
+# Run the fixtures against an isolated home. A coding-agent session may deny
+# this process access to its real ~/.agentjail policy and DB before the shield
+# reaches the path assertion, producing a false failure. Preserve the caller's
+# Go caches because later macOS fixtures build the netproxy after this point.
+export GOCACHE="${GOCACHE:-$(go env GOCACHE)}"
+export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
+# Landlock always grants /tmp and the launch CWD read-write. Put the fake home
+# in the workspace so an outer agent sandbox can create it, then launch every
+# shield fixture from /tmp so the workspace grant cannot swallow ~/.ssh.
+SMOKE_HOME="$(mktemp -d "${REPO_ROOT}/.agentjail-shield-smoke.XXXXXX")"
+export HOME="${SMOKE_HOME}"
+mkdir -p "${HOME}/.ssh"
+cd /tmp
 
 # ---------------------------------------------------------------------------
 # Step 2: Platform check
@@ -93,14 +111,13 @@ if [ -f "${SSH_TEST_FILE}" ]; then
     fail "${LABEL}: file ${SSH_TEST_FILE} was created — sandbox did NOT block the write"
 else
     pass "${LABEL}: file was not created"
-fi
-
-# Also check that output contains evidence of permission denial.
-if echo "${SHIELD_OUTPUT}" | grep -qi "not permitted\|Operation not permitted\|Permission denied\|exit=1\|exit=2"; then
-    pass "${LABEL}: output contains permission denial evidence"
-else
-    # File not created is the definitive check; output format may vary.
-    info "${LABEL}: output did not explicitly mention 'not permitted' but file was not created (acceptable)"
+    # Also check that output contains evidence of permission denial.
+    if echo "${SHIELD_OUTPUT}" | grep -qi "not permitted\|Operation not permitted\|Permission denied\|exit=1\|exit=2"; then
+        pass "${LABEL}: output contains permission denial evidence"
+    else
+        # File not created is the definitive check; output format may vary.
+        info "${LABEL}: output did not explicitly mention 'not permitted' but file was not created (acceptable)"
+    fi
 fi
 
 echo ""

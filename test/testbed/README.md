@@ -85,7 +85,9 @@ tarball from the given worktree (default: this repo checkout), pushes it, and
 runs `guest-provision.sh` inside the guest, which:
 
 1. installs Claude Code (`npm i -g @anthropic-ai/claude-code`),
-2. seeds the login token if `~/.agentjail-testbed/token` exists on the host,
+2. seeds the login token if `~/.agentjail-testbed/token` exists and is readable
+   on the host; otherwise installed-policy scenarios continue and live-agent
+   scenarios skip,
 3. runs `install.sh` with `LOCAL_TARBALL=` once and fails unless that single
    install leaves the daemon running and every detected agent wired,
 4. creates a seed project `~/work/demo` (git repo with an `origin` → allowed
@@ -102,7 +104,9 @@ chmod 600 ~/.agentjail-testbed/token
 
 Provision exports it as `CLAUDE_CODE_OAUTH_TOKEN` in the guest's `~/.bashrc`
 (zsh on macOS — see Mac TODO below). The token is never baked into an image
-and never committed.
+and never committed. A host sandbox may deliberately make the file unreadable;
+that does not block the clean-install release gate, but authenticated live-agent
+scenarios report `SKIP`.
 
 For the live Codex approval scenario, opt in to copying only the current
 Codex `auth.json` into the disposable guest:

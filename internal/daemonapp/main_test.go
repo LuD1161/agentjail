@@ -264,6 +264,13 @@ func TestDaemon_SIGHUP(t *testing.T) {
 	// Start the daemon in its own process group so SIGHUP sent to the daemon
 	// subprocess does not leak to the test binary's process group.
 	cmd := exec.Command(daemonBin, "--socket", sockPath)
+	// The subprocess must not inherit an agent-shielded real home: its default
+	// log, DB, and policy paths would be unreadable before it binds the test
+	// socket. See GOTCHAS #40.
+	cmd.Env = append(os.Environ(),
+		"HOME="+t.TempDir(),
+		"AGENTJAIL_NO_UPDATE_CHECK=1",
+	)
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
