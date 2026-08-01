@@ -762,7 +762,9 @@ Top Policy Deny Rules
 ```
 
 Scope with `--since` (`24h`, `7d`, `0` for all time), widen tables with
-`--top N`, and get the machine-readable form with `--json`. Latency is
+`--top N`, disable the default semantic colors with `--no-color`, and get the
+machine-readable form with `--json`. The `cost` and `sessions list` reports use
+the same palette and accept the same local color override. Latency is
 microseconds and is a local engineering surface only —
 [ADR 0002](docs/adr/0002-latency-as-engineering-metric.md) forbids citing raw
 `elapsed_us` in external claims.

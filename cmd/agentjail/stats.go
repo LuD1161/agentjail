@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/store"
+	"github.com/LuD1161/agentjail/internal/ui"
 )
 
 // runStats renders typed aggregates from the singleton read-only store.
@@ -24,6 +26,7 @@ func runStats(args []string) int {
 	jsonOut := fs.Bool("json", false, "output as JSON")
 	since := fs.String("since", "0", "time range (e.g. 24h, 7d, 30m); 0 for all time")
 	topN := fs.Int("top", 10, "how many rows to show per breakdown table")
+	noColor := fs.Bool("no-color", false, "disable color output")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -33,6 +36,10 @@ func runStats(args []string) int {
 	if *topN < 1 {
 		fmt.Fprintln(os.Stderr, "agentjail stats: --top must be at least 1")
 		return 2
+	}
+	if *noColor {
+		restore := ui.DisableColor()
+		defer restore()
 	}
 
 	sinceDur, err := parseDuration(*since)
@@ -74,13 +81,17 @@ const statsRule = "────────────────────�
 // renderStats prints the human-readable report. Dependency-light on purpose
 // (no internal/ui): plain fmt + block-glyph bars, matching the CLI convention.
 func renderStats(w io.Writer, rep store.StatsReport, since string, topN int) {
+	renderStatsWithUI(w, rep, since, topN, ui.New(w))
+}
+
+func renderStatsWithUI(w io.Writer, rep store.StatsReport, since string, topN int, u *ui.UI) {
 	scope := "all time"
 	if !rep.Since.IsZero() {
 		scope = "last " + since
 	}
 
-	fmt.Fprintf(w, "AgentJail Activity (%s)\n", scope)
-	fmt.Fprintln(w, "════════════════════════════════════════════════════════════")
+	fmt.Fprintln(w, u.Text(ui.ToneAccent, fmt.Sprintf("AgentJail Activity (%s)", scope)))
+	fmt.Fprintln(w, u.Text(ui.ToneMuted, "════════════════════════════════════════════════════════════"))
 	fmt.Fprintln(w)
 
 	window := "—"
@@ -91,37 +102,43 @@ func renderStats(w io.Writer, rep store.StatsReport, since string, topN int) {
 			window = rep.FirstDay + " → " + rep.LastDay
 		}
 	}
-	fmt.Fprintf(w, "Total outcomes:             %d\n", rep.Total)
-	fmt.Fprintf(w, "Sessions:                   %d\n", rep.Sessions)
-	fmt.Fprintf(w, "Allowed / Asked / Blocked:  %d / %d / %d\n", rep.Allow, rep.Ask, rep.Deny)
-	fmt.Fprintf(w, "Active days:                %d  (%s)\n", rep.ActiveDays, window)
+	fmt.Fprintf(w, "Total outcomes:             %s\n", u.Text(ui.ToneAccent, strconv.FormatInt(rep.Total, 10)))
+	fmt.Fprintf(w, "Sessions:                   %s\n", u.Text(ui.ToneAccent, strconv.FormatInt(rep.Sessions, 10)))
+	fmt.Fprintf(w, "Allowed / Asked / Blocked:  %s / %s / %s\n",
+		u.Text(ui.ToneSuccess, strconv.FormatInt(rep.Allow, 10)),
+		u.Text(ui.ToneWarning, strconv.FormatInt(rep.Ask, 10)),
+		u.Text(ui.ToneDanger, strconv.FormatInt(rep.Deny, 10)))
+	fmt.Fprintf(w, "Active days:                %s  (%s)\n",
+		u.Text(ui.ToneAccent, strconv.Itoa(rep.ActiveDays)), u.Text(ui.ToneMuted, window))
 	fmt.Fprintf(w, "Latency (p50/p90/p95/p99/max): %s / %s / %s / %s / %s\n",
-		usDur(rep.Latency.P50), usDur(rep.Latency.P90), usDur(rep.Latency.P95),
-		usDur(rep.Latency.P99), usDur(rep.Latency.Max))
+		u.Text(ui.ToneSuccess, usDur(rep.Latency.P50)), u.Text(ui.ToneSuccess, usDur(rep.Latency.P90)),
+		u.Text(ui.ToneWarning, usDur(rep.Latency.P95)), u.Text(ui.ToneDanger, usDur(rep.Latency.P99)),
+		u.Text(ui.ToneDanger, usDur(rep.Latency.Max)))
 
 	blockRate := 0.0
 	if rep.Total > 0 {
 		blockRate = float64(rep.Deny) / float64(rep.Total) * 100
 	}
-	fmt.Fprintf(w, "Block rate: %s %.1f%%\n", meter(blockRate, 24), blockRate)
+	fmt.Fprintf(w, "Block rate: %s %s\n",
+		u.Text(ui.ToneDanger, meter(blockRate, 24)), u.Text(ui.ToneDanger, fmt.Sprintf("%.1f%%", blockRate)))
 
-	renderBreakdown(w, "Top Policy Deny Rules", "Rule", rep.DenyRules, topN)
-	renderBreakdown(w, "By Agent", "Agent", rep.ByAgent, topN)
-	renderBreakdown(w, "By Surface (audit_log)", "Event", rep.BySurface, topN)
+	renderBreakdown(w, u, "Top Policy Deny Rules", "Rule", rep.DenyRules, topN, ui.ToneDanger)
+	renderBreakdown(w, u, "By Agent", "Agent", rep.ByAgent, topN, ui.ToneAccent)
+	renderBreakdown(w, u, "By Surface (audit_log)", "Event", rep.BySurface, topN, ui.ToneWarning)
 
 	if len(rep.CoverageGaps) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "⚠ Coverage gaps: %d day(s) where the shield activated but zero decisions were recorded.\n", len(rep.CoverageGaps))
-		fmt.Fprintf(w, "  %s\n", strings.Join(rep.CoverageGaps, ", "))
+		fmt.Fprintln(w, u.Text(ui.ToneWarning, fmt.Sprintf("⚠ Coverage gaps: %d day(s) where the shield activated but zero decisions were recorded.", len(rep.CoverageGaps))))
+		fmt.Fprintf(w, "  %s\n", u.Text(ui.ToneWarning, strings.Join(rep.CoverageGaps, ", ")))
 		fmt.Fprintln(w, "  This may indicate an under-recording window; run `agentjail doctor`.")
 	}
 }
 
 // renderBreakdown prints one ranked table with proportional impact bars.
-func renderBreakdown(w io.Writer, title, colName string, rows []store.LabeledCount, topN int) {
+func renderBreakdown(w io.Writer, u *ui.UI, title, colName string, rows []store.LabeledCount, topN int, tone ui.Tone) {
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%s\n", title)
-	fmt.Fprintln(w, statsRule)
+	fmt.Fprintln(w, u.Text(ui.ToneAccent, title))
+	fmt.Fprintln(w, u.Text(ui.ToneMuted, statsRule))
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "  (none)")
 		return
@@ -133,7 +150,7 @@ func renderBreakdown(w io.Writer, title, colName string, rows []store.LabeledCou
 			max = r.Count
 		}
 	}
-	fmt.Fprintf(w, "  %-3s %-32s %8s %6s  %s\n", "#", colName, "Count", "Share", "Impact")
+	fmt.Fprintln(w, u.Text(ui.ToneMuted, fmt.Sprintf("  %-3s %-32s %8s %6s  %s", "#", colName, "Count", "Share", "Impact")))
 	for i, r := range rows {
 		if i >= topN {
 			fmt.Fprintf(w, "  … and %d more\n", len(rows)-topN)
@@ -144,7 +161,7 @@ func renderBreakdown(w io.Writer, title, colName string, rows []store.LabeledCou
 			share = float64(r.Count) / float64(total) * 100
 		}
 		fmt.Fprintf(w, "  %-3d %-32s %8d %5.1f%%  %s\n",
-			i+1, truncate(r.Label, 32), r.Count, share, bar(r.Count, max, 10))
+			i+1, truncate(u.Sanitize(r.Label), 32), r.Count, share, u.Text(tone, bar(r.Count, max, 10)))
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/LuD1161/agentjail/internal/store"
+	"github.com/LuD1161/agentjail/internal/ui"
+	"github.com/muesli/termenv"
 )
 
 func TestRenderStatsReportsFinalOutcomes(t *testing.T) {
@@ -32,6 +34,15 @@ func TestRenderStatsReportsFinalOutcomes(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestRenderStatsUsesColorWhenAvailable(t *testing.T) {
+	var out bytes.Buffer
+	u := ui.NewWithProfile(&out, termenv.TrueColor)
+	renderStatsWithUI(&out, store.StatsReport{Total: 1, Allow: 1}, "0", 10, u)
+	if !strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("colored stats output contains no ANSI escapes: %q", out.String())
 	}
 }
 

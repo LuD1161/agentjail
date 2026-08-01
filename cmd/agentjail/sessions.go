@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/procutil"
 	"github.com/LuD1161/agentjail/internal/store"
+	"github.com/LuD1161/agentjail/internal/ui"
 )
 
 // activeSessionsPath returns the path to the daemon's active sessions file.
@@ -124,10 +126,11 @@ func runSessions(args []string) int {
 }
 
 func sessionsUsage() {
-	fmt.Fprintln(os.Stderr, "usage: agentjail sessions list [--active] [--json] [--since DURATION]")
+	fmt.Fprintln(os.Stderr, "usage: agentjail sessions list [--active] [--json] [--no-color] [--since DURATION]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  --active     show only sessions with an active daemon connection")
 	fmt.Fprintln(os.Stderr, "  --json       output as JSON array")
+	fmt.Fprintln(os.Stderr, "  --no-color   disable color output")
 	fmt.Fprintln(os.Stderr, "  --since      only sessions active within this duration (e.g. 1h, 7d, 30m)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Examples:")
@@ -144,11 +147,16 @@ func runSessionsList(args []string) int {
 	active := fs.Bool("active", false, "show only active sessions")
 	jsonOut := fs.Bool("json", false, "output as JSON")
 	since := fs.String("since", "24h", "time range (e.g. 1h, 7d, 30m); 0 for all time")
+	noColor := fs.Bool("no-color", false, "disable color output")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
 		return 2
+	}
+	if *noColor {
+		restore := ui.DisableColor()
+		defer restore()
 	}
 
 	sinceDur, err := parseDuration(*since)
@@ -211,9 +219,15 @@ func runSessionsList(args []string) int {
 		return 0
 	}
 
-	fmt.Printf("%-22s  %-16s  %-6s  %-19s  %-19s  %-8s  %-10s  %s\n",
+	renderSessions(os.Stdout, output, ui.New(os.Stdout))
+	return 0
+}
+
+func renderSessions(w io.Writer, sessions []sessionOutput, u *ui.UI) {
+	header := fmt.Sprintf("%-22s  %-16s  %-6s  %-19s  %-19s  %-8s  %-10s  %s",
 		"SESSION", "NAME", "ACTIVE", "START", "END", "COUNT", "AGENT", "CWD")
-	for _, s := range output {
+	fmt.Fprintln(w, u.Text(ui.ToneMuted, header))
+	for _, s := range sessions {
 		activeStr := " "
 		if s.Active {
 			activeStr = "*"
@@ -232,10 +246,16 @@ func runSessionsList(args []string) int {
 		if len(name) > 16 {
 			name = name[:15] + "…"
 		}
-		fmt.Printf("%-22s  %-16s  %-6s  %-19s  %-19s  %-8d  %-10s  %s\n",
-			shortSession(s.SessionID), name, activeStr, start, end, s.DecisionCount, s.Agent, s.CWD)
+		fmt.Fprintf(w, "%s  %s  %s  %s  %s  %s  %s  %s\n",
+			u.Text(ui.ToneAccent, fmt.Sprintf("%-22s", shortSession(s.SessionID))),
+			u.Text(ui.ToneAccent, fmt.Sprintf("%-16s", name)),
+			u.Text(ui.ToneSuccess, fmt.Sprintf("%-6s", activeStr)),
+			u.Text(ui.ToneMuted, fmt.Sprintf("%-19s", start)),
+			u.Text(ui.ToneMuted, fmt.Sprintf("%-19s", end)),
+			u.Text(ui.ToneAccent, fmt.Sprintf("%-8d", s.DecisionCount)),
+			u.Text(ui.ToneWarning, fmt.Sprintf("%-10s", s.Agent)),
+			u.Text(ui.ToneMuted, s.CWD))
 	}
-	return 0
 }
 
 // parseDuration extends time.ParseDuration with support for "d" (days) suffix.

@@ -79,6 +79,12 @@ func SetNoColor(disabled bool) {
 	noColor.Store(disabled)
 }
 
+// DisableColor applies a scoped color override and returns a restore function.
+func DisableColor() func() {
+	previous := noColor.Swap(true)
+	return func() { noColor.Store(previous) }
+}
+
 // ColorEnabled reports whether human-readable output may use color.
 func ColorEnabled() bool {
 	return !noColor.Load() && envLookup("NO_COLOR") == ""
@@ -198,6 +204,17 @@ type UI struct {
 	g glyphs
 }
 
+// Tone names a semantic foreground color for report text.
+type Tone uint8
+
+const (
+	ToneAccent Tone = iota
+	ToneSuccess
+	ToneWarning
+	ToneDanger
+	ToneMuted
+)
+
 // New creates a UI bound to w. The color profile is detected from w (so piped
 // writers automatically get the ASCII/plain profile) and the glyph set is
 // detected from the environment via detectGlyphs().
@@ -233,6 +250,25 @@ func NewWithProfile(w io.Writer, p termenv.Profile) *UI {
 // interactive.
 func NewNoColor(w io.Writer) *UI {
 	return newWithProfile(w, termenv.Ascii, detectGlyphs())
+}
+
+// Text renders sanitized report text with a semantic foreground tone.
+func (u *UI) Text(tone Tone, text string) string {
+	color := colorAccent
+	bold := false
+	switch tone {
+	case ToneSuccess:
+		color = colorGreen
+	case ToneWarning:
+		color = colorYellow
+	case ToneDanger:
+		color = colorRed
+	case ToneMuted:
+		color = colorDim
+	case ToneAccent:
+		bold = true
+	}
+	return u.r.NewStyle().Foreground(lipgloss.Color(color)).Bold(bold).Render(sanitize(text))
 }
 
 // --------------------------------------------------------------------------

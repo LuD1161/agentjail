@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/costanalytics"
+	"github.com/LuD1161/agentjail/internal/ui"
+	"github.com/muesli/termenv"
 )
 
 func TestParsePeriod(t *testing.T) {
@@ -34,6 +36,15 @@ func TestParsePeriod(t *testing.T) {
 				t.Fatalf("parsePeriod(%q) = %s, want %s", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrintCostReportUsesColorWhenAvailable(t *testing.T) {
+	var out bytes.Buffer
+	u := ui.NewWithProfile(&out, termenv.TrueColor)
+	printCostReportToWithUI(&out, costanalytics.CostReport{Period: "7d", TotalCost: 1}, u)
+	if !strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("colored cost output contains no ANSI escapes: %q", out.String())
 	}
 }
 

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/LuD1161/agentjail/internal/ui"
+	"github.com/muesli/termenv"
 )
 
 func TestParseDuration_Standard(t *testing.T) {
@@ -28,6 +32,15 @@ func TestParseDuration_Standard(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("parseDuration(%q) = %v; want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestRenderSessionsUsesColorWhenAvailable(t *testing.T) {
+	var out bytes.Buffer
+	u := ui.NewWithProfile(&out, termenv.TrueColor)
+	renderSessions(&out, []sessionOutput{{SessionID: "session-1", Active: true}}, u)
+	if !bytes.Contains(out.Bytes(), []byte("\x1b[")) {
+		t.Fatalf("colored sessions output contains no ANSI escapes: %q", out.String())
 	}
 }
 

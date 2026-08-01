@@ -707,6 +707,27 @@ func TestSetNoColorDisablesSharedRendererPolicy(t *testing.T) {
 	if ColorEnabled() {
 		t.Fatal("ColorEnabled() = true after SetNoColor(true)")
 	}
+	SetNoColor(false)
+	restore := DisableColor()
+	if ColorEnabled() {
+		t.Fatal("ColorEnabled() = true inside DisableColor scope")
+	}
+	restore()
+	if !ColorEnabled() {
+		t.Fatal("ColorEnabled() = false after DisableColor restore")
+	}
+}
+
+func TestTextUsesSemanticColorAndSanitizes(t *testing.T) {
+	var buf bytes.Buffer
+	u := NewWithProfile(&buf, termenv.TrueColor)
+	got := u.Text(ToneDanger, "blocked\x1b[2J")
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("Text() = %q, want color escape", got)
+	}
+	if strings.Contains(got, "[2J") {
+		t.Fatalf("Text() retained injected escape: %q", got)
+	}
 }
 
 // --------------------------------------------------------------------------

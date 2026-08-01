@@ -21,6 +21,7 @@ func runCost(args []string) int {
 	periodStr := fs.String("period", "7d", "time period (e.g. 7d, 30d, 24h)")
 	projectDir := fs.String("project", "", "filter to a specific project directory")
 	jsonOut := fs.Bool("json", false, "output as JSON")
+	noColor := fs.Bool("no-color", false, "disable color output")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -37,6 +38,10 @@ func runCost(args []string) int {
 	if len(*projectDir) > costanalytics.MaxProjectFilterBytes {
 		fmt.Fprintln(os.Stderr, "agentjail cost: --project is too long")
 		return 2
+	}
+	if *noColor {
+		restore := ui.DisableColor()
+		defer restore()
 	}
 
 	since := time.Now().Add(-period)
@@ -91,19 +96,28 @@ func printCostReport(r costanalytics.CostReport) {
 }
 
 func printCostReportTo(w io.Writer, r costanalytics.CostReport) {
-	u := ui.New(w)
+	printCostReportToWithUI(w, r, ui.New(w))
+}
+
+func printCostReportToWithUI(w io.Writer, r costanalytics.CostReport, u *ui.UI) {
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%s (last %s)\n", u.Section("Agent Cost Report"), r.Period)
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  Total spend:  $%.2f  (%d sessions)\n", r.TotalCost, r.SessionCount)
+	fmt.Fprintf(w, "  Total spend:  %s  %s\n",
+		u.Text(ui.ToneAccent, fmt.Sprintf("$%.2f", r.TotalCost)),
+		u.Text(ui.ToneMuted, fmt.Sprintf("(%d sessions)", r.SessionCount)))
 	fmt.Fprintln(w)
 
 	if len(r.ByProject) > 0 {
 		fmt.Fprintln(w, u.Section("By Project"))
 		for _, p := range r.ByProject {
-			fmt.Fprintf(w, "  %-45s $%-8.2f %3.0f%%   %d sessions\n",
-				truncateStr(u.Sanitize(string(p.Project)), 45), p.CostUSD, p.Percent, p.SessionCount)
+			project := fmt.Sprintf("%-45s", truncateStr(u.Sanitize(string(p.Project)), 45))
+			fmt.Fprintf(w, "  %s %s %s   %s\n",
+				u.Text(ui.ToneAccent, project),
+				u.Text(ui.ToneSuccess, fmt.Sprintf("$%-8.2f", p.CostUSD)),
+				u.Text(ui.ToneMuted, fmt.Sprintf("%3.0f%%", p.Percent)),
+				u.Text(ui.ToneMuted, fmt.Sprintf("%d sessions", p.SessionCount)))
 		}
 		fmt.Fprintln(w)
 	}
@@ -111,17 +125,21 @@ func printCostReportTo(w io.Writer, r costanalytics.CostReport) {
 	if len(r.ByModel) > 0 {
 		fmt.Fprintln(w, u.Section("By Model"))
 		for _, m := range r.ByModel {
-			fmt.Fprintf(w, "  %-30s $%-8.2f %3.0f%%   %s output tokens\n",
-				u.Sanitize(string(m.Model)), m.CostUSD, m.Percent, formatTokens(m.OutputTokens))
+			model := fmt.Sprintf("%-30s", truncateStr(u.Sanitize(string(m.Model)), 30))
+			fmt.Fprintf(w, "  %s %s %s   %s\n",
+				u.Text(ui.ToneAccent, model),
+				u.Text(ui.ToneSuccess, fmt.Sprintf("$%-8.2f", m.CostUSD)),
+				u.Text(ui.ToneMuted, fmt.Sprintf("%3.0f%%", m.Percent)),
+				u.Text(ui.ToneMuted, formatTokens(m.OutputTokens)+" output tokens"))
 		}
 		fmt.Fprintln(w)
 	}
 
 	fmt.Fprintln(w, u.Section("Token Efficiency"))
-	fmt.Fprintf(w, "  Cache hit rate:     %.0f%%\n", r.CacheHitRate)
-	fmt.Fprintf(w, "  Avg cost/session:   $%.2f\n", r.AvgCost)
-	fmt.Fprintf(w, "  Avg tokens/session: %s in, %s out\n",
-		formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok))
+	fmt.Fprintf(w, "  Cache hit rate:     %s\n", u.Text(ui.ToneSuccess, fmt.Sprintf("%.0f%%", r.CacheHitRate)))
+	fmt.Fprintf(w, "  Avg cost/session:   %s\n", u.Text(ui.ToneAccent, fmt.Sprintf("$%.2f", r.AvgCost)))
+	fmt.Fprintf(w, "  Avg tokens/session: %s\n", u.Text(ui.ToneMuted,
+		fmt.Sprintf("%s in, %s out", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok))))
 	fmt.Fprintln(w)
 }
 

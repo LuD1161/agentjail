@@ -10,6 +10,12 @@
   palette by default and accept `agentjail --no-color <command>` as a
   process-wide color override while preserving Unicode structure.
 
+### Changed
+
+- **Colorized activity reports**: `stats`, `cost`, and `sessions list` now use
+  the shared semantic palette for totals, outcomes, spend, metadata, and impact
+  bars; each also accepts a command-local `--no-color` flag.
+
 ### Fixed
 
 - **Current-model cost estimates**: price GPT-5.6 Sol/Terra and Claude Opus
