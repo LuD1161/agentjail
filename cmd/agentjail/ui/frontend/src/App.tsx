@@ -17,6 +17,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { NetworkPage } from './pages/network'
 import { MonitorPage } from './pages/monitor'
 import { PoliciesPage } from './pages/policies'
+import { CostPage } from './pages/cost'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/" element={<MonitorPage />} />
             <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/network" element={<NetworkPage />} />
+            <Route path="/cost" element={<CostPage />} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>

@@ -328,7 +328,10 @@ agentjail ui
 
 Opens a loopback-only viewer at `http://127.0.0.1:9101` backed by
 `~/.agentjail/agentjail.db`. It supports session replay, action/tool/rule/session
-filters, policy-mutation audit events, and redacted session-bundle downloads.
+filters, policy-mutation audit events, redacted session-bundle downloads, and a
+Cost tab that groups locally discovered Claude Code, Codex, and OpenCode transcript
+spend by project and model. The Cost tab also shows token efficiency and budget
+alerts configured in `policy.yaml`.
 The header shows whether data came from SQLite or the legacy `daemon.log`
 fallback and warns when the fallback may be stale or incomplete.
 

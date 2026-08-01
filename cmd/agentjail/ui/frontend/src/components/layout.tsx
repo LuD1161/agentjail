@@ -110,6 +110,9 @@ export function Layout({ children, connected = true, status }: LayoutProps) {
               <NavLink to="/network" className={navTabClass}>
                 Network
               </NavLink>
+              <NavLink to="/cost" className={navTabClass}>
+                Cost
+              </NavLink>
               <NavLink to="/policies" className={navTabClass}>
                 Policies
               </NavLink>

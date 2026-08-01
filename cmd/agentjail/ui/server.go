@@ -22,6 +22,7 @@
 //	GET  /api/network/recent     recent intercepted requests (tunnel + MITM only)
 //	GET  /api/network/stats      per-host traffic totals (tunnel + MITM only)
 //	GET  /api/network/body       streams one captured body (never inlined in JSON)
+//	GET  /api/cost/summary       local transcript cost summary
 package ui
 
 import (
@@ -93,6 +94,9 @@ type Server struct {
 	keysOnce sync.Once
 	bodyKeys mitm.KeyWrapper
 
+	costProvider CostProvider
+	now          func() time.Time
+
 	// SSE broadcaster state.
 	subsMu sync.Mutex
 	subs   map[chan string]struct{}
@@ -109,13 +113,15 @@ type RuleInfo struct {
 // NewServer constructs (but does not start) the web UI server.
 func NewServer(addr, logPath, dbPath string, editPolicy bool, store *Store, version string) *Server {
 	return &Server{
-		addr:       addr,
-		logPath:    logPath,
-		dbPath:     dbPath,
-		editPolicy: editPolicy,
-		version:    version,
-		store:      store,
-		subs:       make(map[chan string]struct{}),
+		addr:         addr,
+		logPath:      logPath,
+		dbPath:       dbPath,
+		editPolicy:   editPolicy,
+		version:      version,
+		store:        store,
+		subs:         make(map[chan string]struct{}),
+		costProvider: localCostProvider{},
+		now:          time.Now,
 	}
 }
 
@@ -172,6 +178,7 @@ func (s *Server) Start(
 	mux.HandleFunc("/api/policy/mcp-projects", s.handlePolicyMCPProjects)
 	mux.HandleFunc("/api/policy/projects", s.handlePolicyProjects)
 	mux.HandleFunc("/api/policy/project-config", s.handlePolicyProjectConfig)
+	mux.HandleFunc("/api/cost/summary", s.handleCostSummary)
 
 	go s.tailLog()
 

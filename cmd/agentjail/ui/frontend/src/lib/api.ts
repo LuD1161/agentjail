@@ -1,4 +1,4 @@
-import type { RequestLog, SessionInfo, StateSnapshot } from '@/types'
+import type { CostSummary, RequestLog, SessionInfo, StateSnapshot } from '@/types'
 
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url)
@@ -55,6 +55,17 @@ export function fetchNetworkSessions(): Promise<NetworkSessionsResponse> {
 
 export function fetchState(): Promise<StateSnapshot> {
   return getJSON('/api/state')
+}
+
+export type CostPeriod = '1d' | '7d' | '30d'
+
+export function fetchCostSummary(
+  period: CostPeriod,
+  project?: string,
+): Promise<CostSummary> {
+  const q = new URLSearchParams({ period })
+  if (project) q.set('project', project)
+  return getJSON(`/api/cost/summary?${q.toString()}`)
 }
 
 /** A captured body, read up to a render cap. Bytes never arrive inline in

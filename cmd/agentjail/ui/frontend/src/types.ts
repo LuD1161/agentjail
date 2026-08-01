@@ -128,3 +128,42 @@ export interface RuleInfo {
   enabled: boolean
   editable: boolean
 }
+
+/** Mirrors the GET /api/cost/summary response. */
+export interface CostProjectSummary {
+  project: string
+  cost_usd: number
+  percent: number
+  session_count: number
+}
+
+export interface CostModelSummary {
+  model: string
+  cost_usd: number
+  percent: number
+  session_count: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface CostBudgetAlert {
+  level: 'warning' | 'exceeded'
+  scope: string
+  budget: number
+  spent: number
+  percent: number
+  message: string
+}
+
+export interface CostSummary {
+  period: string
+  total_cost: number
+  session_count: number
+  by_project: CostProjectSummary[]
+  by_model: CostModelSummary[]
+  cache_hit_rate: number
+  avg_cost_per_session: number
+  avg_input_tokens: number
+  avg_output_tokens: number
+  budget_alerts: CostBudgetAlert[]
+}
