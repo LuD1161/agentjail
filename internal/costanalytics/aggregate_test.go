@@ -1,6 +1,7 @@
 package costanalytics
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +25,18 @@ func TestAggregateCountsSessionsAcrossModelsOnce(t *testing.T) {
 	}
 	if report.ByModel[0].SessionCount != 2 || report.ByModel[0].InputTokens != 40 || report.ByModel[0].OutputTokens != 8 {
 		t.Fatalf("alpha summary = %+v", report.ByModel[0])
+	}
+}
+
+func TestMissingPricingErrorsExposeFutureCatalogLag(t *testing.T) {
+	errs := missingPricingErrors([]SessionCost{
+		{Model: "future-model", InputTokens: 10},
+		{Model: "future-model", OutputTokens: 5},
+		{Model: "gpt-5.6-sol", InputTokens: 10},
+		{Model: "<synthetic>", InputTokens: 10},
+	})
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "future-model") {
+		t.Fatalf("errors = %v, want one future-model diagnostic", errs)
 	}
 }
 

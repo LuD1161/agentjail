@@ -2,7 +2,9 @@
 
 **Status:** Accepted
 
-Amended by ADR 0121-transcript-record-recovery for bounded per-record recovery.
+Amended by ADR 0121-transcript-record-recovery for bounded per-record recovery
+and ADR 0122-supplemental-model-pricing for verified models that postdate
+Gryph's latest released catalog.
 
 ## Context
 

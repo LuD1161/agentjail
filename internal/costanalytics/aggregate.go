@@ -1,6 +1,7 @@
 package costanalytics
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func CollectAll(since time.Time) ([]SessionCost, []error) {
 
 	ocReader, err := NewOpenCodeReader(DefaultOpenCodeDBPath())
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	} else {
@@ -50,8 +51,33 @@ func CollectAll(since time.Time) ([]SessionCost, []error) {
 			errs = append(errs, closeErr)
 		}
 	}
+	errs = append(errs, missingPricingErrors(all)...)
 
 	return all, errs
+}
+
+func missingPricingErrors(sessions []SessionCost) []error {
+	missing := make(map[Model]struct{})
+	for _, session := range sessions {
+		model := session.Model
+		hasTokenUsage := session.InputTokens != 0 || session.OutputTokens != 0 || session.CacheRead != 0 || session.CacheWrite != 0
+		if !hasTokenUsage ||
+			strings.HasPrefix(string(model), "<") || strings.HasPrefix(string(model), "(") ||
+			HasPricing(model) {
+			continue
+		}
+		missing[model] = struct{}{}
+	}
+	models := make([]Model, 0, len(missing))
+	for model := range missing {
+		models = append(models, model)
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i] < models[j] })
+	errs := make([]error, 0, len(models))
+	for _, model := range models {
+		errs = append(errs, fmt.Errorf("model pricing unavailable for %q; token usage is included but estimated cost is $0", model))
+	}
+	return errs
 }
 
 func Aggregate(sessions []SessionCost, period Period) CostReport {
