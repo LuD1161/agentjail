@@ -334,6 +334,12 @@ Cost tab that groups locally discovered Claude Code, Codex, and OpenCode transcr
 spend by project and model. The Cost tab also shows token efficiency and budget
 alerts configured in `policy.yaml`.
 
+The same locally computed report is available as a terminal dashboard:
+
+```sh
+agentjail cost --period 7d
+```
+
 Each run recalculates eligible historical Claude Code and Codex sessions from
 their local token totals, so newly supported model prices apply retroactively.
 Transcript content stays local and computed Claude/Codex costs are not stored.

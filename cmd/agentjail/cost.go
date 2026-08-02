@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
@@ -100,47 +101,48 @@ func printCostReportTo(w io.Writer, r costanalytics.CostReport) {
 }
 
 func printCostReportToWithUI(w io.Writer, r costanalytics.CostReport, u *ui.UI) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, u.Box("Agent Cost Report · last "+string(r.Period), costDashboardBody(u, r)))
+	fmt.Fprintln(w)
+}
 
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%s (last %s)\n", u.Section("Agent Cost Report"), r.Period)
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  Total spend:  %s  %s\n",
-		u.Text(ui.ToneAccent, fmt.Sprintf("$%.2f", r.TotalCost)),
-		u.Text(ui.ToneMuted, fmt.Sprintf("(%d sessions)", r.SessionCount)))
-	fmt.Fprintln(w)
+func costDashboardBody(u *ui.UI, r costanalytics.CostReport) string {
+	lines := []string{
+		"TOTAL SPEND",
+		fmt.Sprintf("$%.2f   %d sessions", r.TotalCost, r.SessionCount),
+	}
 
 	if len(r.ByProject) > 0 {
-		fmt.Fprintln(w, u.Section("By Project"))
-		for _, p := range r.ByProject {
-			project := fmt.Sprintf("%-45s", truncateStr(u.Sanitize(string(p.Project)), 45))
-			fmt.Fprintf(w, "  %s %s %s   %s\n",
-				u.Text(ui.ToneAccent, project),
-				u.Text(ui.ToneSuccess, fmt.Sprintf("$%-8.2f", p.CostUSD)),
-				u.Text(ui.ToneMuted, fmt.Sprintf("%3.0f%%", p.Percent)),
-				u.Text(ui.ToneMuted, fmt.Sprintf("%d sessions", p.SessionCount)))
+		lines = append(lines, "", "BY PROJECT")
+		for _, project := range r.ByProject {
+			name := truncateStr(u.Sanitize(string(project.Project)), 26)
+			lines = append(lines, fmt.Sprintf("%-26s %s  $%8.2f  %3d sess", name, costShareBar(project.Percent, 14), project.CostUSD, project.SessionCount))
 		}
-		fmt.Fprintln(w)
 	}
 
 	if len(r.ByModel) > 0 {
-		fmt.Fprintln(w, u.Section("By Model"))
-		for _, m := range r.ByModel {
-			model := fmt.Sprintf("%-30s", truncateStr(u.Sanitize(string(m.Model)), 30))
-			fmt.Fprintf(w, "  %s %s %s   %s\n",
-				u.Text(ui.ToneAccent, model),
-				u.Text(ui.ToneSuccess, fmt.Sprintf("$%-8.2f", m.CostUSD)),
-				u.Text(ui.ToneMuted, fmt.Sprintf("%3.0f%%", m.Percent)),
-				u.Text(ui.ToneMuted, formatTokens(m.OutputTokens)+" output tokens"))
+		lines = append(lines, "", "BY MODEL")
+		for _, model := range r.ByModel {
+			name := truncateStr(u.Sanitize(string(model.Model)), 26)
+			lines = append(lines, fmt.Sprintf("%-26s %s  $%8.2f  %8s out", name, costShareBar(model.Percent, 14), model.CostUSD, formatTokens(model.OutputTokens)))
 		}
-		fmt.Fprintln(w)
 	}
 
-	fmt.Fprintln(w, u.Section("Token Efficiency"))
-	fmt.Fprintf(w, "  Cache hit rate:     %s\n", u.Text(ui.ToneSuccess, fmt.Sprintf("%.0f%%", r.CacheHitRate)))
-	fmt.Fprintf(w, "  Avg cost/session:   %s\n", u.Text(ui.ToneAccent, fmt.Sprintf("$%.2f", r.AvgCost)))
-	fmt.Fprintf(w, "  Avg tokens/session: %s\n", u.Text(ui.ToneMuted,
-		fmt.Sprintf("%s in, %s out", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok))))
-	fmt.Fprintln(w)
+	lines = append(lines,
+		"",
+		"TOKEN EFFICIENCY",
+		fmt.Sprintf("Cache hit  %.0f%%   ·   Avg / session  $%.2f", r.CacheHitRate, r.AvgCost),
+		fmt.Sprintf("Avg tokens %s in   ·   %s out", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok)),
+		"",
+		"local usage aggregates · offline pricing · no transcript upload",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func costShareBar(percent float64, width int) string {
+	percent = max(0, min(100, percent))
+	filled := int(percent/100*float64(width) + 0.5)
+	return "[" + strings.Repeat("=", filled) + strings.Repeat("-", width-filled) + "]"
 }
 
 func parsePeriod(s string) (time.Duration, error) {

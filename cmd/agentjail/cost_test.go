@@ -59,3 +59,47 @@ func TestPrintCostReportSanitizesTranscriptMetadata(t *testing.T) {
 		t.Fatalf("terminal escape survived report rendering: %q", out.String())
 	}
 }
+
+func TestPrintCostReportRendersDashboard(t *testing.T) {
+	var out bytes.Buffer
+	printCostReportTo(&out, costanalytics.CostReport{
+		Period:       "7d",
+		TotalCost:    18.42,
+		SessionCount: 31,
+		ByProject: []costanalytics.ProjectSummary{
+			{Project: "production-api", CostUSD: 10.96, Percent: 59.5},
+		},
+		ByModel: []costanalytics.ModelSummary{
+			{Model: "gpt-5.6-sol", CostUSD: 10.96, Percent: 59.5},
+		},
+		CacheHitRate: 74,
+		AvgCost:      0.59,
+		AvgInputTok:  123_000,
+		AvgOutputTok: 4_500,
+	})
+
+	for _, want := range []string{
+		"Agent Cost Report · last 7d",
+		"TOTAL SPEND",
+		"$18.42   31 sessions",
+		"BY PROJECT",
+		"production-api",
+		"BY MODEL",
+		"gpt-5.6-sol",
+		"Cache hit  74%",
+		"offline pricing",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dashboard missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestCostShareBarBoundsPercent(t *testing.T) {
+	if got := costShareBar(-1, 4); got != "[----]" {
+		t.Fatalf("negative bar = %q", got)
+	}
+	if got := costShareBar(101, 4); got != "[====]" {
+		t.Fatalf("overflow bar = %q", got)
+	}
+}
