@@ -412,6 +412,10 @@ database. The readers retain only session identity, project/model attribution,
 token totals, recorded or
 computed cost, and start time—never conversation content.
 
+The shared per-model summary exposes uncached input, cache-read, cache-write,
+and output totals. Pricing includes every category, so CLI and UI consumers do
+not present output volume as if it were the complete basis for model cost.
+
 Model costs are computed offline through
 [Gryph](https://github.com/safedep/gryph)'s bundled model-resolution and pricing
 provider, with a small officially verified supplement for current agent models

@@ -8,9 +8,9 @@ import (
 
 func TestAggregateCountsSessionsAcrossModelsOnce(t *testing.T) {
 	sessions := []SessionCost{
-		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "alpha", CostUSD: 1, InputTokens: 10, OutputTokens: 2},
-		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "beta", CostUSD: 2, InputTokens: 20, OutputTokens: 4},
-		{Source: "opencode", SessionID: "two", Project: "/tmp/project-b", Model: "alpha", CostUSD: 3, InputTokens: 30, OutputTokens: 6},
+		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "alpha", CostUSD: 1, InputTokens: 10, OutputTokens: 2, CacheRead: 100, CacheWrite: 5},
+		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "beta", CostUSD: 2, InputTokens: 20, OutputTokens: 4, CacheRead: 200, CacheWrite: 10},
+		{Source: "opencode", SessionID: "two", Project: "/tmp/project-b", Model: "alpha", CostUSD: 3, InputTokens: 30, OutputTokens: 6, CacheRead: 300, CacheWrite: 15},
 	}
 
 	report := Aggregate(sessions, "7d")
@@ -23,7 +23,8 @@ func TestAggregateCountsSessionsAcrossModelsOnce(t *testing.T) {
 	if len(report.ByModel) != 2 || report.ByModel[0].Model != "alpha" {
 		t.Fatalf("ByModel = %+v", report.ByModel)
 	}
-	if report.ByModel[0].SessionCount != 2 || report.ByModel[0].InputTokens != 40 || report.ByModel[0].OutputTokens != 8 {
+	if report.ByModel[0].SessionCount != 2 || report.ByModel[0].InputTokens != 40 || report.ByModel[0].OutputTokens != 8 ||
+		report.ByModel[0].CacheRead != 400 || report.ByModel[0].CacheWrite != 20 {
 		t.Fatalf("alpha summary = %+v", report.ByModel[0])
 	}
 }

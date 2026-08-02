@@ -116,7 +116,7 @@ func costDashboardBody(u *ui.UI, r costanalytics.CostReport) string {
 		lines = append(lines, "", "BY PROJECT")
 		for _, project := range r.ByProject {
 			name := truncateStr(u.Sanitize(string(project.Project)), 26)
-			lines = append(lines, fmt.Sprintf("%-26s %s  $%8.2f  %3d sess", name, costShareBar(project.Percent, 14), project.CostUSD, project.SessionCount))
+			lines = append(lines, "  "+u.Emoji("📁  ")+fmt.Sprintf("%-26s %s  $%8.2f  %3d sess", name, costShareBar(project.Percent, 14), project.CostUSD, project.SessionCount))
 		}
 	}
 
@@ -124,7 +124,11 @@ func costDashboardBody(u *ui.UI, r costanalytics.CostReport) string {
 		lines = append(lines, "", "BY MODEL")
 		for _, model := range r.ByModel {
 			name := truncateStr(u.Sanitize(string(model.Model)), 26)
-			lines = append(lines, fmt.Sprintf("%-26s %s  $%8.2f  %8s out", name, costShareBar(model.Percent, 14), model.CostUSD, formatTokens(model.OutputTokens)))
+			lines = append(lines,
+				fmt.Sprintf("  %-26s %s  $%8.2f  %3d sess", name, costShareBar(model.Percent, 14), model.CostUSD, model.SessionCount),
+				fmt.Sprintf("      tokens  %s uncached in · %s cache read · %s cache write · %s out",
+					formatTokens(model.InputTokens), formatTokens(model.CacheRead), formatTokens(model.CacheWrite), formatTokens(model.OutputTokens)),
+			)
 		}
 	}
 
@@ -132,7 +136,7 @@ func costDashboardBody(u *ui.UI, r costanalytics.CostReport) string {
 		"",
 		"TOKEN EFFICIENCY",
 		fmt.Sprintf("Cache hit  %.0f%%   ·   Avg / session  $%.2f", r.CacheHitRate, r.AvgCost),
-		fmt.Sprintf("Avg tokens %s in   ·   %s out", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok)),
+		fmt.Sprintf("Avg tokens %s uncached in   ·   %s out", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok)),
 		"",
 		"local usage aggregates · offline pricing · no transcript upload",
 	)
@@ -151,6 +155,8 @@ func parsePeriod(s string) (time.Duration, error) {
 
 func formatTokens(n int64) string {
 	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
 	case n >= 1_000_000:
 		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 	case n >= 1_000:

@@ -51,6 +51,8 @@ type ModelSummary struct {
 	SessionCount int     `json:"session_count"`
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
+	CacheRead    int64   `json:"cache_read_tokens"`
+	CacheWrite   int64   `json:"cache_write_tokens"`
 }
 
 type CostReport struct {

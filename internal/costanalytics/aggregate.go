@@ -135,6 +135,8 @@ func Aggregate(sessions []SessionCost, period Period) CostReport {
 		modelSessions[model][key] = struct{}{}
 		ms.InputTokens += s.InputTokens
 		ms.OutputTokens += s.OutputTokens
+		ms.CacheRead += s.CacheRead
+		ms.CacheWrite += s.CacheWrite
 	}
 
 	for _, ps := range projectCost {

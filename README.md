@@ -342,6 +342,9 @@ agentjail cost --period 7d
 
 Each run recalculates eligible historical Claude Code and Codex sessions from
 their local token totals, so newly supported model prices apply retroactively.
+Model rows disclose uncached input, cache-read, cache-write, and output tokens;
+all four categories contribute to the API-equivalent estimate, even though a
+high cache-hit workload can make output tokens look small beside its total cost.
 Transcript content stays local and computed Claude/Codex costs are not stored.
 The header shows whether data came from SQLite or the legacy `daemon.log`
 fallback and warns when the fallback may be stale or incomplete.

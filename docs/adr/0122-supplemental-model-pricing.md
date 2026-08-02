@@ -38,7 +38,9 @@ catalog lag cannot silently render token-bearing sessions as `$0.00`.
 Cost reports remain derived views. Every CLI or UI request rereads eligible
 local sessions and computes cost from their recorded token totals, so adding a
 price recalculates historical sessions without a migration or transcript
-rewrite.
+rewrite. Per-model summaries expose the uncached-input, cache-read,
+cache-write, and output totals that contribute to the estimate; showing output
+alone makes cache-heavy workloads appear arithmetically inconsistent.
 
 ## Consequences
 

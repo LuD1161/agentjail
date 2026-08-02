@@ -70,7 +70,7 @@ func TestPrintCostReportRendersDashboard(t *testing.T) {
 			{Project: "production-api", CostUSD: 10.96, Percent: 59.5},
 		},
 		ByModel: []costanalytics.ModelSummary{
-			{Model: "gpt-5.6-sol", CostUSD: 10.96, Percent: 59.5},
+			{Model: "gpt-5.6-sol", CostUSD: 10.96, Percent: 59.5, SessionCount: 12, InputTokens: 123_000, OutputTokens: 4_500, CacheRead: 2_000_000_000, CacheWrite: 50_000},
 		},
 		CacheHitRate: 74,
 		AvgCost:      0.59,
@@ -86,12 +86,32 @@ func TestPrintCostReportRendersDashboard(t *testing.T) {
 		"production-api",
 		"BY MODEL",
 		"gpt-5.6-sol",
+		"2.0B cache read",
+		"50.0K cache write",
 		"Cache hit  74%",
 		"offline pricing",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("dashboard missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestCostDashboardIndentsProjectAndModelRows(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("LC_ALL", "C.UTF-8")
+	var out bytes.Buffer
+	u := ui.New(&out)
+	body := costDashboardBody(u, costanalytics.CostReport{
+		ByProject: []costanalytics.ProjectSummary{{Project: "project"}},
+		ByModel:   []costanalytics.ModelSummary{{Model: "model"}},
+	})
+
+	if !strings.Contains(body, "\n  📁  project") {
+		t.Fatalf("project row is not nested under heading:\n%s", body)
+	}
+	if !strings.Contains(body, "\n  model") {
+		t.Fatalf("model row is not nested under heading:\n%s", body)
 	}
 }
 

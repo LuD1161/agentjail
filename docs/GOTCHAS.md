@@ -649,6 +649,16 @@ snapshots disappeared and the whole file produced only a warning.
   its delimiter; test valid data after the oversized fixture, not just rejection.
   See ADR 0121-transcript-record-recovery.
 
+## 44. A cost total needs every priced token category beside it
+
+The cost report correctly charged uncached input, cache reads, cache writes,
+and output, but its model rows displayed output tokens alone. Snapshot tests
+stayed green while a cache-heavy workload looked hundreds of dollars wrong.
+
+- **Rule:** whenever a derived total combines multiple usage categories, expose
+  every material category in the same view and test the aggregate fields.
+  See ADR 0122-supplemental-model-pricing.
+
 ---
 
 ## Testing gotchas
