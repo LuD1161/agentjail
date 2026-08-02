@@ -39,12 +39,20 @@ func TestAppendSessionCostsCapsResults(t *testing.T) {
 	}
 }
 
-func TestTranscriptScannerRejectsOversizedLine(t *testing.T) {
-	scanner := newTranscriptScanner(strings.NewReader(strings.Repeat("x", maxTranscriptLineBytes+2) + "\n"))
-	if scanner.Scan() {
-		t.Fatal("scanner accepted oversized transcript line")
+func TestTranscriptScannerSkipsOversizedLineAndContinues(t *testing.T) {
+	input := "first\n" + strings.Repeat("x", maxTranscriptLineBytes+2) + "\nlast\n"
+	scanner := newTranscriptScanner(strings.NewReader(input))
+
+	var lines []string
+	for scanner.Scan() {
+		if len(scanner.Bytes()) > 0 {
+			lines = append(lines, string(scanner.Bytes()))
+		}
 	}
-	if scanner.Err() == nil {
-		t.Fatal("scanner error = nil, want oversized-line error")
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(lines, ","); got != "first,last" {
+		t.Fatalf("lines = %q, want oversized record skipped and later record read", got)
 	}
 }

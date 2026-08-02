@@ -2,6 +2,7 @@ package costanalytics
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -40,11 +41,67 @@ func ParsePeriod(value string) (time.Duration, error) {
 	return duration, nil
 }
 
-func newTranscriptScanner(r io.Reader) *bufio.Scanner {
-	scanner := bufio.NewScanner(r)
-	// Scanner refuses an oversized token before exposing it to JSON decoding.
-	scanner.Buffer(make([]byte, 64*1024), maxTranscriptLineBytes+1)
-	return scanner
+type transcriptScanner struct {
+	reader *bufio.Reader
+	line   []byte
+	err    error
+	done   bool
+}
+
+func newTranscriptScanner(r io.Reader) *transcriptScanner {
+	return &transcriptScanner{reader: bufio.NewReaderSize(r, 64*1024)}
+}
+
+func (s *transcriptScanner) Scan() bool {
+	if s.done {
+		return false
+	}
+
+	line := make([]byte, 0, 64*1024)
+	oversized := false
+	for {
+		fragment, err := s.reader.ReadSlice('\n')
+		if !oversized {
+			contentLen := len(fragment)
+			if err == nil && contentLen > 0 {
+				contentLen--
+			}
+			if len(line)+contentLen > maxTranscriptLineBytes {
+				line = nil
+				oversized = true
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+
+		switch {
+		case err == nil:
+			s.line = bytesTrimLineEnding(line)
+			return true
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			s.done = true
+			if len(line) == 0 && !oversized {
+				return false
+			}
+			s.line = bytesTrimLineEnding(line)
+			return true
+		default:
+			s.err = err
+			s.done = true
+			return false
+		}
+	}
+}
+
+func (s *transcriptScanner) Bytes() []byte { return s.line }
+
+func (s *transcriptScanner) Err() error { return s.err }
+
+func bytesTrimLineEnding(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte{'\n'})
+	return bytes.TrimSuffix(line, []byte{'\r'})
 }
 
 func appendSessionCosts(existing, added []SessionCost) ([]SessionCost, error) {

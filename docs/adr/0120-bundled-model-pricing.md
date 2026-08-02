@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 
+Amended by ADR 0121-transcript-record-recovery for bounded per-record recovery.
+
 ## Context
 
 Agent cost reports combine token usage from local Claude Code transcripts and

@@ -43,15 +43,16 @@ func TestClaudeCodeReaderUsesTranscriptCWDAndAggregatesUsage(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeReaderAcceptsLargeOpaqueRecordBeforeUsage(t *testing.T) {
+func TestClaudeCodeReaderContinuesAfterOversizedContentRecord(t *testing.T) {
 	projects := t.TempDir()
 	sessionDir := filepath.Join(projects, "-encoded-project")
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(sessionDir, "session-large.jsonl")
-	content := `{"type":"user","message":{"content":"` + strings.Repeat("x", (1<<20)+1) + `"}}` + "\n" +
-		`{"type":"assistant","cwd":"/real/project","timestamp":"2026-07-31T10:01:00Z","message":{"model":"claude-test","usage":{"input_tokens":10,"output_tokens":4}}}` + "\n"
+	content := `{"type":"user","cwd":"/real/project","message":{"content":"` +
+		strings.Repeat("x", maxTranscriptLineBytes) + `"}}` + "\n" +
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":4}}}` + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +62,6 @@ func TestClaudeCodeReaderAcceptsLargeOpaqueRecordBeforeUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(sessions) != 1 || sessions[0].InputTokens != 10 || sessions[0].OutputTokens != 4 {
-		t.Fatalf("unexpected sessions: %+v", sessions)
+		t.Fatalf("sessions = %+v, want usage after oversized content record", sessions)
 	}
 }

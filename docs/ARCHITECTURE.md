@@ -419,7 +419,9 @@ that have not reached Gryph's bundled catalog yet (ADR 0120-bundled-model-pricin
 ADR 0121-current-model-pricing). AgentJail sends no transcript or usage data to
 Gryph. OpenCode's own non-zero recorded cost takes precedence.
 Missing optional sources are ignored; malformed available sources are reported
-as warnings without affecting enforcement.
+as warnings without affecting enforcement. Oversized JSONL content records are
+discarded individually within a fixed memory bound so later usage records in
+the same transcript remain readable (ADR 0121-transcript-record-recovery).
 
 Budget alerts come from the global `cost` section of `policy.yaml`:
 

@@ -638,6 +638,17 @@ them, so its non-zero total still omitted cache spend.
   model does not attest today's report.
   See ADR 0121-current-model-pricing.
 
+## 45. A JSONL line limit must recover at the next record
+
+The cost readers replaced an unbounded line reader with `bufio.Scanner` and a
+1 MiB cap. Limit tests passed, but real Claude and Codex transcripts embedded
+larger tool results. Scanner stopped permanently at that record, so later usage
+snapshots disappeared and the whole file produced only a warning.
+
+- **Rule:** a per-record resource limit discards only that record and resumes at
+  its delimiter; test valid data after the oversized fixture, not just rejection.
+  See ADR 0121-transcript-record-recovery.
+
 ---
 
 ## Testing gotchas

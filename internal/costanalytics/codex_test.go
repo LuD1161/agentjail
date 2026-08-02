@@ -37,6 +37,25 @@ func TestCodexReaderUsesFinalCumulativeUsage(t *testing.T) {
 	}
 }
 
+func TestCodexReaderContinuesAfterOversizedContentRecord(t *testing.T) {
+	root := t.TempDir()
+	writeCodexTranscript(t, root, "rollout-large.jsonl", `
+{"type":"session_meta","payload":{"id":"session-large","cwd":"/work/project"}}
+{"type":"response_item","payload":{"type":"function_call_output","output":"`+
+		strings.Repeat("x", maxTranscriptLineBytes)+`"}}
+{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":5,"total_tokens":45}}}}
+`)
+
+	sessions, err := NewCodexReaderAt(root).ReadSessions(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].InputTokens != 30 || sessions[0].OutputTokens != 5 {
+		t.Fatalf("sessions = %+v, want usage after oversized content record", sessions)
+	}
+}
+
 func TestCodexReaderIgnoresUnknownAndMalformedRecords(t *testing.T) {
 	root := t.TempDir()
 	writeCodexTranscript(t, root, "rollout.jsonl", `

@@ -4,7 +4,7 @@ AgentJail's cost reader treats Codex session JSONL as a versioned integration,
 not as a stable hook interface. It decodes only metadata, model context, and
 token-count records; conversation content and unknown record types are ignored.
 
-Contract verified on 2026-07-31:
+Contract verified on 2026-08-02:
 
 - Installed implementation: Codex CLI `0.146.0`.
 - Official source: the OpenAI Codex configuration reference documents
@@ -23,3 +23,6 @@ file. Cached-read and cache-write input tokens are split from ordinary input
 tokens before pricing. Missing transcript directories, including persistence
 set to `none`, produce an empty result. Malformed lines and future record/event
 types are ignored so a non-usage schema addition cannot break reporting.
+Records larger than 1 MiB are discarded individually through their newline;
+later metadata and cumulative usage records in the same transcript are still
+read.

@@ -214,7 +214,7 @@ func parseCodexSession(path string) (*codexSessionUsage, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read Codex transcript %s: line exceeds %d bytes or is invalid: %w", path, maxTranscriptLineBytes, err)
+		return nil, fmt.Errorf("read Codex transcript %s: %w", path, err)
 	}
 	return state, nil
 }
