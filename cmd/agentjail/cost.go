@@ -102,45 +102,61 @@ func printCostReportTo(w io.Writer, r costanalytics.CostReport) {
 
 func printCostReportToWithUI(w io.Writer, r costanalytics.CostReport, u *ui.UI) {
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, u.Box("Agent Cost Report · last "+string(r.Period), costDashboardBody(u, r)))
+	fmt.Fprintln(w, u.BoxRows("Agent Cost Report · last "+string(r.Period), costDashboardRows(u, r)))
 	fmt.Fprintln(w)
 }
 
-func costDashboardBody(u *ui.UI, r costanalytics.CostReport) string {
-	lines := []string{
-		"TOTAL SPEND",
-		fmt.Sprintf("$%.2f   %d sessions", r.TotalCost, r.SessionCount),
+func costDashboardRows(u *ui.UI, r costanalytics.CostReport) []ui.BoxRow {
+	lines := []ui.BoxRow{
+		{Text: "ESTIMATED API COST"},
+		{Text: fmt.Sprintf("$%.2f   %d sessions", r.TotalCost, r.SessionCount)},
 	}
 
 	if len(r.ByProject) > 0 {
-		lines = append(lines, "", "BY PROJECT")
+		lines = append(lines, ui.BoxRow{}, ui.BoxRow{Text: "BY PROJECT"})
 		for _, project := range r.ByProject {
 			name := truncateStr(u.Sanitize(string(project.Project)), 26)
-			lines = append(lines, "  "+u.Emoji("📁  ")+fmt.Sprintf("%-26s %s  $%8.2f  %3d sess", name, costShareBar(project.Percent, 14), project.CostUSD, project.SessionCount))
+			lines = append(lines, ui.BoxRow{Text: "  " + u.Emoji("📁  ") + fmt.Sprintf("%-26s %s  $%8.2f  %3d sess", name, costShareBar(project.Percent, 14), project.CostUSD, project.SessionCount)})
 		}
 	}
 
-	if len(r.ByModel) > 0 {
-		lines = append(lines, "", "BY MODEL")
-		for _, model := range r.ByModel {
+	models := visibleModelSummaries(r.ByModel)
+	if len(models) > 0 {
+		lines = append(lines, ui.BoxRow{}, ui.BoxRow{Text: "BY MODEL · API LIST-PRICE ESTIMATE"})
+		for i, model := range models {
 			name := truncateStr(u.Sanitize(string(model.Model)), 26)
 			lines = append(lines,
-				fmt.Sprintf("  %-26s %s  $%8.2f  %3d sess", name, costShareBar(model.Percent, 14), model.CostUSD, model.SessionCount),
-				fmt.Sprintf("      tokens  %s uncached in · %s cache read · %s cache write · %s out",
-					formatTokens(model.InputTokens), formatTokens(model.CacheRead), formatTokens(model.CacheWrite), formatTokens(model.OutputTokens)),
+				ui.BoxRow{Text: fmt.Sprintf("  %-26s %s  $%8.2f  %3d sess", name, costShareBar(model.Percent, 14), model.CostUSD, model.SessionCount)},
+				ui.BoxRow{Text: fmt.Sprintf("      usage   %s input · %s cache reads · %s cache writes · %s output",
+					formatTokens(model.InputTokens), formatTokens(model.CacheRead), formatTokens(model.CacheWrite), formatTokens(model.OutputTokens)), Tone: ui.BoxToneMuted},
 			)
+			if i < len(models)-1 {
+				lines = append(lines, ui.BoxRow{})
+			}
 		}
 	}
 
 	lines = append(lines,
-		"",
-		"TOKEN EFFICIENCY",
-		fmt.Sprintf("Cache hit  %.0f%%   ·   Avg / session  $%.2f", r.CacheHitRate, r.AvgCost),
-		fmt.Sprintf("Avg tokens %s uncached in   ·   %s out", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok)),
-		"",
-		"local usage aggregates · offline pricing · no transcript upload",
+		ui.BoxRow{},
+		ui.BoxRow{Text: "TOKEN EFFICIENCY"},
+		ui.BoxRow{Text: fmt.Sprintf("Cache hit  %.0f%%   ·   Avg API estimate / session  $%.2f", r.CacheHitRate, r.AvgCost)},
+		ui.BoxRow{Text: fmt.Sprintf("Avg usage  %s input   ·   %s output", formatTokens(r.AvgInputTok), formatTokens(r.AvgOutputTok))},
+		ui.BoxRow{},
+		ui.BoxRow{Text: "API list-price equivalent · subscriptions are not billed this way", Tone: ui.BoxToneMuted},
+		ui.BoxRow{Text: "local aggregates · offline pricing · no transcript upload", Tone: ui.BoxToneMuted},
 	)
-	return strings.Join(lines, "\n")
+	return lines
+}
+
+func visibleModelSummaries(models []costanalytics.ModelSummary) []costanalytics.ModelSummary {
+	visible := make([]costanalytics.ModelSummary, 0, len(models))
+	for _, model := range models {
+		if model.CostUSD == 0 && model.InputTokens == 0 && model.OutputTokens == 0 && model.CacheRead == 0 && model.CacheWrite == 0 {
+			continue
+		}
+		visible = append(visible, model)
+	}
+	return visible
 }
 
 func costShareBar(percent float64, width int) string {

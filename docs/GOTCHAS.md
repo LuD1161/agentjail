@@ -656,7 +656,8 @@ and output, but its model rows displayed output tokens alone. Snapshot tests
 stayed green while a cache-heavy workload looked hundreds of dollars wrong.
 
 - **Rule:** whenever a derived total combines multiple usage categories, expose
-  every material category in the same view and test the aggregate fields.
+  every material category in the same view, identify estimates as API list
+  price rather than subscription billing, and test the aggregate fields.
   See ADR 0122-supplemental-model-pricing.
 
 ---

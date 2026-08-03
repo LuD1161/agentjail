@@ -101,6 +101,22 @@ func TestBox(t *testing.T) {
 	}
 }
 
+func TestBoxRowsMutesSupportingTextAfterSanitizing(t *testing.T) {
+	var buf bytes.Buffer
+	u := newWithProfile(&buf, termenv.TrueColor, utf8Glyphs)
+	out := u.BoxRows("report", []BoxRow{
+		{Text: "primary"},
+		{Text: "detail\x1b[2J", Tone: BoxToneMuted},
+	})
+
+	if !strings.Contains(out, "\x1b[") {
+		t.Fatalf("muted row has no terminal styling: %q", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("untrusted terminal escape survived: %q", out)
+	}
+}
+
 // TestBox_MultiLineBodyPreservesRows verifies that a Box with a multi-line body
 // (rows joined with '\n') is NOT collapsed onto a single giant line.
 //

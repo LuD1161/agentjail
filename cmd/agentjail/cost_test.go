@@ -80,16 +80,16 @@ func TestPrintCostReportRendersDashboard(t *testing.T) {
 
 	for _, want := range []string{
 		"Agent Cost Report · last 7d",
-		"TOTAL SPEND",
+		"ESTIMATED API COST",
 		"$18.42   31 sessions",
 		"BY PROJECT",
 		"production-api",
 		"BY MODEL",
 		"gpt-5.6-sol",
-		"2.0B cache read",
-		"50.0K cache write",
+		"2.0B cache reads",
+		"50.0K cache writes",
 		"Cache hit  74%",
-		"offline pricing",
+		"subscriptions are not billed this way",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("dashboard missing %q:\n%s", want, out.String())
@@ -102,10 +102,11 @@ func TestCostDashboardIndentsProjectAndModelRows(t *testing.T) {
 	t.Setenv("LC_ALL", "C.UTF-8")
 	var out bytes.Buffer
 	u := ui.New(&out)
-	body := costDashboardBody(u, costanalytics.CostReport{
+	rows := costDashboardRows(u, costanalytics.CostReport{
 		ByProject: []costanalytics.ProjectSummary{{Project: "project"}},
-		ByModel:   []costanalytics.ModelSummary{{Model: "model"}},
+		ByModel:   []costanalytics.ModelSummary{{Model: "model", InputTokens: 1}},
 	})
+	body := boxRowText(rows)
 
 	if !strings.Contains(body, "\n  📁  project") {
 		t.Fatalf("project row is not nested under heading:\n%s", body)
@@ -113,6 +114,33 @@ func TestCostDashboardIndentsProjectAndModelRows(t *testing.T) {
 	if !strings.Contains(body, "\n  model") {
 		t.Fatalf("model row is not nested under heading:\n%s", body)
 	}
+}
+
+func TestCostDashboardSeparatesModelsAndHidesEmptySyntheticRows(t *testing.T) {
+	u := ui.New(&bytes.Buffer{})
+	rows := costDashboardRows(u, costanalytics.CostReport{ByModel: []costanalytics.ModelSummary{
+		{Model: "paid-one", CostUSD: 2, InputTokens: 1},
+		{Model: "paid-two", CostUSD: 1, OutputTokens: 1},
+		{Model: "<synthetic>", SessionCount: 2},
+	}})
+	body := boxRowText(rows)
+
+	firstDetail := strings.Index(body, "usage   1 input · 0 cache reads · 0 cache writes · 0 output")
+	secondModel := strings.Index(body, "paid-two")
+	if firstDetail < 0 || secondModel < 0 || !strings.Contains(body[firstDetail:secondModel], "\n\n") {
+		t.Fatalf("model rows are not separated clearly:\n%s", body)
+	}
+	if strings.Contains(body, "<synthetic>") {
+		t.Fatalf("empty internal model leaked into human report:\n%s", body)
+	}
+}
+
+func boxRowText(rows []ui.BoxRow) string {
+	text := make([]string, len(rows))
+	for i, row := range rows {
+		text[i] = row.Text
+	}
+	return strings.Join(text, "\n")
 }
 
 func TestCostShareBarBoundsPercent(t *testing.T) {

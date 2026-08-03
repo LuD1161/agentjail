@@ -215,6 +215,20 @@ const (
 	ToneMuted
 )
 
+// BoxTone controls the visual emphasis of a BoxRow.
+type BoxTone uint8
+
+const (
+	BoxToneDefault BoxTone = iota
+	BoxToneMuted
+)
+
+// BoxRow is one sanitized line in a boxed report.
+type BoxRow struct {
+	Text string
+	Tone BoxTone
+}
+
 // New creates a UI bound to w. The color profile is detected from w (so piped
 // writers automatically get the ASCII/plain profile) and the glyph set is
 // detected from the environment via detectGlyphs().
@@ -390,6 +404,24 @@ func (u *UI) Section(title string) string {
 func (u *UI) Box(title, body string) string {
 	title = sanitize(title)
 	body = sanitizeLines(body)
+	return u.renderBox(title, body)
+}
+
+// BoxRows renders typed rows and applies their requested emphasis after
+// sanitization, allowing reports to distinguish primary and supporting data.
+func (u *UI) BoxRows(title string, rows []BoxRow) string {
+	rendered := make([]string, 0, len(rows))
+	for _, row := range rows {
+		line := sanitize(row.Text)
+		if row.Tone == BoxToneMuted {
+			line = u.r.NewStyle().Foreground(lipgloss.Color(colorDim)).Render(line)
+		}
+		rendered = append(rendered, line)
+	}
+	return u.renderBox(sanitize(title), strings.Join(rendered, "\n"))
+}
+
+func (u *UI) renderBox(title, body string) string {
 
 	titleStyle := u.r.NewStyle().
 		Bold(true).
