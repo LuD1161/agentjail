@@ -660,6 +660,16 @@ stayed green while a cache-heavy workload looked hundreds of dollars wrong.
   price rather than subscription billing, and test the aggregate fields.
   See ADR 0122-supplemental-model-pricing.
 
+## 45. A pass-through parser makes Cobra help incomplete
+
+Legacy commands used `DisableFlagParsing` so their existing parsers could keep
+handling argv. Cobra then printed only `--help` and the global `--agent` flag,
+while real options such as `cost --period` worked but were invisible.
+
+- **Rule:** until a legacy parser is fully migrated, mirror every supported
+  runtime flag into its Cobra command and test the live command metadata.
+  See ADR 0027-cobra-cli-framework.
+
 ---
 
 ## Testing gotchas

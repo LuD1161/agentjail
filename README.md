@@ -340,6 +340,10 @@ The same locally computed report is available as a terminal dashboard:
 agentjail cost --period 7d
 ```
 
+`agentjail cost --help` lists the period, project filter, and JSON flags. The
+same complete local-flag help is available on reporting, replay, UI,
+installation, MCP inventory, and skill-policy commands.
+
 Each run recalculates eligible historical Claude Code and Codex sessions from
 their local token totals, so newly supported model prices apply retroactively.
 Model rows disclose uncached input, cache-read, cache-write, and output tokens;

@@ -64,6 +64,11 @@ Adopt [spf13/cobra](https://github.com/spf13/cobra) as the CLI framework.
 5. Remove manual dispatch, help text, and flag parsing as each command migrates
 6. Regenerate `THIRD_PARTY_LICENSES` after dependency addition
 
+During the incremental migration, any command that retains
+`DisableFlagParsing` must also register its legacy runtime flags with Cobra for
+help and completion. Cobra does not discover flags owned by a downstream
+stdlib or manual parser merely because the wrapper forwards argv to it.
+
 ### What does NOT change
 
 - Command names and behavior stay identical
