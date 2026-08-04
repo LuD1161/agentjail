@@ -350,9 +350,14 @@ Model rows disclose uncached input, cache-read, cache-write, and output tokens;
 all four categories contribute to the API-equivalent estimate, even though a
 high cache-hit workload can make output tokens look small beside its total cost.
 Claude cache writes retain their 5-minute/1-hour TTL and use the corresponding
-vendor rate. GPT-5.6 pricing uses Codex's per-request usage to apply the
-documented long-context tier; sessions missing complete request detail fall
-back to base rates and emit a warning instead of guessing from cumulative data.
+vendor rate; older writes without TTL detail use the 5-minute rate and are
+marked as estimates. GPT-5.6 pricing uses Codex's per-request usage to apply
+the documented long-context tier; sessions missing complete request detail
+fall back to base rates and emit a warning instead of guessing from cumulative
+data. Forked Codex transcripts discard copied ancestor usage, and model changes
+within one session remain attributed to the model active for each request; a
+missing fork parent produces a warning because copied history cannot be safely
+identified.
 Zero-usage internal transcript markers such as Claude Code's `<synthetic>`
 records remain available in JSON but are omitted from the human dashboard.
 Transcript content stays local and computed Claude/Codex costs are not stored.

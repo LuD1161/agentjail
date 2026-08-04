@@ -175,6 +175,10 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 	results := make([]SessionCost, 0, len(models))
 	for _, model := range models {
 		mt := perModel[model]
+		pricingMode := PricingModeRequestAware
+		if mt.cacheWrite > mt.cacheWrite5m+mt.cacheWrite1h {
+			pricingMode = PricingModeTTLEstimate
+		}
 		cost := ComputeBaseCost(Model(model), TokenUsage{
 			Input: mt.input, Output: mt.output, CacheRead: mt.cacheRead, CacheWrite: mt.cacheWrite,
 			CacheWrite5m: mt.cacheWrite5m, CacheWrite1h: mt.cacheWrite1h,
@@ -192,7 +196,7 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 			CacheWrite:   mt.cacheWrite,
 			CacheWrite5m: mt.cacheWrite5m,
 			CacheWrite1h: mt.cacheWrite1h,
-			PricingMode:  PricingModeRequestAware,
+			PricingMode:  pricingMode,
 			StartedAt:    startedAt,
 		})
 	}

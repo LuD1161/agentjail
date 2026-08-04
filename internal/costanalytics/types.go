@@ -19,6 +19,7 @@ type PricingMode string
 
 const (
 	PricingModeBaseEstimate PricingMode = "base-estimate"
+	PricingModeTTLEstimate  PricingMode = "ttl-estimate"
 	PricingModeRequestAware PricingMode = "request-aware"
 	PricingModeRecorded     PricingMode = "recorded"
 )
@@ -76,6 +77,7 @@ type ModelSummary struct {
 	CacheWrite5m int64   `json:"cache_write_5m_tokens"`
 	CacheWrite1h int64   `json:"cache_write_1h_tokens"`
 	BaseEstimate bool    `json:"base_estimate"`
+	TTLEstimate  bool    `json:"ttl_estimate"`
 }
 
 type CostReport struct {

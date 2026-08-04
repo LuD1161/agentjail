@@ -12,7 +12,7 @@ type tokenPricing struct {
 	output                    float64
 	cacheRead                 float64
 	cacheWrite                float64
-	cacheWrite1h              float64
+	cacheWrite1hMultiple      float64
 	longContextThreshold      int64
 	longContextInputMultiple  float64
 	longContextOutputMultiple float64
@@ -21,9 +21,9 @@ type tokenPricing struct {
 // Gryph remains the general catalog; this supplement covers current agent
 // models until its bundled data catches up. See ADR 0121-current-model-pricing.
 var supplementalPricing = map[Model]tokenPricing{
-	"claude-opus-4-6": {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10},
-	"claude-opus-4-8": {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10},
-	"claude-opus-5":   {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10},
+	"claude-opus-4-6": {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1hMultiple: 2},
+	"claude-opus-4-8": {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1hMultiple: 2},
+	"claude-opus-5":   {input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1hMultiple: 2},
 	"gpt-5.6":         {input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, longContextThreshold: 272_000, longContextInputMultiple: 2, longContextOutputMultiple: 1.5},
 	"gpt-5.6-sol":     {input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, longContextThreshold: 272_000, longContextInputMultiple: 2, longContextOutputMultiple: 1.5},
 	"gpt-5.6-terra":   {input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125, longContextThreshold: 272_000, longContextInputMultiple: 2, longContextOutputMultiple: 1.5},
@@ -77,30 +77,57 @@ func HasPricing(model Model) bool {
 }
 
 func pricingForModel(model Model) (tokenPricing, bool) {
-	if verified, ok := supplementalPricing[model]; ok {
-		return verified, true
-	}
 	provider, err := GetPricingProvider()
 	if err != nil || provider == nil {
 		return tokenPricing{}, false
 	}
 
 	mp, err := provider.GetPricing(string(model))
-	if err != nil || mp == nil {
+	if err != nil {
 		return tokenPricing{}, false
 	}
-	cacheWrite1h := mp.CacheWrite
+	supplemental, supplemented := supplementalPricing[model]
+	if mp == nil {
+		return supplemental, supplemented
+	}
+	resolved := tokenPricing{
+		input:      mp.InputPer1M,
+		output:     mp.OutputPer1M,
+		cacheRead:  mp.CacheRead,
+		cacheWrite: mp.CacheWrite,
+	}
 	if strings.Contains(strings.ToLower(string(model)), "claude") {
 		// Anthropic prices 1h writes at 2x base input. See ADR 0122-supplemental-model-pricing.
-		cacheWrite1h = mp.InputPer1M * 2
+		resolved.cacheWrite1hMultiple = 2
 	}
-	return tokenPricing{
-		input:        mp.InputPer1M,
-		output:       mp.OutputPer1M,
-		cacheRead:    mp.CacheRead,
-		cacheWrite:   mp.CacheWrite,
-		cacheWrite1h: cacheWrite1h,
-	}, true
+	if supplemented {
+		resolved = overlaySupplementalPricing(resolved, supplemental)
+	}
+	return resolved, true
+}
+
+func overlaySupplementalPricing(base, supplemental tokenPricing) tokenPricing {
+	if base.input == 0 {
+		base.input = supplemental.input
+	}
+	if base.output == 0 {
+		base.output = supplemental.output
+	}
+	if base.cacheRead == 0 {
+		base.cacheRead = supplemental.cacheRead
+	}
+	if base.cacheWrite == 0 {
+		base.cacheWrite = supplemental.cacheWrite
+	}
+	if supplemental.cacheWrite1hMultiple != 0 {
+		base.cacheWrite1hMultiple = supplemental.cacheWrite1hMultiple
+	}
+	if supplemental.longContextThreshold != 0 {
+		base.longContextThreshold = supplemental.longContextThreshold
+		base.longContextInputMultiple = supplemental.longContextInputMultiple
+		base.longContextOutputMultiple = supplemental.longContextOutputMultiple
+	}
+	return base
 }
 
 func tokenCost(usage TokenUsage, pricing tokenPricing, requestAware bool) float64 {
@@ -115,9 +142,9 @@ func tokenCost(usage TokenUsage, pricing tokenPricing, requestAware bool) float6
 	if unclassifiedWrites < 0 {
 		unclassifiedWrites = 0
 	}
-	cacheWrite1h := pricing.cacheWrite1h
-	if cacheWrite1h == 0 {
-		cacheWrite1h = pricing.cacheWrite
+	cacheWrite1h := pricing.cacheWrite
+	if pricing.cacheWrite1hMultiple != 0 {
+		cacheWrite1h = pricing.input * pricing.cacheWrite1hMultiple
 	}
 	return (float64(usage.Input)*pricing.input*inputMultiple +
 		float64(usage.Output)*pricing.output*outputMultiple +

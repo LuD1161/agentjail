@@ -137,9 +137,9 @@ func TestCostDashboardSeparatesModelsAndHidesEmptySyntheticRows(t *testing.T) {
 
 func TestModelUsageDetailExposesCacheTTLAndEstimateLimit(t *testing.T) {
 	detail := strings.Join(modelUsageDetails(costanalytics.ModelSummary{
-		CacheWrite: 3_000_000, CacheWrite5m: 1_000_000, CacheWrite1h: 2_000_000, BaseEstimate: true,
+		CacheWrite: 3_000_000, CacheWrite5m: 1_000_000, CacheWrite1h: 2_000_000, BaseEstimate: true, TTLEstimate: true,
 	}), "\n")
-	for _, want := range []string{"3.0M cache writes", "1.0M 5m", "2.0M 1h", "base rates only"} {
+	for _, want := range []string{"3.0M cache writes", "1.0M 5m", "2.0M 1h", "base rates only", "TTL unavailable"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail missing %q: %s", want, detail)
 		}

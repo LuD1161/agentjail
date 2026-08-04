@@ -71,6 +71,20 @@ func TestComputeRequestCostAppliesGPT56LongContextTier(t *testing.T) {
 	}
 }
 
+func TestOverlaySupplementalPricingPreservesCatalogRatesAndAddsRules(t *testing.T) {
+	t.Parallel()
+
+	base := tokenPricing{input: 7, output: 35, cacheRead: 0.7, cacheWrite: 8.75}
+	rules := supplementalPricing[Model("gpt-5.6-sol")]
+	got := overlaySupplementalPricing(base, rules)
+	if got.input != 7 || got.output != 35 || got.cacheRead != 0.7 || got.cacheWrite != 8.75 {
+		t.Fatalf("catalog rates were replaced: %+v", got)
+	}
+	if got.longContextThreshold != 272_000 || got.longContextInputMultiple != 2 || got.longContextOutputMultiple != 1.5 {
+		t.Fatalf("supplemental rules were not overlaid: %+v", got)
+	}
+}
+
 func TestComputeCostFromTokensUnknownModel(t *testing.T) {
 	t.Parallel()
 

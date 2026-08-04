@@ -89,4 +89,28 @@ func TestClaudeCodeReaderPricesCacheWritesByTTL(t *testing.T) {
 	if got.CacheWrite != 2_000_000 || got.CacheWrite5m != 1_000_000 || got.CacheWrite1h != 1_000_000 || got.CostUSD != 46.75 {
 		t.Fatalf("TTL-aware session = %+v", got)
 	}
+	if got.PricingMode != PricingModeRequestAware {
+		t.Fatalf("PricingMode = %q, want request-aware", got.PricingMode)
+	}
+}
+
+func TestClaudeCodeReaderMarksUnclassifiedCacheWritesEstimated(t *testing.T) {
+	projects := t.TempDir()
+	sessionDir := filepath.Join(projects, "-encoded-project")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sessionDir, "session-cache-old.jsonl")
+	content := `{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"cache_creation_input_tokens":1000000}}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeCodeReader{projectsDir: projects}).ReadSessions(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].PricingMode != PricingModeTTLEstimate || sessions[0].CostUSD != 6.25 {
+		t.Fatalf("unclassified cache session = %+v", sessions)
+	}
 }

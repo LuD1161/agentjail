@@ -419,13 +419,18 @@ Claude's five-minute and one-hour cache-write totals remain distinct through
 the typed report contract. Codex cumulative totals provide displayed usage,
 while complete `last_token_usage` records drive request-level price tiers; an
 incomplete request sequence is explicitly marked as a base-rate estimate.
+Codex usage deltas retain the active model, and forked transcripts remove
+ancestor events by their cumulative usage identity before aggregation.
 
 Model costs are computed offline through
 [Gryph](https://github.com/safedep/gryph)'s bundled model-resolution and pricing
-provider, with a small officially verified supplement for current agent models
-that have not reached Gryph's bundled catalog yet (ADR 0120-bundled-model-pricing
-and ADR 0121-current-model-pricing). AgentJail sends no transcript or usage data
-to Gryph. OpenCode's own non-zero recorded cost takes precedence. Reports
+provider, with source-verified supplemental rates for models newer than Gryph's
+latest release (ADR 0120-bundled-model-pricing and
+ADR 0121-current-model-pricing and ADR 0122-supplemental-model-pricing).
+AgentJail sends no transcript or usage data to Gryph. Supplemental pricing
+semantics overlay a resolved Gryph base rate so a catalog update cannot silently
+remove TTL or long-context rules. OpenCode's own non-zero recorded cost takes
+precedence. Reports
 are recomputed from local token totals on every request, including historical
 sessions; no computed Claude or Codex cost is persisted.
 Missing optional sources are ignored; malformed available sources are reported

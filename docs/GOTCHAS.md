@@ -683,6 +683,19 @@ tier even when its arithmetic is exact.
   rather than inferring a request from a cumulative session.
   See ADR 0122-supplemental-model-pricing and AGE-272.
 
+## 47. A forked transcript contains billable and copied history
+
+Codex fork files begin with the child metadata, then embed the parent metadata
+and cumulative usage history. Treating the last metadata record as identity
+collapsed separate branches; treating the first record as identity counted the
+copied history again. Both approaches produced plausible totals and green
+single-session tests.
+
+- **Rule:** preserve the first session identity, follow the typed fork parent,
+  remove exact ancestor usage events, and charge only the branch deltas. Test a
+  fork that diverges onto another model. See ADR 0122-supplemental-model-pricing
+  and AGE-272.
+
 ---
 
 ## Testing gotchas

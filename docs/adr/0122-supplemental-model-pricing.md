@@ -30,10 +30,13 @@ Primary sources:
 Keep Gryph's bundled provider as the primary catalog. Add a typed, source-dated
 supplemental table only for verified current models absent from the latest
 Gryph release: Claude Opus 4.8 and the GPT-5.6 Sol, Terra, and Luna family.
-Gryph wins automatically when it resolves a model; the supplemental rate is
-consulted only after a catalog miss. Unknown models remain unpriced rather than
-being guessed, and reports emit one diagnostic per unknown model so a future
-catalog lag cannot silently render token-bearing sessions as `$0.00`.
+Gryph wins automatically for base rates when it resolves a model. Supplemental
+pricing dimensions and request-tier rules overlay that base because Gryph's
+flat catalog may recognize a model without representing those semantics. The
+full supplemental rate is consulted after a catalog miss. Unknown models
+remain unpriced rather than being guessed, and reports emit one diagnostic per
+unknown model so a future catalog lag cannot silently render token-bearing
+sessions as `$0.00`.
 
 Cost reports remain derived views. Every CLI or UI request rereads eligible
 local sessions and computes cost from their recorded token totals, so adding a
@@ -49,6 +52,17 @@ input size required for GPT-5.6's over-272K input tier. Apply that tier only
 when the sum of retained request records matches the final cumulative usage;
 otherwise calculate at base rates and emit an explicit diagnostic. A
 session-wide cumulative total must never be treated as one oversized request.
+Attribute monotonic cumulative deltas to the model active at each token event.
+For forked Codex sessions, retain the child identity from the first metadata
+record and remove copied ancestor events by exact cumulative usage identity;
+only the branch's incremental requests contribute again. If an ancestor
+transcript is unavailable, retain the observable usage but warn that copied
+history may be included.
+
+When a historical Claude record has a top-level cache-write total but no TTL
+breakdown, price the unclassified portion at the lower five-minute rate and
+emit an explicit estimate diagnostic. This avoids inventing the more expensive
+TTL while making the possible undercount visible.
 
 ## Consequences
 
@@ -60,3 +74,5 @@ session-wide cumulative total must never be treated as one oversized request.
   marked base estimates.
 - Claude cache TTL pricing and complete Codex request sequences can be
   reconstructed exactly from their current local transcript contracts.
+- Forked Codex sessions count branch requests without charging their copied
+  ancestor history again, and mixed-model sessions retain model attribution.

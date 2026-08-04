@@ -160,6 +160,9 @@ func modelUsageDetails(model costanalytics.ModelSummary) []string {
 	if model.BaseEstimate {
 		details = append(details, "      pricing base rates only · incomplete per-request usage")
 	}
+	if model.TTLEstimate {
+		details = append(details, "      pricing 5m rate used · cache-write TTL unavailable")
+	}
 	return details
 }
 

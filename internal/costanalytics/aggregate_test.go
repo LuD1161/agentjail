@@ -53,6 +53,16 @@ func TestIncompleteRequestPricingErrorsExposeBaseEstimate(t *testing.T) {
 	}
 }
 
+func TestIncompleteCacheWritePricingErrorsExposeTTLAssumption(t *testing.T) {
+	errs := incompleteCacheWritePricingErrors([]SessionCost{
+		{Model: "claude-opus-4-8", PricingMode: PricingModeTTLEstimate},
+		{Model: "claude-opus-4-8", PricingMode: PricingModeTTLEstimate},
+	})
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "without TTL detail") {
+		t.Fatalf("errors = %v, want one TTL diagnostic", errs)
+	}
+}
+
 func TestCheckBudgetUsesInjectedDay(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	sessions := []SessionCost{
