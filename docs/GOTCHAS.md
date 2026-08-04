@@ -670,6 +670,19 @@ while real options such as `cost --period` worked but were invisible.
   runtime flag into its Cobra command and test the live command metadata.
   See ADR 0027-cobra-cli-framework.
 
+## 46. A cache-write total is not a pricing category
+
+Claude's top-level cache-creation count looked sufficient and produced
+plausible totals, while a nested object identified every write as five-minute
+or one-hour. Collapsing that field priced one-hour writes at the cheaper rate.
+Likewise, a Codex session total cannot reveal which requests crossed a pricing
+tier even when its arithmetic is exact.
+
+- **Rule:** retain every transcript dimension that changes price, and apply
+  request-level tiers only to complete per-request records. Fall back visibly
+  rather than inferring a request from a cumulative session.
+  See ADR 0122-supplemental-model-pricing and AGE-272.
+
 ---
 
 ## Testing gotchas

@@ -29,16 +29,22 @@ type transcriptLine struct {
 			OutputTokens             int64 `json:"output_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+			CacheCreation            struct {
+				Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+				Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
+			} `json:"cache_creation"`
 		} `json:"usage"`
 	} `json:"message"`
 }
 
 // modelTokens aggregates token counts for a single model within a session.
 type modelTokens struct {
-	input      int64
-	output     int64
-	cacheRead  int64
-	cacheWrite int64
+	input        int64
+	output       int64
+	cacheRead    int64
+	cacheWrite   int64
+	cacheWrite5m int64
+	cacheWrite1h int64
 }
 
 func NewClaudeCodeReader() *ClaudeCodeReader {
@@ -132,7 +138,15 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 				mt.input += line.Message.Usage.InputTokens
 				mt.output += line.Message.Usage.OutputTokens
 				mt.cacheRead += line.Message.Usage.CacheReadInputTokens
-				mt.cacheWrite += line.Message.Usage.CacheCreationInputTokens
+				cacheWrite5m := line.Message.Usage.CacheCreation.Ephemeral5mInputTokens
+				cacheWrite1h := line.Message.Usage.CacheCreation.Ephemeral1hInputTokens
+				cacheWrite := line.Message.Usage.CacheCreationInputTokens
+				if classified := cacheWrite5m + cacheWrite1h; classified > cacheWrite {
+					cacheWrite = classified
+				}
+				mt.cacheWrite += cacheWrite
+				mt.cacheWrite5m += cacheWrite5m
+				mt.cacheWrite1h += cacheWrite1h
 			}
 		}
 	}
@@ -161,7 +175,10 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 	results := make([]SessionCost, 0, len(models))
 	for _, model := range models {
 		mt := perModel[model]
-		cost := ComputeCostFromTokens(Model(model), mt.input, mt.output, mt.cacheRead, mt.cacheWrite)
+		cost := ComputeBaseCost(Model(model), TokenUsage{
+			Input: mt.input, Output: mt.output, CacheRead: mt.cacheRead, CacheWrite: mt.cacheWrite,
+			CacheWrite5m: mt.cacheWrite5m, CacheWrite1h: mt.cacheWrite1h,
+		})
 		results = append(results, SessionCost{
 			Source:       SourceClaudeCode,
 			SessionID:    SessionID(sessionID),
@@ -173,6 +190,9 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 			OutputTokens: mt.output,
 			CacheRead:    mt.cacheRead,
 			CacheWrite:   mt.cacheWrite,
+			CacheWrite5m: mt.cacheWrite5m,
+			CacheWrite1h: mt.cacheWrite1h,
+			PricingMode:  PricingModeRequestAware,
 			StartedAt:    startedAt,
 		})
 	}

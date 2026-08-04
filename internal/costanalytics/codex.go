@@ -37,6 +37,7 @@ type codexEvent struct {
 	Type string `json:"type"`
 	Info *struct {
 		TotalTokenUsage *codexTokenUsage `json:"total_token_usage"`
+		LastTokenUsage  *codexTokenUsage `json:"last_token_usage"`
 	} `json:"info"`
 }
 
@@ -50,12 +51,14 @@ type codexTokenUsage struct {
 }
 
 type codexSessionUsage struct {
-	sessionID string
-	model     string
-	project   string
-	startedAt time.Time
-	usage     codexTokenUsage
-	maxTotal  int64
+	sessionID   string
+	model       string
+	project     string
+	startedAt   time.Time
+	usage       codexTokenUsage
+	maxTotal    int64
+	pricedUsage codexTokenUsage
+	requestCost float64
 }
 
 // NewCodexReader discovers transcripts in Codex's default per-user data path.
@@ -130,18 +133,25 @@ func (c *CodexReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 		if input < 0 {
 			input = 0
 		}
+		cost := ComputeBaseCost(Model(session.model), codexUsageForPricing(session.usage))
+		pricingMode := PricingModeBaseEstimate
+		if codexUsageEqual(session.pricedUsage, session.usage) {
+			cost = session.requestCost
+			pricingMode = PricingModeRequestAware
+		}
 		sessions = append(sessions, SessionCost{
 			Source:       SourceCodex,
 			SessionID:    SessionID(session.sessionID),
 			Agent:        AgentCodex,
 			Model:        Model(session.model),
 			Project:      Project(session.project),
-			CostUSD:      ComputeCostFromTokens(Model(session.model), input, session.usage.OutputTokens, session.usage.CachedInputTokens, session.usage.CacheWriteTokens),
+			CostUSD:      cost,
 			InputTokens:  input,
 			OutputTokens: session.usage.OutputTokens,
 			CacheRead:    session.usage.CachedInputTokens,
 			CacheWrite:   session.usage.CacheWriteTokens,
 			Reasoning:    session.usage.ReasoningOutput,
+			PricingMode:  pricingMode,
 			StartedAt:    session.startedAt,
 		})
 	}
@@ -205,6 +215,11 @@ func parseCodexSession(path string) (*codexSessionUsage, error) {
 					if total == 0 {
 						total = usage.InputTokens + usage.OutputTokens
 					}
+					if total > state.maxTotal && event.Info.LastTokenUsage != nil && state.model != "" && HasPricing(Model(state.model)) {
+						last := *event.Info.LastTokenUsage
+						state.requestCost += ComputeRequestCost(Model(state.model), codexUsageForPricing(last))
+						addCodexUsage(&state.pricedUsage, last)
+					}
 					if total >= state.maxTotal {
 						state.usage = usage
 						state.maxTotal = total
@@ -231,6 +246,8 @@ func mergeCodexSession(sessions map[string]*codexSessionUsage, candidate *codexS
 	if candidate.maxTotal >= current.maxTotal {
 		current.usage = candidate.usage
 		current.maxTotal = candidate.maxTotal
+		current.pricedUsage = candidate.pricedUsage
+		current.requestCost = candidate.requestCost
 		if candidate.project != "" {
 			current.project = candidate.project
 		}
@@ -245,6 +262,32 @@ func mergeCodexSession(sessions map[string]*codexSessionUsage, candidate *codexS
 	if current.model == "" {
 		current.model = candidate.model
 	}
+}
+
+func codexUsageForPricing(usage codexTokenUsage) TokenUsage {
+	input := usage.InputTokens - usage.CachedInputTokens - usage.CacheWriteTokens
+	if input < 0 {
+		input = 0
+	}
+	return TokenUsage{
+		Input: input, Output: usage.OutputTokens, CacheRead: usage.CachedInputTokens, CacheWrite: usage.CacheWriteTokens,
+	}
+}
+
+func addCodexUsage(total *codexTokenUsage, usage codexTokenUsage) {
+	total.InputTokens += usage.InputTokens
+	total.CachedInputTokens += usage.CachedInputTokens
+	total.CacheWriteTokens += usage.CacheWriteTokens
+	total.OutputTokens += usage.OutputTokens
+	total.ReasoningOutput += usage.ReasoningOutput
+	total.TotalTokens += usage.TotalTokens
+}
+
+func codexUsageEqual(a, b codexTokenUsage) bool {
+	return a.InputTokens == b.InputTokens &&
+		a.CachedInputTokens == b.CachedInputTokens &&
+		a.CacheWriteTokens == b.CacheWriteTokens &&
+		a.OutputTokens == b.OutputTokens
 }
 
 func (c *CodexReader) Close() error {

@@ -15,6 +15,23 @@ type Agent string
 type Model string
 type Project string
 type Period string
+type PricingMode string
+
+const (
+	PricingModeBaseEstimate PricingMode = "base-estimate"
+	PricingModeRequestAware PricingMode = "request-aware"
+	PricingModeRecorded     PricingMode = "recorded"
+)
+
+// TokenUsage is the typed pricing input retained from one request or aggregate.
+type TokenUsage struct {
+	Input        int64
+	Output       int64
+	CacheRead    int64
+	CacheWrite   int64
+	CacheWrite5m int64
+	CacheWrite1h int64
+}
 
 const (
 	AgentClaudeCode Agent = "claude-code"
@@ -23,18 +40,21 @@ const (
 )
 
 type SessionCost struct {
-	Source       Source    `json:"source"`
-	SessionID    SessionID `json:"session_id"`
-	Agent        Agent     `json:"agent"`
-	Model        Model     `json:"model"`
-	Project      Project   `json:"project"`
-	CostUSD      float64   `json:"cost_usd"`
-	InputTokens  int64     `json:"input_tokens"`
-	OutputTokens int64     `json:"output_tokens"`
-	CacheRead    int64     `json:"cache_read_tokens"`
-	CacheWrite   int64     `json:"cache_write_tokens"`
-	Reasoning    int64     `json:"reasoning_tokens"`
-	StartedAt    time.Time `json:"started_at"`
+	Source       Source      `json:"source"`
+	SessionID    SessionID   `json:"session_id"`
+	Agent        Agent       `json:"agent"`
+	Model        Model       `json:"model"`
+	Project      Project     `json:"project"`
+	CostUSD      float64     `json:"cost_usd"`
+	InputTokens  int64       `json:"input_tokens"`
+	OutputTokens int64       `json:"output_tokens"`
+	CacheRead    int64       `json:"cache_read_tokens"`
+	CacheWrite   int64       `json:"cache_write_tokens"`
+	CacheWrite5m int64       `json:"cache_write_5m_tokens"`
+	CacheWrite1h int64       `json:"cache_write_1h_tokens"`
+	Reasoning    int64       `json:"reasoning_tokens"`
+	PricingMode  PricingMode `json:"pricing_mode"`
+	StartedAt    time.Time   `json:"started_at"`
 }
 
 type ProjectSummary struct {
@@ -53,6 +73,9 @@ type ModelSummary struct {
 	OutputTokens int64   `json:"output_tokens"`
 	CacheRead    int64   `json:"cache_read_tokens"`
 	CacheWrite   int64   `json:"cache_write_tokens"`
+	CacheWrite5m int64   `json:"cache_write_5m_tokens"`
+	CacheWrite1h int64   `json:"cache_write_1h_tokens"`
+	BaseEstimate bool    `json:"base_estimate"`
 }
 
 type CostReport struct {

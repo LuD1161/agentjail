@@ -52,8 +52,28 @@ func CollectAll(since time.Time) ([]SessionCost, []error) {
 		}
 	}
 	errs = append(errs, missingPricingErrors(all)...)
+	errs = append(errs, incompleteRequestPricingErrors(all)...)
 
 	return all, errs
+}
+
+func incompleteRequestPricingErrors(sessions []SessionCost) []error {
+	models := make(map[Model]struct{})
+	for _, session := range sessions {
+		if session.PricingMode == PricingModeBaseEstimate && requiresRequestPricing(session.Model) {
+			models[session.Model] = struct{}{}
+		}
+	}
+	ordered := make([]Model, 0, len(models))
+	for model := range models {
+		ordered = append(ordered, model)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	errs := make([]error, 0, len(ordered))
+	for _, model := range ordered {
+		errs = append(errs, fmt.Errorf("model %q has sessions without complete per-request usage; base rates used where long-context tier could not be reconstructed", model))
+	}
+	return errs
 }
 
 func missingPricingErrors(sessions []SessionCost) []error {
@@ -137,6 +157,9 @@ func Aggregate(sessions []SessionCost, period Period) CostReport {
 		ms.OutputTokens += s.OutputTokens
 		ms.CacheRead += s.CacheRead
 		ms.CacheWrite += s.CacheWrite
+		ms.CacheWrite5m += s.CacheWrite5m
+		ms.CacheWrite1h += s.CacheWrite1h
+		ms.BaseEstimate = ms.BaseEstimate || s.PricingMode == PricingModeBaseEstimate
 	}
 
 	for _, ps := range projectCost {

@@ -349,6 +349,10 @@ their local token totals, so newly supported model prices apply retroactively.
 Model rows disclose uncached input, cache-read, cache-write, and output tokens;
 all four categories contribute to the API-equivalent estimate, even though a
 high cache-hit workload can make output tokens look small beside its total cost.
+Claude cache writes retain their 5-minute/1-hour TTL and use the corresponding
+vendor rate. GPT-5.6 pricing uses Codex's per-request usage to apply the
+documented long-context tier; sessions missing complete request detail fall
+back to base rates and emit a warning instead of guessing from cumulative data.
 Zero-usage internal transcript markers such as Claude Code's `<synthetic>`
 records remain available in JSON but are omitted from the human dashboard.
 Transcript content stays local and computed Claude/Codex costs are not stored.

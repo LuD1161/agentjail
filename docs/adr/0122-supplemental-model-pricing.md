@@ -42,12 +42,21 @@ rewrite. Per-model summaries expose the uncached-input, cache-read,
 cache-write, and output totals that contribute to the estimate; showing output
 alone makes cache-heavy workloads appear arithmetically inconsistent.
 
+Preserve pricing dimensions present in vendor transcripts. Claude Code's
+`cache_creation` object separates five-minute and one-hour writes, which use
+different documented rates. Codex's `last_token_usage` supplies the per-request
+input size required for GPT-5.6's over-272K input tier. Apply that tier only
+when the sum of retained request records matches the final cumulative usage;
+otherwise calculate at base rates and emit an explicit diagnostic. A
+session-wide cumulative total must never be treated as one oversized request.
+
 ## Consequences
 
 - Current Claude Opus 4.8 and GPT-5.6 sessions receive non-zero offline cost
   estimates, including sessions created before this change.
 - Gryph remains the broad model-resolution source; the local supplement is
   intentionally small and must cite primary pricing before expansion.
-- Pricing estimates use the documented base token rates. Transcript aggregates
-  do not expose enough per-request detail to reconstruct long-context pricing
-  tiers exactly.
+- Pricing estimates without complete per-request detail remain explicitly
+  marked base estimates.
+- Claude cache TTL pricing and complete Codex request sequences can be
+  reconstructed exactly from their current local transcript contracts.

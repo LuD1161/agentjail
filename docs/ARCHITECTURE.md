@@ -415,6 +415,10 @@ computed cost, and start time—never conversation content.
 The shared per-model summary exposes uncached input, cache-read, cache-write,
 and output totals. Pricing includes every category, so CLI and UI consumers do
 not present output volume as if it were the complete basis for model cost.
+Claude's five-minute and one-hour cache-write totals remain distinct through
+the typed report contract. Codex cumulative totals provide displayed usage,
+while complete `last_token_usage` records drive request-level price tiers; an
+incomplete request sequence is explicitly marked as a base-rate estimate.
 
 Model costs are computed offline through
 [Gryph](https://github.com/safedep/gryph)'s bundled model-resolution and pricing

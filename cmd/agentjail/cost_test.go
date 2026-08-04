@@ -125,13 +125,24 @@ func TestCostDashboardSeparatesModelsAndHidesEmptySyntheticRows(t *testing.T) {
 	}})
 	body := boxRowText(rows)
 
-	firstDetail := strings.Index(body, "usage   1 input · 0 cache reads · 0 cache writes · 0 output")
+	firstDetail := strings.Index(body, "usage   1 input · 0 cache reads · 0 output")
 	secondModel := strings.Index(body, "paid-two")
 	if firstDetail < 0 || secondModel < 0 || !strings.Contains(body[firstDetail:secondModel], "\n\n") {
 		t.Fatalf("model rows are not separated clearly:\n%s", body)
 	}
 	if strings.Contains(body, "<synthetic>") {
 		t.Fatalf("empty internal model leaked into human report:\n%s", body)
+	}
+}
+
+func TestModelUsageDetailExposesCacheTTLAndEstimateLimit(t *testing.T) {
+	detail := strings.Join(modelUsageDetails(costanalytics.ModelSummary{
+		CacheWrite: 3_000_000, CacheWrite5m: 1_000_000, CacheWrite1h: 2_000_000, BaseEstimate: true,
+	}), "\n")
+	for _, want := range []string{"3.0M cache writes", "1.0M 5m", "2.0M 1h", "base rates only"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail missing %q: %s", want, detail)
+		}
 	}
 }
 

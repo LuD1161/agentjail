@@ -65,3 +65,28 @@ func TestClaudeCodeReaderContinuesAfterOversizedContentRecord(t *testing.T) {
 		t.Fatalf("sessions = %+v, want usage after oversized content record", sessions)
 	}
 }
+
+func TestClaudeCodeReaderPricesCacheWritesByTTL(t *testing.T) {
+	projects := t.TempDir()
+	sessionDir := filepath.Join(projects, "-encoded-project")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sessionDir, "session-cache.jsonl")
+	content := `{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":1000000,"cache_creation_input_tokens":2000000,"cache_creation":{"ephemeral_5m_input_tokens":1000000,"ephemeral_1h_input_tokens":1000000}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeCodeReader{projectsDir: projects}).ReadSessions(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %+v", sessions)
+	}
+	got := sessions[0]
+	if got.CacheWrite != 2_000_000 || got.CacheWrite5m != 1_000_000 || got.CacheWrite1h != 1_000_000 || got.CostUSD != 46.75 {
+		t.Fatalf("TTL-aware session = %+v", got)
+	}
+}

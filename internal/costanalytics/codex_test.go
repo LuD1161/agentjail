@@ -1,6 +1,7 @@
 package costanalytics
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,28 @@ func TestCodexReaderContinuesAfterOversizedContentRecord(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].InputTokens != 30 || sessions[0].OutputTokens != 5 {
 		t.Fatalf("sessions = %+v, want usage after oversized content record", sessions)
+	}
+}
+
+func TestCodexReaderPricesLongContextPerRequest(t *testing.T) {
+	root := t.TempDir()
+	writeCodexTranscript(t, root, "rollout-long.jsonl", `
+{"timestamp":"2026-08-03T17:00:00Z","type":"session_meta","payload":{"id":"session-long","cwd":"/work/project"}}
+{"timestamp":"2026-08-03T17:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200000,"cached_input_tokens":50000,"output_tokens":1000,"total_tokens":201000},"last_token_usage":{"input_tokens":200000,"cached_input_tokens":50000,"output_tokens":1000,"total_tokens":201000}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500000,"cached_input_tokens":250000,"output_tokens":2000,"total_tokens":502000},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":200000,"output_tokens":1000,"total_tokens":301000}}}}
+`)
+
+	sessions, err := NewCodexReaderAt(root).ReadSessions(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %+v", sessions)
+	}
+	got := sessions[0]
+	if got.PricingMode != PricingModeRequestAware || math.Abs(got.CostUSD-2.05) > 1e-9 {
+		t.Fatalf("request-aware session = %+v, want cost 2.05", got)
 	}
 }
 

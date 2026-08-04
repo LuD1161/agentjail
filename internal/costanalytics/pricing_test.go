@@ -47,6 +47,30 @@ func TestComputeCostFromTokensUsesVerifiedCurrentRates(t *testing.T) {
 	}
 }
 
+func TestComputeBaseCostDistinguishesClaudeCacheWriteTTLs(t *testing.T) {
+	t.Parallel()
+
+	usage := TokenUsage{
+		Input: 1_000_000, Output: 1_000_000, CacheRead: 1_000_000,
+		CacheWrite: 2_000_000, CacheWrite5m: 1_000_000, CacheWrite1h: 1_000_000,
+	}
+	if got, want := ComputeBaseCost("claude-opus-4-8", usage), 46.75; got != want {
+		t.Fatalf("ComputeBaseCost() = %.2f, want %.2f", got, want)
+	}
+}
+
+func TestComputeRequestCostAppliesGPT56LongContextTier(t *testing.T) {
+	t.Parallel()
+
+	usage := TokenUsage{Input: 100_000, CacheRead: 200_000, Output: 1_000_000}
+	if got, want := ComputeBaseCost("gpt-5.6-sol", usage), 30.6; got != want {
+		t.Fatalf("ComputeBaseCost() = %.2f, want %.2f", got, want)
+	}
+	if got, want := ComputeRequestCost("gpt-5.6-sol", usage), 46.2; got != want {
+		t.Fatalf("ComputeRequestCost() = %.2f, want %.2f", got, want)
+	}
+}
+
 func TestComputeCostFromTokensUnknownModel(t *testing.T) {
 	t.Parallel()
 

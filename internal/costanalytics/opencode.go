@@ -93,8 +93,10 @@ func (o *OpenCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 			}
 		}
 
+		pricingMode := PricingModeRecorded
 		if cost == 0 && (inp > 0 || out > 0 || cacheR > 0 || cacheW > 0) && model != "" {
 			cost = ComputeCostFromTokens(Model(model), inp, out, cacheR, cacheW)
+			pricingMode = PricingModeBaseEstimate
 		}
 
 		sessions = append(sessions, SessionCost{
@@ -109,6 +111,7 @@ func (o *OpenCodeReader) ReadSessions(since time.Time) ([]SessionCost, error) {
 			CacheRead:    cacheR,
 			CacheWrite:   cacheW,
 			Reasoning:    reasoning,
+			PricingMode:  pricingMode,
 			StartedAt:    time.UnixMilli(createdMs),
 		})
 	}

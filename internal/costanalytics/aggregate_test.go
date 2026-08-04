@@ -8,7 +8,7 @@ import (
 
 func TestAggregateCountsSessionsAcrossModelsOnce(t *testing.T) {
 	sessions := []SessionCost{
-		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "alpha", CostUSD: 1, InputTokens: 10, OutputTokens: 2, CacheRead: 100, CacheWrite: 5},
+		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "alpha", CostUSD: 1, InputTokens: 10, OutputTokens: 2, CacheRead: 100, CacheWrite: 5, CacheWrite5m: 2, CacheWrite1h: 3, PricingMode: PricingModeBaseEstimate},
 		{Source: "claude-code", SessionID: "one", Project: "/tmp/project-a", Model: "beta", CostUSD: 2, InputTokens: 20, OutputTokens: 4, CacheRead: 200, CacheWrite: 10},
 		{Source: "opencode", SessionID: "two", Project: "/tmp/project-b", Model: "alpha", CostUSD: 3, InputTokens: 30, OutputTokens: 6, CacheRead: 300, CacheWrite: 15},
 	}
@@ -24,7 +24,8 @@ func TestAggregateCountsSessionsAcrossModelsOnce(t *testing.T) {
 		t.Fatalf("ByModel = %+v", report.ByModel)
 	}
 	if report.ByModel[0].SessionCount != 2 || report.ByModel[0].InputTokens != 40 || report.ByModel[0].OutputTokens != 8 ||
-		report.ByModel[0].CacheRead != 400 || report.ByModel[0].CacheWrite != 20 {
+		report.ByModel[0].CacheRead != 400 || report.ByModel[0].CacheWrite != 20 || report.ByModel[0].CacheWrite5m != 2 ||
+		report.ByModel[0].CacheWrite1h != 3 || !report.ByModel[0].BaseEstimate {
 		t.Fatalf("alpha summary = %+v", report.ByModel[0])
 	}
 }
@@ -38,6 +39,17 @@ func TestMissingPricingErrorsExposeFutureCatalogLag(t *testing.T) {
 	})
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "future-model") {
 		t.Fatalf("errors = %v, want one future-model diagnostic", errs)
+	}
+}
+
+func TestIncompleteRequestPricingErrorsExposeBaseEstimate(t *testing.T) {
+	errs := incompleteRequestPricingErrors([]SessionCost{
+		{Model: "gpt-5.6-sol", PricingMode: PricingModeBaseEstimate},
+		{Model: "gpt-5.6-sol", PricingMode: PricingModeBaseEstimate},
+		{Model: "claude-opus-4-8", PricingMode: PricingModeBaseEstimate},
+	})
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "gpt-5.6-sol") {
+		t.Fatalf("errors = %v, want one gpt-5.6-sol diagnostic", errs)
 	}
 }
 

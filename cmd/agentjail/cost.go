@@ -125,11 +125,10 @@ func costDashboardRows(u *ui.UI, r costanalytics.CostReport) []ui.BoxRow {
 		lines = append(lines, ui.BoxRow{}, ui.BoxRow{Text: "BY MODEL · API LIST-PRICE ESTIMATE"})
 		for i, model := range models {
 			name := truncateStr(u.Sanitize(string(model.Model)), 26)
-			lines = append(lines,
-				ui.BoxRow{Text: fmt.Sprintf("  %-26s %s  $%8.2f  %3d sess", name, costShareBar(model.Percent, 14), model.CostUSD, model.SessionCount)},
-				ui.BoxRow{Text: fmt.Sprintf("      usage   %s input · %s cache reads · %s cache writes · %s output",
-					formatTokens(model.InputTokens), formatTokens(model.CacheRead), formatTokens(model.CacheWrite), formatTokens(model.OutputTokens)), Tone: ui.BoxToneMuted},
-			)
+			lines = append(lines, ui.BoxRow{Text: fmt.Sprintf("  %-26s %s  $%8.2f  %3d sess", name, costShareBar(model.Percent, 14), model.CostUSD, model.SessionCount)})
+			for _, detail := range modelUsageDetails(model) {
+				lines = append(lines, ui.BoxRow{Text: detail, Tone: ui.BoxToneMuted})
+			}
 			if i < len(models)-1 {
 				lines = append(lines, ui.BoxRow{})
 			}
@@ -146,6 +145,22 @@ func costDashboardRows(u *ui.UI, r costanalytics.CostReport) []ui.BoxRow {
 		ui.BoxRow{Text: "local aggregates · offline pricing · no transcript upload", Tone: ui.BoxToneMuted},
 	)
 	return lines
+}
+
+func modelUsageDetails(model costanalytics.ModelSummary) []string {
+	details := []string{fmt.Sprintf("      usage   %s input · %s cache reads · %s output",
+		formatTokens(model.InputTokens), formatTokens(model.CacheRead), formatTokens(model.OutputTokens))}
+	cacheWrites := "      writes  " + formatTokens(model.CacheWrite) + " cache writes"
+	if model.CacheWrite5m != 0 || model.CacheWrite1h != 0 {
+		cacheWrites += fmt.Sprintf(" (%s 5m · %s 1h)", formatTokens(model.CacheWrite5m), formatTokens(model.CacheWrite1h))
+	}
+	if model.CacheWrite != 0 {
+		details = append(details, cacheWrites)
+	}
+	if model.BaseEstimate {
+		details = append(details, "      pricing base rates only · incomplete per-request usage")
+	}
+	return details
 }
 
 func visibleModelSummaries(models []costanalytics.ModelSummary) []costanalytics.ModelSummary {
