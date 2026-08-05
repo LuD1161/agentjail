@@ -647,9 +647,9 @@ snapshots disappeared and the whole file produced only a warning.
 
 - **Rule:** a per-record resource limit discards only that record and resumes at
   its delimiter; test valid data after the oversized fixture, not just rejection.
-  See ADR 0121-transcript-record-recovery.
+  See ADR 0122-transcript-record-recovery.
 
-## 44. A cost total needs every priced token category beside it
+## 46. A cost total needs every priced token category beside it
 
 The cost report correctly charged uncached input, cache reads, cache writes,
 and output, but its model rows displayed output tokens alone. Snapshot tests
@@ -658,9 +658,9 @@ stayed green while a cache-heavy workload looked hundreds of dollars wrong.
 - **Rule:** whenever a derived total combines multiple usage categories, expose
   every material category in the same view, identify estimates as API list
   price rather than subscription billing, and test the aggregate fields.
-  See ADR 0122-supplemental-model-pricing.
+  See ADR 0123-supplemental-model-pricing.
 
-## 45. A pass-through parser makes Cobra help incomplete
+## 47. A pass-through parser makes Cobra help incomplete
 
 Legacy commands used `DisableFlagParsing` so their existing parsers could keep
 handling argv. Cobra then printed only `--help` and the global `--agent` flag,
@@ -670,7 +670,7 @@ while real options such as `cost --period` worked but were invisible.
   runtime flag into its Cobra command and test the live command metadata.
   See ADR 0027-cobra-cli-framework.
 
-## 46. A cache-write total is not a pricing category
+## 48. A cache-write total is not a pricing category
 
 Claude's top-level cache-creation count looked sufficient and produced
 plausible totals, while a nested object identified every write as five-minute
@@ -681,9 +681,9 @@ tier even when its arithmetic is exact.
 - **Rule:** retain every transcript dimension that changes price, and apply
   request-level tiers only to complete per-request records. Fall back visibly
   rather than inferring a request from a cumulative session.
-  See ADR 0122-supplemental-model-pricing and AGE-272.
+  See ADR 0123-supplemental-model-pricing and AGE-272.
 
-## 47. A forked transcript contains billable and copied history
+## 49. A forked transcript contains billable and copied history
 
 Codex fork files begin with the child metadata, then embed the parent metadata
 and cumulative usage history. Treating the last metadata record as identity
@@ -693,7 +693,7 @@ single-session tests.
 
 - **Rule:** preserve the first session identity, follow the typed fork parent,
   remove exact ancestor usage events, and charge only the branch deltas. Test a
-  fork that diverges onto another model. See ADR 0122-supplemental-model-pricing
+  fork that diverges onto another model. See ADR 0123-supplemental-model-pricing
   and AGE-272.
 
 ---

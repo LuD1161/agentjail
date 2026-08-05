@@ -426,7 +426,7 @@ Model costs are computed offline through
 [Gryph](https://github.com/safedep/gryph)'s bundled model-resolution and pricing
 provider, with source-verified supplemental rates for models newer than Gryph's
 latest release (ADR 0120-bundled-model-pricing and
-ADR 0121-current-model-pricing and ADR 0122-supplemental-model-pricing).
+ADR 0121-current-model-pricing and ADR 0123-supplemental-model-pricing).
 AgentJail sends no transcript or usage data to Gryph. Supplemental pricing
 semantics overlay a resolved Gryph base rate so a catalog update cannot silently
 remove TTL or long-context rules. OpenCode's own non-zero recorded cost takes
@@ -436,7 +436,7 @@ sessions; no computed Claude or Codex cost is persisted.
 Missing optional sources are ignored; malformed available sources are reported
 as warnings without affecting enforcement. Oversized JSONL content records are
 discarded individually within a fixed memory bound so later usage records in
-the same transcript remain readable (ADR 0121-transcript-record-recovery).
+the same transcript remain readable (ADR 0122-transcript-record-recovery).
 Token-bearing models absent from both offline catalogs produce an explicit
 pricing-unavailable warning.
 

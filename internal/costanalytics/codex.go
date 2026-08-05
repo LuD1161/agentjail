@@ -222,7 +222,7 @@ func parseCodexSession(path string) (*codexSessionUsage, error) {
 				if json.Unmarshal(envelope.Payload, &event) == nil && event.Type == "token_count" && event.Info != nil && event.Info.TotalTokenUsage != nil {
 					usage := *event.Info.TotalTokenUsage
 					// The serialized total has changed semantics across Codex versions;
-					// input + output is the stable cumulative ordering key. See ADR 0122-supplemental-model-pricing.
+					// input + output is the stable cumulative ordering key. See ADR 0123-supplemental-model-pricing.
 					total := usage.InputTokens + usage.OutputTokens
 					if total > state.maxTotal {
 						state.addCumulativeUsage(usage, event.Info.LastTokenUsage)

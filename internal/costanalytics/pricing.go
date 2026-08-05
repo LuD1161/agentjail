@@ -97,7 +97,7 @@ func pricingForModel(model Model) (tokenPricing, bool) {
 		cacheWrite: mp.CacheWrite,
 	}
 	if strings.Contains(strings.ToLower(string(model)), "claude") {
-		// Anthropic prices 1h writes at 2x base input. See ADR 0122-supplemental-model-pricing.
+		// Anthropic prices 1h writes at 2x base input. See ADR 0123-supplemental-model-pricing.
 		resolved.cacheWrite1hMultiple = 2
 	}
 	if supplemented {
