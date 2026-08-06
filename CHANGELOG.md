@@ -4,23 +4,64 @@
 
 ## Unreleased
 
+## v1.4.1 - 2026-08-06
+
+![v1.4.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.4.1-summary.svg)
+
+## TL;DR
+
+- **Calculate current Claude and Codex API-equivalent costs accurately** with cache-write TTLs, GPT-5.6 long-context tiers, fork-aware usage, and source-dated fallback pricing.
+- **Recover historical usage from real local transcripts** even when JSONL records exceed 1 MiB, then recalculate eligible sessions with the latest bundled rates.
+- **Read spending and activity faster** through a structured terminal dashboard, semantic color controls, complete command help, and explicit cached-token breakdowns.
+- **Use Git over SSH without exposing private-key files** through default policy-controlled session agents that select one remote-matched identity unless loading all is explicit.
+
 ### Added
 
 - **Global color control**: human-readable commands use the shared terminal
   palette by default and accept `agentjail --no-color <command>` as a
   process-wide color override while preserving Unicode structure.
+- **Terminal cost dashboard**: `agentjail cost` renders project and model
+  spending, impact bars, session totals, cache efficiency, and detailed token
+  categories while retaining JSON output for automation.
+- **Policy-controlled Git SSH**: the standard policy can create a session-only
+  native OpenSSH agent, keep private-key files outside the shield, and use the
+  same agent-neutral launch path for Claude Code, Codex, and Cursor.
 
 ### Changed
 
 - **Colorized activity reports**: `stats`, `cost`, and `sessions list` now use
   the shared semantic palette for totals, outcomes, spend, metadata, and impact
   bars; each also accepts a command-local `--no-color` flag.
+- **Remote-aware SSH identity selection**: session bootstrap follows Git push
+  remote precedence and effective OpenSSH `IdentityFile` ordering. Multiple
+  matches require a choice; loading all identities is never the default.
+- **Complete command help**: legacy subcommands now expose their local flags in
+  `--help` alongside inherited global options.
 
 ### Fixed
 
 - **Current-model cost estimates**: price GPT-5.6 Sol/Terra and Claude Opus
   4.8/5 from officially verified rates, and include cache pricing for Claude
   Opus 4.6 instead of reporting active sessions as `$0.00`.
+- **Real transcript ingestion**: recover after oversized Claude and Codex JSONL
+  records, retain valid later records, and surface bounded warnings instead of
+  dropping the rest of a session.
+- **Cached and supplemental usage pricing**: separate uncached input,
+  cache-read, cache-write, and output charges; preserve Claude cache-write TTLs;
+  apply GPT-5.6 long-context rates per request; and exclude copied Codex fork
+  history from the child session.
+- **Pricing boundaries**: attribute model changes to the request that produced
+  each usage delta, keep synthetic zero-usage records out of human dashboards,
+  and warn when incomplete history prevents a safe estimate.
+
+### Security
+
+- **Validated SSH delegation**: accept only a clean, owned, live Unix agent
+  socket, strip ambient delegation variables, and audit the capability without
+  recording socket paths or key material.
+- **Private-key isolation**: native OpenSSH owns passphrase prompts and key
+  loading before the shield starts; private-key files remain blocked throughout
+  the coding session, and the strict policy disables automatic Git SSH.
 
 ## v1.4.0 - 2026-07-31
 
