@@ -261,9 +261,9 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 		{
 			name: "ready",
 			status: sshagent.Status{
-				Readiness:  sshagent.ReadinessReady,
-				KeysOnDisk: true,
-				KeyPaths:   []string{"/home/user/.ssh/id_ed25519"},
+				Readiness: sshagent.ReadinessReady,
+				KeyState:  sshagent.KeyStatePresent,
+				KeyPaths:  []string{"/home/user/.ssh/id_ed25519"},
 			},
 			wantStatus: "ok",
 			wantSubstr: "loaded",
@@ -271,9 +271,9 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 		{
 			name: "keys on disk but agent has none loaded",
 			status: sshagent.Status{
-				Readiness:  sshagent.ReadinessNoKeys,
-				KeysOnDisk: true,
-				KeyPaths:   []string{"/home/user/.ssh/id_ed25519"},
+				Readiness: sshagent.ReadinessNoKeys,
+				KeyState:  sshagent.KeyStatePresent,
+				KeyPaths:  []string{"/home/user/.ssh/id_ed25519"},
 			},
 			wantStatus: "warn",
 			wantSubstr: "ssh-add",
@@ -281,9 +281,9 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 		{
 			name: "no agent reachable, keys on disk",
 			status: sshagent.Status{
-				Readiness:  sshagent.ReadinessNoAgent,
-				KeysOnDisk: true,
-				KeyPaths:   []string{"/home/user/.ssh/id_ed25519"},
+				Readiness: sshagent.ReadinessNoAgent,
+				KeyState:  sshagent.KeyStatePresent,
+				KeyPaths:  []string{"/home/user/.ssh/id_ed25519"},
 			},
 			wantStatus: "warn",
 			wantSubstr: "ssh-add",
@@ -291,8 +291,8 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 		{
 			name: "no keys on disk",
 			status: sshagent.Status{
-				Readiness:  sshagent.ReadinessNoAgent,
-				KeysOnDisk: false,
+				Readiness: sshagent.ReadinessNoAgent,
+				KeyState:  sshagent.KeyStateAbsent,
 			},
 			wantStatus: "skip",
 			wantSubstr: "no ssh keys",
@@ -301,7 +301,7 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 			name: "ready and pinned identity blind spot",
 			status: sshagent.Status{
 				Readiness:           sshagent.ReadinessReady,
-				KeysOnDisk:          true,
+				KeyState:            sshagent.KeyStatePresent,
 				KeyPaths:            []string{"/home/user/.ssh/id_ed25519"},
 				PinnedIdentityPaths: []string{"/home/user/.ssh/id_ed25519"},
 			},
@@ -312,7 +312,7 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 			name: "deploy-key-only pinned, no id_* keys on disk - still warns, not skip",
 			status: sshagent.Status{
 				Readiness:           sshagent.ReadinessReady,
-				KeysOnDisk:          false,
+				KeyState:            sshagent.KeyStateAbsent,
 				PinnedIdentityPaths: []string{"/home/user/.ssh/github_deploy"},
 			},
 			wantStatus: "warn",
@@ -321,9 +321,9 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 		{
 			name: "ready and not pinned",
 			status: sshagent.Status{
-				Readiness:  sshagent.ReadinessReady,
-				KeysOnDisk: true,
-				KeyPaths:   []string{"/home/user/.ssh/id_ed25519"},
+				Readiness: sshagent.ReadinessReady,
+				KeyState:  sshagent.KeyStatePresent,
+				KeyPaths:  []string{"/home/user/.ssh/id_ed25519"},
 			},
 			wantStatus: "ok",
 			wantSubstr: "loaded",
@@ -331,11 +331,76 @@ func TestDoctorSSHAgentCheck(t *testing.T) {
 		{
 			name: "no keys on disk and not pinned",
 			status: sshagent.Status{
-				Readiness:  sshagent.ReadinessNoAgent,
-				KeysOnDisk: false,
+				Readiness: sshagent.ReadinessNoAgent,
+				KeyState:  sshagent.KeyStateAbsent,
 			},
 			wantStatus: "skip",
 			wantSubstr: "no ssh keys",
+		},
+		{
+			name: "shielded missing socket reports inactive Git-over-SSH capability",
+			status: sshagent.Status{
+				Execution: sshagent.ExecutionShielded,
+				KeyState:  sshagent.KeyStateUnknown,
+				Readiness: sshagent.ReadinessNoAgent,
+			},
+			wantStatus: "warn",
+			wantSubstr: "not active",
+		},
+		{
+			name: "shielded requested delegation with missing socket warns",
+			status: sshagent.Status{
+				Execution:  sshagent.ExecutionShielded,
+				Delegation: sshagent.DelegationRequested,
+				KeyState:   sshagent.KeyStateUnknown,
+				Readiness:  sshagent.ReadinessNoAgent,
+			},
+			wantStatus: "warn",
+			wantSubstr: "delegation was requested but is unavailable",
+		},
+		{
+			name: "shielded requested delegation with stale socket warns",
+			status: sshagent.Status{
+				Execution:  sshagent.ExecutionShielded,
+				Delegation: sshagent.DelegationRequested,
+				KeyState:   sshagent.KeyStateUnknown,
+				Readiness:  sshagent.ReadinessNoAgent,
+				SockPath:   "/tmp/stale-agent.sock",
+			},
+			wantStatus: "warn",
+			wantSubstr: "delegation was requested but the delegated SSH_AUTH_SOCK is unusable",
+		},
+		{
+			name: "shielded empty agent warns",
+			status: sshagent.Status{
+				Execution: sshagent.ExecutionShielded,
+				KeyState:  sshagent.KeyStateUnknown,
+				Readiness: sshagent.ReadinessNoKeys,
+				SockPath:  "/tmp/agent.sock",
+			},
+			wantStatus: "warn",
+			wantSubstr: "no loaded identities",
+		},
+		{
+			name: "shielded usable delegated agent warns about unrestricted signing authority",
+			status: sshagent.Status{
+				Execution:  sshagent.ExecutionShielded,
+				Delegation: sshagent.DelegationRequested,
+				KeyState:   sshagent.KeyStateUnknown,
+				Readiness:  sshagent.ReadinessReady,
+				SockPath:   "/tmp/agent.sock",
+			},
+			wantStatus: "warn",
+			wantSubstr: "not host- or repository-scoped",
+		},
+		{
+			name: "unshielded unreadable key directory is unknown, not skipped",
+			status: sshagent.Status{
+				KeyState:  sshagent.KeyStateUnknown,
+				Readiness: sshagent.ReadinessNoAgent,
+			},
+			wantStatus: "warn",
+			wantSubstr: "availability is unknown",
 		},
 	}
 

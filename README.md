@@ -255,7 +255,7 @@ It never renders nothing while agentjail is installed — silence would be indis
 
 The badge attests **both** enforcement layers ([ADR 0085](./docs/adr/0085-statusline-attests-daemon.md)):
 
-- `UNSECURED` — the session is not running under `agentjail-shield`. Use `agentjail claude`, or install the [PATH shim](#install) to get it automatically.
+- `UNSECURED` — the session is not running under `agentjail-shield`. Use `agentjail run -- <agent>`, or install the [PATH shim](#install) to get it automatically.
 - `POLICY OFF` — the shield is holding, but the policy daemon is unreachable and the hook is failing open, so no rule is being evaluated. Restart the daemon; `agentjail doctor` says why.
 
 The padlock only appears when both are live. When agentjail is uninstalled the badge disappears entirely.
@@ -284,7 +284,7 @@ agentjail install --all               # non-interactive, install all detected
 agentjail install --with-path-shim    # wrap `claude`, `codex`, and Cursor's `agent`
 ```
 
-By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands run shielded without a special launch command.
+By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands enter that same agent-neutral launch path without a special command. Policy defaults, including session SSH-agent setup, therefore behave identically for `codex resume` and `agentjail run -- codex resume`.
 
 It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstall, `agentjail update`, and daemon auto-update all restore the complete shim set rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 
@@ -479,6 +479,11 @@ agentjail uninstall --force           # tear down anyway (leaves hooks re-inject
 | `file_policy` | reads/writes to `~/.ssh`, `~/.aws`, `~/.gnupg`, credentials, secrets; reads of any `.env*` still ask, writes are limited to secret `.env` forms (templates like `.env.example` are writable, [ADR 0057](./docs/adr/0057-env-write-deny-secret-form-denylist.md)) |
 | `mcp_policy` | unknown MCP servers; default-blocked: `*stripe*`, `*payment*`, `*billing*` |
 | `command_policy` | `rm -rf`, `curl\|bash`, `sudo`, `git push --force`, `env\|curl`, `chmod 777`, and more |
+
+The immutable built-in standard posture also sets
+`capabilities.git_ssh: true`. The installed `~/.agentjail/policy.yaml` is
+protected from coding agents but remains editable by its human owner; set the
+capability to `false` for a strict standing posture.
 
 **4 locked self-protection rules** (can never be disabled):
 
@@ -829,7 +834,7 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 
 **Tier 2 - MicroVM:** microsandbox Go SDK integration for hardware-isolated agent execution on macOS (HVF), Linux (KVM), and Windows (WSL2).
 
-**SSH under the sandbox:** `ssh` works through `ssh-agent` - the agent socket is passed through and allowed, but private key files stay unreadable by design. If a sandboxed `ssh` fails with "Operation not permitted", the key probably isn't loaded: run `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` once (macOS). `agentjail doctor` flags a not-loaded key proactively. See [SANDBOX.md](./docs/SANDBOX.md#ssh-and-ssh-agent).
+**SSH under the sandbox:** private key files stay unreadable. The standard built-in policy enables Git over SSH automatically; if an interactive terminal has local keys but no usable agent, AgentJail offers a session-only native OpenSSH setup. It follows the current Git remote's SSH host alias and effective `IdentityFile` configuration. When multiple identities remain, you choose one; loading all is explicit and never the default. Any passphrase prompt comes directly from `ssh-add`, not AgentJail. The strict policy disables this capability. Use `--git-ssh` or `--no-git-ssh` for a per-launch override. Delegation exposes signing operations for every loaded identity and is not host- or repository-scoped. See [SANDBOX.md](./docs/SANDBOX.md#ssh-and-ssh-agent).
 
 </details>
 

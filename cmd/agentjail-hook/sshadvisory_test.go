@@ -57,7 +57,7 @@ func overrideSetGetenv(key string) string {
 
 // readyProbe simulates an ssh-agent that already has keys loaded.
 func readyProbe(ctx context.Context) sshagent.Status {
-	return sshagent.Status{Readiness: sshagent.ReadinessReady, KeysOnDisk: true, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
+	return sshagent.Status{Readiness: sshagent.ReadinessReady, KeyState: sshagent.KeyStatePresent, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
 }
 
 // readyPinnedProbe simulates an ssh-agent that has keys loaded AND a pinned
@@ -65,7 +65,7 @@ func readyProbe(ctx context.Context) sshagent.Status {
 func readyPinnedProbe(ctx context.Context) sshagent.Status {
 	return sshagent.Status{
 		Readiness:           sshagent.ReadinessReady,
-		KeysOnDisk:          true,
+		KeyState:            sshagent.KeyStatePresent,
 		KeyPaths:            []string{"/home/u/.ssh/id_ed25519"},
 		PinnedIdentityPaths: []string{"/home/u/.ssh/id_ed25519"},
 	}
@@ -73,7 +73,7 @@ func readyPinnedProbe(ctx context.Context) sshagent.Status {
 
 // needsRemediationProbe simulates keys on disk but no agent reachable.
 func needsRemediationProbe(ctx context.Context) sshagent.Status {
-	return sshagent.Status{Readiness: sshagent.ReadinessNoAgent, KeysOnDisk: true, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
+	return sshagent.Status{Readiness: sshagent.ReadinessNoAgent, KeyState: sshagent.KeyStatePresent, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
 }
 
 // slowProbe respects ctx cancellation: it sleeps well past the 75ms probe
@@ -83,7 +83,7 @@ func needsRemediationProbe(ctx context.Context) sshagent.Status {
 func slowProbe(ctx context.Context) sshagent.Status {
 	select {
 	case <-time.After(150 * time.Millisecond):
-		return sshagent.Status{Readiness: sshagent.ReadinessNoAgent, KeysOnDisk: true, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
+		return sshagent.Status{Readiness: sshagent.ReadinessNoAgent, KeyState: sshagent.KeyStatePresent, KeyPaths: []string{"/home/u/.ssh/id_ed25519"}}
 	case <-ctx.Done():
 		return sshagent.Status{}
 	}

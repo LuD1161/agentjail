@@ -22,6 +22,8 @@ that prevent access to credentials, host processes, and unrestricted network.
 
 Examples:
   agentjail run -- claude
+  agentjail run --git-ssh -- codex
+  agentjail run --no-git-ssh -- claude
   agentjail run -- codex --approval-mode full-auto
   agentjail run -- cursor`,
 	DisableFlagParsing: true,
@@ -36,8 +38,9 @@ Examples:
 }
 
 var claudeCmd = &cobra.Command{
-	Use:   "claude [args...]",
-	Short: "Run Claude Code inside the agentjail shield",
+	Use:    "claude [args...]",
+	Short:  "Run Claude Code inside the agentjail shield",
+	Hidden: true,
 	Long: `Launch Claude Code inside the agentjail OS-native sandbox.
 
 This is equivalent to: agentjail run -- claude [args...]
@@ -46,9 +49,11 @@ The session is protected by Landlock (Linux) or Seatbelt (macOS) by default:
 credential paths, host processes, and unrestricted network access are blocked
 at the kernel level.
 
-  agentjail claude                Sandboxed (default).
+  agentjail claude                Sandboxed compatibility alias.
+  agentjail claude --git-ssh      Enable Git over SSH for this launch.
   agentjail claude --no-sandbox   Hook-only policy, no OS sandbox (for hosts
                                   that cannot sandbox, or an explicit opt-out).`,
+	Deprecated:         "use `agentjail run -- claude` so every coding agent has the same launch pattern",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
@@ -68,7 +73,7 @@ func runClaudeCmd(args []string) int {
 	// Lift them ahead of the "claude" command name so runRunCmd's leading-flag
 	// loop sees them the same way it does for `agentjail run --no-sandbox -- ...`.
 	var lead []string
-	for len(args) > 0 && (args[0] == "--no-sandbox" || args[0] == "--tunnel") {
+	for len(args) > 0 && isRunLaunchFlag(args[0]) {
 		lead = append(lead, args[0])
 		args = args[1:]
 	}
@@ -77,30 +82,18 @@ func runClaudeCmd(args []string) int {
 }
 
 func runRunCmd(args []string) int {
-	// Consume the run-level --tunnel flag when it appears before the command
-	// (e.g. `agentjail run --tunnel -- grok`). It routes the agent through the
-	// transparent L7 tunnel (TLS-terminating MITM + network policy packs) instead
-	// of the host-level netproxy. Opt-in: the default remains netproxy.
-	// Consume leading run-level flags. --no-sandbox runs the agent WITHOUT the
-	// OS sandbox (hook-only policy) — for hosts that can't sandbox or explicit
-	// opt-out; the sandbox is the default. --tunnel routes egress through the L7
-	// tunnel and requires the sandbox.
-	tunnelMode, noSandbox := false, false
-	for len(args) > 0 {
-		if args[0] == "--tunnel" {
-			tunnelMode = true
-			args = args[1:]
-			continue
-		}
-		if args[0] == "--no-sandbox" {
-			noSandbox = true
-			args = args[1:]
-			continue
-		}
-		break
-	}
-	if noSandbox && tunnelMode {
+	// Launch flags are recognized only before the child command.
+	options, args := parseRunOptions(args)
+	if options.noSandbox && options.tunnelMode {
 		fmt.Fprintln(os.Stderr, "agentjail run: --no-sandbox cannot be combined with --tunnel (the tunnel needs the sandbox)")
+		return 2
+	}
+	if options.gitSSH && options.noGitSSH {
+		fmt.Fprintln(os.Stderr, "agentjail run: --git-ssh and --no-git-ssh cannot be combined")
+		return 2
+	}
+	if options.noSandbox && (options.gitSSH || options.noGitSSH) {
+		fmt.Fprintln(os.Stderr, "agentjail run: Git-over-SSH launch controls require the OS sandbox; remove --no-sandbox")
 		return 2
 	}
 
@@ -113,7 +106,6 @@ func runRunCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "agentjail run: no command given")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  usage: agentjail run -- <command> [args...]")
-		fmt.Fprintln(os.Stderr, "  usage: agentjail claude [args...]")
 		return 2
 	}
 
@@ -125,7 +117,7 @@ func runRunCmd(args []string) int {
 
 	// 1. Locate the shield binary (skipped under --no-sandbox).
 	var shieldBin string
-	if !noSandbox {
+	if !options.noSandbox {
 		shieldBin, err = findShieldBinary(home)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
@@ -165,7 +157,7 @@ func runRunCmd(args []string) int {
 	// 5a. --no-sandbox: exec the agent directly. Policy is still enforced by the
 	// installed hook; there is no OS sandbox. This is the honest fallback for
 	// hosts that cannot sandbox and an explicit opt-out.
-	if noSandbox {
+	if options.noSandbox {
 		fmt.Fprintf(os.Stderr, "agentjail: starting UNSANDBOXED session for %s — hook-only policy, no OS sandbox\n", agentName)
 		execArgs := append([]string{agentPath}, args[1:]...)
 		if err := syscall.Exec(agentPath, execArgs, os.Environ()); err != nil {
@@ -177,13 +169,22 @@ func runRunCmd(args []string) int {
 
 	// 5b. Exec through shield (default). This replaces the current process.
 	shieldArgs := []string{shieldBin}
-	if tunnelMode {
+	if options.tunnelMode {
 		shieldArgs = append(shieldArgs, "--tunnel")
+	}
+	if options.gitSSH {
+		shieldArgs = append(shieldArgs, "--git-ssh")
+	}
+	if options.noGitSSH {
+		shieldArgs = append(shieldArgs, "--no-git-ssh")
 	}
 	shieldArgs = append(shieldArgs, "--", agentPath)
 	shieldArgs = append(shieldArgs, args[1:]...)
 
 	fmt.Fprintf(os.Stderr, "agentjail: starting shielded session for %s\n", agentName)
+	if handled, code := maybeBootstrapSSH(options, home, shieldArgs); handled {
+		return code
+	}
 
 	if err := syscall.Exec(shieldBin, shieldArgs, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to exec shield: %v\n", err)
@@ -191,6 +192,44 @@ func runRunCmd(args []string) int {
 	}
 
 	return 0 // unreachable after exec
+}
+
+type runOptions struct {
+	tunnelMode bool
+	noSandbox  bool
+	gitSSH     bool
+	noGitSSH   bool
+}
+
+func isRunLaunchFlag(arg string) bool {
+	switch arg {
+	case "--tunnel", "--no-sandbox", "--git-ssh", "--no-git-ssh":
+		return true
+	default:
+		return false
+	}
+}
+
+// parseRunOptions consumes only AgentJail's leading launch flags; everything
+// after the command belongs to the child agent unchanged.
+func parseRunOptions(args []string) (runOptions, []string) {
+	var options runOptions
+	for len(args) > 0 {
+		switch args[0] {
+		case "--tunnel":
+			options.tunnelMode = true
+		case "--no-sandbox":
+			options.noSandbox = true
+		case "--git-ssh":
+			options.gitSSH = true
+		case "--no-git-ssh":
+			options.noGitSSH = true
+		default:
+			return options, args
+		}
+		args = args[1:]
+	}
+	return options, args
 }
 
 // resolveRealAgent finds the real agent binary on PATH, skipping the agentjail

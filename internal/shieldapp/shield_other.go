@@ -11,6 +11,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 // runShield is the fallback implementation for platforms other than macOS and
@@ -18,7 +19,7 @@ import (
 //
 // It prints a loud warning and execs the agent without any sandbox.
 // The hook layer (agentjail-hook) still runs on every PreToolUse call.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, policyPath string, _ time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, _ time.Time, emitter audit.Emitter) {
 	if profilePrint {
 		fmt.Fprintln(os.Stderr, "agentjail-shield: sandbox is not supported on this platform.")
 		fmt.Fprintln(os.Stderr, "Supported platforms: darwin (macOS), linux (Landlock, kernel 5.13+)")
@@ -32,9 +33,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	fmt.Fprintln(os.Stderr,
 		"  Running agent WITHOUT sandbox.  The hook layer still enforces on every PreToolUse.")
 
-	// Suppress unused-variable warnings: cfg, noNetproxy, and policyPath are
+	// Suppress unused-variable warnings: noNetproxy and policyPath are
 	// not used on unsupported platforms.
-	_ = cfg
 	_ = noNetproxy
 	_ = policyPath
 	_ = ipv6Mode
@@ -45,8 +45,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		Actor:     "shield",
 	})
 
+	env := sandbox.StripEnv(sandbox.BuildCleanEnv(os.Environ(), cfg), cfg)
+	env = sandbox.ReplaceSSHAgentEnv(env, sshAuthSock, sandbox.EnvVarName(sshAgentDelegatedEnv))
+	if sshAuthSock.Path != "" {
+		env = append(env, sshAgentDelegatedEnv)
+	}
+	env = append(env, sandbox.AgentGitSSHEnv(os.Getenv, sshAuthSock)...)
 	argv := append([]string{agentPath}, agentArgs...)
-	if err := syscall.Exec(agentPath, argv, os.Environ()); err != nil {
+	if err := syscall.Exec(agentPath, argv, env); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: exec agent failed: %v\n", err)
 		os.Exit(1)
 	}

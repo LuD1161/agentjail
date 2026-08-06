@@ -169,7 +169,7 @@ func TestRenderPathShimTargetsAgentCommand(t *testing.T) {
 			for _, want := range []string{
 				"command -v " + target.Command,
 				"Running " + target.Command + " UNSHIELDED",
-				`exec "$SHIELD" -- "$REAL_` + strings.ToUpper(target.Command) + `" "$@"`,
+				`exec "$LAUNCHER" run -- ` + target.Command + ` "$@"`,
 			} {
 				if !strings.Contains(got, want) {
 					t.Errorf("shim for %s missing %q", target.Command, want)

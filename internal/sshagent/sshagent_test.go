@@ -95,8 +95,13 @@ func TestProbe(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Prober{
-				RunSSHAdd:    tt.runSSHAdd,
-				ListKeyFiles: func() []string { return tt.keyPaths },
+				RunSSHAdd: tt.runSSHAdd,
+				FindKeyFiles: func() KeyFiles {
+					if len(tt.keyPaths) == 0 {
+						return KeyFiles{State: KeyStateAbsent}
+					}
+					return KeyFiles{State: KeyStatePresent, Paths: tt.keyPaths}
+				},
 				Getenv: func(name string) string {
 					if name == "SSH_AUTH_SOCK" {
 						return tt.sockPath
@@ -121,12 +126,72 @@ func TestProbe(t *testing.T) {
 	}
 }
 
+func TestProbePreservesShieldedDelegationAndUnknownKeyState(t *testing.T) {
+	p := &Prober{
+		FindKeyFiles: func() KeyFiles { return KeyFiles{State: KeyStateUnknown} },
+		RunSSHAdd: func(ctx context.Context) (int, error) {
+			return 0, nil
+		},
+		Getenv: func(name string) string {
+			switch name {
+			case "AGENTJAIL_SHIELDED":
+				return "1"
+			case DelegationEnv:
+				return "1"
+			case "SSH_AUTH_SOCK":
+				return "/tmp/agent.sock"
+			default:
+				return ""
+			}
+		},
+	}
+
+	got := p.Probe(context.Background())
+	if got.Execution != ExecutionShielded {
+		t.Errorf("Execution = %v, want ExecutionShielded", got.Execution)
+	}
+	if got.Delegation != DelegationRequested {
+		t.Errorf("Delegation = %v, want DelegationRequested", got.Delegation)
+	}
+	if got.KeyState != KeyStateUnknown {
+		t.Errorf("KeyState = %v, want KeyStateUnknown", got.KeyState)
+	}
+	if got.NeedsRemediation() {
+		t.Error("NeedsRemediation() = true for unknown key state, want false")
+	}
+}
+
+func TestProbeScansPinnedConfigWithoutSocket(t *testing.T) {
+	const home = "/home/u"
+	p := &Prober{
+		FindKeyFiles: func() KeyFiles { return KeyFiles{State: KeyStateUnknown} },
+		Getenv: func(name string) string {
+			if name == "HOME" {
+				return home
+			}
+			return ""
+		},
+		ReadSSHConfig: func() string { return pinnedConfig },
+		PathExists: func(path string) bool {
+			return path == filepath.Join(home, ".ssh", "id_ed25519")
+		},
+	}
+
+	got := p.Probe(context.Background())
+	if got.Readiness != ReadinessNoAgent {
+		t.Errorf("Readiness = %v, want ReadinessNoAgent", got.Readiness)
+	}
+	if !got.PinnedIdentity() {
+		t.Error("PinnedIdentity() = false, want true when SSH_AUTH_SOCK is unset")
+	}
+}
+
 func TestRemediation(t *testing.T) {
 	t.Run("darwin single id_ed25519", func(t *testing.T) {
 		s := Status{
-			Readiness:  ReadinessNoKeys,
-			KeysOnDisk: true,
-			KeyPaths:   []string{"/home/u/.ssh/id_ed25519"},
+			Readiness: ReadinessNoKeys,
+			KeyState:  KeyStatePresent,
+			KeyPaths:  []string{"/home/u/.ssh/id_ed25519"},
 		}
 		got := s.Remediation("darwin")
 		if !strings.Contains(got, "--apple-use-keychain") {
@@ -139,9 +204,9 @@ func TestRemediation(t *testing.T) {
 
 	t.Run("linux single key", func(t *testing.T) {
 		s := Status{
-			Readiness:  ReadinessNoAgent,
-			KeysOnDisk: true,
-			KeyPaths:   []string{"/home/u/.ssh/id_ed25519"},
+			Readiness: ReadinessNoAgent,
+			KeyState:  KeyStatePresent,
+			KeyPaths:  []string{"/home/u/.ssh/id_ed25519"},
 		}
 		got := s.Remediation("linux")
 		if !strings.Contains(got, "ssh-agent") {
@@ -154,9 +219,9 @@ func TestRemediation(t *testing.T) {
 
 	t.Run("multiple keys without id_ed25519 falls back to placeholder", func(t *testing.T) {
 		s := Status{
-			Readiness:  ReadinessNoKeys,
-			KeysOnDisk: true,
-			KeyPaths:   []string{"/home/u/.ssh/id_rsa", "/home/u/.ssh/id_ecdsa"},
+			Readiness: ReadinessNoKeys,
+			KeyState:  KeyStatePresent,
+			KeyPaths:  []string{"/home/u/.ssh/id_rsa", "/home/u/.ssh/id_ecdsa"},
 		}
 		got := s.Remediation("linux")
 		if !strings.Contains(got, "<your-key>") {
@@ -166,9 +231,9 @@ func TestRemediation(t *testing.T) {
 
 	t.Run("multiple keys with id_ed25519 prefers it", func(t *testing.T) {
 		s := Status{
-			Readiness:  ReadinessNoKeys,
-			KeysOnDisk: true,
-			KeyPaths:   []string{"/home/u/.ssh/id_rsa", "/home/u/.ssh/id_ed25519"},
+			Readiness: ReadinessNoKeys,
+			KeyState:  KeyStatePresent,
+			KeyPaths:  []string{"/home/u/.ssh/id_rsa", "/home/u/.ssh/id_ed25519"},
 		}
 		got := s.Remediation("darwin")
 		if !strings.Contains(got, "id_ed25519") {
@@ -178,9 +243,9 @@ func TestRemediation(t *testing.T) {
 
 	t.Run("no remediation needed returns empty string", func(t *testing.T) {
 		s := Status{
-			Readiness:  ReadinessReady,
-			KeysOnDisk: true,
-			KeyPaths:   []string{"/home/u/.ssh/id_ed25519"},
+			Readiness: ReadinessReady,
+			KeyState:  KeyStatePresent,
+			KeyPaths:  []string{"/home/u/.ssh/id_ed25519"},
 		}
 		if got := s.Remediation("darwin"); got != "" {
 			t.Errorf("Remediation() = %q, want empty string when not needed", got)
@@ -310,8 +375,10 @@ func TestProbePinnedIdentity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Prober{
-				RunSSHAdd:    tt.runSSHAdd,
-				ListKeyFiles: func() []string { return nil },
+				RunSSHAdd: tt.runSSHAdd,
+				FindKeyFiles: func() KeyFiles {
+					return KeyFiles{State: KeyStateAbsent}
+				},
 				Getenv: func(name string) string {
 					if name == "SSH_AUTH_SOCK" {
 						return "/tmp/agent.sock"

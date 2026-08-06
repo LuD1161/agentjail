@@ -157,7 +157,7 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	// ipv6Mode gates the macOS tunnel's IPv6 datapath only (AGE-262); Linux
 	// has no equivalent knob yet, so the resolved value is a no-op here.
 	_ = ipv6Mode
@@ -338,14 +338,17 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
 	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
 	env = sandbox.StripEnv(env, cfg)
-	env = sandbox.RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
+	env = sandbox.ReplaceSSHAgentEnv(env, sshAuthSock, sandbox.EnvVarName(sshAgentDelegatedEnv))
+	if sshAuthSock.Path != "" {
+		env = append(env, sshAgentDelegatedEnv)
+	}
 	// A shielded launch starts a NEW agent session, never a child of the
 	// Claude session the user happened to launch it from. The inherited
 	// marker would put Claude Code into child-session mode (transcripts off,
 	// no compaction), so it must not survive even though CLAUDE_CODE_* is
 	// allowlisted.
 	env = sandbox.RemoveEnvKeys(env, "CLAUDE_CODE_CHILD_SESSION")
-	gitSSHEnv := sandbox.AgentGitSSHEnv(os.Getenv)
+	gitSSHEnv := sandbox.AgentGitSSHEnv(os.Getenv, sshAuthSock)
 	env = append(env, gitSSHEnv...)
 	if sshOverrideInjected(gitSSHEnv) {
 		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
@@ -851,20 +854,6 @@ func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, erro
 		}
 		if err := allowPath(g.path, access); err != nil {
 			return -1, fmt.Errorf("allow %s: %w", g.path, err)
-		}
-	}
-
-	// SSH agent socket: if SSH_AUTH_SOCK points outside /tmp (e.g.
-	// /run/user/<uid>/... via systemd/gnome-keyring), grant RW on the
-	// socket so ssh can connect(2) to the agent. The env var itself is
-	// passed through via EnvAllowlistBaseline.
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if resolved, err := filepath.EvalSymlinks(sock); err == nil {
-			if !strings.HasPrefix(resolved, "/tmp/") && !strings.HasPrefix(resolved, "/tmp") {
-				if err := allowPath(resolved, rwFileAccess); err != nil {
-					fmt.Fprintf(os.Stderr, "agentjail-shield: skip SSH_AUTH_SOCK %s: %v\n", resolved, err)
-				}
-			}
 		}
 	}
 

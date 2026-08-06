@@ -18,13 +18,16 @@ const (
 	SessionStarted        = "session.started"
 	ShieldActivated       = "shield.activated"
 	ShieldFailed          = "shield.failed"
-	ShieldAuditFinding    = "shield.audit_finding"
-	OAuthCompleted        = "oauth.completed"
-	HookTampered          = "hook.tampered"
-	HookReinjected        = "hook.reinjected"
-	CredentialIssued      = "credential.issued"
-	CredentialRevoked     = "credential.revoked"
-	RetentionPurged       = "retention.purged"
+	// SSHAgentDelegated records an accepted broad signing delegation.
+	// Detail contains fixed scope only, never socket paths. See ADR 0124-explicit-ssh-delegation.
+	SSHAgentDelegated  = "ssh_agent.delegated"
+	ShieldAuditFinding = "shield.audit_finding"
+	OAuthCompleted     = "oauth.completed"
+	HookTampered       = "hook.tampered"
+	HookReinjected     = "hook.reinjected"
+	CredentialIssued   = "credential.issued"
+	CredentialRevoked  = "credential.revoked"
+	RetentionPurged    = "retention.purged"
 	// DecisionsDropped reports decisions the async writer could not persist
 	// (buffer full or write error). Under-recording is otherwise invisible;
 	// see ADR 0072.

@@ -73,7 +73,7 @@ func emitShieldWarning(noColor bool) {
 			"   escapes, symlinks) may access sensitive files.\n"+
 			"\n"+
 			"   %sFor full protection:%s\n"+
-			"     Terminal:  %sagentjail claude%s\n"+
+			"     Terminal:  %sagentjail run -- <agent>%s\n"+
 			"     VS Code:   %sagentjail install --for vscode%s\n"+
 			"     Cursor:    %sagentjail install --for cursor-ide%s\n"+
 			"\n"+

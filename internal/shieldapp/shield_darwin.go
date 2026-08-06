@@ -40,17 +40,20 @@ const sandboxExecPath = "/usr/bin/sandbox-exec"
 // shield_linux.go. hostEnv is a parameter (not read internally via
 // os.Environ()) so tests can inject a synthetic host environment and assert
 // an arbitrary secret does not survive.
-func buildBaseEnv(hostEnv []string, cfg *config.PolicyConfig) []string {
+func buildBaseEnv(hostEnv []string, cfg *config.PolicyConfig, sshAuthSock sandbox.SSHAuthSock) []string {
 	env := sandbox.BuildCleanEnv(hostEnv, cfg)
 	env = sandbox.StripEnv(env, cfg)
-	env = sandbox.RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
+	env = sandbox.ReplaceSSHAgentEnv(env, sshAuthSock, sandbox.EnvVarName(sshAgentDelegatedEnv))
 	// A shielded launch starts a NEW agent session, never a child of the
 	// Claude session the user happened to launch it from. The inherited
 	// marker would put Claude Code into child-session mode (transcripts off,
 	// no compaction), so it must not survive even though CLAUDE_CODE_* is
 	// allowlisted.
 	env = sandbox.RemoveEnvKeys(env, "CLAUDE_CODE_CHILD_SESSION")
-	env = append(env, sandbox.AgentGitSSHEnv(os.Getenv)...)
+	env = append(env, sandbox.AgentGitSSHEnv(os.Getenv, sshAuthSock)...)
+	if sshAuthSock.Path != "" {
+		env = append(env, sshAgentDelegatedEnv)
+	}
 	return env
 }
 
@@ -308,19 +311,25 @@ func resolveAllowedHosts(cfg *config.PolicyConfig) []string {
 // allowedIPs is informational only (sbpl cannot enforce per-IP); they are
 // logged at startup for audit visibility.
 func generateSBProfile(cfg *config.PolicyConfig, home string) string {
-	return generateSBProfileWithIPs(cfg, home, resolveAllowedHosts(cfg), false)
+	return generateSBProfileWithTrustedSSHAuthSock(cfg, home, resolveAllowedHosts(cfg), false, sandbox.SSHAuthSock{})
 }
 
 // generateSBProfileWithNetproxy is the version used when netproxy is active.
 // It omits the wildcard-443/80 rules; only localhost is allowed outbound so
 // all traffic must flow through the proxy.
 func generateSBProfileWithNetproxy(cfg *config.PolicyConfig, home string) string {
-	return generateSBProfileWithIPs(cfg, home, resolveAllowedHosts(cfg), true)
+	return generateSBProfileWithTrustedSSHAuthSock(cfg, home, resolveAllowedHosts(cfg), true, sandbox.SSHAuthSock{})
 }
 
 // generateSBProfileWithIPs is the inner generator used by generateSBProfile
 // and directly by tests (which supply their own IP list for determinism).
 func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs []string, withNetproxy bool) string {
+	return generateSBProfileWithTrustedSSHAuthSock(cfg, home, allowedIPs, withNetproxy, sandbox.SSHAuthSock{})
+}
+
+// generateSBProfileWithTrustedSSHAuthSock grants an AF_UNIX connect exception
+// only for a launch capability validated before the shield profile is built.
+func generateSBProfileWithTrustedSSHAuthSock(cfg *config.PolicyConfig, home string, allowedIPs []string, withNetproxy bool, sshAuthSock sandbox.SSHAuthSock) string {
 	var sb strings.Builder
 
 	sb.WriteString("(version 1)\n")
@@ -578,26 +587,10 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 	// among same-specificity rules, so any later allow naming the same path would
 	// win. See ADR 0067-control-plane-token-auth.
 
-	// SSH agent socket: allow connect() to the ssh-agent listener so ssh can
-	// authenticate via the agent (signing-only) without ever reading a private
-	// key -- key files stay blocked by the file-read deny block above. Seatbelt
-	// models AF_UNIX connect() as network-outbound, so this must be an explicit
-	// allow BEFORE the (deny network*) catch-all. The path is runtime-dynamic
-	// (macOS launchd agents live under /private/tmp/com.apple.launchd.*/Listeners);
-	// it is read from SSH_AUTH_SOCK, which is passed through via
-	// EnvAllowlistBaseline. See internal/sandbox/env.go. Linux needs no
-	// equivalent allow: Landlock does not mediate AF_UNIX connect()
-	// (ADR 0067-control-plane-token-auth).
-	//
-	// (path ...) is the canonical exact-match predicate for a unix-socket
-	// destination (verified with sandbox-exec). The base is (allow default), so socket(2) creation is already
-	// permitted -- unlike a (deny default) profile we do not also need
-	// (allow system-socket (socket-domain AF_UNIX)).
-	//
-	// Fail closed on a control-socket path: such an allow would defeat both the
-	// deny below and the (deny network*) catch-all.
-	// See ADR 0067-control-plane-token-auth.
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+	// Seatbelt grants the exact socket only after validated delegation;
+	// AgentJail control sockets remain denied. See ADR
+	// 0124-explicit-ssh-delegation and ADR 0067-control-plane-token-auth.
+	if sock := sshAuthSock.Path; sock != "" {
 		if isControlSocketPath(sock, home) {
 			fmt.Fprintf(os.Stderr,
 				"agentjail-shield WARNING: SSH_AUTH_SOCK (%s) names an agentjail control socket -- refusing to emit an allow rule for it.\n", sock)
@@ -757,7 +750,7 @@ func isControlSocketPath(p, home string) bool {
 //
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	// --tunnel dispatches entirely to the NETransparentProxyProvider path
 	// (tunnel_shield_darwin.go). profilePrint is handled specially: rather
 	// than stand up the sysext + gateway just to print a profile, print the
@@ -776,8 +769,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			os.Exit(0)
 		}
 		ctx := context.Background()
-		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, ipv6Mode, emitter, func() {
-			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, policyPath, startTime, emitter)
+		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, ipv6Mode, sshAuthSock, emitter, func() {
+			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, policyPath, startTime, emitter)
 		})
 		// startTunnelDarwin either os.Exit's on success/fatal-error, or (on a
 		// fail-open setup failure) invokes fallback above, which itself never
@@ -785,14 +778,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		// startTunnelDarwin's doc comment.
 		return
 	}
-	runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, policyPath, startTime, emitter)
+	runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, policyPath, startTime, emitter)
 }
 
 // runShieldNoTunnel is the non-tunnel (default) macOS launch path: sbpl +
 // optional netproxy. Split out of runShield so --tunnel can dispatch to
 // startTunnelDarwin instead, and so a fail-open tunnel setup failure can fall
 // back into exactly this path. See runShield's doc comment above.
-func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	ctx := context.Background()
 	_ = startTime // TODO: add startup timing + session summary to macOS shield
 	home, err := os.UserHomeDir()
@@ -826,9 +819,9 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	// avoid spawning a proxy just to print the profile.
 	var profile string
 	if withNetproxy {
-		profile = generateSBProfileWithNetproxy(cfg, home)
+		profile = generateSBProfileWithTrustedSSHAuthSock(cfg, home, resolveAllowedHosts(cfg), true, sshAuthSock)
 	} else {
-		profile = generateSBProfile(cfg, home)
+		profile = generateSBProfileWithTrustedSSHAuthSock(cfg, home, resolveAllowedHosts(cfg), false, sshAuthSock)
 	}
 
 	if profilePrint {
@@ -875,13 +868,13 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 			Detail:    map[string]string{"error": "sandbox-exec not found"},
 			Actor:     "shield",
 		})
-		execAgent(ctx, cfg, agentPath, agentArgs, withNetproxy, sessionToken, emitter)
+		execAgent(ctx, cfg, agentPath, agentArgs, withNetproxy, sessionToken, sshAuthSock, emitter)
 		return
 	}
 
 	// Build the environment: clean allowlist + strip defence-in-depth + proxy
 	// vars + granted secrets.
-	env := buildBaseEnv(os.Environ(), cfg)
+	env := buildBaseEnv(os.Environ(), cfg, sshAuthSock)
 	if sshOverrideInjected(env) {
 		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
 	}
@@ -1005,11 +998,11 @@ func recordSandboxExecFailure(ctx context.Context, emitter audit.Emitter, err er
 
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
 // is absent (fail-open path).  Env stripping still applies.
-func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token, emitter audit.Emitter) {
+func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token, sshAuthSock sandbox.SSHAuthSock, emitter audit.Emitter) {
 	// FIX1 (ADR 0039): same clean-then-strip ordering as runShield's sandbox
 	// path -- the fail-open fallback must not leak a broader environment
 	// than the sandboxed path does.
-	env := buildBaseEnv(os.Environ(), cfg)
+	env := buildBaseEnv(os.Environ(), cfg, sshAuthSock)
 	if sshOverrideInjected(env) {
 		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
 	}

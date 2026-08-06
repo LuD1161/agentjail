@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 // (a) Cleanup ordering: runCleanupSteps must call every non-nil step, in
@@ -147,7 +148,7 @@ func TestStartTunnelDarwinFailsOpenWhenAppMissing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		startTunnelDarwin(context.Background(), nil, "/bin/echo", nil, "", true, false, emitter, fallback)
+		startTunnelDarwin(context.Background(), nil, "/bin/echo", nil, "", true, false, sandbox.SSHAuthSock{}, emitter, fallback)
 	}()
 
 	select {

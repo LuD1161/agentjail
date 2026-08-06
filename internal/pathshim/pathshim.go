@@ -162,6 +162,7 @@ func AddToShellProfile(home, binDir string) error {
 // Render produces one fail-open wrapper. See ADR 0063-shim-fails-open-uninstall-is-total.
 func Render(target Target, shieldBin, shimDir, shimPath string) string {
 	commandUpper := strings.ToUpper(target.Command)
+	launcherBin := filepath.Join(filepath.Dir(shieldBin), "agentjail")
 	codexApprovalCompat := ""
 	if target.Command == "codex" {
 		codexApprovalCompat = `# Keep Codex unsandboxed while preserving AgentJail's exact execpolicy prompt.
@@ -185,6 +186,7 @@ fi
 set -e
 
 SHIELD="%s"
+LAUNCHER="%s"
 
 find_real_agent() {
     _orig_path="$PATH"
@@ -220,9 +222,15 @@ if [ ! -x "$SHIELD" ]; then
     exec "$REAL_%s" "$@"
 fi
 
+if [ -x "$LAUNCHER" ]; then
+    exec "$LAUNCHER" run -- %s "$@"
+fi
+
+echo "WARNING: agentjail launcher is missing or not executable at $LAUNCHER" >&2
+echo "  Git-over-SSH setup is unavailable; entering the shield directly." >&2
 exec "$SHIELD" -- "$REAL_%s" "$@"
 
-`, target.Command, shieldBin, shimDir, target.Command, commandUpper, commandUpper,
+`, target.Command, shieldBin, launcherBin, shimDir, target.Command, commandUpper, commandUpper,
 		target.Command, shimDir, target.DisplayName, shimPath, commandUpper, shimPath,
-		shimPath, codexApprovalCompat, target.Command, shimPath, commandUpper, commandUpper)
+		shimPath, codexApprovalCompat, target.Command, shimPath, commandUpper, target.Command, commandUpper)
 }

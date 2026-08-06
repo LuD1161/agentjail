@@ -42,6 +42,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/envaudit"
 	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/netpolicy"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 	"github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -103,10 +104,12 @@ func Run(args []string) int {
 	// transitional AGENTJAIL_TUNNEL_IPV6 env var. See ADR 0110.
 	tunnelIPv6Flag := fs.Bool("tunnel-ipv6", false, "enable the IPv6 datapath for the macOS tunnel (AGE-262), overriding a network.tunnel_ipv6/env opt-out")
 	noTunnelIPv6 := fs.Bool("no-tunnel-ipv6", false, "explicitly disable the IPv6 tunnel datapath (default), overriding network.tunnel_ipv6/env opt-in")
+	gitSSH := fs.Bool("git-ssh", false, "enable Git over SSH for this launch by delegating all loaded SSH-agent identities")
+	noGitSSH := fs.Bool("no-git-ssh", false, "disable automatic Git-over-SSH capability for this launch")
 	auditJSON := fs.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := fs.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--no-mitm] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--no-mitm] [--git-ssh|--no-git-ssh] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml (default: ~/.agentjail/policy.yaml)")
 		fmt.Fprintln(os.Stderr, "  --profile-print     print the generated sandbox profile to stderr and exit 0")
@@ -118,6 +121,8 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "  --no-provider-gateway  do not route a detected provider agent through the local capture gateway (ADR 0109)")
 		fmt.Fprintln(os.Stderr, "  --tunnel-ipv6       enable the IPv6 datapath for the macOS tunnel (AGE-262)")
 		fmt.Fprintln(os.Stderr, "  --no-tunnel-ipv6    (default) disable the IPv6 tunnel datapath")
+		fmt.Fprintln(os.Stderr, "  --git-ssh          enable Git over SSH for this launch; delegates all loaded SSH-agent identities")
+		fmt.Fprintln(os.Stderr, "  --no-git-ssh       disable policy-default Git over SSH for this launch")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
 		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings, or if IMDS is reachable in port-only mode")
 		fmt.Fprintln(os.Stderr, "")
@@ -137,6 +142,7 @@ func Run(args []string) int {
 				"  path and will become the default.")
 	}
 	startTime := time.Now()
+	ctx := context.Background()
 
 	// Open the audit emitter BEFORE sandbox activation. After Landlock/
 	// Seatbelt is applied, new file opens may be restricted. Pre-opened
@@ -159,8 +165,6 @@ func Run(args []string) int {
 			defer st.Close()
 		}
 	}
-	ctx := context.Background()
-
 	// The '--' separator is required.
 	rest := fs.Args()
 	if len(rest) == 0 {
@@ -183,6 +187,31 @@ func Run(args []string) int {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: policy file %s exists but could not be loaded: %v\n", *policyPath, err)
 		fmt.Fprintln(os.Stderr, "agentjail-shield: refusing to launch the agent with a malformed policy file -- fix the file or remove it to use built-in defaults")
 		return 1
+	}
+	gitSSHMode, err := resolveGitSSHLaunchMode(cfg.GitSSHEnabled(), *gitSSH, *noGitSSH)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail-shield: %v\n", err)
+		return 64
+	}
+	sshAuthSock := sandbox.SSHAuthSock{}
+	// Automatic mode is opportunistic: an absent parent agent is normal for
+	// HTTPS-only users. See ADR 0125-default-git-ssh.
+	if gitSSHMode == gitSSHExplicit || (gitSSHMode == gitSSHAutomatic && os.Getenv("SSH_AUTH_SOCK") != "") {
+		sshAuthSock, err = prepareSSHAgentForwarding(true)
+		if err != nil {
+			if gitSSHMode == gitSSHExplicit {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: %v\n", err)
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: capabilities.git_ssh is enabled, but the inherited SSH agent is unusable; continuing without Git over SSH: %v\n", err)
+			sshAuthSock = sandbox.SSHAuthSock{}
+		}
+	}
+	if sshAuthSock.Path != "" {
+		fmt.Fprintln(os.Stderr, "  ⚠ SSH agent delegated")
+		fmt.Fprintln(os.Stderr, "    Every loaded identity is available inside this session.")
+		fmt.Fprintln(os.Stderr, "    Signatures are not restricted by host or repository.")
+		fmt.Fprintln(os.Stderr)
 	}
 
 	// --no-provider-gateway is a per-launch override that beats any config
@@ -295,10 +324,17 @@ func Run(args []string) int {
 	// syscall.Exec's into the sandboxed agent (replacing this process image)
 	// or calls os.Exit itself on a fatal setup error. The return 0 below is
 	// unreachable in practice but keeps this function's signature honest.
+	if sshAuthSock.Path != "" {
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.SSHAgentDelegated,
+			Detail:    map[string]string{"scope": "all_loaded_identities"},
+			Actor:     "shield",
+		})
+	}
 	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode,
 		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM),
 		resolveTunnelIPv6(*tunnelIPv6Flag, *noTunnelIPv6, os.Getenv(tunnelIPv6EnvVar) == "1", cfg.Network.TunnelIPv6),
-		*policyPath, startTime, emitter)
+		sshAuthSock, *policyPath, startTime, emitter)
 	return 0
 }
 

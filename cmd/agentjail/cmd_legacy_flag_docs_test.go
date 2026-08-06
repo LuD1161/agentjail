@@ -22,7 +22,8 @@ func TestLegacyCommandsExposeTheirRuntimeFlagsInHelp(t *testing.T) {
 		{installCmd, []string{"for", "all", "yes", "with-path-shim"}},
 		{uninstallCmd, []string{"for", "path-shim-only", "keep-secrets"}},
 		{updateCmd, []string{"force"}},
-		{runCmd, []string{"tunnel", "no-sandbox"}},
+		{runCmd, []string{"tunnel", "no-sandbox", "git-ssh", "no-git-ssh"}},
+		{claudeCmd, []string{"tunnel", "no-sandbox", "git-ssh", "no-git-ssh"}},
 		{mcpScanCmd, []string{"json"}},
 		{skillAllowCmd, []string{"project"}},
 	}

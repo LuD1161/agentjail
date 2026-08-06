@@ -696,6 +696,55 @@ single-session tests.
   fork that diverges onto another model. See ADR 0123-supplemental-model-pricing
   and AGE-272.
 
+## 50. An unreadable credential directory is not an empty one
+
+The SSH diagnostic used an empty key-path list for both an absent `~/.ssh`
+directory and a shield-denied directory. In a shielded session with no
+`SSH_AUTH_SOCK`, it therefore printed "no ssh keys -- skipping" and the final
+report said all checks passed even though SSH Git could not use private keys.
+
+- **Rule:** model unknown discovery separately from a confirmed absence. For a
+  capability that the sandbox deliberately denies, diagnose the required
+  delegated capability directly; never infer it is unnecessary from a failed
+  enumeration. See ADR 0124-explicit-ssh-delegation and AGE-273.
+
+## 51. A key can stay secret while its authority leaks
+
+SSH-agent passthrough kept private-key bytes unreadable, so tests and docs
+treated it as a safe compatibility carve-out. The socket still let any
+shielded process enumerate loaded identities and request signatures from all
+of them, while a generic signing request carried no Git repository or remote
+host that AgentJail could enforce.
+
+- **Rule:** model access to a credential operation as credential delegation,
+  even when key material never crosses the boundary. Admit signing capability
+  only through a validated launch policy or explicit override, disclose its
+  true scope, and never claim a path check supplies protocol authorization.
+  See ADR 0124-explicit-ssh-delegation, ADR 0125-default-git-ssh, and AGE-273.
+
+## 52. One launch policy needs one launch path
+
+The default policy enabled Git SSH and `agentjail run` could create a session
+agent, but the PATH shims executed the shield directly. Both launches were
+sandboxed and their unit tests passed, while ordinary `codex resume` silently
+skipped the default bootstrap.
+
+- **Rule:** every convenience launcher must converge on the canonical launch
+  path before policy defaults are resolved. Test the user-facing shim command,
+  not only its eventual shield execution. See ADR 0126-session-ssh-bootstrap
+  and AGE-273.
+
+## 53. Agent readiness does not select the right account
+
+The SSH E2E loaded one identity, so broad agent delegation passed clone, push,
+and pull. A real session loaded two GitHub identities; the server accepted the
+first valid key as a different account and rejected the repository operation.
+
+- **Rule:** when creating a session agent, resolve the current remote's
+  effective SSH identity and load one key by default. Treat multiple matches as
+  a user choice, never proof that any loaded key is the intended account. See
+  ADR 0126-session-ssh-bootstrap and AGE-273.
+
 ---
 
 ## Testing gotchas

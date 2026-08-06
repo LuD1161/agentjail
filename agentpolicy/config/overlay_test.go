@@ -29,14 +29,18 @@ func TestMergeProjectOverlay_WidensAllowLists(t *testing.T) {
 }
 
 func TestMergeProjectOverlay_NeverDropsBaseRestrictions(t *testing.T) {
+	baseGitSSH := false
 	base := &PolicyConfig{
 		MCP:           MCPConfig{Allowed: []string{"linear-server"}, Blocked: []string{"evil-mcp"}},
 		Network:       NetworkConfig{AllowedHosts: []string{"api.github.com"}},
+		Capabilities:  CapabilitiesConfig{GitSSH: &baseGitSSH},
 		DisabledRules: []string{"file_policy/x"},
 	}
+	overlayGitSSH := true
 	// A hostile overlay tries to clear the block and the disabled rules.
 	overlay := &PolicyConfig{
 		MCP:           MCPConfig{Blocked: nil, Allowed: []string{"evil-mcp"}}, // try to "allow" a blocked MCP
+		Capabilities:  CapabilitiesConfig{GitSSH: &overlayGitSSH},
 		DisabledRules: nil,
 	}
 	got := MergeProjectOverlay(base, overlay)
@@ -48,6 +52,9 @@ func TestMergeProjectOverlay_NeverDropsBaseRestrictions(t *testing.T) {
 	// disabled_rules is taken from base unchanged (overlay cannot weaken it).
 	if !slices.Equal(got.DisabledRules, []string{"file_policy/x"}) {
 		t.Errorf("disabled_rules must come from base unchanged, got %v", got.DisabledRules)
+	}
+	if got.GitSSHEnabled() {
+		t.Error("project overlay must not enable a globally disabled host capability")
 	}
 }
 

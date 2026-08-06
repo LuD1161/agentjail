@@ -33,6 +33,11 @@ func ctlProfile(t *testing.T) string {
 	return generateSBProfileWithNetproxy(&config.PolicyConfig{}, testHome)
 }
 
+func ctlProfileWithSSHAuthSock(t *testing.T, sock string) string {
+	t.Helper()
+	return generateSBProfileWithTrustedSSHAuthSock(&config.PolicyConfig{}, testHome, nil, true, sandbox.SSHAuthSock{Path: sock})
+}
+
 // Every control socket must carry an explicit deny. secrets.sock had none until
 // AGE-216: it was covered only by the catch-all, while ADR 0067 claimed the
 // profile denied "the control socket paths".
@@ -77,16 +82,14 @@ func TestDarwinControlSocketDeniesEmittedAfterAllNetworkAllows(t *testing.T) {
 // be emitted, independent of ordering.
 func TestDarwinSSHAuthSockGuardSuppressesControlSocketAllow(t *testing.T) {
 	for _, sock := range ControlSocketPaths(testHome) {
-		t.Setenv("SSH_AUTH_SOCK", sock)
-		profile := ctlProfile(t)
+		profile := ctlProfileWithSSHAuthSock(t, sock)
 		bad := fmt.Sprintf("(allow network-outbound\n    (path %q))", sock)
 		if strings.Contains(profile, bad) {
 			t.Errorf("SSH_AUTH_SOCK=%s produced an allow rule for a control socket:\n%s", sock, bad)
 		}
 	}
 	// A path inside the control-socket dir, even one not yet bound.
-	t.Setenv("SSH_AUTH_SOCK", proxyctl.ControlSocketDirForHome(testHome)+"/planted.sock")
-	if strings.Contains(ctlProfile(t), "planted.sock") {
+	if strings.Contains(ctlProfileWithSSHAuthSock(t, proxyctl.ControlSocketDirForHome(testHome)+"/planted.sock"), "planted.sock") {
 		t.Error("a path inside the control-socket dir was allowed into the profile")
 	}
 }
@@ -95,8 +98,7 @@ func TestDarwinSSHAuthSockGuardSuppressesControlSocketAllow(t *testing.T) {
 // suppression test above could pass simply because nothing is ever emitted.
 func TestDarwinSSHAuthSockLegitimatePathStillAllowed(t *testing.T) {
 	legit := "/private/tmp/com.apple.launchd.abc123/Listeners"
-	t.Setenv("SSH_AUTH_SOCK", legit)
-	profile := ctlProfile(t)
+	profile := ctlProfileWithSSHAuthSock(t, legit)
 	want := fmt.Sprintf("(allow network-outbound\n    (path %q))", legit)
 	if !strings.Contains(profile, want) {
 		t.Errorf("legitimate SSH_AUTH_SOCK %s was not allowed; the guard is over-broad and ssh would break", legit)

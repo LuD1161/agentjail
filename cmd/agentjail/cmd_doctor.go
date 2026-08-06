@@ -110,7 +110,7 @@ func runDoctor(mode repairMode) int {
 	}
 
 	var repairable []doctorCheck
-	otherFailures, gatingRepairs := 0, 0
+	otherFailures, gatingRepairs, warnings := 0, 0, 0
 	u := ui.New(os.Stdout)
 
 	fmt.Fprintln(os.Stdout, u.Header("AgentJail Doctor", "system health & protection", runtime.GOOS+"/"+runtime.GOARCH))
@@ -120,6 +120,9 @@ func runDoctor(mode repairMode) int {
 		fmt.Fprintln(os.Stdout, u.Section(doctorSectionTitle(u, s.name)))
 		for _, c := range s.run(home) {
 			printCheck(u, c)
+			if c.status == statusWarn {
+				warnings++
+			}
 			if c.status != statusFail {
 				continue
 			}
@@ -150,6 +153,10 @@ func runDoctor(mode repairMode) int {
 		return 1
 	}
 
+	if warnings > 0 {
+		fmt.Fprintf(os.Stdout, "%d warning(s) above need attention.\n", warnings)
+		return 0
+	}
 	fmt.Fprintln(os.Stdout, u.Badge("ok", "All checks passed."))
 	return 0
 }
@@ -550,13 +557,10 @@ func checkSSHAgent(home string) []doctorCheck {
 // function of Status so it can be tested with hand-built values without a
 // real ssh-agent.
 //
-// Ordering matters (Codex-required): PinnedBlindSpot is independent of
-// KeysOnDisk (a pinned deploy key that ListKeyFiles never globs still hits
-// the trap), so it must be evaluated BEFORE the !KeysOnDisk skip - otherwise
-// a deploy-key-only user with no id_* files would be wrongly skipped instead
-// of warned.
+// A shielded session cannot fall back to private-key files. Its socket must be
+// usable even when ~/.ssh cannot be inspected. See ADR 0056-ssh-agent-pinned-identityfile-blindspot.
 func sshAgentCheck(st sshagent.Status) doctorCheck {
-	if st.Readiness == sshagent.ReadinessReady && st.PinnedBlindSpot() {
+	if st.PinnedBlindSpot() {
 		return doctorCheck{
 			label:  "ssh-agent",
 			status: statusWarn,
@@ -564,11 +568,47 @@ func sshAgentCheck(st sshagent.Status) doctorCheck {
 		}
 	}
 
-	if !st.KeysOnDisk && !st.PinnedIdentity() {
-		return doctorCheck{
-			label:  "ssh-agent",
-			status: statusSkip,
-			detail: "no ssh keys in ~/.ssh — skipping",
+	if st.Execution == sshagent.ExecutionShielded {
+		switch st.Readiness {
+		case sshagent.ReadinessReady:
+			return doctorCheck{
+				label:  "ssh-agent",
+				status: statusWarn,
+				detail: "SSH-agent delegation is active with key(s) loaded. It exposes signing operations for every loaded identity and is not host- or repository-scoped",
+			}
+		case sshagent.ReadinessNoKeys:
+			return doctorCheck{
+				label:  "ssh-agent",
+				status: statusWarn,
+				detail: "SSH-agent delegation is active but the delegated agent has no loaded identities; private-key files stay blocked, so SSH Git cannot authenticate",
+			}
+		case sshagent.ReadinessNoAgent:
+			if st.SockPath == "" {
+				if st.Delegation == sshagent.DelegationRequested {
+					return doctorCheck{
+						label:  "ssh-agent",
+						status: statusWarn,
+						detail: "SSH-agent delegation was requested but is unavailable: SSH_AUTH_SOCK is unset. Private-key files stay blocked, so SSH Git cannot authenticate",
+					}
+				}
+				return doctorCheck{
+					label:  "ssh-agent",
+					status: statusWarn,
+					detail: "Git-over-SSH capability is not active in this shielded session; private-key files stay blocked, so SSH Git is unavailable",
+				}
+			}
+			if st.Delegation == sshagent.DelegationRequested {
+				return doctorCheck{
+					label:  "ssh-agent",
+					status: statusWarn,
+					detail: "SSH-agent delegation was requested but the delegated SSH_AUTH_SOCK is unusable; private-key files stay blocked, so SSH Git cannot authenticate",
+				}
+			}
+			return doctorCheck{
+				label:  "ssh-agent",
+				status: statusWarn,
+				detail: "shielded session has an undelegated SSH_AUTH_SOCK that is unusable; private-key files stay blocked, so SSH Git cannot authenticate",
+			}
 		}
 	}
 
@@ -580,9 +620,23 @@ func sshAgentCheck(st sshagent.Status) doctorCheck {
 		}
 	}
 
-	// NeedsRemediation() is true here: keys are on disk but not loaded.
-	// This is user environment state, not an agentjail install defect, so
-	// it must never trip hasFailure — status stays "warn".
+	if st.KeyState == sshagent.KeyStateUnknown {
+		return doctorCheck{
+			label:  "ssh-agent",
+			status: statusWarn,
+			detail: "could not inspect ~/.ssh, so ssh key availability is unknown",
+		}
+	}
+
+	if st.KeyState == sshagent.KeyStateAbsent {
+		return doctorCheck{
+			label:  "ssh-agent",
+			status: statusSkip,
+			detail: "no ssh keys in ~/.ssh — skipping",
+		}
+	}
+
+	// A missing loaded key is a user-environment warning, not an install failure.
 	return doctorCheck{
 		label:  "ssh-agent",
 		status: statusWarn,

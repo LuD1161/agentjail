@@ -1,13 +1,5 @@
-// Package sshagent detects whether ssh-agent is usable so callers can warn a
-// user whose private key isn't loaded into it.
-//
-// The shield blocks direct reads of private-key files by design (ADR 0001) —
-// SSH access under agentjail MUST go through ssh-agent forwarding. If the
-// key isn't loaded into the agent, ssh fails with a cryptic
-// "Permission denied (publickey)" error that gives no hint about the real
-// cause. This package probes agent reachability and identity count so a
-// caller can surface a clear diagnosis and the correct remediation
-// (ssh-add) — never a recommendation to grant the key file itself.
+// Package sshagent diagnoses delegated SSH signing capability.
+// Private-key files remain blocked. See ADR 0124-explicit-ssh-delegation.
 package sshagent
 
 import (
@@ -34,10 +26,51 @@ const (
 	ReadinessReady
 )
 
+// KeyState describes what the probe could establish about private key files.
+// Unknown is deliberately distinct from Absent: a shield blocks ~/.ssh reads,
+// so an unreadable directory must not be reported as having no keys.
+type KeyState int
+
+const (
+	KeyStateUnknown KeyState = iota
+	KeyStateAbsent
+	KeyStatePresent
+)
+
+// ExecutionState records whether the probe runs in a sandboxed agent session.
+// SSH private-key files are unavailable in that state, so a usable agent is
+// required for SSH authentication.
+type ExecutionState int
+
+const (
+	ExecutionUnshielded ExecutionState = iota
+	ExecutionShielded
+)
+
+// DelegationState records whether the shield granted SSH signing access.
+type DelegationState int
+
+const (
+	DelegationDisabled DelegationState = iota
+	DelegationRequested
+)
+
+// DelegationEnv marks a shield-validated SSH-agent delegation.
+const DelegationEnv = "AGENTJAIL_SSH_AGENT_DELEGATED"
+
+// KeyFiles is the typed result of enumerating ~/.ssh private key names.
+// Paths are used only for local remediation text; no key material is read.
+type KeyFiles struct {
+	State KeyState
+	Paths []string
+}
+
 // Status is the probed ssh-agent + on-disk-key state.
 type Status struct {
 	Readiness  Readiness
-	KeysOnDisk bool     // true if >=1 private key file is present under ~/.ssh
+	KeyState   KeyState
+	Execution  ExecutionState
+	Delegation DelegationState
 	SockPath   string   // value of SSH_AUTH_SOCK (may be empty)
 	KeyPaths   []string // detected on-disk private key paths (for remediation)
 
@@ -61,9 +94,9 @@ type Prober struct {
 	// a start error, or a context error) means the agent is unreachable.
 	RunSSHAdd func(ctx context.Context) (exitCode int, err error)
 
-	// ListKeyFiles returns the on-disk private key paths under ~/.ssh
-	// used for remediation messaging.
-	ListKeyFiles func() []string
+	// FindKeyFiles enumerates on-disk private key paths under ~/.ssh for
+	// remediation messaging, preserving whether the directory was unreadable.
+	FindKeyFiles func() KeyFiles
 
 	// Getenv reads an environment variable. Defaults to os.Getenv.
 	Getenv func(string) string
@@ -89,7 +122,7 @@ type Prober struct {
 func DefaultProber() *Prober {
 	return &Prober{
 		RunSSHAdd:     runSSHAddReal,
-		ListKeyFiles:  listKeyFilesReal,
+		FindKeyFiles:  findKeyFilesReal,
 		Getenv:        os.Getenv,
 		ReadSSHConfig: readSSHConfigReal,
 		PathExists:    pathExistsReal,
@@ -98,11 +131,26 @@ func DefaultProber() *Prober {
 
 // Probe returns the ssh-agent + on-disk-key Status.
 func (p *Prober) Probe(ctx context.Context) Status {
-	st := Status{
-		SockPath: p.Getenv("SSH_AUTH_SOCK"),
-		KeyPaths: p.ListKeyFiles(),
+	keys := KeyFiles{State: KeyStateUnknown}
+	if p.FindKeyFiles != nil {
+		keys = p.FindKeyFiles()
 	}
-	st.KeysOnDisk = len(st.KeyPaths) > 0
+	st := Status{
+		KeyState: keys.State,
+		KeyPaths: keys.Paths,
+	}
+	if p.Getenv != nil {
+		st.SockPath = p.Getenv("SSH_AUTH_SOCK")
+		if p.Getenv("AGENTJAIL_SHIELDED") == "1" {
+			st.Execution = ExecutionShielded
+		}
+		if p.Getenv(DelegationEnv) == "1" {
+			st.Delegation = DelegationRequested
+		}
+	}
+
+	// Pinned config remains diagnostic evidence when no agent is reachable.
+	st.PinnedIdentityPaths = p.probePinnedIdentityPaths()
 
 	if st.SockPath == "" {
 		st.Readiness = ReadinessNoAgent
@@ -125,7 +173,6 @@ func (p *Prober) Probe(ctx context.Context) Status {
 		st.Readiness = ReadinessNoAgent
 	}
 
-	st.PinnedIdentityPaths = p.probePinnedIdentityPaths()
 	return st
 }
 
@@ -161,7 +208,7 @@ func (p *Prober) probePinnedIdentityPaths() []string {
 // isn't usable via the agent — i.e. ssh will fail and the fix is ssh-add,
 // not granting file access.
 func (s Status) NeedsRemediation() bool {
-	return s.KeysOnDisk && s.Readiness != ReadinessReady
+	return s.KeyState == KeyStatePresent && s.Readiness != ReadinessReady
 }
 
 // Remediation returns a human-readable ssh-add command for the given GOOS.
@@ -191,9 +238,9 @@ func (s Status) PinnedIdentity() bool {
 // IdentityFile that the shield blocks. ssh reads the pinned file first,
 // the shield denies it, and ssh gives up before falling back to the
 // agent - "Permission denied (publickey)" with no hint that the agent
-// was ready and would have worked. Deliberately NOT gated on KeysOnDisk /
-// the id_* glob: a pinned deploy key (e.g. ~/.ssh/github_deploy) that
-// ListKeyFiles never sees still hits this trap.
+// was ready and would have worked. Deliberately NOT gated on KeyState /
+// the id_* scan: a pinned deploy key (e.g. ~/.ssh/github_deploy) that
+// FindKeyFiles does not see still hits this trap.
 func (s Status) PinnedBlindSpot() bool {
 	return s.Readiness == ReadinessReady && s.PinnedIdentity()
 }
@@ -214,7 +261,7 @@ func (s Status) PinnedRemediation(goos string) string {
 	return "ssh config pins an IdentityFile the shield blocks, even though ssh-agent has a key loaded. " +
 		"For a one-off command: GIT_SSH_COMMAND='ssh -o IdentitiesOnly=no -o IdentityFile=none -o IdentityAgent=$SSH_AUTH_SOCK' <your-git-or-ssh-command>. " +
 		"Or remove `IdentitiesOnly yes` from your ssh config so the agent is used as a fallback. " +
-		"The shield already applies this override automatically for git unless AGENTJAIL_NO_SSH_OVERRIDE is set."
+		"When Git over SSH is active, the shield applies this override for git unless AGENTJAIL_NO_SSH_OVERRIDE is set."
 }
 
 // chooseKey picks a display name for the key to reference in remediation
@@ -407,23 +454,30 @@ func underDir(path string, dir string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// listKeyFilesReal globs ~/.ssh/id_* for private key files, excluding
-// public keys (*.pub).
-func listKeyFilesReal() []string {
+// An unreadable ~/.ssh is unknown, not an empty key inventory.
+// See ADR 0124-explicit-ssh-delegation.
+func findKeyFilesReal() KeyFiles {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		return KeyFiles{State: KeyStateUnknown}
 	}
-	matches, err := filepath.Glob(filepath.Join(home, ".ssh", "id_*"))
+	entries, err := os.ReadDir(filepath.Join(home, ".ssh"))
 	if err != nil {
-		return nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return KeyFiles{State: KeyStateAbsent}
+		}
+		return KeyFiles{State: KeyStateUnknown}
 	}
-	keys := make([]string, 0, len(matches))
-	for _, m := range matches {
-		if strings.HasSuffix(m, ".pub") {
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "id_") || strings.HasSuffix(name, ".pub") {
 			continue
 		}
-		keys = append(keys, m)
+		keys = append(keys, filepath.Join(home, ".ssh", name))
 	}
-	return keys
+	if len(keys) == 0 {
+		return KeyFiles{State: KeyStateAbsent}
+	}
+	return KeyFiles{State: KeyStatePresent, Paths: keys}
 }

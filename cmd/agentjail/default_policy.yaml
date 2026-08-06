@@ -51,6 +51,10 @@ commands:
   # env|curl exfil pattern.
   extra_block: []
 
+capabilities:
+  # Standard profile; delegates every identity loaded in the session agent.
+  git_ssh: true
+
 network:
   # Hosts whose resolved IP addresses are permitted for outbound TCP
   # connections when agentjail-shield is active, and hosts allowed through

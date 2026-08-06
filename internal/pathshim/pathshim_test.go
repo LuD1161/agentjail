@@ -50,7 +50,11 @@ func TestRenderedTargetsAreValidShell(t *testing.T) {
 			if out, err := exec.Command("/bin/sh", "-n", path).CombinedOutput(); err != nil {
 				t.Fatalf("invalid shell: %v\n%s", err, out)
 			}
-			for _, want := range []string{"command -v " + target.Command, "Running " + target.Command + " UNSHIELDED"} {
+			for _, want := range []string{
+				"command -v " + target.Command,
+				"Running " + target.Command + " UNSHIELDED",
+				`exec "$LAUNCHER" run -- ` + target.Command + ` "$@"`,
+			} {
 				if !strings.Contains(content, want) {
 					t.Errorf("shim missing %q", want)
 				}
@@ -113,8 +117,13 @@ func runRenderedCodexShim(t *testing.T, args []string) []string {
 	}
 
 	capture := filepath.Join(root, "argv")
+	route := filepath.Join(root, "route")
 	shield := filepath.Join(root, "agentjail-shield")
-	if err := os.WriteFile(shield, []byte("#!/bin/sh\n[ \"$1\" = \"--\" ] || exit 64\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(shield, []byte("#!/bin/sh\nprintf 'shield\\n' > \"$CAPTURE_ROUTE\"\n[ \"$1\" = \"--\" ] || exit 64\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(root, "agentjail")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'launcher\\n' > \"$CAPTURE_ROUTE\"\n[ \"$1\" = run ] || exit 64\n[ \"$2\" = -- ] || exit 64\n[ \"$3\" = codex ] || exit 64\nshift 3\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	realCodex := filepath.Join(realDir, "codex")
@@ -131,10 +140,18 @@ func runRenderedCodexShim(t *testing.T, args []string) []string {
 	cmd := exec.Command(shim, args...)
 	cmd.Env = append(os.Environ(),
 		"CAPTURE_ARGS="+capture,
+		"CAPTURE_ROUTE="+route,
 		"PATH="+shimDir+":"+realDir+":/usr/bin:/bin",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run shim: %v\n%s", err, out)
+	}
+	rawRoute, err := os.ReadFile(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(rawRoute)) != "launcher" {
+		t.Fatalf("shim route = %q, want canonical launcher", rawRoute)
 	}
 	raw, err := os.ReadFile(capture)
 	if err != nil {

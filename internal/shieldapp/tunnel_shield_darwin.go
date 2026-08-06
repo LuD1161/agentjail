@@ -25,6 +25,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/dnsvip"
 	"github.com/LuD1161/agentjail/internal/mitm"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
 
@@ -152,7 +153,7 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 // returns, so this is dead code reachable only if that contract is violated;
 // the explicit return keeps that violation a compile error away from a
 // fallthrough double-launch rather than a silent one.
-func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, ipv6Enabled bool, emitter audit.Emitter, fallback func()) {
+func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, emitter audit.Emitter, fallback func()) {
 	logger := slog.Default()
 	sessionID := generateSessionID()
 	logger.Info("tunnel session started", "session_id", sessionID)
@@ -484,7 +485,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	}
 	profile := generateSBProfileTunnel(cfg, home)
 
-	env := buildBaseEnv(os.Environ(), cfg)
+	env := buildBaseEnv(os.Environ(), cfg, sshAuthSock)
 	env = AppendShieldedEnv(env, Sandboxed)
 	env = append(env, "AGENTJAIL_TUNNEL=1")
 

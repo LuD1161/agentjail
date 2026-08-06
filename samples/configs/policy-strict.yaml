@@ -33,3 +33,7 @@ commands:
     - "scp"           # outbound file transfer to a remote host
     - "rsync"         # ditto
     - "ssh.*-o\\s*ProxyJump"   # SSH tunneling
+
+# Host capabilities: none are delegated automatically in the strict profile.
+capabilities:
+  git_ssh: false

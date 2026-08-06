@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release chaos tunnel-lib macos-app
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release chaos tunnel-lib macos-app
 
 BIN ?= bin/agentjail
 
@@ -88,6 +88,9 @@ opa-test:  ## opa test over agentpolicy/policies/ (requires opa on PATH)
 smoke: ## run the end-to-end smoke tests (hook pipeline + OS sandbox)
 	bash cmd/agentjail-hook/test/smoke.sh
 	bash cmd/agentjail-shield/test/smoke.sh
+
+ssh-git-e2e: ## disposable SSH-agent + real Git clone/push/pull acceptance test
+	AGENTJAIL_SSH_GIT_E2E=1 bash cmd/agentjail-shield/test/ssh-git-e2e.sh
 
 e2e: ## full new-user E2E test (build, daemon, hook, store, replay, UI, filters, try)
 	bash test/e2e-newuser.sh

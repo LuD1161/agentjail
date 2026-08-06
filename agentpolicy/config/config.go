@@ -33,16 +33,17 @@ import (
 // serialised into OPA's data document via the OPA Go API (which accepts
 // map[string]any, not JSON-tagged structs directly).
 type PolicyConfig struct {
-	MCP         MCPConfig          `yaml:"mcp"`
-	File        FileConfig         `yaml:"file"`
-	Commands    CommandConfig      `yaml:"commands"`
-	Network     NetworkConfig      `yaml:"network"`
-	Web         WebConfig          `yaml:"web"`
-	AWS         AWSConfig          `yaml:"aws"`
-	Secrets     SecretsConfig      `yaml:"secrets"`
-	Credentials []CredentialConfig `yaml:"credentials"`
-	Skills      SkillsConfig       `yaml:"skills"`
-	Cost        CostConfig         `yaml:"cost"`
+	MCP          MCPConfig          `yaml:"mcp"`
+	File         FileConfig         `yaml:"file"`
+	Commands     CommandConfig      `yaml:"commands"`
+	Network      NetworkConfig      `yaml:"network"`
+	Web          WebConfig          `yaml:"web"`
+	AWS          AWSConfig          `yaml:"aws"`
+	Secrets      SecretsConfig      `yaml:"secrets"`
+	Credentials  []CredentialConfig `yaml:"credentials"`
+	Skills       SkillsConfig       `yaml:"skills"`
+	Cost         CostConfig         `yaml:"cost"`
+	Capabilities CapabilitiesConfig `yaml:"capabilities"`
 	// DisabledRules is a list of rule_id strings or glob patterns (using "/"
 	// as the segment separator, so "file_policy/*" matches
 	// "file_policy/sensitive_credential" but not "file_policy/x/y").
@@ -86,6 +87,18 @@ type CostConfig struct {
 	DailyBudget    float64            `yaml:"daily_budget"`
 	ProjectBudgets map[string]float64 `yaml:"project_budgets"`
 	AlertThreshold float64            `yaml:"alert_threshold"`
+}
+
+// CapabilitiesConfig controls optional host capabilities exposed at launch.
+// Pointer fields preserve an explicit false when merged over built-in defaults.
+type CapabilitiesConfig struct {
+	GitSSH *bool `yaml:"git_ssh"`
+}
+
+// GitSSHEnabled reports the resolved standing posture for Git-over-SSH.
+// An omitted value follows the built-in standard profile and remains enabled.
+func (c *PolicyConfig) GitSSHEnabled() bool {
+	return c != nil && (c.Capabilities.GitSSH == nil || *c.Capabilities.GitSSH)
 }
 
 const (
@@ -725,6 +738,7 @@ func Default() *PolicyConfig {
 			ProjectBudgets: map[string]float64{},
 			AlertThreshold: 0.8,
 		},
+		Capabilities: CapabilitiesConfig{GitSSH: boolPtr(true)},
 		// DaemonUnreachable: degraded by default — the offline denials are a
 		// subset of the permanently-locked online rules, so no working call is
 		// newly refused (ADR 0074, superseding 0050's allow default).
@@ -943,6 +957,16 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 	}
 	for project, budget := range overlay.Cost.ProjectBudgets {
 		result.Cost.ProjectBudgets[project] = budget
+	}
+
+	// Capabilities.GitSSH is tri-state so an explicit false overrides the
+	// standard profile's true default. Project overlays cannot change it.
+	if overlay.Capabilities.GitSSH != nil {
+		result.Capabilities.GitSSH = boolPtr(*overlay.Capabilities.GitSSH)
+	} else if base.Capabilities.GitSSH != nil {
+		result.Capabilities.GitSSH = boolPtr(*base.Capabilities.GitSSH)
+	} else {
+		result.Capabilities.GitSSH = boolPtr(true)
 	}
 
 	// Secrets.EnvBlocklist

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 // ---- FIX1: darwin env leak (ADR 0039) ----
@@ -31,7 +32,7 @@ func TestBuildBaseEnv_NonBlocklistedSecretDoesNotSurvive(t *testing.T) {
 		"SOME_RANDOM_TOKEN=abc123",
 	}
 	cfg := config.Default()
-	got := buildBaseEnv(hostEnv, cfg)
+	got := buildBaseEnv(hostEnv, cfg, sandbox.SSHAuthSock{})
 
 	for _, kv := range got {
 		if strings.HasPrefix(kv, "MY_SECRET=") {
@@ -52,25 +53,18 @@ func TestBuildBaseEnv_NonBlocklistedSecretDoesNotSurvive(t *testing.T) {
 	}
 }
 
-// TestBuildBaseEnv_SSHAuthSockInBaseline verifies that SSH_AUTH_SOCK passes
-// through to the sandboxed agent by default. This reverses the earlier FIX1
-// non-goal: agent-based ssh auth is the intended path (the shield blocks
-// private-key file reads by design, so ssh MUST use the agent). Passing the
-// socket path is signing-only -- the key never leaves the agent -- and the
-// network egress policy remains the real control point. See the SSH_AUTH_SOCK
-// passthrough work (EnvAllowlistBaseline in internal/sandbox/env.go and the
-// per-OS socket grants in shield_linux.go / shield_darwin.go).
-func TestBuildBaseEnv_SSHAuthSockInBaseline(t *testing.T) {
+// Only the typed, validated capability may reach the child environment.
+func TestBuildBaseEnv_SSHAuthSockRequiresValidatedDelegation(t *testing.T) {
 	hostEnv := []string{"SSH_AUTH_SOCK=/tmp/ssh-agent.sock", "PATH=/usr/bin"}
-	got := buildBaseEnv(hostEnv, config.Default())
+	got := buildBaseEnv(hostEnv, config.Default(), sandbox.SSHAuthSock{})
 	var sawSock bool
 	for _, kv := range got {
 		if kv == "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" {
 			sawSock = true
 		}
 	}
-	if !sawSock {
-		t.Errorf("SSH_AUTH_SOCK must survive buildBaseEnv (agent-based ssh auth): %v", got)
+	if sawSock {
+		t.Errorf("ambient SSH_AUTH_SOCK leaked without validated delegation: %v", got)
 	}
 }
 

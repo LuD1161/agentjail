@@ -80,33 +80,55 @@ every macOS since 10.5.
 
 Private key FILE reads are blocked by design on both platforms --
 `~/.ssh/id_*` and friends match `SensitiveFilePatterns` and stay denied
-regardless of shield config. `ssh` still works under the shield through
-`ssh-agent`: `SSH_AUTH_SOCK` is passed through the sandbox's env
-allowlist, and the shield explicitly allows connecting to that socket
-(macOS: `network-outbound` on the resolved socket path; Linux: a dynamic
-Landlock rw grant for the socket path), so a sandboxed `ssh` can ask the
-agent to sign without ever touching the key file. See
-[ADR 0054](./adr/0054-macos-shield-tempdir-afunix-parity.md) for the
-underlying AF_UNIX mechanics.
-
-If a sandboxed `ssh` fails with "Operation not permitted" or a similar
-auth failure, the key is most likely not loaded into the agent yet -- it
-is not a sandbox misconfiguration. Load it once:
+regardless of shield config. The built-in standard policy enables Git over SSH
+when the parent terminal has a usable SSH agent:
 
 ```sh
-# macOS (persists across reboots via Keychain)
-ssh-add --apple-use-keychain ~/.ssh/id_ed25519
-
-# Other platforms
-eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+agentjail run -- codex
 ```
 
-`agentjail doctor` proactively checks for this (keys present on disk but
-none loaded in the agent) and prints the same hint. The hook prints a
-one-shot version of the same advisory to stderr the first time it allows
-an ssh-ish command while the agent is empty. Neither ever suggests
-granting a read hole for the key file -- the fix is always to load the
-key into the agent.
+Set `capabilities.git_ssh: false` for the strict posture, or use
+`agentjail run --no-git-ssh -- <agent>` for one launch. `--git-ssh` enables it
+for one launch when the standing policy disables automatic delegation.
+
+The shield validates the delegated socket, injects it only for that session,
+and explicitly allows connecting to that socket on macOS with an exact
+`network-outbound` rule. Linux Landlock does not mediate AF_UNIX `connect(2)`,
+so AgentJail adds no misleading filesystem grant there; removing the variable
+is not a hard Unix-socket isolation boundary on Linux. A sandboxed `ssh` can
+then ask the agent to sign without ever touching the key file. See ADR
+0124-explicit-ssh-delegation for the capability boundary and platform limits.
+
+Delegating an agent is intentionally a security trade-off: any process in the
+shielded session can request signatures from **every identity loaded in that
+agent**. The socket protocol does not restrict use to a host or repository.
+Prefer a dedicated, narrowly authorized identity. `agentjail doctor` reports
+inactive, missing, unusable, and active delegation states.
+
+When an interactive launch finds local SSH identities but no usable agent, it
+offers to start a session-only native OpenSSH agent. For the current branch's
+SSH push remote (falling back to `origin`), AgentJail follows the effective
+OpenSSH `IdentityFile` order, including `Host` aliases. One matching identity
+is loaded directly. Multiple matches produce a chooser whose default loads
+only the first; loading every listed identity is explicit. Without an SSH
+remote or config match, the same chooser uses the discovered local identities.
+AgentJail never maps a repository owner to a key.
+
+The next private-key passphrase prompt, if any, is owned by OpenSSH `ssh-add`.
+AgentJail does not read, capture, log, or store the passphrase or private key.
+The agent terminates with the coding session. Noninteractive launches never
+prompt. An explicit `--git-ssh` request fails closed if setup is unavailable or
+declined; automatic standard-policy launches continue without Git SSH. An
+already-running inherited agent is not modified; all identities it already
+holds remain within the disclosed delegation scope.
+
+If native setup cannot load a hardware-backed or custom identity, configure it
+through OpenSSH in the parent environment and launch AgentJail again. AgentJail
+does not grant a read hole for the key file.
+
+`agentjail doctor` proactively reports a delegated agent with no
+identities. Neither it nor the hook suggests granting a read hole for the key
+file -- private-key file access stays denied.
 
 **Key loaded but ssh still fails (pinned `IdentityFile`).** If
 `ssh-add -l` shows your key *is* loaded yet a sandboxed `ssh`/`git` still
@@ -116,15 +138,16 @@ explicit `IdentityFile` (usually with `IdentitiesOnly yes`). `ssh` tries
 to read that on-disk file first -- which the shield blocks -- and gives
 up before trying the agent.
 
-For shield-wrapped `git`, this is handled automatically: the shield
-injects an agent-backed `GIT_SSH_COMMAND` (`ssh -o IdentitiesOnly=no -o
+When Git over SSH is active, the shield injects an agent-backed
+`GIT_SSH_COMMAND` (`ssh -o IdentitiesOnly=no -o
 IdentityFile=none -o IdentityAgent='<your SSH_AUTH_SOCK>'`) so `git`
-authenticates through the agent instead of the pinned file, with no action
-needed. The `IdentitiesOnly=no` is the decisive part: with `IdentitiesOnly
-yes` in your config, OpenSSH only offers agent keys matching a configured
+authenticates through the agent instead of the pinned file after you accept
+the delegation warning. The `IdentitiesOnly=no` is the decisive part: with
+`IdentitiesOnly yes` in your config, OpenSSH only offers agent keys matching a configured
 `IdentityFile`, so an agent key that differs from the pinned one is never
 offered -- `IdentitiesOnly=no` lifts that so the agent's real key is used.
-This auto-fix is skipped -- and you are back to the manual workaround below
+When inactive, the socket and `GIT_SSH_COMMAND` are removed. When active, this
+auto-fix is skipped -- and you are back to the manual workaround below
 -- if you have already set your own `GIT_SSH_COMMAND`, or if you export
 `AGENTJAIL_NO_SSH_OVERRIDE=1` to opt out (for example, to keep your
 deliberate per-host identity restrictions intact for git too). See
@@ -314,6 +337,8 @@ The `--` separator between shield flags and the agent command is **required**.
 | `--tunnel` | `false` | Route agent traffic through the unprivileged-userns transparent forwarder (Linux only; no sudo, no daemon). Decrypts HTTPS by default so policy templates apply -- see `--no-mitm` |
 | `--mitm` | *(on)* | Force TLS interception on, overriding a `network.tunnel_mitm: false` opt-out. Interception is already the default inside a tunnel, so this is normally redundant (ADR 0077) |
 | `--no-mitm` | `false` | Transparent-only: relay the agent's TLS opaquely instead of decrypting it. Keeps netns isolation and IP/SNI visibility, but **HTTP(S) policy templates cannot match** -- `netpolicy` only recognizes HTTP through the interception path. Use for cert-pinned endpoints (ADR 0077) |
+| `--git-ssh` | policy | Enable Git over SSH for this launch by delegating all loaded SSH-agent identities |
+| `--no-git-ssh` | policy | Disable Git over SSH for this launch |
 | `--audit-json=PATH` | `""` | Write environment audit findings as JSON to PATH (use `-` for stdout) |
 | `--audit-strict` | `false` | Refuse to launch if critical audit findings (root, AdminAccess, IMDSv1), or if cloud metadata (IMDS) is reachable in port-only mode |
 

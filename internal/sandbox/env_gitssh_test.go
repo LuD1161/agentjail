@@ -21,7 +21,7 @@ func TestAgentGitSSHEnv_UserValuePreservedVerbatim(t *testing.T) {
 		"SSH_AUTH_SOCK":   "/tmp/agent.sock",
 	})
 
-	got := AgentGitSSHEnv(getenv)
+	got := AgentGitSSHEnv(getenv, SSHAuthSock{Path: "/tmp/agent.sock"})
 	want := []string{"GIT_SSH_COMMAND=ssh -o IdentityAgent=none -F /custom/config"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
@@ -33,6 +33,16 @@ func TestAgentGitSSHEnv_UserValuePreservedVerbatim(t *testing.T) {
 	}
 }
 
+func TestAgentGitSSHEnv_DefaultDenyDoesNotPreserveHostOverride(t *testing.T) {
+	got := AgentGitSSHEnv(fakeGetenv(map[string]string{
+		"GIT_SSH_COMMAND": "ssh -F /host-controlled/config",
+		"SSH_AUTH_SOCK":   "/tmp/ambient.sock",
+	}), SSHAuthSock{})
+	if got != nil {
+		t.Fatalf("ambient GIT_SSH_COMMAND survived without delegation: %v", got)
+	}
+}
+
 func TestAgentGitSSHEnv_OptOut(t *testing.T) {
 	cases := []string{"1", "true", "yes", "TRUE"}
 	for _, v := range cases {
@@ -40,7 +50,7 @@ func TestAgentGitSSHEnv_OptOut(t *testing.T) {
 			"AGENTJAIL_NO_SSH_OVERRIDE": v,
 			"SSH_AUTH_SOCK":             "/tmp/agent.sock",
 		})
-		got := AgentGitSSHEnv(getenv)
+		got := AgentGitSSHEnv(getenv, SSHAuthSock{Path: "/tmp/agent.sock"})
 		if got != nil {
 			t.Errorf("AGENTJAIL_NO_SSH_OVERRIDE=%q: got %v, want nil", v, got)
 		}
@@ -54,7 +64,7 @@ func TestAgentGitSSHEnv_OptOutFalsyValuesDoNotOptOut(t *testing.T) {
 			"AGENTJAIL_NO_SSH_OVERRIDE": v,
 			"SSH_AUTH_SOCK":             "/tmp/agent.sock",
 		})
-		got := AgentGitSSHEnv(getenv)
+		got := AgentGitSSHEnv(getenv, SSHAuthSock{Path: "/tmp/agent.sock"})
 		if got == nil {
 			t.Errorf("AGENTJAIL_NO_SSH_OVERRIDE=%q should NOT opt out, got nil", v)
 		}
@@ -66,7 +76,7 @@ func TestAgentGitSSHEnv_NormalPath(t *testing.T) {
 		"SSH_AUTH_SOCK": "/tmp/agent.sock",
 	})
 
-	got := AgentGitSSHEnv(getenv)
+	got := AgentGitSSHEnv(getenv, SSHAuthSock{Path: "/tmp/agent.sock"})
 	want := []string{
 		"GIT_SSH_COMMAND=ssh -o IdentitiesOnly=no -o IdentityFile=none -o IdentityAgent='/tmp/agent.sock'",
 		"AGENTJAIL_SSH_OVERRIDE=1",
@@ -81,7 +91,7 @@ func TestAgentGitSSHEnv_SockWithSpaceIsSingleQuoted(t *testing.T) {
 		"SSH_AUTH_SOCK": "/tmp/my agent dir/agent.sock",
 	})
 
-	got := AgentGitSSHEnv(getenv)
+	got := AgentGitSSHEnv(getenv, SSHAuthSock{Path: "/tmp/my agent dir/agent.sock"})
 	wantCmd := "GIT_SSH_COMMAND=ssh -o IdentitiesOnly=no -o IdentityFile=none -o IdentityAgent='/tmp/my agent dir/agent.sock'"
 	if len(got) == 0 || got[0] != wantCmd {
 		t.Fatalf("got %v, want first element %q", got, wantCmd)
@@ -95,7 +105,7 @@ func TestAgentGitSSHEnv_EmptySockYieldsNil(t *testing.T) {
 	getenv := fakeGetenv(map[string]string{
 		"SSH_AUTH_SOCK": "",
 	})
-	got := AgentGitSSHEnv(getenv)
+	got := AgentGitSSHEnv(getenv, SSHAuthSock{})
 	if got != nil {
 		t.Fatalf("got %v, want nil", got)
 	}
@@ -111,7 +121,7 @@ func TestAgentGitSSHEnv_ControlCharSockYieldsNil(t *testing.T) {
 		getenv := fakeGetenv(map[string]string{
 			"SSH_AUTH_SOCK": sock,
 		})
-		got := AgentGitSSHEnv(getenv)
+		got := AgentGitSSHEnv(getenv, SSHAuthSock{})
 		if got != nil {
 			t.Errorf("sock %q: got %v, want nil (fail-closed on control char)", sock, got)
 		}
@@ -203,7 +213,7 @@ func TestAssembly_DedupeThenAppend(t *testing.T) {
 	// marker), per rule 1.
 	env = append(env, AgentGitSSHEnv(fakeGetenv(map[string]string{
 		"GIT_SSH_COMMAND": "ssh -F /passthrough/config",
-	}))...)
+	}), SSHAuthSock{Path: "/tmp/agent.sock"})...)
 
 	gitSSHCount := 0
 	markerCount := 0
@@ -254,7 +264,7 @@ func TestAssembly_SpoofedMarkerNeverSurvivesWhenOverrideInjected(t *testing.T) {
 	env = RemoveEnvKeys(env, "GIT_SSH_COMMAND", "AGENTJAIL_SSH_OVERRIDE")
 	env = append(env, AgentGitSSHEnv(fakeGetenv(map[string]string{
 		"SSH_AUTH_SOCK": "/tmp/agent.sock",
-	}))...)
+	}), SSHAuthSock{Path: "/tmp/agent.sock"})...)
 
 	markerCount := 0
 	for _, kv := range env {

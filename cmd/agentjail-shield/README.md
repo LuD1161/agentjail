@@ -52,12 +52,33 @@ agentjail-shield --profile-print -- claude
 # Disable the per-host proxy; revert to port-based filtering (no per-host enforcement)
 agentjail-shield --no-netproxy -- claude
 
+# Override the standing Git-over-SSH capability for this session
+agentjail-shield --git-ssh -- codex
+agentjail-shield --no-git-ssh -- codex
+
 # Pass flags through to the agent
 agentjail-shield -- claude --print "what's in ~/.ssh/?"
 ```
 
 The `--` separator is required; without it, agentjail-shield exits 64
 (`EX_USAGE`).
+
+### SSH agent delegation
+
+The built-in standard policy sets `capabilities.git_ssh: true`; the strict
+sample sets it to false. `--git-ssh` and `--no-git-ssh` override that standing
+choice for one launch. Private-key files remain unreadable. The launcher accepts only a clean,
+owned, live SSH-agent socket and rejects symlinks, non-sockets, and AgentJail
+control paths. This validation is not authorization or peer
+attestation: a successful delegation exposes **every** identity loaded in your
+agent to the session, and SSH-agent signatures have no AgentJail host or
+repository scope.
+
+The public `agentjail run -- <agent>` launcher can create a session-only native
+OpenSSH agent when an interactive user has local keys but no usable agent. Any
+passphrase prompt comes directly from `ssh-add`; AgentJail does not capture it.
+The shield still validates the resulting socket before use, and the agent exits
+with the coding session.
 
 ---
 
