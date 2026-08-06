@@ -8,9 +8,21 @@ import (
 	"testing"
 )
 
+// t.TempDir includes the test name and can exceed macOS's unix-socket limit.
+// Keep SSH-agent fixtures under a short OS temporary path.
+func shieldTestShortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ajssh")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func shieldTestSSHSocket(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "agent.sock")
+	path := filepath.Join(shieldTestShortSocketDir(t), "agent.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
@@ -64,7 +76,7 @@ func TestResolveGitSSHLaunchMode(t *testing.T) {
 }
 
 func TestSelectSSHAgentForwardingRejectsNonAgentListener(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "not-agent.sock")
+	path := filepath.Join(shieldTestShortSocketDir(t), "not-agent.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +108,7 @@ func TestSelectSSHAgentForwardingFailsClosed(t *testing.T) {
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	home := t.TempDir()
+	home := shieldTestShortSocketDir(t)
 	controlDir := filepath.Join(home, ".agentjail")
 	if err := os.Mkdir(controlDir, 0o700); err != nil {
 		t.Fatal(err)
