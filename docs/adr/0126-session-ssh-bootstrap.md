@@ -41,9 +41,9 @@ ssh-agent agentjail __ssh-bootstrap --identity <path> -- agentjail-shield ...
 
 The hidden bootstrap command invokes native `ssh-add` with the controlling
 terminal as stdin, stdout, and stderr. AgentJail does not pipe, capture, audit,
-or store the passphrase, key contents, or OpenSSH output. One compact line
-states that any following prompt belongs directly to OpenSSH and AgentJail
-never reads keys or passphrases. Discovered local identity paths are supplied directly to
+or store the passphrase, key contents, or OpenSSH output. The compact consent
+prompt identifies session-only OpenSSH and states that AgentJail never reads
+keys or passphrases. Discovered local identity paths are supplied directly to
 `ssh-add`; no shell or `eval` is used.
 
 Before that handoff, the launcher resolves Git's configured push remote for

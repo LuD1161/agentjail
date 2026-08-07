@@ -114,8 +114,8 @@ only the first; loading every listed identity is explicit. Without an SSH
 remote or config match, the same chooser uses the discovered local identities.
 AgentJail never maps a repository owner to a key.
 
-The compact setup notice identifies the selected key and states that any
-following prompt is owned directly by OpenSSH `ssh-add`; AgentJail does not
+The compact consent prompt identifies the selected key and session-only
+OpenSSH `ssh-add`; it states that AgentJail does not
 read the passphrase or private key. Routine launch details stay quiet, while
 sandbox readiness and the broad SSH-signing delegation warning remain visible.
 The agent terminates with the coding session. Noninteractive launches never

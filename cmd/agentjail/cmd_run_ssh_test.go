@@ -82,7 +82,7 @@ func TestPromptSSHBootstrapDefaultsYes(t *testing.T) {
 			if got && !reflect.DeepEqual(paths, selection.Paths) {
 				t.Fatalf("selected paths = %v, want %v", paths, selection.Paths)
 			}
-			wantPrompt := "Git SSH: load ~/.ssh/id_work into a session-only agent? [Y/n] "
+			wantPrompt := "Git SSH: load ~/.ssh/id_work into session-only OpenSSH? AgentJail never reads keys/passphrases. [Y/n] "
 			if output.String() != wantPrompt {
 				t.Fatalf("prompt = %q, want %q", output.String(), wantPrompt)
 			}
@@ -211,14 +211,8 @@ func TestCompleteSSHBootstrapUsesTTYAndPreservesCommand(t *testing.T) {
 	if execPath != args[0] || !reflect.DeepEqual(execArgs, args) {
 		t.Fatalf("exec = %q %v, want %q %v", execPath, execArgs, args[0], args)
 	}
-	message := tty.String()
-	for _, want := range []string{"OpenSSH will prompt directly", "AgentJail never reads keys or passphrases"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("bootstrap message missing %q: %q", want, message)
-		}
-	}
-	if lines := strings.Count(strings.TrimSpace(message), "\n") + 1; lines != 1 {
-		t.Fatalf("bootstrap message has %d lines, want 1: %q", lines, message)
+	if message := tty.String(); message != "" {
+		t.Fatalf("bootstrap repeated consent guidance: %q", message)
 	}
 }
 

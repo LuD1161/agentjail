@@ -140,7 +140,7 @@ func maybeBootstrapSSH(options runOptions, home string, shieldArgs []string) (bo
 func promptSSHBootstrap(tty io.ReadWriter, selection sshagent.IdentitySelection, home string) ([]string, bool) {
 	reader := bufio.NewReader(tty)
 	if len(selection.Paths) > 1 {
-		fmt.Fprintln(tty, "Git SSH: no usable agent; choose a key for a session-only agent.")
+		fmt.Fprintln(tty, "Git SSH: choose a key for session-only OpenSSH; AgentJail never reads keys/passphrases.")
 		if selection.Source == sshagent.IdentitySelectionSSHConfig {
 			fmt.Fprintf(tty, "  Multiple SSH identities match %s:\n", selection.Host)
 		} else if selection.Host != "" {
@@ -177,10 +177,10 @@ func promptSSHBootstrap(tty io.ReadWriter, selection sshagent.IdentitySelection,
 		}
 	}
 
-	prompt := "Git SSH: start a session-only agent and try default identities? [Y/n] "
+	prompt := "Git SSH: let session-only OpenSSH try default identities? AgentJail never reads keys/passphrases. [Y/n] "
 	if len(selection.Paths) == 1 {
 		identity := displaySSHIdentity(selection.Paths[0], home)
-		prompt = fmt.Sprintf("Git SSH: load %s into a session-only agent? [Y/n] ", identity)
+		prompt = fmt.Sprintf("Git SSH: load %s into session-only OpenSSH? AgentJail never reads keys/passphrases. [Y/n] ", identity)
 	}
 	fmt.Fprint(tty, prompt)
 	line, err := reader.ReadString('\n')
@@ -233,8 +233,6 @@ func parseSSHBootstrapArgs(args []string) (identities []string, command []string
 }
 
 func completeSSHBootstrap(args []string, tty io.ReadWriter, runAdd func(io.ReadWriter) error, execProcess func(string, []string, []string) error) int {
-	fmt.Fprintln(tty, "OpenSSH will prompt directly; AgentJail never reads keys or passphrases.")
-
 	if err := runAdd(tty); err != nil {
 		fmt.Fprintf(tty, "OpenSSH could not load a key: %v\n", err)
 		return 1
