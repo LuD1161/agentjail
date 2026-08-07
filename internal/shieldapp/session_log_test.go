@@ -47,6 +47,13 @@ func TestOpenShieldSessionLog(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("mode = %o, want 600", got)
 	}
+	dirInfo, err := os.Stat(session.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("directory mode = %o, want 700", got)
+	}
 }
 
 func TestOpenShieldSessionLogVerboseMirrorsStderr(t *testing.T) {

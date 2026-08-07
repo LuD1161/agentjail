@@ -24,6 +24,9 @@ func openShieldSessionLog(stateDir string, now time.Time, pid int, verbose bool,
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("create log directory: %w", err)
 	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("secure log directory: %w", err)
+	}
 	name := fmt.Sprintf("shield-%s-%d.log", now.UTC().Format("20060102T150405.000000000Z"), pid)
 	path := filepath.Join(dir, name)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
