@@ -83,6 +83,11 @@ fixing it.
 **Adopt the SPA.** React + shadcn/ui + TanStack (Table, Query) + Vite is the
 frontend of the local UI. Merge `rescue/burp-ui-2026-07-05` forward.
 
+The macOS shield restores the rescue branch's best-effort UI auto-start and the
+status line links to the shared loopback address while it is reachable. The
+address lives in `internal/localui`; the CLI, shield, and status line do not
+maintain separate literals.
+
 This is an explicit, named deviation from the `AGENTS.md` **Avoid: frontend
 frameworks** rule, granted for `cmd/agentjail/ui/frontend/` and nowhere else.
 The rule stands everywhere else in the repo; a second frontend framework, or

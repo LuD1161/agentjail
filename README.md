@@ -261,6 +261,10 @@ The badge attests **both** enforcement layers ([ADR 0085](./docs/adr/0085-status
 
 The padlock only appears when both are live. When agentjail is uninstalled the badge disappears entirely.
 
+On macOS, a shielded launch also starts the loopback web UI on demand. While it
+is reachable, the status line includes a clickable `📊 UI` link to
+`http://127.0.0.1:9101`; UI startup is best-effort and never blocks the agent.
+
 Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the persistent AgentJail badge. Instead, AgentJail's `SessionStart` and `Stop` hooks display one of `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive`; `agentjail status` and `agentjail doctor` remain available for an on-demand check.
 
 When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. For any Bash `ask`, including a user-authored custom policy, AgentJail prints the redacted effective command immediately before Codex's native prompt, while the broker command inside the prompt carries only `--operation shell-command` and an opaque challenge. This does not re-enable sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md)).
@@ -327,6 +331,10 @@ Requires Go 1.22+.
 ```sh
 agentjail ui
 ```
+
+The server listens on `127.0.0.1:9101` by default. macOS shield launches start
+it automatically when needed; the explicit command remains available on every
+platform and for custom `--addr` settings.
 
 Opens a loopback-only viewer at `http://127.0.0.1:9101` backed by
 `~/.agentjail/agentjail.db`. It supports session replay, action/tool/rule/session

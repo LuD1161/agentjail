@@ -113,6 +113,10 @@ const (
 	// never a token, never the gateway nonce.
 	GatewayProviderRouted = "gateway.provider_routed"
 	GatewayStartFailed    = "gateway.start_failed"
+	// Local UI lifecycle initiated by the shield. Detail contains only the
+	// shared loopback address and a fixed failure class, never filesystem paths.
+	LocalUIStarted        = "local_ui.started"
+	LocalUIStartFailed    = "local_ui.start_failed"
 	CodexApprovalMinted   = "codex_approval.minted"
 	CodexPromptObserved   = "codex_approval.prompt_observed"
 	CodexApprovalRedeemed = "codex_approval.redeemed"

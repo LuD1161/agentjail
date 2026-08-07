@@ -199,3 +199,27 @@ func TestRunChainedStatuslineFailureIsSilent(t *testing.T) {
 		t.Fatalf("failed chained status line returned %q", got)
 	}
 }
+
+func TestLocalUILink(t *testing.T) {
+	tests := []struct {
+		name      string
+		shielded  bool
+		reachable bool
+		wantLink  bool
+	}{
+		{name: "shielded and reachable", shielded: true, reachable: true, wantLink: true},
+		{name: "shielded but unavailable", shielded: true},
+		{name: "unshielded", reachable: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := localUILink(tt.shielded, func() bool { return tt.reachable })
+			if (got != "") != tt.wantLink {
+				t.Fatalf("link = %q, wantLink %v", got, tt.wantLink)
+			}
+			if tt.wantLink && (!strings.Contains(got, "📊 UI") || !strings.Contains(got, "127.0.0.1:9101")) {
+				t.Fatalf("link = %q, missing label or address", got)
+			}
+		})
+	}
+}

@@ -751,6 +751,9 @@ func isControlSocketPath(p, home string) bool {
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
 func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, startTime time.Time, emitter audit.Emitter) {
+	if !profilePrint {
+		ensureLocalUI(context.Background(), emitter)
+	}
 	// --tunnel dispatches entirely to the NETransparentProxyProvider path
 	// (tunnel_shield_darwin.go). profilePrint is handled specially: rather
 	// than stand up the sysext + gateway just to print a profile, print the

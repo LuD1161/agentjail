@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/localui"
 	"github.com/LuD1161/agentjail/internal/wire"
 	"github.com/spf13/cobra"
 )
@@ -134,6 +135,7 @@ const (
 // Hang guard, not a budget: only bites on a wedged daemon.
 // See ADR 0085-statusline-attests-daemon.
 const statuslineProbeTimeout = 50 * time.Millisecond
+const statuslineUIProbeTimeout = 50 * time.Millisecond
 
 // Must ping, not dial: connect() succeeds against a wedged daemon, so a dial
 // badges one that enforces nothing as secured.
@@ -184,8 +186,20 @@ func shieldBadge() string {
 	}).badge()
 }
 
+func localUILink(shielded bool, reachable func() bool) string {
+	if !shielded || !reachable() {
+		return ""
+	}
+	return "\033]8;;" + localui.DefaultURL + "\033\\📊 UI\033]8;;\033\\"
+}
+
 func runStatusline(cmd *cobra.Command, args []string) {
 	parts := []string{shieldBadge()}
+	if link := localUILink(os.Getenv("AGENTJAIL_SHIELDED") == "1", func() bool {
+		return localui.Reachable(localui.DefaultAddr, statuslineUIProbeTimeout)
+	}); link != "" {
+		parts = append(parts, link)
+	}
 
 	chain := statuslineChain
 	if statuslineChainBase64 != "" {
