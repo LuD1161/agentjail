@@ -13,7 +13,17 @@ import (
 
 func testSSHAuthSocket(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "agent.sock")
+	// Keep the socket short and free of symlink components on macOS.
+	tempRoot, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp root: %v", err)
+	}
+	dir, err := os.MkdirTemp(tempRoot, "ajssh")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "agent.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
