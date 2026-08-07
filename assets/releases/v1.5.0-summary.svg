@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" fill="none">
+  <rect width="720" height="240" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <rect width="720" height="48" rx="12" fill="#161b22"/>
+  <rect y="12" width="720" height="36" fill="#161b22"/>
+  <circle cx="24" cy="24" r="6" fill="#3fb950"/>
+  <text x="44" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v1.5.0</text>
+  <text x="214" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Network visibility, without startup noise</text>
+
+  <rect x="20" y="60" width="216" height="160" rx="8" fill="#1c2128" stroke="#58a6ff44"/>
+  <text x="36" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#58a6ff">TUNNELED BY DEFAULT</text>
+  <text x="36" y="108" font-family="monospace" font-size="10" fill="#8b949e">opt-in PATH shims</text>
+  <text x="36" y="128" font-family="monospace" font-size="10" fill="#8b949e">Claude · Codex · Cursor</text>
+  <text x="36" y="148" font-family="monospace" font-size="10" fill="#8b949e">child args preserved</text>
+  <text x="36" y="178" font-family="monospace" font-size="10" fill="#f0f6fc">network policy visible</text>
+  <text x="36" y="204" font-family="monospace" font-size="10" fill="#6e7681">direct run stays explicit</text>
+
+  <rect x="252" y="60" width="216" height="160" rx="8" fill="#1c2128" stroke="#a371f744"/>
+  <text x="268" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#a371f7">QUIET, NOT SILENT</text>
+  <text x="268" y="108" font-family="monospace" font-size="10" fill="#8b949e">1–3 startup lines</text>
+  <text x="268" y="128" font-family="monospace" font-size="10" fill="#8b949e">private JSON diagnostics</text>
+  <text x="268" y="148" font-family="monospace" font-size="10" fill="#8b949e">--verbose when needed</text>
+  <text x="268" y="178" font-family="monospace" font-size="10" fill="#f0f6fc">warnings stay visible</text>
+  <text x="268" y="204" font-family="monospace" font-size="10" fill="#6e7681">10-session retention</text>
+
+  <rect x="484" y="60" width="216" height="160" rx="8" fill="#1c2128" stroke="#3fb95044"/>
+  <text x="500" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950">LOCAL UI + FIXES</text>
+  <text x="500" y="108" font-family="monospace" font-size="10" fill="#8b949e">macOS UI auto-start</text>
+  <text x="500" y="128" font-family="monospace" font-size="10" fill="#8b949e">status-line UI link</text>
+  <text x="500" y="148" font-family="monospace" font-size="10" fill="#8b949e">shared loopback address</text>
+  <text x="500" y="178" font-family="monospace" font-size="10" fill="#f0f6fc">Landlock file grants fixed</text>
+  <text x="500" y="204" font-family="monospace" font-size="10" fill="#6e7681">SSH boundary preserved</text>
+</svg>

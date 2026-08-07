@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v1.5.0** | Aug 6, 2026 | Opted-in PATH shims now launch through the transparent tunnel, macOS shielded sessions start and link the local UI, and routine startup stays compact while private session logs retain diagnostics. Linux Landlock config-file grants are corrected. |
 | **v1.4.1** | Aug 6, 2026 | Cost reports recover oversized transcripts and price current models, cache TTLs, long contexts, forks, and model changes accurately. The terminal dashboard adds complete token breakdowns and color controls, while Git SSH gets more consistent session-agent bootstrap and cleaner remote-aware identity selection. |
 | **v1.4.0** | Jul 31, 2026 | Local cost analytics and the SPA Cost dashboard summarize Claude Code, Codex, and OpenCode usage with bundled Gryph pricing, token efficiency, and budgets. A polished doctor report detects CLI/daemon version skew, while Linux updates now restart, attest, and roll back the supervised daemon transactionally. |
 | **v1.3.0** | Jul 31, 2026 | Codex 0.146 natively approves every effective Bash `ask` — including user-authored custom rules — through a one-use, fail-closed `shell-command` broker; non-Bash asks remain fail-closed. Git remote updates are classified from parsed executable arguments, including `git -C`, and bypass mode preserves the Bash approval boundary while other approval categories stay rejected. |

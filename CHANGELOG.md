@@ -4,6 +4,54 @@
 
 ## Unreleased
 
+## v1.5.0 - 2026-08-06
+
+![v1.5.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.5.0-summary.svg)
+
+## TL;DR
+
+- **Route ordinary PATH-shim launches through the transparent tunnel** so opted-in Claude Code, Codex, and Cursor sessions get network visibility by default.
+- **Start the macOS local UI with shielded sessions** and surface its loopback link in the persistent status line.
+- **Keep routine startup to one to three useful lines** while retaining private per-session JSON diagnostics and an explicit `--verbose` troubleshooting mode.
+- **Preserve SSH and credential boundaries** while fixing Linux Landlock grants for legitimate regular files under `~/.config`.
+
+### Added
+
+- **Private shield session logs**: each launch records structured diagnostics in
+  `~/.agentjail/logs/`, keeps the newest 10 files, and accepts
+  `agentjail run --verbose -- <agent>` to mirror them to stderr.
+- **macOS UI auto-start**: shielded sessions start the loopback UI on demand and
+  expose a clickable `📊 UI` link in the persistent status line when reachable.
+
+### Changed
+
+- **Tunneled PATH-shim launches**: the opt-in wrappers now enter
+  `agentjail run --tunnel -- <agent>`, preserving child arguments and launch
+  policy while enabling transparent network visibility by default.
+- **Compact startup**: routine launch details move out of the interactive
+  terminal. Sandbox readiness, required consent, enforcement failures, and the
+  broad SSH-signing warning remain visible.
+- **Concise SSH bootstrap**: the selected identity, session-only OpenSSH scope,
+  and passphrase privacy statement share one consent prompt. Launch-time Codex
+  hook reassertion no longer repeats install-only trust guidance.
+
+### Fixed
+
+- **Linux config-file grants**: regular files directly under `~/.config` receive
+  file-scoped Landlock rights instead of invalid directory-only rights, removing
+  noisy `EINVAL` skips and restoring intended read access.
+- **Shared local UI address**: UI launch and status-line rendering use one typed
+  loopback address contract instead of duplicating the endpoint.
+
+### Security
+
+- **Private diagnostic storage**: shield log directories are forced to mode
+  `0700` and log files to `0600`; retention and log-open outcomes are audited
+  without recording file paths.
+- **Important warnings stay interactive**: quiet mode does not suppress
+  malformed-policy failures, sandbox downgrades, SSH delegation scope, or other
+  actionable security notices.
+
 ## v1.4.1 - 2026-08-06
 
 ![v1.4.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.4.1-summary.svg)
