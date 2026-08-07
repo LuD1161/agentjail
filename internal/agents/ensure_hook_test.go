@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -121,5 +122,31 @@ func TestEnsureHookRegistered_CodexRestoresRemovedHook(t *testing.T) {
 	status := (Codex{}).Status(env)
 	if !status.Installed {
 		t.Errorf("Codex Status.Installed = false after EnsureHookRegistered, want true")
+	}
+}
+
+func TestEnsureHookRegistered_CodexDoesNotPrintInstallGuidance(t *testing.T) {
+	home := t.TempDir()
+	env := Env{Home: home, HookBin: filepath.Join(home, ".agentjail", "bin", "agentjail-hook")}
+
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	os.Stdout = writePipe
+	_, ensureErr := EnsureHookRegistered(Codex{}, env)
+	_ = writePipe.Close()
+	os.Stdout = originalStdout
+	output, readErr := io.ReadAll(readPipe)
+	_ = readPipe.Close()
+	if ensureErr != nil {
+		t.Fatal(ensureErr)
+	}
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(output) != 0 {
+		t.Fatalf("launch-time Codex hook reassertion printed setup guidance: %q", output)
 	}
 }

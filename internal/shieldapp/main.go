@@ -21,7 +21,7 @@
 //
 // Usage:
 //
-//	agentjail-shield [--policy=PATH] [--profile-print] -- <agent-cmd> [args...]
+//	agentjail-shield [--policy=PATH] [--profile-print] [--verbose] -- <agent-cmd> [args...]
 //
 // See also: docs/adr/0001-os-sandbox-enforcement-layer.md
 package shieldapp
@@ -32,6 +32,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,8 +109,9 @@ func Run(args []string) int {
 	noGitSSH := fs.Bool("no-git-ssh", false, "disable automatic Git-over-SSH capability for this launch")
 	auditJSON := fs.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := fs.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
+	verbose := fs.Bool("verbose", false, "also mirror structured shield logs to stderr")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--no-mitm] [--git-ssh|--no-git-ssh] [--audit-json=PATH] [--audit-strict] -- <agent-cmd> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--no-mitm] [--git-ssh|--no-git-ssh] [--audit-json=PATH] [--audit-strict] [--verbose] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml (default: ~/.agentjail/policy.yaml)")
 		fmt.Fprintln(os.Stderr, "  --profile-print     print the generated sandbox profile to stderr and exit 0")
@@ -125,6 +127,7 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "  --no-git-ssh       disable policy-default Git over SSH for this launch")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
 		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings, or if IMDS is reachable in port-only mode")
+		fmt.Fprintln(os.Stderr, "  --verbose           also mirror structured shield logs to stderr (default: ~/.agentjail/logs/ only)")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Wraps the coding agent in the OS-native sandbox before exec.")
 		fmt.Fprintln(os.Stderr, "Requires a '--' separator between shield flags and the agent command.")
@@ -143,6 +146,22 @@ func Run(args []string) int {
 	}
 	startTime := time.Now()
 	ctx := context.Background()
+	stateDir, stateDirErr := shieldStateDir()
+
+	// Open before sandbox activation so every tunnel component inherits the
+	// private structured sink. See ADR 0128-shield-session-logs.
+	var sessionLog *shieldSessionLog
+	var sessionLogErr error
+	if stateDirErr == nil {
+		var logger *slog.Logger
+		sessionLog, logger, sessionLogErr = openShieldSessionLog(stateDir, startTime, os.Getpid(), *verbose, os.Stderr)
+		if sessionLogErr != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield: could not open session log: %v\n", sessionLogErr)
+		} else {
+			defer sessionLog.Close()
+			slog.SetDefault(logger)
+		}
+	}
 
 	// Open the audit emitter BEFORE sandbox activation. After Landlock/
 	// Seatbelt is applied, new file opens may be restricted. Pre-opened
@@ -152,9 +171,8 @@ func Run(args []string) int {
 	// stderr is still the user's terminal at this point, and the marker is
 	// what doctor can read later. See ADR 0089-record-shield-launches.
 	var emitter audit.Emitter = audit.NopEmitter{}
-	stateDir, err := shieldStateDir()
-	if err != nil {
-		fmt.Fprint(os.Stderr, unrecordableWarning("~/.agentjail/agentjail.db", err))
+	if stateDirErr != nil {
+		fmt.Fprint(os.Stderr, unrecordableWarning("~/.agentjail/agentjail.db", stateDirErr))
 	} else {
 		st, openErr := openShieldAudit(stateDir)
 		if openErr != nil {
@@ -163,6 +181,40 @@ func Run(args []string) int {
 		} else {
 			emitter = st
 			defer st.Close()
+		}
+	}
+	if sessionLogErr != nil {
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ShieldLogOpenFailed,
+			Entity:    "shield_session",
+			Detail:    map[string]string{"reason": "open_failed"},
+			Actor:     "shield",
+		})
+	} else if sessionLog != nil {
+		slog.Info("shield session log opened", "path", sessionLog.path, "verbose", *verbose)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.ShieldLogOpened,
+			Entity:    "shield_session",
+			Detail:    map[string]string{"verbose": fmt.Sprintf("%t", *verbose)},
+			Actor:     "shield",
+		})
+		removed, pruneErr := pruneOldShieldLogs(sessionLog.dir, shieldLogKeep, sessionLog.path)
+		if pruneErr != nil {
+			slog.Warn("old shield logs could not be pruned", "err", pruneErr)
+			_ = emitter.Emit(ctx, audit.Event{
+				EventType: audit.ShieldLogPruneFailed,
+				Entity:    "shield_logs",
+				Detail:    map[string]string{"reason": "remove_failed"},
+				Actor:     "shield",
+			})
+		} else if removed > 0 {
+			slog.Info("old shield logs pruned", "removed", removed)
+			_ = emitter.Emit(ctx, audit.Event{
+				EventType: audit.ShieldLogsPruned,
+				Entity:    "shield_logs",
+				Detail:    map[string]string{"removed": fmt.Sprintf("%d", removed)},
+				Actor:     "shield",
+			})
 		}
 	}
 	// The '--' separator is required.
@@ -208,10 +260,7 @@ func Run(args []string) int {
 		}
 	}
 	if sshAuthSock.Path != "" {
-		fmt.Fprintln(os.Stderr, "  ⚠ SSH agent delegated")
-		fmt.Fprintln(os.Stderr, "    Every loaded identity is available inside this session.")
-		fmt.Fprintln(os.Stderr, "    Signatures are not restricted by host or repository.")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "⚠ agentjail: SSH agent delegated — all loaded identities can sign without host/repository restrictions")
 	}
 
 	// --no-provider-gateway is a per-launch override that beats any config

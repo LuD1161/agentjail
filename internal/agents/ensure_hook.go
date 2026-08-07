@@ -1,5 +1,12 @@
 package agents
 
+// hookReassertInstaller is the launch-time installation seam. Implementors
+// may suppress setup guidance that is useful during install but noisy on every
+// session start.
+type hookReassertInstaller interface {
+	installForHookReassert(env Env) error
+}
+
 // EnsureHookRegistered re-asserts an agent's agentjail hook registration,
 // restoring it if it is missing or was altered. It exists for callers (e.g.
 // agentjail-shield) that need to guarantee the hook is wired at a specific
@@ -23,7 +30,12 @@ package agents
 // so any current or future Agent implementation gets it for free.
 func EnsureHookRegistered(a Agent, env Env) (changed bool, err error) {
 	before := a.Status(env)
-	if err := a.Install(env); err != nil {
+	if installer, ok := a.(hookReassertInstaller); ok {
+		err = installer.installForHookReassert(env)
+	} else {
+		err = a.Install(env)
+	}
+	if err != nil {
 		return false, err
 	}
 	return !before.Installed, nil

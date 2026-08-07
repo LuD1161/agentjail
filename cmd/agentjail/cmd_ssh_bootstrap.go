@@ -139,14 +139,8 @@ func maybeBootstrapSSH(options runOptions, home string, shieldArgs []string) (bo
 
 func promptSSHBootstrap(tty io.ReadWriter, selection sshagent.IdentitySelection, home string) ([]string, bool) {
 	reader := bufio.NewReader(tty)
-	fmt.Fprintln(tty)
-	fmt.Fprintln(tty, "  SSH access")
-	if len(selection.Paths) == 0 {
-		fmt.Fprintln(tty, "  No usable SSH agent was found.")
-	} else {
-		fmt.Fprintln(tty, "  No usable agent was found; local SSH keys are available.")
-	}
 	if len(selection.Paths) > 1 {
+		fmt.Fprintln(tty, "Git SSH: no usable agent; choose a key for a session-only agent.")
 		if selection.Source == sshagent.IdentitySelectionSSHConfig {
 			fmt.Fprintf(tty, "  Multiple SSH identities match %s:\n", selection.Host)
 		} else if selection.Host != "" {
@@ -183,17 +177,10 @@ func promptSSHBootstrap(tty io.ReadWriter, selection sshagent.IdentitySelection,
 		}
 	}
 
+	prompt := "Git SSH: start a session-only agent and try default identities? [Y/n] "
 	if len(selection.Paths) == 1 {
 		identity := displaySSHIdentity(selection.Paths[0], home)
-		if selection.Source == sshagent.IdentitySelectionSSHConfig {
-			fmt.Fprintf(tty, "  SSH config for %s selects %s.\n", selection.Host, identity)
-		} else {
-			fmt.Fprintf(tty, "  Identity: %s\n", identity)
-		}
-	}
-	prompt := "  Start a session-only OpenSSH agent and try its default identities? [Y/n] "
-	if len(selection.Paths) == 1 {
-		prompt = "  Start a session-only OpenSSH agent and load it? [Y/n] "
+		prompt = fmt.Sprintf("Git SSH: load %s into a session-only agent? [Y/n] ", identity)
 	}
 	fmt.Fprint(tty, prompt)
 	line, err := reader.ReadString('\n')
@@ -246,21 +233,12 @@ func parseSSHBootstrapArgs(args []string) (identities []string, command []string
 }
 
 func completeSSHBootstrap(args []string, tty io.ReadWriter, runAdd func(io.ReadWriter) error, execProcess func(string, []string, []string) error) int {
-	fmt.Fprintln(tty)
-	fmt.Fprintln(tty, "  Loading SSH keys")
-	fmt.Fprintln(tty, "  Passphrase prompts below come from OpenSSH (ssh-add), not AgentJail.")
-	fmt.Fprintln(tty, "  AgentJail does not read, capture, log, or store passphrases or private keys.")
-	fmt.Fprintln(tty)
+	fmt.Fprintln(tty, "OpenSSH will prompt directly; AgentJail never reads keys or passphrases.")
 
 	if err := runAdd(tty); err != nil {
 		fmt.Fprintf(tty, "OpenSSH could not load a key: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(tty)
-	fmt.Fprintln(tty, "  ✓ SSH ready for this session")
-	fmt.Fprintln(tty, "    Private-key files remain blocked inside the sandbox.")
-	fmt.Fprintln(tty)
-
 	if err := execProcess(args[0], args, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail: cannot launch shield after SSH setup: %v\n", err)
 		return 1

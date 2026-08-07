@@ -879,7 +879,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	// vars + granted secrets.
 	env := buildBaseEnv(os.Environ(), cfg, sshAuthSock)
 	if sshOverrideInjected(env) {
-		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
+		slog.Info("injected agent-backed Git SSH override")
 	}
 	env = AppendShieldedEnv(env, Sandboxed)
 	if withNetproxy {
@@ -1007,7 +1007,7 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 	// than the sandboxed path does.
 	env := buildBaseEnv(os.Environ(), cfg, sshAuthSock)
 	if sshOverrideInjected(env) {
-		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
+		slog.Info("injected agent-backed Git SSH override")
 	}
 	env = AppendShieldedEnv(env, NotSandboxed)
 	if withNetproxy {

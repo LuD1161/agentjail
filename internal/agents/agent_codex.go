@@ -55,6 +55,16 @@ func (Codex) Detect(env Env) Detection {
 //
 // The operation is idempotent. All file mutations go through writeFileAtomic.
 func (Codex) Install(env Env) error {
+	return installCodex(env, true)
+}
+
+// installForHookReassert keeps the launch-time integrity check silent. The
+// interactive trust reminder belongs to explicit installation, not startup.
+func (Codex) installForHookReassert(env Env) error {
+	return installCodex(env, false)
+}
+
+func installCodex(env Env, showTrustInstruction bool) error {
 	if err := os.MkdirAll(filepath.Join(env.Home, ".codex"), 0o700); err != nil {
 		return fmt.Errorf("install codex: mkdir ~/.codex: %w", err)
 	}
@@ -72,8 +82,11 @@ func (Codex) Install(env Env) error {
 		return fmt.Errorf("install codex: config.toml: %w", err)
 	}
 
-	// Step 3 — trust cannot be persisted; print manual instruction.
-	printCodexTrustInstruction(codexHookCommand(env))
+	// Step 3 — trust cannot be persisted; explicit installs show the manual
+	// instruction while launch-time reassertion stays quiet.
+	if showTrustInstruction {
+		printCodexTrustInstruction(codexHookCommand(env))
+	}
 
 	return nil
 }

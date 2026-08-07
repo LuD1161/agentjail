@@ -244,6 +244,13 @@ agentjail replay --list               # list recorded sessions
 agentjail replay -session 625d86f1    # interactive TUI replay
 ```
 
+Each shielded launch writes structured JSON diagnostics to a private
+`~/.agentjail/logs/shield-*.log` file and retains the newest 10 files. Use the
+canonical `agentjail run --verbose -- <agent>` form to mirror that stream to
+stderr while troubleshooting; arguments after the second `--` still belong to
+the agent unchanged. Normal startup stays within one to three lines: sandbox
+readiness plus any actionable security warning or prompt.
+
 **Is this session actually protected?** In Claude Code and Cursor CLI, the status line tells you, for the whole life of the session:
 
 ```

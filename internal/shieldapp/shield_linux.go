@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -163,11 +164,6 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	_ = ipv6Mode
 	ctx := context.Background()
 	noColor := os.Getenv("NO_COLOR") != ""
-	if noColor {
-		fmt.Fprintln(os.Stderr, "  agentjail — setting up sandbox...")
-	} else {
-		fmt.Fprintln(os.Stderr, "  \033[38;5;208magentjail\033[0m — setting up sandbox...")
-	}
 
 	// Tunnel mode: try to start the unprivileged-userns transparent tunnel
 	// (ADR 0079). On success the agent runs inside the namespace and its
@@ -351,7 +347,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	gitSSHEnv := sandbox.AgentGitSSHEnv(os.Getenv, sshAuthSock)
 	env = append(env, gitSSHEnv...)
 	if sshOverrideInjected(gitSSHEnv) {
-		fmt.Fprintln(os.Stderr, "agentjail-shield INFO: injected agent-backed GIT_SSH_COMMAND (pinned IdentityFile blind spot workaround; set AGENTJAIL_NO_SSH_OVERRIDE=1 to opt out)")
+		slog.Info("injected agent-backed Git SSH override")
 	}
 	if netproxyReady {
 		env = append(env, proxyEnvVars(netproxyDefaultAddr, sessionToken)...)
@@ -1177,7 +1173,7 @@ func allowConfigDirExcludingCredentials(configDir string, allowPath func(string,
 	}
 	for _, e := range entries {
 		if denied[e.Name()] {
-			fmt.Fprintf(os.Stderr, "agentjail-shield: denying read access to %s (credential store)\n", filepath.Join(configDir, e.Name()))
+			slog.Info("credential store excluded from sandbox read grants", "path", filepath.Join(configDir, e.Name()))
 			continue
 		}
 		p := filepath.Join(configDir, e.Name())

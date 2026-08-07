@@ -97,10 +97,9 @@ if ! printf '\n' | script -qefc "$phase1_cmd" /dev/null >"$phase1_log" 2>&1; the
 	sed -n '1,200p' "$phase1_log"
 	fail "guided shield launch"
 fi
-grep -q "come from OpenSSH (ssh-add), not AgentJail" "$phase1_log" || fail "missing OpenSSH ownership notice"
-grep -q "SSH ready for this session" "$phase1_log" || fail "missing SSH readiness notice"
+grep -q "OpenSSH will prompt directly" "$phase1_log" || fail "missing OpenSSH ownership notice"
 grep -q "SSH agent delegated" "$phase1_log" || fail "missing delegation warning"
-grep -q "does not read, capture, log, or store" "$phase1_log" || fail "missing passphrase privacy notice"
+grep -q "AgentJail never reads keys or passphrases" "$phase1_log" || fail "missing passphrase privacy notice"
 if ! grep -q "Multiple SSH identities match github-work" "$phase1_log"; then
 	sed -n '1,200p' "$phase1_log"
 	fail "missing configured identity chooser"

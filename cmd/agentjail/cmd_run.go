@@ -22,6 +22,7 @@ that prevent access to credentials, host processes, and unrestricted network.
 
 Examples:
   agentjail run -- claude
+  agentjail run --verbose -- claude
   agentjail run --git-ssh -- codex
   agentjail run --no-git-ssh -- claude
   agentjail run -- codex --approval-mode full-auto
@@ -94,6 +95,10 @@ func runRunCmd(args []string) int {
 	}
 	if options.noSandbox && (options.gitSSH || options.noGitSSH) {
 		fmt.Fprintln(os.Stderr, "agentjail run: Git-over-SSH launch controls require the OS sandbox; remove --no-sandbox")
+		return 2
+	}
+	if options.noSandbox && options.verbose {
+		fmt.Fprintln(os.Stderr, "agentjail run: --verbose controls shield logs and cannot be combined with --no-sandbox")
 		return 2
 	}
 
@@ -178,10 +183,12 @@ func runRunCmd(args []string) int {
 	if options.noGitSSH {
 		shieldArgs = append(shieldArgs, "--no-git-ssh")
 	}
+	if options.verbose {
+		shieldArgs = append(shieldArgs, "--verbose")
+	}
 	shieldArgs = append(shieldArgs, "--", agentPath)
 	shieldArgs = append(shieldArgs, args[1:]...)
 
-	fmt.Fprintf(os.Stderr, "agentjail: starting shielded session for %s\n", agentName)
 	if handled, code := maybeBootstrapSSH(options, home, shieldArgs); handled {
 		return code
 	}
@@ -199,11 +206,12 @@ type runOptions struct {
 	noSandbox  bool
 	gitSSH     bool
 	noGitSSH   bool
+	verbose    bool
 }
 
 func isRunLaunchFlag(arg string) bool {
 	switch arg {
-	case "--tunnel", "--no-sandbox", "--git-ssh", "--no-git-ssh":
+	case "--tunnel", "--no-sandbox", "--git-ssh", "--no-git-ssh", "--verbose":
 		return true
 	default:
 		return false
@@ -224,6 +232,8 @@ func parseRunOptions(args []string) (runOptions, []string) {
 			options.gitSSH = true
 		case "--no-git-ssh":
 			options.noGitSSH = true
+		case "--verbose":
+			options.verbose = true
 		default:
 			return options, args
 		}
