@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/LuD1161/agentjail/internal/localui"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +63,7 @@ func init() {
 	documentStringFlag(tryCmd, "write", "", "evaluate a Write event on this path")
 	documentBoolFlag(tryCmd, "json", "emit JSON (JSONL in interactive mode)")
 
-	documentStringFlag(uiCmd, "addr", "127.0.0.1:9101", "listen address")
+	documentStringFlag(uiCmd, "addr", localui.DefaultAddr, "listen address")
 	documentStringFlag(uiCmd, "db", dbPath, "path to SQLite event store")
 	documentStringFlag(uiCmd, "log", logPath, "path to daemon log")
 	documentBoolFlag(uiCmd, "edit-policy", "allow policy enable/disable controls")

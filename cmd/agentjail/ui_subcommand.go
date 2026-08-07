@@ -13,12 +13,13 @@ import (
 
 	"github.com/LuD1161/agentjail/cmd/agentjail/ui"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/localui"
 )
 
 // runUI is the entry point for `agentjail ui`. Returns an exit code.
 func runUI(args []string) int {
 	// Parse flags manually (no new deps).
-	addr := "127.0.0.1:9101"
+	addr := localui.DefaultAddr
 	home, _ := os.UserHomeDir()
 	logPath := filepath.Join(home, ".agentjail", "daemon.log")
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
@@ -96,9 +97,9 @@ func runUI(args []string) int {
 }
 
 func printUIUsage() {
-	fmt.Fprintln(os.Stderr, "usage: agentjail ui [--addr 127.0.0.1:9101] [--db PATH] [--log PATH] [--edit-policy] [--insecure-bind]")
+	fmt.Fprintf(os.Stderr, "usage: agentjail ui [--addr %s] [--db PATH] [--log PATH] [--edit-policy] [--insecure-bind]\n", localui.DefaultAddr)
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "  --addr ADDR        listen address (default: 127.0.0.1:9101)")
+	fmt.Fprintf(os.Stderr, "  --addr ADDR        listen address (default: %s)\n", localui.DefaultAddr)
 	fmt.Fprintln(os.Stderr, "  --db PATH          path to SQLite event store (default: ~/.agentjail/agentjail.db)")
 	fmt.Fprintln(os.Stderr, "  --log PATH         path to daemon.log (default: ~/.agentjail/daemon.log)")
 	fmt.Fprintln(os.Stderr, "  --edit-policy      allow policy enable/disable controls (default: read-only)")
