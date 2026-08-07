@@ -121,14 +121,25 @@ if ! warm_daemon; then fail "Daemon never returned a live decision (stayed cold)
 
 # --- Phase 3: Hook decisions ---
 run_hook() {
-  local json="$1"
+  local json="$1" attempt=0
   local stderr_f; stderr_f=$(mktemp)
+  local stdout_f; stdout_f=$(mktemp)
   local json_f; json_f=$(mktemp)
   printf '%s' "$json" > "$json_f"
-  HOOK_EXIT=0
-  AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail-hook" < "$json_f" 2>"$stderr_f" || HOOK_EXIT=$?
+  # Retry only explicit transient unavailability; a persistent outage still
+  # reaches the assertion and fails. See docs/GOTCHAS.md #31.
+  while true; do
+    HOOK_EXIT=0
+    AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail-hook" < "$json_f" >"$stdout_f" 2>"$stderr_f" || HOOK_EXIT=$?
+    if ! grep -qi "daemon unreachable" "$stdout_f" "$stderr_f" || [ "$attempt" -ge 4 ]; then
+      break
+    fi
+    sleep 0.1
+    attempt=$((attempt+1))
+  done
+  cat "$stdout_f"
   HOOK_ERR=$(cat "$stderr_f")
-  rm -f "$stderr_f" "$json_f"
+  rm -f "$stderr_f" "$stdout_f" "$json_f"
 }
 
 # Use the pre-isolation HOME: the isolated $HOME lives under /tmp (a policy
