@@ -43,7 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v1.4.1** | Aug 6, 2026 | Cost reports recover oversized transcripts and price current models, cache TTLs, long contexts, forks, and model changes accurately. The terminal dashboard adds complete token breakdowns and color controls, while policy-controlled Git SSH uses a session-only agent and selects one remote-matched identity without exposing private-key files. |
+| **v1.4.1** | Aug 6, 2026 | Cost reports recover oversized transcripts and price current models, cache TTLs, long contexts, forks, and model changes accurately. The terminal dashboard adds complete token breakdowns and color controls, while Git SSH gets more consistent session-agent bootstrap and cleaner remote-aware identity selection. |
 | **v1.4.0** | Jul 31, 2026 | Local cost analytics and the SPA Cost dashboard summarize Claude Code, Codex, and OpenCode usage with bundled Gryph pricing, token efficiency, and budgets. A polished doctor report detects CLI/daemon version skew, while Linux updates now restart, attest, and roll back the supervised daemon transactionally. |
 | **v1.3.0** | Jul 31, 2026 | Codex 0.146 natively approves every effective Bash `ask` — including user-authored custom rules — through a one-use, fail-closed `shell-command` broker; non-Bash asks remain fail-closed. Git remote updates are classified from parsed executable arguments, including `git -C`, and bypass mode preserves the Bash approval boundary while other approval categories stay rejected. |
 | **v1.2.0** | Jul 29, 2026 | `agentjail stats` summarizes final outcomes, policy denies, per-agent activity, latency, and recording gaps. Manual and daemon updates now restore the complete opt-in PATH shim set for Claude Code, Codex, and Cursor. |
@@ -285,7 +285,7 @@ agentjail install --all               # non-interactive, install all detected
 agentjail install --with-path-shim    # wrap `claude`, `codex`, and Cursor's `agent`
 ```
 
-By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands enter that same agent-neutral launch path without a special command. Policy defaults, including session SSH-agent setup, therefore behave identically for `codex resume` and `agentjail run -- codex resume`.
+By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands enter the canonical `agentjail run --tunnel -- <agent>` launch path without a special command. Child arguments keep the same boundary and policy defaults, including session SSH-agent setup, behave identically; the shim adds network visibility without bypassing `agentjail run`.
 
 It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstall, `agentjail update`, and daemon auto-update all restore the complete shim set rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 
@@ -598,9 +598,10 @@ agentjail policy list
 
 ## Network visibility
 
-By default the shield filters network access by port only. Pass `--tunnel` to
-route the agent's traffic through a transparent forwarder instead, so policy can
-see and act on what the agent actually does on the network:
+Direct `agentjail run` launches filter network access by port unless `--tunnel`
+is passed. The opt-in PATH shim adds that flag by default, so ordinary
+`claude`, `codex`, and Cursor `agent` commands route traffic through the
+transparent forwarder and policy can act on what the agent does on the network:
 
 ```sh
 agentjail run --tunnel -- claude
@@ -610,8 +611,9 @@ agentjail run --tunnel -- claude
 unprivileged user + network + mount namespaces the shield creates and owns
 ([ADR 0079](./docs/adr/0079-agent-netns-veth-vs-userns-tunfd.md)). Nothing is
 provisioned at install; a session that never tunnels is never asked for anything
-([ADR 0078](./docs/adr/0078-lazy-tunnel-consent.md)). The tunnel is opt-in per
-session today.
+([ADR 0078](./docs/adr/0078-lazy-tunnel-consent.md)). Explicit launchers remain
+opt-in per session; installing the PATH shim records the user's standing choice
+to make tunneled launches the default ([ADR 0127](./docs/adr/0127-shim-default-tunnel.md)).
 
 **It decrypts HTTPS by default, and says so.** Policy templates only reach
 HTTP(S) traffic through TLS interception, so `--tunnel` terminates TLS using a CA
