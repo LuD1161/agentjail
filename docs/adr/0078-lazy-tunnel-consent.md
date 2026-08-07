@@ -86,10 +86,10 @@ target state, reached for free.
 - **Nothing to build on Linux today.** The requirement is already met by ADR
   0079's zero-privilege design. This ADR exists to keep it that way and to
   constrain the macOS work before it lands the wrong way.
-- **Tunnelling stays per-session opt-in for now** (`--tunnel`). Making it
-  default-on (AGE-171) is a separate decision; when it happens, D1/D2/D4 still
-  hold — a default-on tunnel on Linux costs nothing and prompts nothing, while
-  on macOS a default-on tunnel would still have to ask at first use.
+- **Direct launchers keep tunnelling per-session opt-in** (`--tunnel`). The
+  opt-in PATH shim now records a standing choice and supplies `--tunnel` on
+  ordinary agent commands; D1/D2/D4 still hold. See
+  [ADR 0127-shim-default-tunnel](./0127-shim-default-tunnel.md).
 
 ## Related
 

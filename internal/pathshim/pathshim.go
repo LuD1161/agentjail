@@ -223,12 +223,12 @@ if [ ! -x "$SHIELD" ]; then
 fi
 
 if [ -x "$LAUNCHER" ]; then
-    exec "$LAUNCHER" run -- %s "$@"
+    exec "$LAUNCHER" run --tunnel -- %s "$@"
 fi
 
 echo "WARNING: agentjail launcher is missing or not executable at $LAUNCHER" >&2
 echo "  Git-over-SSH setup is unavailable; entering the shield directly." >&2
-exec "$SHIELD" -- "$REAL_%s" "$@"
+exec "$SHIELD" --tunnel -- "$REAL_%s" "$@"
 
 `, target.Command, shieldBin, launcherBin, shimDir, target.Command, commandUpper, commandUpper,
 		target.Command, shimDir, target.DisplayName, shimPath, commandUpper, shimPath,

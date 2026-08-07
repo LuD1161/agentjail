@@ -219,7 +219,8 @@ warning and execs the agent **without** any sandbox (fail-open). The hook layer
 > **opt-in and OFF by default**. The credentialed proxy URL broke Claude Code's
 > MCP transport on macOS. The transparent tunnel that supersedes the proxy with
 > real per-session isolation and no proxy env now **ships on Linux** behind
-> `--tunnel` (ADR 0079); it is opt-in per session, and default-on is a later
+> `--tunnel` (ADR 0079); direct launches are opt-in per session, while the
+> opt-in PATH shim supplies it by default (ADR 0127), and broader default-on is a later
 > step. Until
 > then the shield runs **port-only by default** (filesystem/process/keychain
 > sandbox stays fully on); pass `--netproxy` to turn per-host filtering on. The

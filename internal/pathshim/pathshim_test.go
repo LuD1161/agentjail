@@ -53,7 +53,8 @@ func TestRenderedTargetsAreValidShell(t *testing.T) {
 			for _, want := range []string{
 				"command -v " + target.Command,
 				"Running " + target.Command + " UNSHIELDED",
-				`exec "$LAUNCHER" run -- ` + target.Command + ` "$@"`,
+				`exec "$LAUNCHER" run --tunnel -- ` + target.Command + ` "$@"`,
+				`exec "$SHIELD" --tunnel -- "$REAL_`,
 			} {
 				if !strings.Contains(content, want) {
 					t.Errorf("shim missing %q", want)
@@ -123,7 +124,7 @@ func runRenderedCodexShim(t *testing.T, args []string) []string {
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(root, "agentjail")
-	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'launcher\\n' > \"$CAPTURE_ROUTE\"\n[ \"$1\" = run ] || exit 64\n[ \"$2\" = -- ] || exit 64\n[ \"$3\" = codex ] || exit 64\nshift 3\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'launcher\\n' > \"$CAPTURE_ROUTE\"\n[ \"$1\" = run ] || exit 64\n[ \"$2\" = --tunnel ] || exit 64\n[ \"$3\" = -- ] || exit 64\n[ \"$4\" = codex ] || exit 64\nshift 4\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	realCodex := filepath.Join(realDir, "codex")
