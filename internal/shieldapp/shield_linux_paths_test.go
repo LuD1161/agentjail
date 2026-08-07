@@ -117,7 +117,7 @@ func TestAllowConfigDirExcludingCredentials_SkipsCredentialSubdirs(t *testing.T)
 		return nil
 	}
 
-	allowConfigDirExcludingCredentials(configDir, fakeAllow, 0)
+	allowConfigDirExcludingCredentials(configDir, fakeAllow, 0, 0)
 
 	grantedSet := make(map[string]bool, len(granted))
 	for _, g := range granted {
@@ -153,7 +153,7 @@ func TestAllowConfigDirExcludingCredentials_SkipsKEKDir(t *testing.T) {
 		return nil
 	}
 
-	allowConfigDirExcludingCredentials(configDir, fakeAllow, 0)
+	allowConfigDirExcludingCredentials(configDir, fakeAllow, 0, 0)
 }
 
 // TestAllowConfigDirExcludingCredentials_MissingDirIsNoop verifies a
@@ -165,9 +165,38 @@ func TestAllowConfigDirExcludingCredentials_MissingDirIsNoop(t *testing.T) {
 		called = true
 		return nil
 	}
-	allowConfigDirExcludingCredentials(filepath.Join(t.TempDir(), "does-not-exist"), fakeAllow, 0)
+	allowConfigDirExcludingCredentials(filepath.Join(t.TempDir(), "does-not-exist"), fakeAllow, 0, 0)
 	if called {
 		t.Error("allowPath was called for a nonexistent ~/.config; want no-op")
+	}
+}
+
+// Regular files reject directory-only Landlock rights with EINVAL. Keep the
+// child type attached to its access mask. See docs/GOTCHAS.md §54.
+func TestAllowConfigDirExcludingCredentials_UsesFileScopedAccess(t *testing.T) {
+	configDir := t.TempDir()
+	file := filepath.Join(configDir, "mimeapps.list")
+	dir := filepath.Join(configDir, "some-tool")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	const dirAccess uint64 = 11
+	const fileAccess uint64 = 22
+	got := make(map[string]uint64)
+	allowConfigDirExcludingCredentials(configDir, func(path string, access uint64) error {
+		got[path] = access
+		return nil
+	}, dirAccess, fileAccess)
+
+	if got[file] != fileAccess {
+		t.Errorf("regular file access = %d, want %d", got[file], fileAccess)
+	}
+	if got[dir] != dirAccess {
+		t.Errorf("directory access = %d, want %d", got[dir], dirAccess)
 	}
 }
 

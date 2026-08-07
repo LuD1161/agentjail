@@ -745,6 +745,17 @@ first valid key as a different account and rejected the repository operation.
   a user choice, never proof that any loaded key is the intended account. See
   ADR 0126-session-ssh-bootstrap and AGE-273.
 
+## 54. A path grant must match the inode type
+
+The `~/.config` allowlist tests proved credential directories were skipped and
+ordinary children were offered to Landlock. They did not assert the access
+mask. Regular files were offered directory-only rights, so Landlock returned
+`EINVAL`; startup continued with noisy skip messages and those files remained
+unreadable.
+
+- **Rule:** preserve the file/directory type when constructing Landlock rules,
+  and test the actual access mask rather than only the path list.
+
 ---
 
 ## Testing gotchas

@@ -938,7 +938,7 @@ func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, erro
 				// its subtree is granted -- so grant each child individually
 				// and skip the denylisted ones instead of granting ~/.config
 				// as a whole. See ConfigCredentialSubdirs (P4).
-				allowConfigDirExcludingCredentials(p, allowPath, roAccess)
+				allowConfigDirExcludingCredentials(p, allowPath, roAccess, roFileAccess)
 				continue
 			}
 			if err := allowPath(p, roAccess); err != nil {
@@ -1166,7 +1166,7 @@ func isSensitiveMCPTarget(target, home string) bool {
 //
 // If configDir does not exist, this is a silent no-op (same semantics as
 // allowPath skipping an absent path).
-func allowConfigDirExcludingCredentials(configDir string, allowPath func(string, uint64) error, roAccess uint64) {
+func allowConfigDirExcludingCredentials(configDir string, allowPath func(string, uint64) error, roDirAccess, roFileAccess uint64) {
 	denied := make(map[string]bool, len(ConfigCredentialSubdirs()))
 	for _, d := range ConfigCredentialSubdirs() {
 		denied[d] = true
@@ -1181,7 +1181,11 @@ func allowConfigDirExcludingCredentials(configDir string, allowPath func(string,
 			continue
 		}
 		p := filepath.Join(configDir, e.Name())
-		if err := allowPath(p, roAccess); err != nil {
+		access := roFileAccess
+		if e.IsDir() {
+			access = roDirAccess
+		}
+		if err := allowPath(p, access); err != nil {
 			fmt.Fprintf(os.Stderr, "agentjail-shield: skip %s: %v\n", p, err)
 		}
 	}
