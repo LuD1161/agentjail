@@ -8,11 +8,15 @@ import (
 	"testing"
 )
 
-// t.TempDir includes the test name and can exceed macOS's unix-socket limit.
-// Keep SSH-agent fixtures under a short OS temporary path.
+// Keep fixtures short and canonical: macOS's /var temp path is a symlink, and
+// SSH-agent validation rejects symlink components.
 func shieldTestShortSocketDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ajssh")
+	tempRoot, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp root: %v", err)
+	}
+	dir, err := os.MkdirTemp(tempRoot, "ajssh")
 	if err != nil {
 		t.Fatalf("mkdir temp: %v", err)
 	}
