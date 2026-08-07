@@ -18,6 +18,10 @@ const (
 	SessionStarted        = "session.started"
 	ShieldActivated       = "shield.activated"
 	ShieldFailed          = "shield.failed"
+	ShieldLogOpened       = "shield_log.opened"
+	ShieldLogOpenFailed   = "shield_log.open_failed"
+	ShieldLogsPruned      = "shield_log.pruned"
+	ShieldLogPruneFailed  = "shield_log.prune_failed"
 	// SSHAgentDelegated records an accepted broad signing delegation.
 	// Detail contains fixed scope only, never socket paths. See ADR 0124-explicit-ssh-delegation.
 	SSHAgentDelegated  = "ssh_agent.delegated"
