@@ -18,6 +18,7 @@ import (
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/credentials"
+	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 	auditstore "github.com/LuD1161/agentjail/internal/store"
@@ -34,16 +35,18 @@ type RPCRequest struct {
 	Scope   string `json:"scope,omitempty"`
 	TTL     string `json:"ttl,omitempty"`
 	GrantID string `json:"grant_id,omitempty"`
+	Tool    string `json:"tool,omitempty"`
 }
 
 // RPCResponse is the newline-delimited JSON response from the server.
 type RPCResponse struct {
-	OK      bool              `json:"ok"`
-	Error   string            `json:"error,omitempty"`
-	Names   []string          `json:"names,omitempty"`
-	EnvVars map[string]string `json:"env_vars,omitempty"`
-	GrantID string            `json:"grant_id,omitempty"`
-	Expires string            `json:"expires,omitempty"`
+	OK       bool                      `json:"ok"`
+	Error    string                    `json:"error,omitempty"`
+	Names    []string                  `json:"names,omitempty"`
+	EnvVars  map[string]string         `json:"env_vars,omitempty"`
+	GrantID  string                    `json:"grant_id,omitempty"`
+	Expires  string                    `json:"expires,omitempty"`
+	Delivery *credentialtools.Delivery `json:"delivery,omitempty"`
 }
 
 // defaultSocketPath returns ~/.agentjail/secrets.sock.
@@ -264,6 +267,11 @@ func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emit
 			return RPCResponse{OK: false, Error: err.Error()}
 		}
 		slog.Info("secret stored", "name", req.Name)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.CredentialStored,
+			Entity:    req.Name,
+			Actor:     "secrets",
+		})
 		return RPCResponse{OK: true}
 
 	case "list":
@@ -278,10 +286,18 @@ func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emit
 			return RPCResponse{OK: false, Error: err.Error()}
 		}
 		slog.Info("secret deleted", "name", req.Name)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.CredentialRemoved,
+			Entity:    req.Name,
+			Actor:     "secrets",
+		})
 		return RPCResponse{OK: true}
 
 	case "grant":
 		return handleGrant(req, store, gm, emitter)
+
+	case "tool_grant":
+		return handleToolGrant(req, store, gm, emitter)
 
 	case "revoke":
 		if err := gm.Revoke(req.GrantID); err != nil {
@@ -299,6 +315,123 @@ func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emit
 	}
 }
 
+// handleToolGrant retrieves or issues credential material and presents it for
+// one registered CLI adapter. The control-token boundary keeps this response
+// outside the sandbox until the shield has prepared the session.
+func handleToolGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) RPCResponse {
+	tool, err := credentialtools.ParseTool(req.Tool)
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+
+	var issuer toolMaterialIssuer = localToolMaterialIssuer{store: store}
+	material, issued, err := issuer.Issue(context.Background(), tool, req)
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	adapter, err := credentialtools.DefaultRegistry().Resolve(tool)
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	delivery, err := adapter.Present(material)
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+
+	ttl := parseGrantTTL(req.TTL)
+	grant := issued
+	if grant == nil {
+		grant = &credentials.Grant{
+			ID:         credentials.NewGrantID(),
+			SecretName: req.Name,
+			Backend:    "static",
+			Scope:      "direct",
+			ExpiresAt:  time.Now().Add(ttl),
+		}
+	}
+	grant.SecretName = req.Name
+	grantID := gm.Register(grant)
+
+	ctx := context.Background()
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.CredentialIssued,
+		Entity:    req.Name,
+		Detail: map[string]string{
+			"type":     grant.Backend,
+			"grant_id": grantID,
+			"tool":     string(tool),
+		},
+		Actor: "secrets",
+	})
+
+	return RPCResponse{
+		OK:       true,
+		Delivery: &delivery,
+		GrantID:  grantID,
+		Expires:  grant.ExpiresAt.Format(time.RFC3339),
+	}
+}
+
+// toolMaterialIssuer is the source seam before CLI presentation. JIT,
+// Vault, and OpenBao issuers implement this contract without changing the
+// adapters or shield bootstrap. See ADR 0129-credentialed-cli-bootstrap.
+type toolMaterialIssuer interface {
+	Issue(context.Context, credentialtools.Tool, *RPCRequest) (credentialtools.Material, *credentials.Grant, error)
+}
+
+type localToolMaterialIssuer struct {
+	store *Store
+}
+
+func (i localToolMaterialIssuer) Issue(ctx context.Context, tool credentialtools.Tool, req *RPCRequest) (credentialtools.Material, *credentials.Grant, error) {
+	raw, err := i.store.Get(req.Name)
+	if err != nil {
+		return credentialtools.Material{}, nil, fmt.Errorf("load credential %q: %w", req.Name, err)
+	}
+
+	// Existing AWS AssumeRole entries keep using the shipped STS issuer. Static
+	// entries bypass issuance and are passed directly for this milestone.
+	if tool == credentialtools.ToolAWS {
+		cfg, cfgErr := i.store.loadConfig(req.Name)
+		if cfgErr == nil && cfg.RoleARN != "" {
+			grant, grantErr := backends["aws"].Grant(ctx, cfg, defaultScope(req.Scope), parseGrantTTL(req.TTL))
+			if grantErr != nil {
+				return credentialtools.Material{}, nil, grantErr
+			}
+			return awsMaterialFromGrant(grant), grant, nil
+		}
+	}
+
+	material, err := credentialtools.DecodeStatic(tool, raw)
+	if err != nil {
+		return credentialtools.Material{}, nil, fmt.Errorf("credential %q: %w", req.Name, err)
+	}
+	return material, nil, nil
+}
+
+func awsMaterialFromGrant(grant *credentials.Grant) credentialtools.Material {
+	return credentialtools.Material{Fields: map[credentialtools.Field]string{
+		credentialtools.FieldAccessKeyID:     grant.EnvVars["AWS_ACCESS_KEY_ID"],
+		credentialtools.FieldSecretAccessKey: grant.EnvVars["AWS_SECRET_ACCESS_KEY"],
+		credentialtools.FieldSessionToken:    grant.EnvVars["AWS_SESSION_TOKEN"],
+	}}
+}
+
+func parseGrantTTL(value string) time.Duration {
+	ttl, err := time.ParseDuration(value)
+	if err != nil || ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	return credentials.ClampTTL(ttl)
+}
+
+func defaultScope(value string) string {
+	if value == "" {
+		return "read-only"
+	}
+	return value
+}
+
 // backends maps backend names to their implementations.
 var backends = map[string]credentials.Backend{
 	"aws":   &credentials.AWSBackend{},
@@ -313,16 +446,8 @@ func handleGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, em
 		return RPCResponse{OK: false, Error: fmt.Sprintf("load secret: %v", err)}
 	}
 
-	ttl, err := time.ParseDuration(req.TTL)
-	if err != nil {
-		ttl = 15 * time.Minute
-	}
-	ttl = credentials.ClampTTL(ttl)
-
-	scope := req.Scope
-	if scope == "" {
-		scope = "read-only"
-	}
+	ttl := parseGrantTTL(req.TTL)
+	scope := defaultScope(req.Scope)
 
 	ctx := context.Background()
 
@@ -434,15 +559,32 @@ func rpcClient(socketPath string, req *RPCRequest) (*RPCResponse, error) {
 func runSet(args []string) {
 	fs := flag.NewFlagSet("set", flag.ExitOnError)
 	socketPath := fs.String("socket", defaultSocketPath(), "path to Unix socket")
+	fromStdin := fs.Bool("stdin", false, "read the secret value from stdin")
 	fs.Parse(args)
 
 	rest := fs.Args()
-	if len(rest) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-secrets set <name> <value>")
+	if (!*fromStdin && len(rest) != 2) || (*fromStdin && len(rest) != 1) {
+		fmt.Fprintln(os.Stderr, "usage: agentjail-secrets set [--stdin] <name> [value]")
 		os.Exit(64)
 	}
+	value := ""
+	if *fromStdin {
+		const maxSecretSize = 16 << 20
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, maxSecretSize+1))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-secrets: read stdin: %v\n", err)
+			os.Exit(1)
+		}
+		if len(data) > maxSecretSize {
+			fmt.Fprintln(os.Stderr, "agentjail-secrets: stdin secret exceeds 16 MiB")
+			os.Exit(1)
+		}
+		value = string(data)
+	} else {
+		value = rest[1]
+	}
 
-	resp, err := rpcClient(*socketPath, &RPCRequest{Action: "set", Name: rest[0], Value: rest[1]})
+	resp, err := rpcClient(*socketPath, &RPCRequest{Action: "set", Name: rest[0], Value: value})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-secrets: %v\n", err)
 		os.Exit(1)

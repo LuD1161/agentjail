@@ -36,6 +36,7 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "Commands:")
 		fmt.Fprintln(os.Stderr, "  serve                          Start the secrets RPC server (Unix socket)")
 		fmt.Fprintln(os.Stderr, "  set <name> <value>             Store a secret (encrypted at rest)")
+		fmt.Fprintln(os.Stderr, "  set --stdin <name>             Store a secret read from stdin (keeps it out of argv)")
 		fmt.Fprintln(os.Stderr, "  list                           List secret names (never values)")
 		fmt.Fprintln(os.Stderr, "  delete <name>                  Delete a secret")
 		fmt.Fprintln(os.Stderr, "  grant <name> --scope=<policy>  Issue scoped, short-lived credentials")
