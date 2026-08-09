@@ -800,6 +800,18 @@ without the applicable plan exercised no authenticated model loop at all.
   clean it afterward, and keep optional compatibility probes outside that gate.
   See ADR 0130-codex-live-gate.
 
+## 59. Reading CLI configuration does not prove authenticated use
+
+The credentialed CLI gate asked AWS CLI where it found its keys, read the
+generated kubeconfig with kubectl, and echoed the GitHub token through gh. It
+passed even if no CLI could authenticate a provider request with the delivered
+material.
+
+- **Rule:** credential delivery E2E must cross the tool's authentication
+  protocol. Validate a secret-derived AWS SigV4 signature and a Kubernetes
+  bearer request, not only environment variables or configuration output. See
+  ADR 0129-credentialed-cli-bootstrap and AGE-279.
+
 ---
 
 ## Testing gotchas

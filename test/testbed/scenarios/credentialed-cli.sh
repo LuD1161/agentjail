@@ -17,11 +17,17 @@ hash_stream() {
 }
 
 cleanup() {
+    if [ -n "${STUB_PID:-}" ]; then
+        kill "$STUB_PID" >/dev/null 2>&1 || true
+        wait "$STUB_PID" 2>/dev/null || true
+    fi
     for name in aws/testbed kube/testbed github/testbed kube/unsafe-exec kube/unsafe-file; do
         "$AJ" credential remove "$name" >/dev/null 2>&1 || true
     done
     rm -f "$PROJECT/aws" /tmp/agentjail-unsafe-tool \
-        /tmp/agentjail-aws-config-list
+        /tmp/agentjail-aws-config-list /tmp/agentjail-aws-identity.json \
+        /tmp/agentjail-kube-version.json /tmp/agentjail-credential-stub.js \
+        /tmp/agentjail-credential-stub.log /tmp/agentjail-credential-stub.port
     rm -f "$HOME/.aws/credentials" "$HOME/.kube/config" "$HOME/.config/gh/hosts.yml"
 }
 trap cleanup EXIT
@@ -46,6 +52,91 @@ AWS_SESSION_FINGERPRINT=$(printf %s testbed-session-not-real | hash_stream)
 KUBE_FINGERPRINT=$(printf %s kube-test-token-not-real | hash_stream)
 GH_FINGERPRINT=$(printf %s ghp_testbed_not_real | hash_stream)
 
+# Validate actual provider protocols rather than only asking each CLI where it
+# found its credential. The stub recomputes AWS SigV4 from the expected secret
+# and accepts the Kubernetes request only with the expected bearer token.
+# See GOTCHAS.md #59.
+cat > /tmp/agentjail-credential-stub.js <<'NODE'
+const crypto = require('crypto');
+const fs = require('fs');
+const http = require('http');
+
+const accessKey = 'AKIATESTBED000000001';
+const secretKey = 'testbed-secret-not-real';
+const sessionToken = 'testbed-session-not-real';
+const kubeToken = 'kube-test-token-not-real';
+const log = label => fs.appendFileSync('/tmp/agentjail-credential-stub.log', label + '\n');
+const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+const hmac = (key, value) => crypto.createHmac('sha256', key).update(value).digest();
+const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <GetCallerIdentityResult><Arn>arn:aws:iam::123456789012:user/agentjail-test</Arn><UserId>AGENTJAILTEST</UserId><Account>123456789012</Account></GetCallerIdentityResult>
+  <ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata>
+</GetCallerIdentityResponse>`;
+
+function verifySigV4(req, body) {
+  const auth = req.headers.authorization || '';
+  const match = auth.match(/^AWS4-HMAC-SHA256 Credential=([^/]+)\/([^,]+), SignedHeaders=([^,]+), Signature=([0-9a-f]+)$/);
+  if (!match || match[1] !== accessKey || req.headers['x-amz-security-token'] !== sessionToken) return false;
+  const scope = match[2];
+  const parts = scope.split('/');
+  if (parts.length !== 4 || parts[2] !== 'sts' || parts[3] !== 'aws4_request') return false;
+  const signedHeaders = match[3];
+  const canonicalHeaders = signedHeaders.split(';').map(name => {
+    const value = String(req.headers[name] || '').trim().replace(/\s+/g, ' ');
+    return `${name}:${value}\n`;
+  }).join('');
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const canonicalRequest = [req.method, url.pathname, url.searchParams.toString(), canonicalHeaders, signedHeaders, sha256(body)].join('\n');
+  const amzDate = req.headers['x-amz-date'];
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256(canonicalRequest)].join('\n');
+  const dateKey = hmac(Buffer.from('AWS4' + secretKey), parts[0]);
+  const regionKey = hmac(dateKey, parts[1]);
+  const serviceKey = hmac(regionKey, parts[2]);
+  const signingKey = hmac(serviceKey, 'aws4_request');
+  const expected = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+  return expected.length === match[4].length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(match[4]));
+}
+
+const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', chunk => chunks.push(chunk));
+  req.on('end', () => {
+    const body = Buffer.concat(chunks);
+    if (req.url === '/version') {
+      if (req.headers.authorization !== `Bearer ${kubeToken}`) {
+        res.writeHead(401); res.end('unauthorized'); return;
+      }
+      log('KUBE_BEARER_OK');
+      res.writeHead(200, {'content-type': 'application/json'});
+      res.end(JSON.stringify({major: '1', minor: '30', gitVersion: 'v1.30.0'}));
+      return;
+    }
+    if (!verifySigV4(req, body)) {
+      res.writeHead(403, {'content-type': 'text/xml'}); res.end('<ErrorResponse><Error><Code>SignatureDoesNotMatch</Code></Error></ErrorResponse>'); return;
+    }
+    log('AWS_SIGV4_OK');
+    res.writeHead(200, {'content-type': 'text/xml'}); res.end(xml);
+  });
+});
+server.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync('/tmp/agentjail-credential-stub.port', String(server.address().port));
+});
+NODE
+rm -f /tmp/agentjail-credential-stub.log /tmp/agentjail-credential-stub.port
+node /tmp/agentjail-credential-stub.js >/dev/null 2>&1 &
+STUB_PID=$!
+for _ in $(seq 1 50); do
+    [ -s /tmp/agentjail-credential-stub.port ] && break
+    sleep 0.1
+done
+if [ ! -s /tmp/agentjail-credential-stub.port ]; then
+    bad "local credential protocol stub failed to start"
+    exit 1
+fi
+STUB_PORT=$(cat /tmp/agentjail-credential-stub.port)
+STUB_URL="http://127.0.0.1:$STUB_PORT"
+
 AWS_ACCESS_KEY_ID=AKIATESTBED000000001 \
 AWS_SECRET_ACCESS_KEY=testbed-secret-not-real \
 AWS_SESSION_TOKEN=testbed-session-not-real \
@@ -66,12 +157,12 @@ else
 fi
 rm -f "$PROJECT/aws" /tmp/agentjail-unsafe-tool
 
-KUBECONFIG_BODY='apiVersion: v1
+KUBECONFIG_BODY="apiVersion: v1
 kind: Config
 clusters:
 - name: test
   cluster:
-    server: https://127.0.0.1:65535
+    server: $STUB_URL
 users:
 - name: test
   user:
@@ -82,7 +173,7 @@ contexts:
     cluster: test
     user: test
 current-context: agentjail-test
-'
+"
 
 KUBECONFIG_EXEC='apiVersion: v1
 kind: Config
@@ -168,8 +259,12 @@ test "$(printf %s "$AWS_SECRET_ACCESS_KEY" | hash_stream)" = __AWS_SECRET_FINGER
 test "$(printf %s "$AWS_SESSION_TOKEN" | hash_stream)" = __AWS_SESSION_FINGERPRINT__
 test "$AWS_DEFAULT_REGION" = us-west-2
 test "$AWS_EC2_METADATA_DISABLED" = true
+aws sts get-caller-identity --endpoint-url "$AGENTJAIL_TEST_STUB_URL" --no-cli-pager > /tmp/agentjail-aws-identity.json
+grep -q 123456789012 /tmp/agentjail-aws-identity.json
 test "$(kubectl config current-context)" = agentjail-test
 test "$(kubectl config view --raw --minify -o "jsonpath={.users[0].user.token}" | hash_stream)" = __KUBE_FINGERPRINT__
+kubectl get --raw /version > /tmp/agentjail-kube-version.json
+grep -q v1.30.0 /tmp/agentjail-kube-version.json
 test "$(stat -c %a "$KUBECONFIG" 2>/dev/null || stat -f %Lp "$KUBECONFIG")" = 600
 case "$KUBECONFIG" in /tmp/agentjail-credentials-*/kubeconfig) ;; *) exit 21 ;; esac
 case "$(command -v aws)" in /tmp/agentjail-credentials-*/bin/aws) ;; *) exit 22 ;; esac
@@ -197,6 +292,7 @@ OUT=$(AWS_ACCESS_KEY_ID=AMBIENT_AWS_ACCESS_NOT_SELECTED \
     AWS_DEFAULT_REGION=AMBIENT_AWS_REGION_NOT_SELECTED \
     GH_TOKEN=AMBIENT_GH_NOT_SELECTED \
     KUBECONFIG="$HOME/.kube/config" \
+    AGENTJAIL_TEST_STUB_URL="$STUB_URL" \
     timeout 60 "$AJ" run \
     --no-git-ssh \
     --credential=aws=aws/testbed \
@@ -214,6 +310,17 @@ if [ "$RC" = 0 ]; then
     ok "one shielded session used AWS env, kubeconfig file, and GH env credentials"
 else
     bad "credentialed CLI session failed (rc=$RC)"
+fi
+
+if grep -qx AWS_SIGV4_OK /tmp/agentjail-credential-stub.log 2>/dev/null; then
+    ok "AWS CLI made a provider request with a valid secret-derived SigV4 signature"
+else
+    bad "AWS CLI did not complete a valid SigV4-authenticated provider request"
+fi
+if grep -qx KUBE_BEARER_OK /tmp/agentjail-credential-stub.log 2>/dev/null; then
+    ok "kubectl made an API request with the broker-delivered bearer token"
+else
+    bad "kubectl did not complete a bearer-authenticated API request"
 fi
 
 printf '%s\n' "$OUT" | grep -q 'aws ready with broker credential "aws/testbed"' \
