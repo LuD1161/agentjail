@@ -38,10 +38,27 @@ provision:
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
       apt-get install -y --no-install-recommends \
-        curl ca-certificates git tmux sqlite3 openssh-client asciinema jq neofetch
+        curl ca-certificates git tmux sqlite3 openssh-client asciinema jq neofetch unzip gh
       # Claude Code requires node >= 22; Ubuntu 24.04's apt ships 18.
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
       apt-get install -y nodejs
+
+      # Credentialed-CLI release gate: install real clients, but never seed
+      # credentials in the image. The scenario imports disposable fake values
+      # into AgentJail's encrypted broker after provisioning.
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64) aws_arch=x86_64; kube_arch=amd64 ;;
+        aarch64|arm64) aws_arch=aarch64; kube_arch=arm64 ;;
+        *) echo "unsupported credentialed-CLI test architecture: $arch" >&2; exit 1 ;;
+      esac
+      curl -fsSLo /tmp/awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip"
+      (cd /tmp && unzip -q awscliv2.zip)
+      /tmp/aws/install --update
+      rm -rf /tmp/aws /tmp/awscliv2.zip
+      kubectl_version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+      curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/${kube_arch}/kubectl"
+      chmod 0755 /usr/local/bin/kubectl
   # systemd --user must survive ssh disconnects for the agentjail daemon.
   - mode: system
     script: |

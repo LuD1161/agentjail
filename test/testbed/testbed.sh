@@ -198,7 +198,7 @@ do_gate() {
     # real-agent tunnel check (tunnel-agent). The latter SKIPs itself when no
     # Claude token is seeded, so it is safe to always include. --scenario runs
     # exactly one instead.
-    local scenarios=("e2e-smoke" "tunnel-agent")
+    local scenarios=("e2e-smoke" "credentialed-cli" "tunnel-agent")
     while [ $# -gt 0 ]; do
         case "$1" in
             --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;

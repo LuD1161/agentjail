@@ -333,10 +333,12 @@ make e2e-release        # == testbed.sh gate --worktree .
 
 It resets a `release-gate` testbed to the clean golden (or creates it the first
 time — that run is slow, ~5–8 min for cloud-init + node; later runs reset in
-seconds), provisions the current worktree through the real installer, runs the
-`e2e-smoke` scenario, and **exits non-zero on any failure** so it can gate the
-tag. Wired into the pre-release checklist in `AGENTS.md`. Run it on the Linux
-host for the Linux build and on the Mac for the macOS build.
+seconds), provisions the current worktree through the real installer, then runs
+`e2e-smoke`, `credentialed-cli`, and `tunnel-agent`. The credential scenario
+uses the real AWS CLI, kubectl, and GitHub CLI with disposable broker values;
+the gate **exits non-zero on any failure** so it can gate the tag. Wired into
+the pre-release checklist in `AGENTS.md`. Run it on the Linux host for the
+Linux build and on the Mac for the macOS build.
 
 CI note: this is deliberately a **local** gate, not a GitHub Actions job —
 Linux needs KVM and macOS needs a self-hosted Tart host, and the release is cut

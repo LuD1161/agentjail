@@ -34,6 +34,49 @@ fi
 git config --global user.name  "Testbed Agent" 2>/dev/null || true
 git config --global user.email "agent@testbed.local" 2>/dev/null || true
 
+# ---- 0b. credentialed CLI release-gate clients -----------------------------
+# Cloud-init handles new Linux images, while this provision step also repairs
+# restored golden images created before the credentialed CLI gate existed.
+if [ "$(uname -s)" = "Linux" ]; then
+    if ! command -v gh >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+        log "installing credentialed CLI package prerequisites"
+        sudo apt-get update -q
+        sudo apt-get install -y -q unzip gh
+    fi
+
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64) aws_arch=x86_64; kube_arch=amd64 ;;
+        aarch64|arm64) aws_arch=aarch64; kube_arch=arm64 ;;
+        *) log "unsupported credentialed CLI test architecture: $arch"; exit 1 ;;
+    esac
+
+    if ! command -v aws >/dev/null 2>&1; then
+        log "installing AWS CLI for credentialed CLI release gate"
+        curl -fsSLo /tmp/awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip"
+        (cd /tmp && unzip -q awscliv2.zip)
+        sudo /tmp/aws/install
+        rm -rf /tmp/aws /tmp/awscliv2.zip
+    fi
+
+    if ! command -v kubectl >/dev/null 2>&1; then
+        log "installing kubectl for credentialed CLI release gate"
+        kubectl_version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+        curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/${kube_arch}/kubectl"
+        sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+        rm -f /tmp/kubectl
+    fi
+elif command -v brew >/dev/null 2>&1; then
+    credential_formulae=()
+    command -v aws >/dev/null 2>&1 || credential_formulae+=(awscli)
+    command -v kubectl >/dev/null 2>&1 || credential_formulae+=(kubernetes-cli)
+    command -v gh >/dev/null 2>&1 || credential_formulae+=(gh)
+    if [ "${#credential_formulae[@]}" -gt 0 ]; then
+        log "installing credentialed CLI release-gate clients: ${credential_formulae[*]}"
+        brew install "${credential_formulae[@]}"
+    fi
+fi
+
 # ---- 1. Claude Code ---------------------------------------------------------
 
 if ! command -v claude >/dev/null 2>&1; then
@@ -108,7 +151,13 @@ fi
 # ---- 3. agentjail via the shipped installer -----------------------------------
 
 log "running install.sh with LOCAL_TARBALL (the real user path)"
-LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
+if [ "$(uname -s)" = "Linux" ] && command -v setsid >/dev/null 2>&1; then
+    # Lima gives provision commands a controlling TTY. Detach it so the shipped
+    # installer takes its documented non-interactive select-all path.
+    setsid -w env LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
+else
+    LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
+fi
 
 # macOS Gatekeeper quarantines unsigned binaries copied from outside.
 # Strip the quarantine xattr so they can execute without code-signing.
