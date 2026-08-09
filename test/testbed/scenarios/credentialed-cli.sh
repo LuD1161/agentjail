@@ -41,6 +41,9 @@ printf 'HOST_KUBE_SECRET_SENTINEL\n' > "$HOME/.kube/config"
 printf 'HOST_GH_SECRET_SENTINEL\n' > "$HOME/.config/gh/hosts.yml"
 
 AWS_ACCESS_FINGERPRINT=$(printf %s AKIATESTBED000000001 | hash_stream)
+AWS_SECRET_FINGERPRINT=$(printf %s testbed-secret-not-real | hash_stream)
+AWS_SESSION_FINGERPRINT=$(printf %s testbed-session-not-real | hash_stream)
+KUBE_FINGERPRINT=$(printf %s kube-test-token-not-real | hash_stream)
 GH_FINGERPRINT=$(printf %s ghp_testbed_not_real | hash_stream)
 
 AWS_ACCESS_KEY_ID=AKIATESTBED000000001 \
@@ -138,6 +141,21 @@ GH_TOKEN=ghp_testbed_not_real \
     && ok "GitHub token imported through user-facing CLI" \
     || bad "GitHub token import failed"
 
+CREDENTIAL_LIST=$("$AJ" credential list 2>&1)
+if printf '%s\n' "$CREDENTIAL_LIST" | grep -q 'aws/testbed' \
+    && printf '%s\n' "$CREDENTIAL_LIST" | grep -q 'kube/testbed' \
+    && printf '%s\n' "$CREDENTIAL_LIST" | grep -q 'github/testbed' \
+    && ! printf '%s\n' "$CREDENTIAL_LIST" | grep -Eq 'testbed-secret|testbed-session|kube-test-token|ghp_'; then
+    ok "credential list returns selected names without values"
+else
+    bad "credential list omitted a name or exposed a value"
+fi
+if printf '%s\n' "$CREDENTIAL_LIST" | grep -Eq 'unsafe-exec|unsafe-file'; then
+    bad "rejected kubeconfig was persisted"
+else
+    ok "rejected kubeconfigs were not persisted"
+fi
+
 CHECK='set -eu
 hash_stream() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | awk "{print \$1}"
@@ -146,9 +164,20 @@ aws configure list > /tmp/agentjail-aws-config-list
 grep -Eq "access_key[[:space:]].*[[:space:]]env" /tmp/agentjail-aws-config-list
 grep -Eq "secret_key[[:space:]].*[[:space:]]env" /tmp/agentjail-aws-config-list
 test "$(printf %s "$AWS_ACCESS_KEY_ID" | hash_stream)" = __AWS_ACCESS_FINGERPRINT__
+test "$(printf %s "$AWS_SECRET_ACCESS_KEY" | hash_stream)" = __AWS_SECRET_FINGERPRINT__
+test "$(printf %s "$AWS_SESSION_TOKEN" | hash_stream)" = __AWS_SESSION_FINGERPRINT__
+test "$AWS_DEFAULT_REGION" = us-west-2
+test "$AWS_EC2_METADATA_DISABLED" = true
 test "$(kubectl config current-context)" = agentjail-test
+test "$(kubectl config view --raw --minify -o "jsonpath={.users[0].user.token}" | hash_stream)" = __KUBE_FINGERPRINT__
 test "$(stat -c %a "$KUBECONFIG" 2>/dev/null || stat -f %Lp "$KUBECONFIG")" = 600
 case "$KUBECONFIG" in /tmp/agentjail-credentials-*/kubeconfig) ;; *) exit 21 ;; esac
+case "$(command -v aws)" in /tmp/agentjail-credentials-*/bin/aws) ;; *) exit 22 ;; esac
+case "$(command -v kubectl)" in /tmp/agentjail-credentials-*/bin/kubectl) ;; *) exit 23 ;; esac
+case "$(command -v gh)" in /tmp/agentjail-credentials-*/bin/gh) ;; *) exit 24 ;; esac
+case "$GH_CONFIG_DIR" in /tmp/agentjail-credentials-*/gh-config) ;; *) exit 25 ;; esac
+test "$(stat -c %a "$GH_CONFIG_DIR" 2>/dev/null || stat -f %Lp "$GH_CONFIG_DIR")" = 700
+test "$AGENTJAIL_CREDENTIAL_TOOLS" = aws,kubectl,gh
 test "$(gh auth token | tr -d "\\n" | hash_stream)" = __GH_FINGERPRINT__
 ! cat "$HOME/.aws/credentials" 2>/dev/null | grep -q HOST_AWS_SECRET_SENTINEL
 ! cat "$HOME/.kube/config" 2>/dev/null | grep -q HOST_KUBE_SECRET_SENTINEL
@@ -156,11 +185,16 @@ test "$(gh auth token | tr -d "\\n" | hash_stream)" = __GH_FINGERPRINT__
 '
 CHECK=${CHECK/__GH_FINGERPRINT__/$GH_FINGERPRINT}
 CHECK=${CHECK/__AWS_ACCESS_FINGERPRINT__/$AWS_ACCESS_FINGERPRINT}
+CHECK=${CHECK/__AWS_SECRET_FINGERPRINT__/$AWS_SECRET_FINGERPRINT}
+CHECK=${CHECK/__AWS_SESSION_FINGERPRINT__/$AWS_SESSION_FINGERPRINT}
+CHECK=${CHECK/__KUBE_FINGERPRINT__/$KUBE_FINGERPRINT}
 
 # This scenario tests broker credentials, not the seed project's default Git SSH
 # bootstrap. See ADR 0126-session-ssh-bootstrap.
 OUT=$(AWS_ACCESS_KEY_ID=AMBIENT_AWS_ACCESS_NOT_SELECTED \
     AWS_SECRET_ACCESS_KEY=AMBIENT_AWS_SECRET_NOT_SELECTED \
+    AWS_SESSION_TOKEN=AMBIENT_AWS_SESSION_NOT_SELECTED \
+    AWS_DEFAULT_REGION=AMBIENT_AWS_REGION_NOT_SELECTED \
     GH_TOKEN=AMBIENT_GH_NOT_SELECTED \
     KUBECONFIG="$HOME/.kube/config" \
     timeout 60 "$AJ" run \
@@ -202,6 +236,16 @@ if grep -R -a -E 'AKIATESTBED000000001|testbed-secret-not-real|testbed-session-n
     bad "credential value persisted in AgentJail state or logs"
 else
     ok "AgentJail state and logs contain no plaintext credential values"
+fi
+
+for name in aws/testbed kube/testbed github/testbed; do
+    "$AJ" credential remove "$name" >/dev/null 2>&1 || bad "credential remove failed for $name"
+done
+POST_REMOVE_LIST=$("$AJ" credential list 2>&1)
+if printf '%s\n' "$POST_REMOVE_LIST" | grep -Eq 'aws/testbed|kube/testbed|github/testbed'; then
+    bad "credential remove left a selected broker entry"
+else
+    ok "credential remove deletes all selected broker entries"
 fi
 
 echo "=== RESULT: $PASS pass, $FAIL fail ==="

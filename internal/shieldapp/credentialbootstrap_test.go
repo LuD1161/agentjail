@@ -21,6 +21,9 @@ func TestCredentialSelections(t *testing.T) {
 	if got := selections.String(); got != "aws=aws/default,kubectl=kube/dev" {
 		t.Fatalf("String() = %q", got)
 	}
+	if got := selections.readyTools(); got != "aws,kubectl" {
+		t.Fatalf("readyTools() = %q", got)
+	}
 	if err := selections.Set("aws=aws/other"); err == nil {
 		t.Fatal("duplicate tool selection succeeded")
 	}

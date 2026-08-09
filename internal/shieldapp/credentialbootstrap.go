@@ -31,6 +31,14 @@ func (s credentialSelections) binaryPaths() []string {
 	return paths
 }
 
+func (s credentialSelections) readyTools() string {
+	tools := make([]string, 0, len(s))
+	for _, selection := range s {
+		tools = append(tools, string(selection.Tool))
+	}
+	return strings.Join(tools, ",")
+}
+
 func (s *credentialSelections) String() string {
 	values := make([]string, 0, len(*s))
 	for _, selection := range *s {
@@ -203,7 +211,10 @@ func prepareCredentialSession(selections credentialSelections, ctlToken string) 
 	if inherited := os.Getenv("PATH"); inherited != "" {
 		path += string(os.PathListSeparator) + inherited
 	}
-	session.env = append(session.env, credentialtools.EnvVar{Name: "PATH", Value: path})
+	session.env = append(session.env,
+		credentialtools.EnvVar{Name: "PATH", Value: path},
+		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_TOOLS", Value: selections.readyTools()},
+	)
 	return session, nil
 }
 

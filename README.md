@@ -338,6 +338,10 @@ interface: AWS environment variables, a mode-0600 generated kubeconfig named by
 session exits; a later launch removes artifacts abandoned by a killed shield
 after verifying their owner process is gone.
 
+The child process also receives `AGENTJAIL_CREDENTIAL_TOOLS` as a comma-separated
+list of ready tool IDs, while the startup notice names each selected broker
+entry without including credential values.
+
 Kubeconfig import is strict and self-contained: `exec` and `auth-provider`
 plugins, `tokenFile`, certificate/key/CA file paths, unknown fields, and multiple
 YAML documents are rejected. Embed the token or certificate/key data instead;

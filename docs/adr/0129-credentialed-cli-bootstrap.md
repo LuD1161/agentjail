@@ -59,6 +59,10 @@ The initial issuer is the local encrypted broker:
 4. The registered adapter presents it for the selected CLI.
 5. The shield injects the result into only that session.
 
+The child receives `AGENTJAIL_CREDENTIAL_TOOLS` containing only the ready tool
+IDs, in addition to the non-secret startup notices. Credential names and values
+are not encoded in that discovery variable.
+
 A future issuer can return the same material without changing an adapter. A new
 CLI needs one adapter and does not change broker transport or sandbox launch
 logic.
