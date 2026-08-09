@@ -2,7 +2,7 @@
 # testbed.sh — persistent clean-VM sandboxes for agentjail (Stage 1+2).
 #
 # A testbed is a named VM that behaves like a real end-user machine. One
-# testbed per worktree/feature: install that build, run Claude Code against
+# testbed per worktree/feature: install that build, run a coding agent against
 # it, poke for days, reset to the golden snapshot when done.
 #
 #   testbed.sh create <name>              new VM from template + golden snapshot
@@ -10,8 +10,10 @@
 #   testbed.sh ssh <name>                 interactive shell
 #   testbed.sh exec <name> -- <cmd...>    run a command in the guest
 #   testbed.sh provision <name> [--worktree <path>] [--with-codex]
+#                                         [--codex-version <version>]
+#                                         [--without-claude-auth]
 #                                         build tarball -> install.sh ->
-#                                         Claude Code + agentjail, ready to use
+#                                         coding agents + agentjail, ready to use
 #   testbed.sh test <name> [scenario] [--codex-auth <path>]
 #                                         run a scenario (default: e2e-smoke) in-guest
 #   testbed.sh record <name> [scenario..] record scenarios (asciinema) -> reports/<ts>/
@@ -97,12 +99,14 @@ do_create() {
 # ---- provision --------------------------------------------------------------
 
 do_provision() {
-    local name="${1:?usage: testbed.sh provision <name> [--worktree <path>] [--with-codex]}"; shift
-    local worktree="$REPO_ROOT" with_codex=0
+    local name="${1:?usage: testbed.sh provision <name> [--worktree <path>] [--with-codex] [--codex-version <version>] [--without-claude-auth]}"; shift
+    local worktree="$REPO_ROOT" with_codex=0 with_claude_auth=1 codex_version="0.146.0"
     while [ $# -gt 0 ]; do
         case "$1" in
             --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;
             --with-codex) with_codex=1; shift ;;
+            --codex-version) codex_version="$2"; shift 2 ;;
+            --without-claude-auth) with_claude_auth=0; shift ;;
             *) die "unknown provision flag: $1" ;;
         esac
     done
@@ -131,7 +135,9 @@ do_provision() {
     guest_push "$name" "$TESTBED_DIR/guest-provision.sh" /tmp/guest-provision.sh
 
     local token_file="$HOME/.agentjail-testbed/token"
-    if [ -f "$token_file" ]; then
+    if [ "$with_claude_auth" -eq 0 ]; then
+        log "Claude credential seeding disabled for this provision"
+    elif [ -f "$token_file" ]; then
         log "seeding Claude Code OAuth token"
         if ! guest_push "$name" "$token_file" /tmp/claude-token; then
             guest_exec "$name" "rm -f /tmp/claude-token" || true
@@ -161,7 +167,7 @@ do_provision() {
     fi
 
     log "running guest-provision.sh inside the guest"
-    guest_exec "$name" "AGENTJAIL_TESTBED_CODEX=$with_codex bash /tmp/guest-provision.sh"
+    guest_exec "$name" "AGENTJAIL_TESTBED_CODEX=$with_codex AGENTJAIL_TESTBED_CODEX_VERSION=$codex_version bash /tmp/guest-provision.sh"
     log "provisioned. Try: $0 ssh $name   then: agentjail status && claude"
 }
 
@@ -195,9 +201,8 @@ do_exec() {
 do_gate() {
     local worktree="$REPO_ROOT" name="release-gate"
     # Default gate set: clean-box install/enforcement (e2e-smoke) plus the
-    # real-agent tunnel check (tunnel-agent). The latter SKIPs itself when no
-    # Claude token is seeded, so it is safe to always include. --scenario runs
-    # exactly one instead.
+    # real-agent tunnel check (tunnel-agent). The latter requires a disposable
+    # Codex auth cache and never skips. --scenario runs exactly one instead.
     local scenarios=("e2e-smoke" "credentialed-cli" "tunnel-agent")
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -206,6 +211,33 @@ do_gate() {
             *) die "unknown gate flag: $1" ;;
         esac
     done
+
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    local codex_auth="${CODEX_AUTH_FILE:-$codex_home/auth.json}"
+    local codex_bin="" codex_version="" needs_codex=0 s
+    for s in "${scenarios[@]}"; do
+        [ "$s" = "tunnel-agent" ] && needs_codex=1
+    done
+    if [ "$needs_codex" -eq 1 ]; then
+        local candidate
+        while IFS= read -r candidate; do
+            case "$candidate" in
+                "$HOME/.agentjail/bin/"*) ;;
+                *) codex_bin="$candidate"; break ;;
+            esac
+        done < <(type -a -p codex 2>/dev/null)
+        [ -x "$codex_bin" ] || die "real Codex CLI not found outside AgentJail's shim directory"
+        [ -r "$codex_auth" ] || die "Codex auth cache is required for the release gate: $codex_auth"
+        local auth_mode
+        auth_mode="$(stat -c %a "$codex_auth" 2>/dev/null || stat -f %Lp "$codex_auth")"
+        case "$auth_mode" in
+            400|600) ;;
+            *) die "Codex auth cache must be private (mode 600 or 400), got $auth_mode: $codex_auth" ;;
+        esac
+        codex_version="${CODEX_TESTBED_VERSION:-$("$codex_bin" --version 2>/dev/null | awk '$1 == "codex-cli" {print $2; exit}')}"
+        [ -n "$codex_version" ] || die "could not determine the host Codex CLI version"
+        "$codex_bin" login status >/dev/null 2>&1 || die "host Codex CLI is not authenticated"
+    fi
 
     log "RELEASE GATE starting (driver=$DRIVER, worktree=$worktree)"
     # Single-VM invariant (Tart): macOS caps concurrently running VMs (~2), so
@@ -226,11 +258,20 @@ do_gate() {
     else
         do_create "$name"
     fi
-    do_provision "$name" --worktree "$worktree"
-    local s
+    if [ "$needs_codex" -eq 1 ]; then
+        do_provision "$name" --worktree "$worktree" --with-codex \
+            --codex-version "$codex_version" --without-claude-auth
+    else
+        do_provision "$name" --worktree "$worktree"
+    fi
     for s in "${scenarios[@]}"; do
         log "RELEASE GATE: running scenario '$s' on a clean box"
-        do_test "$name" "$s" || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+        if [ "$s" = "tunnel-agent" ]; then
+            do_test "$name" "$s" --codex-auth "$codex_auth" \
+                || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+        else
+            do_test "$name" "$s" || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+        fi
     done
     log "RELEASE GATE ✓ PASS — safe to tag"
     return 0
@@ -253,8 +294,8 @@ do_test() {
             *) die "unknown test flag: $1" ;;
         esac
     done
-    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ]; then
-        die "--codex-auth is accepted only by the codex-approval scenario"
+    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ] && [ "$scenario" != "tunnel-agent" ]; then
+        die "--codex-auth is accepted only by the codex-approval and tunnel-agent scenarios"
     fi
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
     [ -f "$script" ] || die "scenario not found: $script"

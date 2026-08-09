@@ -2,8 +2,8 @@
 # guest-provision.sh — runs INSIDE a testbed guest (pushed by testbed.sh provision).
 #
 # Turns a clean box into "a real dev machine that just installed agentjail":
-#   1. Claude Code via npm (the way a human installs it)
-#   2. optional Claude login seeding and Codex CLI installation
+#   1. Claude Code via npm and optional Codex CLI installation
+#   2. optional Claude login seeding
 #   3. agentjail via the SHIPPED install.sh (LOCAL_TARBALL seam) — the true
 #      user path: checksum verify, ~/.agentjail/bin, service install, hook merge
 #   4. a realistic seed project (~/work/demo) with allowed + forbidden remotes
@@ -134,12 +134,13 @@ fi
 # Codex is installed only for the explicit live-agent approval scenario.
 # Authentication is injected later by the scenario runner.
 if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
-    if ! command -v codex >/dev/null 2>&1 || [ "$(codex --version 2>/dev/null)" != "codex-cli 0.146.0" ]; then
-        log "installing Codex CLI 0.146.0 for approval compatibility"
+    codex_version="${AGENTJAIL_TESTBED_CODEX_VERSION:-0.146.0}"
+    if ! command -v codex >/dev/null 2>&1 || [ "$(codex --version 2>/dev/null)" != "codex-cli $codex_version" ]; then
+        log "installing Codex CLI $codex_version"
         if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-            npm install -g @openai/codex@0.146.0
+            npm install -g "@openai/codex@$codex_version"
         else
-            sudo npm install -g @openai/codex@0.146.0
+            sudo npm install -g "@openai/codex@$codex_version"
         fi
     fi
     mkdir -p "$HOME/.codex"
@@ -231,4 +232,8 @@ if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ] \
     log "verification failed: the clean install did not wire Codex"
     exit 1
 fi
-log "done. This box now looks like a fresh dev machine with agentjail + Claude Code."
+if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
+    log "done. This box now looks like a fresh dev machine with agentjail + Claude Code + Codex."
+else
+    log "done. This box now looks like a fresh dev machine with agentjail + Claude Code."
+fi

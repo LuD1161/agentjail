@@ -9,8 +9,8 @@ agentjail is always installed **through the real user path**: a release-layout
 tarball (`make dist-tarball`) fed to the shipped `install.sh` via its
 `LOCAL_TARBALL=` seam. The installer wires every detected agent once, exactly
 as a piped end-user install does; the testbed does not run a second install to
-repair or alter that result. Claude Code is installed via npm, like a human
-would.
+repair or alter that result. Claude Code and the release operator's exact Codex
+CLI version are installed via npm, like a human would.
 
 ## Status / division of work
 
@@ -24,6 +24,8 @@ would.
 ```sh
 test/testbed/testbed.sh create <name>                 # new VM + golden snapshot
 test/testbed/testbed.sh provision <name> [--worktree <path>] [--with-codex]
+                                      [--codex-version <version>]
+                                      [--without-claude-auth]
 test/testbed/testbed.sh ssh <name>
 test/testbed/testbed.sh exec <name> -- <cmd>
 test/testbed/testbed.sh test <name> [scenario] [--codex-auth <path>]
@@ -84,16 +86,28 @@ The driver (Lima vs Tart) is auto-selected by host OS. `provision` builds the
 tarball from the given worktree (default: this repo checkout), pushes it, and
 runs `guest-provision.sh` inside the guest, which:
 
-1. installs Claude Code (`npm i -g @anthropic-ai/claude-code`),
-2. seeds the login token if `~/.agentjail-testbed/token` exists and is readable
-   on the host; otherwise installed-policy scenarios continue and live-agent
-   scenarios skip,
+1. installs Claude Code and, when requested, Codex CLI,
+2. optionally seeds the legacy Claude login for manual scenarios,
 3. runs `install.sh` with `LOCAL_TARBALL=` once and fails unless that single
    install leaves the daemon running and every detected agent wired,
 4. creates a seed project `~/work/demo` (git repo with an `origin` → allowed
    local bare remote and an `exfil` → forbidden remote, plus a dirty file).
 
-### Credential seeding (one-time, per host)
+### Live-agent credential seeding
+
+The release gate uses the current host Codex session. It requires a private
+file-backed cache at `${CODEX_AUTH_FILE:-${CODEX_HOME:-~/.codex}/auth.json}` and
+checks `codex login status` before provisioning. The exact host Codex CLI
+version is installed in the guest. Only `auth.json` is copied, immediately
+before `tunnel-agent`; the host runner and guest trap remove it afterward.
+
+This follows the official [OpenAI Codex authentication guidance](https://developers.openai.com/codex/auth)
+for a headless machine. Treat the cache like a password: never commit it, paste
+it into tickets, or pass it to a recording command. The default release gate
+fails rather than skipping if Codex auth is unavailable. See
+[ADR 0130-codex-live-gate](../../docs/adr/0130-codex-live-gate.md).
+
+The older manual Claude flow remains optional:
 
 ```sh
 claude setup-token          # prints a long-lived OAuth token
@@ -105,8 +119,8 @@ chmod 600 ~/.agentjail-testbed/token
 Provision exports it as `CLAUDE_CODE_OAUTH_TOKEN` in the guest's `~/.bashrc`
 (zsh on macOS — see Mac TODO below). The token is never baked into an image
 and never committed. A host sandbox may deliberately make the file unreadable;
-that does not block the clean-install release gate, but authenticated live-agent
-scenarios report `SKIP`.
+that does not block the clean-install release gate. The release gate explicitly
+disables this seed and runs Codex instead.
 
 For the live Codex approval scenario, opt in to copying only the current
 Codex `auth.json` into the disposable guest:

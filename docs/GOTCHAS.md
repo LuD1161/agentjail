@@ -789,6 +789,17 @@ broker would faithfully inject AWS credentials into an agent-controlled file.
   test a real PATH-shadowing lookalike. See ADR 0129-credentialed-cli-bootstrap
   and AGE-276.
 
+## 58. An optional live-agent gate is not a release gate
+
+The release command included a real Claude scenario, but missing credentials
+turned it into a successful skip. Every local test stayed green while machines
+without the applicable plan exercised no authenticated model loop at all.
+
+- **Rule:** a release-required integration must fail when its required auth is
+  absent. Seed one explicitly selected harness immediately before the scenario,
+  clean it afterward, and keep optional compatibility probes outside that gate.
+  See ADR 0130-codex-live-gate.
+
 ---
 
 ## Testing gotchas

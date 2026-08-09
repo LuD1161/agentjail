@@ -23,6 +23,11 @@ hook() {
 
 # install wiring
 grep -q agentjail-hook "$HOME/.claude/settings.json" && scn_ok "hook wired in settings.json" || scn_fail "hook wired in settings.json"
+if command -v codex >/dev/null 2>&1; then
+    grep -q 'agentjail-hook --agent=codex' "$HOME/.codex/hooks.json" \
+        && scn_ok "Codex hook wired in hooks.json" \
+        || scn_fail "Codex hook wired in hooks.json"
+fi
 # macOS uses launchd (LaunchAgent plist); Linux uses systemd --user.
 if [ "$(uname -s)" = "Darwin" ]; then
     launchctl list 2>/dev/null | grep -q agentjail && scn_ok "daemon active (launchd)" || scn_fail "daemon active (launchd)"

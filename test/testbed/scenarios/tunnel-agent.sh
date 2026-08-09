@@ -1,35 +1,48 @@
 #!/usr/bin/env bash
-# tunnel-agent.sh — a REAL Claude Code task through the transparent tunnel.
+# tunnel-agent.sh — a REAL Codex task through the transparent tunnel.
 #
 # The only scenario that runs a live agent (not curl, not a hook-JSON probe)
 # through `agentjail-shield --tunnel` and asserts the tunnel DECRYPTED and
 # captured its own model traffic. This is the fixture the curl matrix cannot be:
-# a real multi-turn model loop over TLS to api.anthropic.com, which is exactly
+# a real model loop over TLS to OpenAI, which is exactly
 # what the h2 MITM has to intercept. See AGE-223 and plans/010-linux-tunnel-h2-e2e.
 #
 # Bodies are NOT persisted (ADR 0077) — we assert on per-request metadata:
 # decrypted host, path, byte counts, and redaction hygiene.
 #
-# Needs (seeded by guest-provision): claude logged in, sqlite3, jq.
+# Needs: Codex installed plus a disposable auth cache injected by testbed.sh.
 # testbed-mode: single
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 
 SHIELD="$HOME/.agentjail/bin/agentjail-shield"
+AJ="$HOME/.agentjail/bin/agentjail"
 DB="$HOME/.agentjail/network.db"
 WORK="$HOME/work/pelican"
 
-# This scenario needs a real Claude login (a seeded ~/.claude-token, from
-# ~/.agentjail-testbed/token) plus claude + sqlite3. When any is absent — e.g. a
-# token-less CI box — SKIP cleanly (exit 0) so the release gate still passes; it
-# runs for real on a machine equipped with a token. `agentjail-shield` missing is
-# a genuine failure, not a skip.
-command -v claude   >/dev/null || { echo "### SKIP tunnel-agent: claude not installed"; exit 0; }
-command -v sqlite3  >/dev/null || { echo "### SKIP tunnel-agent: sqlite3 not installed"; exit 0; }
-[ -f "$HOME/.claude-token" ]   || { echo "### SKIP tunnel-agent: no ~/.claude-token (seed ~/.agentjail-testbed/token to run this gate)"; exit 0; }
+# Auth is copied only for this scenario and removed on every exit. Treat it as
+# a password. See ADR 0130-codex-live-gate.
+cleanup() {
+    rm -f /tmp/codex-auth.json "$HOME/.codex/auth.json"
+}
+trap cleanup EXIT INT TERM
 
-scn_init "tunnel-agent" "real Claude session through --tunnel; tunnel decrypts its own model traffic"
+scn_init "tunnel-agent" "real Codex session through --tunnel; tunnel decrypts its own model traffic"
 [ -x "$SHIELD" ] && scn_ok "agentjail-shield installed" || { scn_fail "agentjail-shield installed"; scn_finish; exit; }
+command -v codex >/dev/null 2>&1 && scn_ok "Codex CLI installed" || { scn_fail "Codex CLI installed"; scn_finish; exit; }
+command -v sqlite3 >/dev/null 2>&1 || { scn_fail "sqlite3 installed"; scn_finish; exit; }
+if [ ! -f /tmp/codex-auth.json ]; then
+    scn_fail "disposable Codex auth was explicitly provided"
+    scn_finish
+    exit
+fi
+mkdir -p "$HOME/.codex"
+chmod 700 "$HOME/.codex"
+install -m 0600 /tmp/codex-auth.json "$HOME/.codex/auth.json"
+rm -f /tmp/codex-auth.json
+codex login status >/dev/null 2>&1 \
+    && scn_ok "Codex accepts the disposable authenticated session" \
+    || { scn_fail "Codex accepts the disposable authenticated session"; scn_finish; exit; }
 
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK" || { scn_fail "workspace writable"; scn_finish; exit; }
 git init -q 2>/dev/null || true
@@ -42,18 +55,12 @@ echo "  network.db watermark before: $BEFORE"
 # One self-contained file, no CDN — the point is the model loop, not the art.
 TASK="Create pelican.html in the current directory: a single self-contained HTML page with an inline SVG drawing of a pelican (no external CDN links, no frameworks). Keep it under 120 lines. Then stage and commit it with git. Report the file you created."
 
-# guest_exec runs non-interactive bash, so the rcfile where provision exported
-# CLAUDE_CODE_OAUTH_TOKEN is never sourced. Load the seeded token here so the
-# real `claude -p` is authenticated.
-[ -f "$HOME/.claude-token" ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-token")"
-[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && scn_ok "Claude token present in scenario env" || scn_fail "Claude token present in scenario env"
-
 echo "  === running the agent through the tunnel ==="
 RUN_LOG="$WORK/.run.log"
-timeout 900 "$SHIELD" --tunnel --mitm -- \
-  claude -p "$TASK" \
-  --allowedTools "Write" "Edit" "Bash" "Read" \
-  --output-format text \
+timeout 900 "$AJ" run --tunnel --no-git-ssh -- \
+  codex --dangerously-bypass-approvals-and-sandbox \
+  --dangerously-bypass-hook-trust -C "$WORK" \
+  exec --ephemeral "$TASK" \
   >"$RUN_LOG" 2>&1 || true
 tail -6 "$RUN_LOG" | grep -vE "landlock_add_rule|skip /home|denying read" | sed 's/^/    /'
 
@@ -77,13 +84,13 @@ fi
 grep -qi "<svg" "$WORK/pelican.html" 2>/dev/null && scn_ok "artifact contains inline SVG" || scn_fail "artifact contains inline SVG"
 
 # 2. The tunnel DECRYPTED the model traffic. A tunnel that fell back to netproxy,
-#    or that failed to MITM the TLS, captures zero rows for the Anthropic host.
+#    or that failed to MITM TLS, captures zero OpenAI/Codex model rows.
 NEW_TOTAL="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE;" 2>/dev/null || echo 0)"
-API_REQS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and host like '%anthropic%' and path like '%messages%';" 2>/dev/null || echo 0)"
-API_RESP="$(sqlite3 "$DB" "select coalesce(sum(response_size),0) from network_requests where id > $BEFORE and host like '%anthropic%';" 2>/dev/null || echo 0)"
+API_REQS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%') and (path like '%responses%' or path like '%codex%');" 2>/dev/null || echo 0)"
+API_RESP="$(sqlite3 "$DB" "select coalesce(sum(response_size),0) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%');" 2>/dev/null || echo 0)"
 echo "  captured: $NEW_TOTAL new rows, $API_REQS model turns, ${API_RESP}B decrypted response"
 [ "$NEW_TOTAL" -gt 0 ] && scn_ok "tunnel captured new requests" || scn_fail "tunnel captured new requests"
-[ "$API_REQS" -gt 0 ] && scn_ok "tunnel decrypted model turns (/v1/messages)" || scn_fail "tunnel decrypted model turns (/v1/messages)"
+[ "$API_REQS" -gt 0 ] && scn_ok "tunnel decrypted Codex model traffic" || scn_fail "tunnel decrypted Codex model traffic"
 [ "$API_RESP" -gt 0 ] && scn_ok "tunnel saw decrypted response bytes" || scn_fail "tunnel saw decrypted response bytes"
 
 # 3. Credential hygiene — the capture is only publishable if nothing secret
