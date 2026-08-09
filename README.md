@@ -299,6 +299,58 @@ agentjail install --with-path-shim    # wrap `claude`, `codex`, and Cursor's `ag
 
 By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands enter the canonical `agentjail run --tunnel -- <agent>` launch path without a special command. Child arguments keep the same boundary and policy defaults, including session SSH-agent setup, behave identically; the shim adds network visibility without bypassing `agentjail run`.
 
+### Credentialed CLI tools
+
+AWS CLI, `kubectl`, and GitHub CLI can receive an explicitly selected credential
+from AgentJail's encrypted local broker without exposing the host's `~/.aws`,
+`~/.kube`, or `~/.config/gh` stores.
+
+Import a credential while outside the sandbox:
+
+```sh
+# Reads AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and optional session/region vars.
+agentjail credential set aws/default --tool aws --from-current-env
+
+# Imports a single-cluster/context/user kubeconfig with inline credentials.
+agentjail credential set kube/dev --tool kubectl --from-file ./dev.kubeconfig
+
+# Reads GH_TOKEN (or GITHUB_TOKEN).
+agentjail credential set github/default --tool gh --from-current-env
+
+agentjail credential list
+```
+
+Select credentials before launching the coding agent:
+
+```sh
+agentjail run \
+  --credential=aws=aws/default \
+  --credential=kubectl=kube/dev \
+  --credential=gh=github/default \
+  -- codex
+```
+
+The shield resolves each CLI binary before sandbox activation, rejects binaries
+inside the working tree or temporary directory, retrieves the named credential
+over the authenticated broker socket, and creates only that session's standard
+interface: AWS environment variables, a mode-0600 generated kubeconfig named by
+`KUBECONFIG`, or `GH_TOKEN`. Generated files and grants are cleaned when the
+session exits; a later launch removes artifacts abandoned by a killed shield
+after verifying their owner process is gone.
+
+Kubeconfig import is strict and self-contained: `exec` and `auth-provider`
+plugins, `tokenFile`, certificate/key/CA file paths, unknown fields, and multiple
+YAML documents are rejected. Embed the token or certificate/key data instead;
+AgentJail never executes or follows credential sources from the imported file.
+
+This first OSS path performs **direct credential delivery**. The agent can read
+credentials made available to its own environment or session file, and a root
+or broadly privileged credential remains root or broadly privileged. Provider
+IAM/RBAC is the current scope boundary. Credential policy, company policy, and
+general JIT/Vault/OpenBao issuance are later layers that plug into the same
+issuer-independent adapter contract. See
+[ADR 0129-credentialed-cli-bootstrap](./docs/adr/0129-credentialed-cli-bootstrap.md).
+
 It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstall, `agentjail update`, and daemon auto-update all restore the complete shim set rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 
 Each shim **fails open**. If the shield binary is missing (interrupted upgrade, partial uninstall), it warns loudly and runs the real agent unshielded rather than breaking it ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md)).

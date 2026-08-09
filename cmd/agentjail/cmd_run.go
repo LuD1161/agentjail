@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,8 @@ that prevent access to credentials, host processes, and unrestricted network.
 Examples:
   agentjail run -- claude
   agentjail run --verbose -- claude
+  agentjail run --credential=aws=aws/default -- claude
+  agentjail run --credential=kubectl=kube/dev --credential=gh=github/default -- codex
   agentjail run --git-ssh -- codex
   agentjail run --no-git-ssh -- claude
   agentjail run -- codex --approval-mode full-auto
@@ -99,6 +102,10 @@ func runRunCmd(args []string) int {
 	}
 	if options.noSandbox && options.verbose {
 		fmt.Fprintln(os.Stderr, "agentjail run: --verbose controls shield logs and cannot be combined with --no-sandbox")
+		return 2
+	}
+	if options.noSandbox && len(options.credentials) > 0 {
+		fmt.Fprintln(os.Stderr, "agentjail run: credentialed tools require the OS sandbox; remove --no-sandbox")
 		return 2
 	}
 
@@ -186,6 +193,9 @@ func runRunCmd(args []string) int {
 	if options.verbose {
 		shieldArgs = append(shieldArgs, "--verbose")
 	}
+	for _, credential := range options.credentials {
+		shieldArgs = append(shieldArgs, "--credential="+credential)
+	}
 	shieldArgs = append(shieldArgs, "--", agentPath)
 	shieldArgs = append(shieldArgs, args[1:]...)
 
@@ -202,14 +212,18 @@ func runRunCmd(args []string) int {
 }
 
 type runOptions struct {
-	tunnelMode bool
-	noSandbox  bool
-	gitSSH     bool
-	noGitSSH   bool
-	verbose    bool
+	tunnelMode  bool
+	noSandbox   bool
+	gitSSH      bool
+	noGitSSH    bool
+	verbose     bool
+	credentials []string
 }
 
 func isRunLaunchFlag(arg string) bool {
+	if strings.HasPrefix(arg, "--credential=") {
+		return true
+	}
 	switch arg {
 	case "--tunnel", "--no-sandbox", "--git-ssh", "--no-git-ssh", "--verbose":
 		return true
@@ -223,6 +237,15 @@ func isRunLaunchFlag(arg string) bool {
 func parseRunOptions(args []string) (runOptions, []string) {
 	var options runOptions
 	for len(args) > 0 {
+		if strings.HasPrefix(args[0], "--credential=") {
+			value := strings.TrimPrefix(args[0], "--credential=")
+			if value == "" {
+				return options, args
+			}
+			options.credentials = append(options.credentials, value)
+			args = args[1:]
+			continue
+		}
 		switch args[0] {
 		case "--tunnel":
 			options.tunnelMode = true

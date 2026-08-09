@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestParseRunOptionsCredentialMappings(t *testing.T) {
+	t.Parallel()
+	options, rest := parseRunOptions([]string{
+		"--credential=aws=aws/default",
+		"--credential=kubectl=kube/dev",
+		"--",
+		"codex",
+	})
+	if len(options.credentials) != 2 || options.credentials[0] != "aws=aws/default" || options.credentials[1] != "kubectl=kube/dev" {
+		t.Fatalf("credentials = %#v", options.credentials)
+	}
+	if len(rest) != 2 || rest[0] != "--" || rest[1] != "codex" {
+		t.Fatalf("rest = %#v", rest)
+	}
+}
+
 // TestResolveRealAgent_SkipsShimDir verifies that resolveRealAgent finds the
 // real binary even when the agentjail shim dir (~/.agentjail/bin) is FIRST on
 // PATH -- the ordering transparent interception needs. A naive exec.LookPath
