@@ -8,6 +8,7 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
@@ -19,14 +20,16 @@ type secretsRPCRequest struct {
 	Scope   string `json:"scope,omitempty"`
 	TTL     string `json:"ttl,omitempty"`
 	GrantID string `json:"grant_id,omitempty"`
+	Tool    string `json:"tool,omitempty"`
 }
 
 type secretsRPCResponse struct {
-	OK      bool              `json:"ok"`
-	Error   string            `json:"error,omitempty"`
-	EnvVars map[string]string `json:"env_vars,omitempty"`
-	GrantID string            `json:"grant_id,omitempty"`
-	Expires string            `json:"expires,omitempty"`
+	OK       bool                      `json:"ok"`
+	Error    string                    `json:"error,omitempty"`
+	EnvVars  map[string]string         `json:"env_vars,omitempty"`
+	GrantID  string                    `json:"grant_id,omitempty"`
+	Expires  string                    `json:"expires,omitempty"`
+	Delivery *credentialtools.Delivery `json:"delivery,omitempty"`
 }
 
 type activeGrant struct {

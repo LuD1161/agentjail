@@ -158,7 +158,7 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	// ipv6Mode gates the macOS tunnel's IPv6 datapath only (AGE-262); Linux
 	// has no equivalent knob yet, so the resolved value is a no-op here.
 	_ = ipv6Mode
@@ -286,13 +286,13 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	landlockRulesetFD := -1
 	var landlockErr error
 	if tunnelSess != nil {
-		fd, err := buildLandlockRuleset(cfg, netproxyPort)
+		fd, err := buildLandlockRuleset(cfg, netproxyPort, credentialTools.binaryPaths())
 		landlockErr = err
 		if err == nil {
 			landlockRulesetFD = fd
 		}
 	} else {
-		landlockErr = applyLandlock(cfg, netproxyPort)
+		landlockErr = applyLandlock(cfg, netproxyPort, credentialTools.binaryPaths())
 	}
 
 	// Apply Landlock to the current process.  The agent (run as a child
@@ -330,6 +330,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			Actor:     "shield",
 		})
 	}
+	credentialSession, err := prepareCredentialSession(credentialTools, ctlToken)
+	if err != nil {
+		cleanupNetproxy(netproxyCmd)
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Build the agent's environment: clean allowlist + strip defence-in-depth + proxy vars + granted secrets.
 	env := sandbox.BuildCleanEnv(os.Environ(), cfg)
@@ -358,6 +364,17 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	}
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, ctlToken)
 	env = append(env, grantEnvVars...)
+	env = credentialSession.applyEnv(env)
+	for _, tool := range credentialTools {
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready with broker credential %q\n", tool.Tool, tool.Name)
+		slog.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.CredentialToolReady,
+			Entity:    tool.Name,
+			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath},
+			Actor:     "shield",
+		})
+	}
 
 	elapsed := time.Since(startTime)
 	if noColor {
@@ -417,6 +434,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// Kill and reap the netproxy child (zombie cleanup).
 	cleanupNetproxy(netproxyCmd)
 	revokeSecretGrants(activeGrants, ctlToken)
+	credentialSession.cleanup(ctlToken)
 
 	// Print session summary.
 	printSessionSummary(noColor, sessionDuration)
@@ -655,8 +673,8 @@ func safeGitGrant(p, home string) bool {
 // with buildLandlockRuleset and hands the fd to the post-nsenter harden shim,
 // which calls restrict_self AFTER nsenter has joined the namespaces — see
 // restrictSelfWithRuleset and the AGE-166 note in runShield.
-func applyLandlock(cfg *config.PolicyConfig, netproxyPort int) error {
-	rulesetFd, err := buildLandlockRuleset(cfg, netproxyPort)
+func applyLandlock(cfg *config.PolicyConfig, netproxyPort int, credentialToolPaths []string) error {
+	rulesetFd, err := buildLandlockRuleset(cfg, netproxyPort, credentialToolPaths)
 	if err != nil {
 		return err
 	}
@@ -687,7 +705,7 @@ func restrictSelfWithRuleset(rulesetFd int) error {
 // entered the namespaces: nsenter opens the holder's /proc/<pid>/ns/* (nsfs
 // inodes that Landlock cannot grant — landlock_add_rule returns EBADFD on
 // nsfs), so restricting before nsenter would deny that open (AGE-166).
-func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, error) {
+func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int, credentialToolPaths []string) (int, error) {
 	// Probe supported Landlock ABI version (ruleset_attr=NULL, size=0, flags=VERSION).
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if errno != 0 {
@@ -969,6 +987,11 @@ func buildLandlockRuleset(cfg *config.PolicyConfig, netproxyPort int) (int, erro
 	for _, p := range roSysDirs {
 		if err := allowPath(p, roAccess); err != nil {
 			return -1, fmt.Errorf("allow %s: %w", p, err)
+		}
+	}
+	for _, p := range credentialToolPaths {
+		if err := allowPath(p, roFileAccess|uint64(unix.LANDLOCK_ACCESS_FS_EXECUTE)); err != nil {
+			return -1, fmt.Errorf("allow credentialed tool %s: %w", p, err)
 		}
 	}
 	// /dev needs write access for /dev/null, /dev/zero, /dev/urandom, ptys, etc.

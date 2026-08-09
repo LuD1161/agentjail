@@ -148,7 +148,7 @@ func TestStartTunnelDarwinFailsOpenWhenAppMissing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		startTunnelDarwin(context.Background(), nil, "/bin/echo", nil, "", true, false, sandbox.SSHAuthSock{}, emitter, fallback)
+		startTunnelDarwin(context.Background(), nil, "/bin/echo", nil, "", true, false, sandbox.SSHAuthSock{}, nil, emitter, fallback)
 	}()
 
 	select {

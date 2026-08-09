@@ -756,6 +756,39 @@ unreadable.
 - **Rule:** preserve the file/directory type when constructing Landlock rules,
   and test the actual access mask rather than only the path list.
 
+## 55. An environment token does not imply config-file independence
+
+The GitHub adapter set `GH_TOKEN`, and its unit and local CLI tests passed.
+GitHub CLI 2.45 still probed `~/.config/gh/hosts.yml` during startup; the clean
+shielded gate correctly denied that host credential store and the command quit.
+
+- **Rule:** test each credential adapter with a denied ambient credential store
+  and the oldest supported client. Redirect optional CLI configuration into the
+  private session even when the documented token variable has precedence. See
+  ADR 0129-credentialed-cli-bootstrap and AGE-278.
+
+## 56. Counting kubeconfig contexts does not make an import self-contained
+
+The first kubeconfig validator required one cluster, context, and user, so all
+positive tests passed. The raw document was still handed to kubectl unchanged;
+an `exec` plugin, `tokenFile`, or certificate path could therefore reach outside
+the broker material model at runtime.
+
+- **Rule:** validate every downstream-interpreted credential source, reject
+  unknown fields and extra documents, and test hostile configs through the
+  user-facing import path. See ADR 0129-credentialed-cli-bootstrap and AGE-277.
+
+## 57. Exact PATH resolution can exactly select an attacker binary
+
+The bootstrap resolved, statted, and later rechecked the first `aws` in PATH.
+Those checks all passed for an executable created inside the workspace, so the
+broker would faithfully inject AWS credentials into an agent-controlled file.
+
+- **Rule:** binary identity checks do not establish trust. Reject credentialed
+  executables from agent-writable roots before requesting broker material, then
+  test a real PATH-shadowing lookalike. See ADR 0129-credentialed-cli-bootstrap
+  and AGE-276.
+
 ---
 
 ## Testing gotchas

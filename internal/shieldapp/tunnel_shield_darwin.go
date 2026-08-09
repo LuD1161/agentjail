@@ -153,7 +153,7 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 // returns, so this is dead code reachable only if that contract is violated;
 // the explicit return keeps that violation a compile error away from a
 // fallthrough double-launch rather than a silent one.
-func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, emitter audit.Emitter, fallback func()) {
+func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, emitter audit.Emitter, fallback func()) {
 	logger := slog.Default()
 	sessionID := generateSessionID()
 	logger.Info("tunnel session started", "session_id", sessionID)
@@ -494,6 +494,24 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	ctlToken, _ := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, ctlToken)
 	env = append(env, grantEnvVars...)
+	credentialSession, credentialErr := prepareCredentialSession(credentialTools, ctlToken)
+	if credentialErr != nil {
+		cleanupGateway()
+		_, _ = exec.Command(appPath, "stop").CombinedOutput()
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", credentialErr)
+		os.Exit(1)
+	}
+	env = credentialSession.applyEnv(env)
+	for _, tool := range credentialTools {
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready with broker credential %q\n", tool.Tool, tool.Name)
+		logger.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath)
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.CredentialToolReady,
+			Entity:    tool.Name,
+			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath},
+			Actor:     "shield",
+		})
+	}
 
 	for k, v := range caEnvVars {
 		env = append(env, k+"="+v)
@@ -547,6 +565,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	_, _ = exec.Command(appPath, "stop").CombinedOutput()
 	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, "")
 	revokeSecretGrants(activeGrants, ctlToken)
+	credentialSession.cleanup(ctlToken)
 
 	os.Exit(exitCode)
 }

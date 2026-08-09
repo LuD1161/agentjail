@@ -19,7 +19,7 @@ import (
 //
 // It prints a loud warning and execs the agent without any sandbox.
 // The hook layer (agentjail-hook) still runs on every PreToolUse call.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, policyPath string, _ time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, _ time.Time, emitter audit.Emitter) {
 	if profilePrint {
 		fmt.Fprintln(os.Stderr, "agentjail-shield: sandbox is not supported on this platform.")
 		fmt.Fprintln(os.Stderr, "Supported platforms: darwin (macOS), linux (Landlock, kernel 5.13+)")
@@ -38,6 +38,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	_ = noNetproxy
 	_ = policyPath
 	_ = ipv6Mode
+	_ = credentialTools
 
 	_ = emitter.Emit(context.Background(), audit.Event{
 		EventType: audit.ShieldFailed,
