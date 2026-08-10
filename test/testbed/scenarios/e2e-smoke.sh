@@ -21,13 +21,21 @@ hook() {
     scn_check "$1" "$2" "$dec"
 }
 
-# install wiring
-grep -q agentjail-hook "$HOME/.claude/settings.json" && scn_ok "hook wired in settings.json" || scn_fail "hook wired in settings.json"
+# install wiring follows the selected-agent contract from ADR 0053.
+installed_agent_hooks=0
+if command -v claude >/dev/null 2>&1; then
+    installed_agent_hooks=$((installed_agent_hooks+1))
+    grep -q agentjail-hook "$HOME/.claude/settings.json" \
+        && scn_ok "Claude hook wired in settings.json" \
+        || scn_fail "Claude hook wired in settings.json"
+fi
 if command -v codex >/dev/null 2>&1; then
+    installed_agent_hooks=$((installed_agent_hooks+1))
     grep -q 'agentjail-hook --agent=codex' "$HOME/.codex/hooks.json" \
         && scn_ok "Codex hook wired in hooks.json" \
         || scn_fail "Codex hook wired in hooks.json"
 fi
+[ "$installed_agent_hooks" -gt 0 ] || scn_fail "a supported coding agent is installed"
 # macOS uses launchd (LaunchAgent plist); Linux uses systemd --user.
 if [ "$(uname -s)" = "Darwin" ]; then
     launchctl list 2>/dev/null | grep -q agentjail && scn_ok "daemon active (launchd)" || scn_fail "daemon active (launchd)"
