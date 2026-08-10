@@ -873,6 +873,18 @@ Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md). All commits are signed off (DCO) and follow Conventional Commits.
 
+The clean-VM release gate is agent-selectable and currently defaults to Codex:
+
+```sh
+AGENTJAIL_TESTBED_AGENT=codex make e2e-release
+```
+
+Run it once on a Linux host (Lima/KVM) and once on Apple Silicon macOS (Tart)
+before tagging. The Codex gate checks host RAM and disk before boot, requires a
+file-based auth cache, and fails rather than skipping when authentication is
+unavailable. Its VM is stopped and deleted on every exit path by default; see
+[`test/testbed/README.md`](./test/testbed/README.md).
+
 ## License
 
 [Apache-2.0](./LICENSE) - explicit defensive patent grant. Third-party notices

@@ -74,12 +74,12 @@ else
     echo "Host build/test/smoke gates: skipped (scenario-only retry)"
 fi
 
-bash "$TESTBED_DIR/testbed.sh" reset "$TESTBED_NAME"
-bash "$TESTBED_DIR/testbed.sh" provision "$TESTBED_NAME" \
-    --worktree "$WORKTREE" \
-    --with-codex
-bash "$TESTBED_DIR/testbed.sh" test "$TESTBED_NAME" codex-approval \
-    --codex-auth "$AUTH_FILE"
+AGENTJAIL_TESTBED_AGENT=codex \
+    bash "$TESTBED_DIR/testbed.sh" reset "$TESTBED_NAME"
+AGENTJAIL_TESTBED_AGENT=codex \
+    bash "$TESTBED_DIR/testbed.sh" provision "$TESTBED_NAME" --worktree "$WORKTREE"
+AGENTJAIL_TESTBED_AGENT=codex \
+    bash "$TESTBED_DIR/testbed.sh" test "$TESTBED_NAME" codex-approval --codex-auth "$AUTH_FILE"
 
 git diff --check
 git status --short

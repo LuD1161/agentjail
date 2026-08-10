@@ -31,6 +31,129 @@ DRIVER="$(detect_driver)"
 
 inst() { echo "${TB_PREFIX}$1"; }
 
+# ---- host resources --------------------------------------------------------
+
+# These are admission requirements, not guesses about total host capacity.
+# Keep them aligned with lima-template.yaml and the Tart golden image.
+TESTBED_REQUIRED_MEMORY_GIB="${AGENTJAIL_TESTBED_REQUIRED_MEMORY_GIB:-4}"
+TESTBED_REQUIRED_DISK_GIB="${AGENTJAIL_TESTBED_REQUIRED_DISK_GIB:-20}"
+TESTBED_HOST_MEMORY_RESERVE_GIB="${AGENTJAIL_TESTBED_HOST_MEMORY_RESERVE_GIB:-2}"
+TESTBED_HOST_DISK_RESERVE_GIB="${AGENTJAIL_TESTBED_HOST_DISK_RESERVE_GIB:-5}"
+
+validate_resource_gib() {
+    local key="$1" value="$2"
+    case "$value" in
+        ''|*[!0-9]*) die "$key must be a whole number of GiB, got '$value'" ;;
+    esac
+    [ "$value" -gt 0 ] || die "$key must be greater than zero"
+}
+
+validate_resource_gib AGENTJAIL_TESTBED_REQUIRED_MEMORY_GIB "$TESTBED_REQUIRED_MEMORY_GIB"
+validate_resource_gib AGENTJAIL_TESTBED_REQUIRED_DISK_GIB "$TESTBED_REQUIRED_DISK_GIB"
+validate_resource_gib AGENTJAIL_TESTBED_HOST_MEMORY_RESERVE_GIB "$TESTBED_HOST_MEMORY_RESERVE_GIB"
+validate_resource_gib AGENTJAIL_TESTBED_HOST_DISK_RESERVE_GIB "$TESTBED_HOST_DISK_RESERVE_GIB"
+
+gib_bytes() { echo $(( $1 * 1024 * 1024 * 1024 )); }
+
+bytes_gib() {
+    awk -v bytes="$1" 'BEGIN { printf "%.1f", bytes / 1073741824 }'
+}
+
+host_available_memory_bytes() {
+    case "$(uname -s)" in
+        Linux)
+            awk '/^MemAvailable:/ { printf "%.0f\n", $2 * 1024; found=1; exit }
+                 END { if (!found) exit 1 }' /proc/meminfo
+            ;;
+        Darwin)
+            vm_stat | darwin_available_memory_bytes
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# Free + inactive + speculative pages conservatively approximate the memory
+# macOS can reclaim without swapping; purgeable pages may overlap inactive.
+darwin_available_memory_bytes() {
+    awk '
+        NR == 1 {
+            if (match($0, /page size of [0-9]+ bytes/)) {
+                size = substr($0, RSTART + 13, RLENGTH - 19)
+            }
+            next
+        }
+        /^Pages free:/        { freep=$3 }
+        /^Pages inactive:/    { inactive=$3 }
+        /^Pages speculative:/ { speculative=$3 }
+        END {
+            gsub(/\./, "", freep); gsub(/\./, "", inactive)
+            gsub(/\./, "", speculative)
+            if (!size) exit 1
+            printf "%.0f\n", (freep + inactive + speculative) * size
+        }'
+}
+
+testbed_storage_dir() {
+    if [ -n "${AGENTJAIL_TESTBED_STORAGE_DIR:-}" ]; then
+        echo "$AGENTJAIL_TESTBED_STORAGE_DIR"
+        return
+    fi
+    case "$DRIVER" in
+        lima) echo "${LIMA_HOME:-$HOME/.lima}" ;;
+        tart) echo "$HOME/.tart" ;;
+    esac
+}
+
+existing_parent() {
+    local path="$1"
+    while [ ! -e "$path" ]; do
+        [ "$path" != "/" ] || break
+        path="$(dirname "$path")"
+    done
+    echo "$path"
+}
+
+host_available_disk_bytes() {
+    local path
+    path="$(existing_parent "$(testbed_storage_dir)")"
+    df -Pk "$path" | awk 'NR == 2 { printf "%.0f\n", $4 * 1024; found=1 }
+                           END { if (!found) exit 1 }'
+}
+
+# assert_host_resources <name> <create|reuse>
+#
+# A new VM must fit its full configured disk plus the host reserve. A reused VM
+# already owns its disk, but still needs the reserve for provisioning writes.
+assert_host_resources() {
+    local name="${1:?assert_host_resources: name required}"
+    local allocation="${2:?assert_host_resources: create or reuse required}"
+    case "$allocation" in create|reuse) ;; *) die "invalid resource allocation mode: $allocation" ;; esac
+
+    local available_memory required_memory available_disk required_disk
+    available_memory="$(host_available_memory_bytes)" \
+        || die "cannot determine available host memory; refusing to start $(inst "$name")"
+    required_memory="$(gib_bytes $((TESTBED_REQUIRED_MEMORY_GIB + TESTBED_HOST_MEMORY_RESERVE_GIB)))"
+    if [ "$available_memory" -lt "$required_memory" ]; then
+        die "insufficient host RAM for $(inst "$name"): $(bytes_gib "$available_memory") GiB available, $(bytes_gib "$required_memory") GiB required (${TESTBED_REQUIRED_MEMORY_GIB} GiB VM + ${TESTBED_HOST_MEMORY_RESERVE_GIB} GiB host reserve).
+Stop another VM or lower AGENTJAIL_TESTBED_REQUIRED_MEMORY_GIB only if the guest is configured for it. No VM was started."
+    fi
+
+    available_disk="$(host_available_disk_bytes)" \
+        || die "cannot determine free space for $(testbed_storage_dir); refusing to start $(inst "$name")"
+    required_disk="$(gib_bytes "$TESTBED_HOST_DISK_RESERVE_GIB")"
+    if [ "$allocation" = create ]; then
+        required_disk=$((required_disk + $(gib_bytes "$TESTBED_REQUIRED_DISK_GIB")))
+    fi
+    if [ "$available_disk" -lt "$required_disk" ]; then
+        local disk_detail="${TESTBED_HOST_DISK_RESERVE_GIB} GiB reserve"
+        [ "$allocation" = reuse ] || disk_detail="$disk_detail + ${TESTBED_REQUIRED_DISK_GIB} GiB VM"
+        die "insufficient host disk for $(inst "$name"): $(bytes_gib "$available_disk") GiB free at $(testbed_storage_dir), $(bytes_gib "$required_disk") GiB required ($disk_detail).
+Free space or select a larger testbed storage volume. No VM was started."
+    fi
+
+    log "resource preflight passed: $(bytes_gib "$available_memory") GiB RAM available, $(bytes_gib "$available_disk") GiB disk free"
+}
+
 # ---- Lima driver -----------------------------------------------------------
 
 lima_running() { limactl list --format '{{.Name}} {{.Status}}' | grep -q "^$(inst "$1") Running"; }

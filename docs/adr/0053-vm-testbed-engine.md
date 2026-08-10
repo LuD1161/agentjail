@@ -58,5 +58,36 @@ like a real end-user machine:
   main-branch build lacking Linux daemon support.
 - Cost: ~600 MB cached Ubuntu image + ~3 GB per Linux testbed on the host's data volume;
   ~20–25 GB one-time golden on the Mac (APFS clones are copy-on-write).
-- The Tart driver is written but unvalidated until the Mac-side pass
-  (`test/testbed/README.md` § "Mac side").
+- The Tart driver and chaos scenarios were validated on macOS in AGE-236;
+  every release still requires a per-commit run on the target host.
+
+## 2026-08-09 addendum: selected real-agent gate
+
+`AGENTJAIL_TESTBED_AGENT` is the single host-to-guest selection contract. It
+accepts `codex` and `claude-code`; Codex is the default while its integration is
+under active acceptance testing. Provisioning installs only the selected agent,
+and the release gate chooses that agent's live scenario. A selected real-agent
+gate may not convert missing authentication into a successful skip.
+
+`AGENTJAIL_TESTBED_NAME` is the VM-isolation contract for parallel worktrees.
+The default includes the selected agent, and concurrent worktrees set distinct
+names; no gate may assume the historical global `release-gate` VM is private.
+
+The gate admits a VM only when current reclaimable memory can hold the guest
+plus a host reserve and the backing volume has the required free disk. Defaults
+match the 4 GiB/20 GiB Linux template, with 2 GiB RAM and 5 GiB disk held back
+for the host; Tart operators set the requirements to their golden-image size.
+An unreadable metric or insufficient resource fails before boot.
+
+One EXIT lifecycle owns credentials, host temporaries, partial creation, and
+the gate VM on Linux and macOS. The default destroys the gate VM after every
+outcome to release RAM and disk; `AGENTJAIL_TESTBED_KEEP_VM=1` explicitly keeps
+the disk cache but still stops the VM. Manual named testbeds remain persistent.
+
+For Codex, the host copies only a file-based auth cache immediately before the
+live scenario and removes it from the guest on normal completion or host-script
+exit. Config, sessions, plugins, and MCP definitions do not cross the boundary.
+This follows the official Codex Authentication documentation's headless-machine
+cache-copy fallback. The contract was checked against Codex CLI `0.147.0` and
+the official documentation on 2026-08-09; the live Linux and macOS results are
+recorded by the release-gate transcript for the commit under test.

@@ -9,8 +9,8 @@ agentjail is always installed **through the real user path**: a release-layout
 tarball (`make dist-tarball`) fed to the shipped `install.sh` via its
 `LOCAL_TARBALL=` seam. The installer wires every detected agent once, exactly
 as a piped end-user install does; the testbed does not run a second install to
-repair or alter that result. Claude Code is installed via npm, like a human
-would.
+repair or alter that result. `AGENTJAIL_TESTBED_AGENT` selects the agent under
+test; it defaults to `codex` and also accepts `claude-code`.
 
 ## Status / division of work
 
@@ -23,7 +23,7 @@ would.
 
 ```sh
 test/testbed/testbed.sh create <name>                 # new VM + golden snapshot
-test/testbed/testbed.sh provision <name> [--worktree <path>] [--with-codex]
+AGENTJAIL_TESTBED_AGENT=codex test/testbed/testbed.sh provision <name> [--worktree <path>]
 test/testbed/testbed.sh ssh <name>
 test/testbed/testbed.sh exec <name> -- <cmd>
 test/testbed/testbed.sh test <name> [scenario] [--codex-auth <path>]
@@ -34,6 +34,39 @@ test/testbed/testbed.sh reset <name> [tag]            # revert to golden
 test/testbed/testbed.sh ls
 test/testbed/testbed.sh destroy <name>
 ```
+
+`AGENTJAIL_TESTBED_NAME` selects the persistent VM name. It defaults to
+`release-gate-<agent>`; set it to a worktree-specific name when another agent
+may be using a testbed concurrently.
+
+### Host resource admission and cleanup
+
+Before starting a VM, the harness reads reclaimable host memory and free space
+on the Lima or Tart storage volume. A new VM defaults to a 4 GiB memory and
+20 GiB disk requirement, with 2 GiB RAM and 5 GiB disk reserved for the host.
+It fails before boot with the available and required amounts when either check
+does not pass.
+
+The requirements are configurable when a golden image uses different sizing:
+
+```sh
+AGENTJAIL_TESTBED_REQUIRED_MEMORY_GIB=6 \
+AGENTJAIL_TESTBED_REQUIRED_DISK_GIB=30 \
+AGENTJAIL_TESTBED_HOST_MEMORY_RESERVE_GIB=4 \
+AGENTJAIL_TESTBED_HOST_DISK_RESERVE_GIB=10 \
+make e2e-release
+```
+
+The backing volume defaults to `LIMA_HOME` on Linux and `~/.tart` on macOS.
+Set `AGENTJAIL_TESTBED_STORAGE_DIR` when the VM driver stores disks elsewhere;
+the directory must be on the same filesystem as the VM images.
+
+The release gate owns its VM for the duration of the run. On success, failure,
+Ctrl-C, or termination it removes injected authentication and temporary host
+files, stops the VM, and deletes the gate VM to release both RAM and disk. Set
+`AGENTJAIL_TESTBED_KEEP_VM=1` only when intentionally trading disk for a faster
+next run; retained gate VMs are still stopped. Manual `create` testbeds remain
+persistent by design, while a failed partial creation is always deleted.
 
 ### At most 2 testbeds exist at once
 
@@ -53,8 +86,8 @@ in another terminal, and destroying it to make room is a surprise this repo does
 not ship. The caller decides what to drop.
 
 **The release gate is not exempt - it asks for a slot.** `make e2e-release` needs
-`tb-release-gate` and is the one command with a job that must finish, so at the
-cap it offers to clear a slot rather than only refusing:
+its configured `tb-<name>` VM and is the one command with a job that must finish,
+so at the cap it offers to clear a slot rather than only refusing:
 
 ```
 testbed: destroy testbed dev to free a slot for the release gate? [y/N]
@@ -84,43 +117,37 @@ The driver (Lima vs Tart) is auto-selected by host OS. `provision` builds the
 tarball from the given worktree (default: this repo checkout), pushes it, and
 runs `guest-provision.sh` inside the guest, which:
 
-1. installs Claude Code (`npm i -g @anthropic-ai/claude-code`),
-2. seeds the login token if `~/.agentjail-testbed/token` exists and is readable
-   on the host; otherwise installed-policy scenarios continue and live-agent
-   scenarios skip,
+1. installs only the selected agent through npm,
+2. keeps Codex authentication out of provisioning and injects it only for the
+   live scenario,
 3. runs `install.sh` with `LOCAL_TARBALL=` once and fails unless that single
-   install leaves the daemon running and every detected agent wired,
+   non-interactive install leaves the daemon running and the selected agent wired,
 4. creates a seed project `~/work/demo` (git repo with an `origin` → allowed
    local bare remote and an `exfil` → forbidden remote, plus a dirty file).
 
-### Credential seeding (one-time, per host)
+### Codex authentication (current gate)
 
 ```sh
-claude setup-token          # prints a long-lived OAuth token
-mkdir -p ~/.agentjail-testbed
-vi ~/.agentjail-testbed/token   # paste the token, single line
-chmod 600 ~/.agentjail-testbed/token
+AGENTJAIL_TESTBED_AGENT=codex make e2e-release
+
+# Parallel worktree example:
+AGENTJAIL_TESTBED_AGENT=codex \
+AGENTJAIL_TESTBED_NAME=codex-approval-worktree \
+make e2e-release
 ```
 
-Provision exports it as `CLAUDE_CODE_OAUTH_TOKEN` in the guest's `~/.bashrc`
-(zsh on macOS — see Mac TODO below). The token is never baked into an image
-and never committed. A host sandbox may deliberately make the file unreadable;
-that does not block the clean-install release gate, but authenticated live-agent
-scenarios report `SKIP`.
+The gate requires a readable file-based Codex auth cache. Override its location
+with `CODEX_AUTH_FILE=/path/to/auth.json`. If Codex uses the OS credential store,
+configure file storage and log in before running the gate; the official Codex
+authentication guide documents `cli_auth_credentials_store = "file"` and the
+headless auth-cache copy workflow.
 
-For the live Codex approval scenario, opt in to copying only the current
-Codex `auth.json` into the disposable guest:
-
-```sh
-test/testbed/run-codex-approval-gate.sh
-```
-
-This path pins Codex CLI 0.146.0. Authentication is copied immediately before
+The default pins Codex CLI 0.147.0; override with
+`AGENTJAIL_TESTBED_CODEX_VERSION`. Authentication is copied immediately before
 the scenario rather than during provisioning, and both the guest scenario and
-host runner remove it afterward. It does not copy host Codex config, plugins,
-MCP definitions, or sessions. The complete host-side transcript is written to
-the ignored `dist/codex-approval-gate.log` file. Do not record or publish the
-guest filesystem while credentials are present.
+host runner remove it afterward, including on an interrupted host run. It does
+not copy host Codex config, plugins, MCP definitions, or sessions. Do not record
+or publish the guest filesystem while credentials are present.
 
 ---
 
@@ -225,13 +252,11 @@ Two important lessons baked into the scenario:
 
 ---
 
-## Mac side — WHAT THE MAC AGENT NEEDS TO DO
+## macOS Tart setup reference
 
-> Context for the agent working on the Mac: the Linux half already runs on the
-> Linux host. **Only do the macOS/Tart work below.** The shared scripts
-> (`testbed.sh`, `lib.sh`, `guest-provision.sh`) already contain a Tart driver,
-> written blind on the Linux host — your job is to bake the golden image,
-> then validate/fix that driver on real hardware.
+The shared scripts use Tart on Apple Silicon. The golden image and the three
+chaos scenarios were validated on macOS for AGE-236; the selected Codex release
+gate must still pass on the exact commit being released.
 
 ### 1. Install Tart
 
@@ -272,13 +297,11 @@ Golden stays stopped forever; testbeds are instant APFS clones of it.
 OS updates: re-bake the golden, never update inside a testbed (huge deltas).
 Apple EULA allows max **2 running** macOS guests — clones at rest are fine.
 
-### 3. Validate the Tart driver in `testbed.sh` / `lib.sh`
-
-The Tart code paths are marked UNVALIDATED. Walk this and fix what breaks:
+### 3. Validate the selected agent on the current commit
 
 ```sh
 test/testbed/testbed.sh create mac-dev        # clone + run + wait for IP
-test/testbed/testbed.sh provision mac-dev     # builds darwin tarball on the Mac, installs in guest
+AGENTJAIL_TESTBED_AGENT=codex test/testbed/testbed.sh provision mac-dev
 test/testbed/testbed.sh ssh mac-dev
 ```
 
@@ -295,8 +318,8 @@ Known things to verify / likely fixes (commit them when done):
       grep agentjail` on macOS, `systemctl --user is-active` on Linux.
 - [x] **Gatekeeper**: `guest-provision.sh` runs `xattr -dr com.apple.quarantine`
       on `~/.agentjail/bin` after `install.sh` on Darwin.
-- [ ] **End-to-end check**: inside the testbed, `agentjail status` green,
-      `claude` runs with the hook wired, a write to `~/.ssh/x` gets denied.
+- [ ] **Per-commit Codex gate**: `AGENTJAIL_TESTBED_AGENT=codex make e2e-release`
+      completes with a real authenticated Codex run and zero scenario skips.
 
 ### 4. Done when
 
@@ -331,12 +354,12 @@ This engine runs **on every release, not on a timer**. Before tagging `vX.Y.Z`:
 make e2e-release        # == testbed.sh gate --worktree .
 ```
 
-It resets a `release-gate` testbed to the clean golden (or creates it the first
-time — that run is slow, ~5–8 min for cloud-init + node; later runs reset in
-seconds), provisions the current worktree through the real installer, runs the
-`e2e-smoke` scenario, and **exits non-zero on any failure** so it can gate the
-tag. Wired into the pre-release checklist in `AGENTS.md`. Run it on the Linux
-host for the Linux build and on the Mac for the macOS build.
+It resets the configured gate testbed to the clean golden (or creates it),
+provisions the current worktree through the real installer, and runs the
+selected agent's live scenario. It **exits non-zero on insufficient host
+resources, missing authentication, scenario failure, or install failure** and
+deletes the gate VM afterward by default. Codex is the default. Run it on the
+Linux host for the Linux build and on the Mac for the macOS build.
 
 CI note: this is deliberately a **local** gate, not a GitHub Actions job —
 Linux needs KVM and macOS needs a self-hosted Tart host, and the release is cut

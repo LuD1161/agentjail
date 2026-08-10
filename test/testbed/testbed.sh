@@ -2,16 +2,16 @@
 # testbed.sh — persistent clean-VM sandboxes for agentjail (Stage 1+2).
 #
 # A testbed is a named VM that behaves like a real end-user machine. One
-# testbed per worktree/feature: install that build, run Claude Code against
-# it, poke for days, reset to the golden snapshot when done.
+# testbed per worktree/feature: install that build, run the selected agent
+# against it, poke for days, reset to the golden snapshot when done.
 #
 #   testbed.sh create <name>              new VM from template + golden snapshot
 #   testbed.sh ls                         list testbeds
 #   testbed.sh ssh <name>                 interactive shell
 #   testbed.sh exec <name> -- <cmd...>    run a command in the guest
-#   testbed.sh provision <name> [--worktree <path>] [--with-codex]
+#   AGENTJAIL_TESTBED_AGENT=codex testbed.sh provision <name> [--worktree <path>]
 #                                         build tarball -> install.sh ->
-#                                         Claude Code + agentjail, ready to use
+#                                         selected agent + agentjail, ready to use
 #   testbed.sh test <name> [scenario] [--codex-auth <path>]
 #                                         run a scenario (default: e2e-smoke) in-guest
 #   testbed.sh record <name> [scenario..] record scenarios (asciinema) -> reports/<ts>/
@@ -24,12 +24,123 @@
 #   testbed.sh destroy <name>             delete the VM
 #
 # Drivers: Lima/QEMU on Linux (a Linux host), Tart on macOS (the Mac).
-# Credential seeding: put a token from `claude setup-token` into
+# Agent selection: AGENTJAIL_TESTBED_AGENT=codex|claude-code (default: codex).
+# Claude credential seeding: put a token from `claude setup-token` into
 #   ~/.agentjail-testbed/token   (chmod 600)
 # and provision will export CLAUDE_CODE_OAUTH_TOKEN inside the guest.
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+TESTBED_AGENT="${AGENTJAIL_TESTBED_AGENT:-codex}"
+case "$TESTBED_AGENT" in
+    codex|claude-code) ;;
+    *) die "unsupported AGENTJAIL_TESTBED_AGENT '$TESTBED_AGENT' (supported: codex, claude-code)" ;;
+esac
+
+ACTIVE_AUTH_TESTBED=""
+ACTIVE_GATE_TESTBED=""
+ACTIVE_PARTIAL_CREATE=""
+CLEANUP_FILES=()
+
+register_cleanup_file() { CLEANUP_FILES+=("$1"); }
+
+forget_cleanup_file() {
+    local target="$1" i
+    for i in "${!CLEANUP_FILES[@]}"; do
+        [ "${CLEANUP_FILES[$i]}" = "$target" ] && CLEANUP_FILES[$i]=""
+    done
+}
+
+cleanup_injected_auth() {
+    [ -n "$ACTIVE_AUTH_TESTBED" ] || return 0
+    guest_exec "$ACTIVE_AUTH_TESTBED" "rm -f /tmp/codex-auth.json \"\$HOME/.codex/auth.json\"" >/dev/null 2>&1 || true
+    ACTIVE_AUTH_TESTBED=""
+}
+
+stop_testbed() {
+    local name="$1"
+    case "$DRIVER" in
+        lima)
+            limactl stop "$(inst "$name")" >/dev/null 2>&1 || true
+            if lima_running "$name"; then
+                log "graceful stop did not release $(inst "$name"); forcing shutdown"
+                limactl stop -f "$(inst "$name")" >/dev/null 2>&1 || true
+            fi
+            lima_running "$name" && return 1
+            ;;
+        tart)
+            tart stop "$(inst "$name")" >/dev/null 2>&1 || true
+            tart_running_names | grep -qx "$(inst "$name")" && return 1
+            ;;
+    esac
+    return 0
+}
+
+cleanup_host_files() {
+    local path rc=0
+    for path in "${CLEANUP_FILES[@]}"; do
+        [ -z "$path" ] || rm -f -- "$path" || rc=1
+    done
+    CLEANUP_FILES=()
+    return "$rc"
+}
+
+destroy_testbed_verified() {
+    local name="$1"
+    do_destroy "$name" >/dev/null 2>&1 || true
+    if "${DRIVER}_exists" "$name"; then
+        log "ERROR: cleanup could not delete $(inst "$name")"
+        return 1
+    fi
+}
+
+cleanup_testbed_lifecycle() {
+    local rc=0
+    if [ -n "$ACTIVE_PARTIAL_CREATE" ]; then
+        log "removing partially-created testbed $(inst "$ACTIVE_PARTIAL_CREATE")"
+        destroy_testbed_verified "$ACTIVE_PARTIAL_CREATE" || rc=1
+        ACTIVE_PARTIAL_CREATE=""
+    fi
+    if [ -n "$ACTIVE_GATE_TESTBED" ]; then
+        if [ "${AGENTJAIL_TESTBED_KEEP_VM:-0}" = "1" ]; then
+            log "stopping gate VM $(inst "$ACTIVE_GATE_TESTBED") (retained by AGENTJAIL_TESTBED_KEEP_VM=1)"
+            if ! stop_testbed "$ACTIVE_GATE_TESTBED"; then
+                log "ERROR: cleanup could not stop $(inst "$ACTIVE_GATE_TESTBED")"
+                rc=1
+            fi
+        else
+            log "destroying gate VM $(inst "$ACTIVE_GATE_TESTBED") to release RAM and disk"
+            destroy_testbed_verified "$ACTIVE_GATE_TESTBED" || rc=1
+        fi
+        ACTIVE_GATE_TESTBED=""
+    fi
+    return "$rc"
+}
+
+cleanup_all() {
+    local rc=$? cleanup_rc=0
+    trap - EXIT INT TERM
+    # Deleting the default ephemeral gate VM removes its auth cache without a
+    # potentially blocking guest round-trip during signal handling.
+    if [ -n "$ACTIVE_GATE_TESTBED" ] && [ "${AGENTJAIL_TESTBED_KEEP_VM:-0}" = "0" ]; then
+        ACTIVE_AUTH_TESTBED=""
+    else
+        cleanup_injected_auth || cleanup_rc=1
+    fi
+    cleanup_host_files || cleanup_rc=1
+    cleanup_testbed_lifecycle || cleanup_rc=1
+    if [ "$rc" -eq 0 ] && [ "$cleanup_rc" -ne 0 ]; then
+        log "ERROR: testbed cleanup was incomplete"
+        rc=1
+    fi
+    exit "$rc"
+}
+
+case "${AGENTJAIL_TESTBED_KEEP_VM:-0}" in 0|1) ;; *) die "AGENTJAIL_TESTBED_KEEP_VM must be 0 or 1" ;; esac
+trap cleanup_all EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1; }
 
@@ -44,6 +155,8 @@ do_create() {
     # No exemption for the gate -- it reaches this same function, and one rule
     # with no special cases is worth more than a gate that never has to think.
     assert_testbed_capacity "$name"
+    assert_host_resources "$name" create
+    ACTIVE_PARTIAL_CREATE="$name"
     case "$DRIVER" in
         lima)
             log "creating $(inst "$name") from lima-template.yaml (first run downloads the Ubuntu image)"
@@ -68,6 +181,7 @@ do_create() {
             # misblamed DHCP. Poll for both the run process dying AND the IP so a
             # VM that never starts fails fast with the real reason.
             local runlog; runlog="$(mktemp -t tart-run.XXXXXX)"
+            register_cleanup_file "$runlog"
             tart run --no-graphics "$(inst "$name")" >"$runlog" 2>&1 &
             local runpid=$!
             log "waiting for IP"
@@ -77,32 +191,37 @@ do_create() {
                     log "tart run exited before the VM came up:"
                     sed 's/^/    /' "$runlog" >&2
                     rm -f "$runlog"
+                    forget_cleanup_file "$runlog"
                     die "VM failed to start (see error above). macOS caps how many VMs run at once; stop another VM and retry: tart stop <name>  (running now: $(tart_running_names | paste -sd' ' -))"
                 fi
                 ip="$(tart_ip_any "$(inst "$name")" || true)"
                 [ -n "$ip" ] && break
                 i=$((i+1))
-                [ "$i" -lt 60 ] || { rm -f "$runlog"; die "VM is running but never got an IP after 120s (DHCP)"; }
+                [ "$i" -lt 60 ] || { rm -f "$runlog"; forget_cleanup_file "$runlog"; die "VM is running but never got an IP after 120s (DHCP)"; }
                 sleep 2
             done
             rm -f "$runlog"
+            forget_cleanup_file "$runlog"
             log "waiting for SSH (sshd comes up a few seconds after the IP)"
             tart_wait_ssh "$name" 120 \
                 || die "VM '$(inst "$name")' got IP $ip but SSH never became reachable within 120s"
             log "testbed '$name' ready. Next: $0 provision $name"
             ;;
     esac
+    ACTIVE_PARTIAL_CREATE=""
 }
 
 # ---- provision --------------------------------------------------------------
 
 do_provision() {
-    local name="${1:?usage: testbed.sh provision <name> [--worktree <path>] [--with-codex]}"; shift
-    local worktree="$REPO_ROOT" with_codex=0
+    local name="${1:?usage: testbed.sh provision <name> [--worktree <path>]}"; shift
+    local worktree="$REPO_ROOT"
     while [ $# -gt 0 ]; do
         case "$1" in
             --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;
-            --with-codex) with_codex=1; shift ;;
+            --with-codex)
+                die "--with-codex was replaced by AGENTJAIL_TESTBED_AGENT=codex"
+                ;;
             *) die "unknown provision flag: $1" ;;
         esac
     done
@@ -130,17 +249,21 @@ do_provision() {
     guest_push "$name" "$worktree/install.sh" /tmp/agentjail-install.sh
     guest_push "$name" "$TESTBED_DIR/guest-provision.sh" /tmp/guest-provision.sh
 
-    local token_file="$HOME/.agentjail-testbed/token"
-    if [ -f "$token_file" ]; then
-        log "seeding Claude Code OAuth token"
-        if ! guest_push "$name" "$token_file" /tmp/claude-token; then
-            guest_exec "$name" "rm -f /tmp/claude-token" || true
-            log "NOTE: $token_file exists but is unreadable — continuing without optional Claude login."
-            log "      Installed-policy scenarios still run; live-agent scenarios will SKIP."
+    if [ "$TESTBED_AGENT" = "claude-code" ]; then
+        local token_file="$HOME/.agentjail-testbed/token"
+        if [ -f "$token_file" ]; then
+            log "seeding Claude Code OAuth token"
+            if ! guest_push "$name" "$token_file" /tmp/claude-token; then
+                guest_exec "$name" "rm -f /tmp/claude-token" || true
+                log "NOTE: $token_file exists but is unreadable — continuing without optional Claude login."
+                log "      Installed-policy scenarios still run; live-agent scenarios will SKIP."
+            fi
+        else
+            log "NOTE: no $token_file — Claude Code will be installed but not logged in."
+            log "      Run 'claude setup-token' on the host and save the token there (chmod 600)."
         fi
     else
-        log "NOTE: no $token_file — Claude Code will be installed but not logged in."
-        log "      Run 'claude setup-token' on the host and save the token there (chmod 600)."
+        log "Codex auth is injected only for the live scenario, never during provisioning"
     fi
     # Sync the host's global MCP servers into the guest so the testbed's Claude
     # Code sees the same MCP surface a real session does (agentjail's netproxy
@@ -148,21 +271,24 @@ do_provision() {
     # `.mcpServers` block from ~/.claude.json — project-scoped and
     # claude.ai-connected (OAuth) servers don't travel to a headless guest.
     local host_claude="$HOME/.claude.json"
-    if command -v jq >/dev/null 2>&1 && [ -f "$host_claude" ] \
+    if [ "$TESTBED_AGENT" = "claude-code" ] \
+        && command -v jq >/dev/null 2>&1 && [ -f "$host_claude" ] \
         && jq -e '(.mcpServers // {}) | length > 0' "$host_claude" >/dev/null 2>&1; then
         local mcp_tmp
         mcp_tmp="$(mktemp "${TMPDIR:-/tmp}/agentjail-mcp.XXXXXX")"
+        register_cleanup_file "$mcp_tmp"
         jq '{mcpServers: (.mcpServers // {})}' "$host_claude" > "$mcp_tmp"
         log "syncing host global MCP servers -> guest ($(jq -r '.mcpServers | keys | join(", ")' "$mcp_tmp"))"
         guest_push "$name" "$mcp_tmp" /tmp/claude-mcp.json
         rm -f "$mcp_tmp"
+        forget_cleanup_file "$mcp_tmp"
     else
         log "no global MCP servers on host (or jq missing) — skipping MCP sync"
     fi
 
     log "running guest-provision.sh inside the guest"
-    guest_exec "$name" "AGENTJAIL_TESTBED_CODEX=$with_codex bash /tmp/guest-provision.sh"
-    log "provisioned. Try: $0 ssh $name   then: agentjail status && claude"
+    guest_exec "$name" "AGENTJAIL_TESTBED_AGENT=$(printf '%q' "$TESTBED_AGENT") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/guest-provision.sh"
+    log "provisioned for $TESTBED_AGENT. Try: $0 ssh $name   then: agentjail status"
 }
 
 # ---- the rest ---------------------------------------------------------------
@@ -191,32 +317,52 @@ do_exec() {
 # do_gate is the release gate: a fresh, clean box (reset to the post-cloud-init
 # golden, or created if absent) provisioned from the given worktree and run
 # through a scenario. Any failure -> non-zero exit, so it can gate `git tag`.
-# The gate testbed is left at rest afterward (reset next run) for speed.
+# The gate VM is destroyed afterward by default. Set
+# AGENTJAIL_TESTBED_KEEP_VM=1 to retain it stopped for a faster next run.
 do_gate() {
-    local worktree="$REPO_ROOT" name="release-gate"
-    # Default gate set: clean-box install/enforcement (e2e-smoke) plus the
-    # real-agent tunnel check (tunnel-agent). The latter SKIPs itself when no
-    # Claude token is seeded, so it is safe to always include. --scenario runs
-    # exactly one instead.
-    local scenarios=("e2e-smoke" "tunnel-agent")
+    local worktree="$REPO_ROOT" name="${AGENTJAIL_TESTBED_NAME:-release-gate-$TESTBED_AGENT}"
+    local scenarios=() scenario_override=0 gate_codex_auth=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --worktree) worktree="$(cd "$2" && pwd)"; shift 2 ;;
-            --scenario) scenarios=("$2"); shift 2 ;;
+            --scenario) scenarios=("$2"); scenario_override=1; shift 2 ;;
             *) die "unknown gate flag: $1" ;;
         esac
+    done
+
+    if [ "$scenario_override" -eq 0 ]; then
+        case "$TESTBED_AGENT" in
+            codex) scenarios=("codex-approval") ;;
+            claude-code) scenarios=("e2e-smoke" "tunnel-agent") ;;
+        esac
+    fi
+
+    local candidate
+    for candidate in "${scenarios[@]}"; do
+        if [ "$candidate" = "codex-approval" ]; then
+            gate_codex_auth="${CODEX_AUTH_FILE:-$HOME/.codex/auth.json}"
+            [ -f "$gate_codex_auth" ] && [ -r "$gate_codex_auth" ] \
+                || die "Codex gate requires a readable file-based auth cache; set CODEX_AUTH_FILE to Codex auth.json"
+        fi
     done
 
     log "RELEASE GATE starting (driver=$DRIVER, worktree=$worktree)"
     # Single-VM invariant (Tart): macOS caps concurrently running VMs (~2), so
     # the gate runs exactly one testbed VM. Stop any OTHER running testbed VMs up
-    # front to guarantee a free slot, and register a cleanup that stops THIS gate
-    # VM on exit (success, failure, or interrupt) so a run never leaves an orphan
-    # holding a slot. Stopped (not deleted) = reset-and-reuse next run for speed.
+    # front to guarantee a free slot. The unified EXIT cleanup owns this gate VM
+    # on both hosts and cannot replace credential or temporary-file cleanup.
     if [ "$DRIVER" = tart ]; then
         tart_stop_other_testbeds "$(inst "$name")"
-        trap "tart stop '$(inst "$name")' >/dev/null 2>&1 || true" EXIT
     fi
+    local allocation=create
+    if "${DRIVER}_exists" "$name"; then
+        allocation=reuse
+        ACTIVE_GATE_TESTBED="$name"
+        # Count memory after releasing this gate's previous allocation.
+        stop_testbed "$name"
+    fi
+    assert_host_resources "$name" "$allocation"
+    ACTIVE_GATE_TESTBED="$name"
     # Ask before the clone, not after a 20-minute provision discovers the cap.
     # The gate is not exempt from MAX_TESTBEDS -- it asks for a slot instead.
     gate_reclaim_slot "$(inst "$name")"
@@ -230,7 +376,12 @@ do_gate() {
     local s
     for s in "${scenarios[@]}"; do
         log "RELEASE GATE: running scenario '$s' on a clean box"
-        do_test "$name" "$s" || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+        if [ "$s" = "codex-approval" ]; then
+            do_test "$name" "$s" --codex-auth "$gate_codex_auth" \
+                || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+        else
+            do_test "$name" "$s" || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+        fi
     done
     log "RELEASE GATE ✓ PASS — safe to tag"
     return 0
@@ -275,11 +426,12 @@ do_test() {
             guest_exec "$name" "rm -f /tmp/codex-auth.json" || true
             return 1
         fi
+        ACTIVE_AUTH_TESTBED="$name"
     fi
     local rc=0
-    guest_exec "$name" "$(chaos_env) bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
+    guest_exec "$name" "$(chaos_env) AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
     if [ -n "$codex_auth" ]; then
-        guest_exec "$name" "rm -f /tmp/codex-auth.json \"\$HOME/.codex/auth.json\"" || true
+        cleanup_injected_auth
     fi
     return "$rc"
 }

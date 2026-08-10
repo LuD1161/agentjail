@@ -2,8 +2,8 @@
 # guest-provision.sh — runs INSIDE a testbed guest (pushed by testbed.sh provision).
 #
 # Turns a clean box into "a real dev machine that just installed agentjail":
-#   1. Claude Code via npm (the way a human installs it)
-#   2. optional Claude login seeding and Codex CLI installation
+#   1. the selected coding agent via its normal package path
+#   2. optional agent login preparation
 #   3. agentjail via the SHIPPED install.sh (LOCAL_TARBALL seam) — the true
 #      user path: checksum verify, ~/.agentjail/bin, service install, hook merge
 #   4. a realistic seed project (~/work/demo) with allowed + forbidden remotes
@@ -11,6 +11,13 @@
 set -euo pipefail
 
 log() { echo "==> [guest] $*"; }
+
+TESTBED_AGENT="${AGENTJAIL_TESTBED_AGENT:-codex}"
+CODEX_VERSION="${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}"
+case "$TESTBED_AGENT" in
+    codex|claude-code) ;;
+    *) log "unsupported AGENTJAIL_TESTBED_AGENT '$TESTBED_AGENT'"; exit 2 ;;
+esac
 
 # ---- 0a. transparent-tunnel prerequisite ------------------------------------
 # Ubuntu 23.10+ (incl. 24.04 noble, this template's image) ships
@@ -34,9 +41,9 @@ fi
 git config --global user.name  "Testbed Agent" 2>/dev/null || true
 git config --global user.email "agent@testbed.local" 2>/dev/null || true
 
-# ---- 1. Claude Code ---------------------------------------------------------
+# ---- 1. Selected coding agent -----------------------------------------------
 
-if ! command -v claude >/dev/null 2>&1; then
+if [ "$TESTBED_AGENT" = "claude-code" ] && ! command -v claude >/dev/null 2>&1; then
     log "installing Claude Code via npm"
     # brew-installed node on macOS owns its prefix - no sudo needed.
     # System-packaged node on Linux needs sudo for global installs.
@@ -45,17 +52,19 @@ if ! command -v claude >/dev/null 2>&1; then
     else
         sudo npm install -g @anthropic-ai/claude-code
     fi
-else
+elif [ "$TESTBED_AGENT" = "claude-code" ]; then
     log "Claude Code already installed: $(claude --version 2>/dev/null || true)"
 fi
 
 # agentjail's Claude Code detection requires ~/.claude to exist.
-mkdir -p "$HOME/.claude"
-[ -f "$HOME/.claude/settings.json" ] || echo '{}' > "$HOME/.claude/settings.json"
+if [ "$TESTBED_AGENT" = "claude-code" ]; then
+    mkdir -p "$HOME/.claude"
+    [ -f "$HOME/.claude/settings.json" ] || echo '{}' > "$HOME/.claude/settings.json"
+fi
 
 # Merge any host-synced MCP servers into ~/.claude.json (Claude Code's global
 # config). node is guaranteed here (Claude Code needs it); the guest has no jq.
-if [ -f /tmp/claude-mcp.json ]; then
+if [ "$TESTBED_AGENT" = "claude-code" ] && [ -f /tmp/claude-mcp.json ]; then
     log "syncing MCP servers into ~/.claude.json"
     node -e '
         const fs = require("fs");
@@ -72,7 +81,7 @@ fi
 
 # ---- 2. Credential seeding (optional) ----------------------------------------
 
-if [ -f /tmp/claude-token ]; then
+if [ "$TESTBED_AGENT" = "claude-code" ] && [ -f /tmp/claude-token ]; then
     log "seeding CLAUDE_CODE_OAUTH_TOKEN"
     install -m 0600 /tmp/claude-token "$HOME/.claude-token"
     rm -f /tmp/claude-token
@@ -84,19 +93,19 @@ if [ -f /tmp/claude-token ]; then
     if ! grep -q CLAUDE_CODE_OAUTH_TOKEN "$rcfile" 2>/dev/null; then
         printf '\n# agentjail testbed: Claude Code login\nexport CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-token")"\n' >> "$rcfile"
     fi
-else
+elif [ "$TESTBED_AGENT" = "claude-code" ]; then
     log "no token pushed — Claude Code installed but not logged in"
 fi
 
 # Codex is installed only for the explicit live-agent approval scenario.
 # Authentication is injected later by the scenario runner.
-if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
-    if ! command -v codex >/dev/null 2>&1 || [ "$(codex --version 2>/dev/null)" != "codex-cli 0.146.0" ]; then
-        log "installing Codex CLI 0.146.0 for approval compatibility"
+if [ "$TESTBED_AGENT" = "codex" ]; then
+    if ! command -v codex >/dev/null 2>&1 || [ "$(codex --version 2>/dev/null)" != "codex-cli $CODEX_VERSION" ]; then
+        log "installing Codex CLI $CODEX_VERSION for approval compatibility"
         if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-            npm install -g @openai/codex@0.146.0
+            npm install -g "@openai/codex@$CODEX_VERSION"
         else
-            sudo npm install -g @openai/codex@0.146.0
+            sudo npm install -g "@openai/codex@$CODEX_VERSION"
         fi
     fi
     mkdir -p "$HOME/.codex"
@@ -108,7 +117,7 @@ fi
 # ---- 3. agentjail via the shipped installer -----------------------------------
 
 log "running install.sh with LOCAL_TARBALL (the real user path)"
-LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
+AGENTJAIL_ASSUME_YES=1 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
 
 # macOS Gatekeeper quarantines unsigned binaries copied from outside.
 # Strip the quarantine xattr so they can execute without code-signing.
@@ -120,7 +129,7 @@ fi
 # The Codex approval matrix models users who launch through the opt-in PATH
 # shim. This is a separate consented install action, not a second base install.
 # See ADR 0119-command-approval-transport.
-if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ]; then
+if [ "$TESTBED_AGENT" = "codex" ]; then
     log "installing the opt-in Codex PATH shim for approval compatibility"
     "$HOME/.agentjail/bin/agentjail" install --with-path-shim
 fi
@@ -173,13 +182,14 @@ if ! printf '%s\n' "$status_output" | grep -q 'daemon.*running' \
     log "verification failed: the clean install did not leave the daemon running"
     exit 1
 fi
-if ! printf '%s\n' "$status_output" | grep -q 'Claude Code.*installed'; then
-    log "verification failed: the clean install did not wire Claude Code"
-    exit 1
-fi
-if [ "${AGENTJAIL_TESTBED_CODEX:-0}" = "1" ] \
-    && ! printf '%s\n' "$status_output" | grep -q 'Codex.*installed'; then
-    log "verification failed: the clean install did not wire Codex"
-    exit 1
-fi
-log "done. This box now looks like a fresh dev machine with agentjail + Claude Code."
+case "$TESTBED_AGENT" in
+    codex)
+        printf '%s\n' "$status_output" | grep -q 'Codex.*installed' \
+            || { log "verification failed: the clean install did not wire Codex"; exit 1; }
+        ;;
+    claude-code)
+        printf '%s\n' "$status_output" | grep -q 'Claude Code.*installed' \
+            || { log "verification failed: the clean install did not wire Claude Code"; exit 1; }
+        ;;
+esac
+log "done. This box now looks like a fresh dev machine with agentjail + $TESTBED_AGENT."
