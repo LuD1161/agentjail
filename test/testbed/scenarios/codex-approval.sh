@@ -7,9 +7,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 AJ="$HOME/.agentjail/bin/agentjail"
 CODEX_REAL="$HOME/.agentjail/bin/codex"
 PROJECT="$HOME/work/codex-approval"
-REMOTE="$HOME/work/remotes/codex-approval.git"
+REMOTE="$PROJECT/.remote.git"
 SESSION="codex-approval-$RANDOM"
-CODEX_VERSION="codex-cli 0.146.0"
+CODEX_VERSION="codex-cli ${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}"
 PROMPT_MARKER="agentjail approval-exec --operation shell-command"
 DISPLAY_MARKER="🔐 AgentJail approval required for:"
 EXPECTED_CONTEXT=""
@@ -46,8 +46,8 @@ if [ ! -x "$CODEX_REAL" ] || ! printf '%s\n' "$CODEX_VERSION_OUTPUT" | grep -Fq 
 fi
 scn_ok "installed Codex version is $CODEX_VERSION"
 
-rm -rf "$PROJECT" "$REMOTE"
-mkdir -p "$(dirname "$REMOTE")" "$PROJECT"
+rm -rf "$PROJECT"
+mkdir -p "$PROJECT"
 git init --bare -q "$REMOTE"
 git -C "$PROJECT" init -q
 git -C "$PROJECT" config user.name "Codex Approval Test"
@@ -121,7 +121,7 @@ print_sanitized_pane() {
 start_interactive_push() {
     local branch="$1"
     EXPECTED_CONTEXT="HEAD:refs/heads/$branch"
-    start_interactive_command "git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch"
+    start_and_wait_for_approval "git -C \"$PROJECT\" push origin HEAD:refs/heads/$branch"
 }
 
 start_interactive_command() {
@@ -132,9 +132,28 @@ start_interactive_command() {
         "cd '$PROJECT' && '$CODEX_REAL' --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: $command'" Enter
 }
 
+transport_failed_before_tool() {
+    tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null \
+        | grep -qiE 'reconnecting|stream disconnected|websocket protocol error|handshake not finished'
+}
+
+start_and_wait_for_approval() {
+    local command="$1" attempt
+    for attempt in 1 2; do
+        start_interactive_command "$command"
+        wait_for_approval_prompt && return 0
+        if [ "$attempt" -eq 1 ] && transport_failed_before_tool; then
+            echo "  INFO  Codex transport failed before PreToolUse; retrying once"
+            print_sanitized_pane
+            continue
+        fi
+        return 1
+    done
+    return 1
+}
+
 APPROVE_BRANCH="agentjail-approval-approve"
-start_interactive_push "$APPROVE_BRANCH"
-if wait_for_approval_prompt; then
+if start_interactive_push "$APPROVE_BRANCH"; then
     scn_ok "AgentJail ask shows the Git push and opens Codex native approval prompt"
     tmux send-keys -t "$SESSION:0.0" "1" Enter
 else
@@ -153,6 +172,7 @@ if branch_exists "$APPROVE_BRANCH"; then
     scn_ok "approved prompt pushes the exact requested branch"
 else
     scn_fail "approved prompt pushes the exact requested branch"
+    print_sanitized_pane
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
@@ -160,8 +180,7 @@ CUSTOM_EFFECT="$PROJECT/custom-approved.txt"
 CUSTOM_COMMAND="printf agentjail-custom-approval-marker > $CUSTOM_EFFECT"
 rm -f "$CUSTOM_EFFECT"
 EXPECTED_CONTEXT="agentjail-custom-approval-marker"
-start_interactive_command "$CUSTOM_COMMAND"
-if wait_for_approval_prompt; then
+if start_and_wait_for_approval "$CUSTOM_COMMAND"; then
     scn_ok "user-authored Bash ask opens the same native approval prompt"
     tmux send-keys -t "$SESSION:0.0" "1" Enter
 else
@@ -180,12 +199,12 @@ if [ "$(cat "$CUSTOM_EFFECT" 2>/dev/null || true)" = "agentjail-custom-approval-
     scn_ok "approved custom-policy command executes the exact requested effect"
 else
     scn_fail "approved custom-policy command executes the exact requested effect"
+    print_sanitized_pane
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 DECLINE_BRANCH="agentjail-approval-decline"
-start_interactive_push "$DECLINE_BRANCH"
-if wait_for_approval_prompt; then
+if start_interactive_push "$DECLINE_BRANCH"; then
     scn_ok "decline path reaches the same native prompt"
     tmux send-keys -t "$SESSION:0.0" Escape
     sleep 5

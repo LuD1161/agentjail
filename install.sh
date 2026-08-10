@@ -279,7 +279,13 @@ export AGENTJAIL_INSTALL_METHOD="${AGENTJAIL_INSTALL_METHOD:-curl}"
 # left without a usable `agentjail` command. `agentjail install` prints its
 # own per-step/per-agent errors; this just stops a non-zero exit from killing
 # the shell.
-"$INSTALL_DIR/agentjail" install || echo "⚠️  agentjail install reported errors above — see output; continuing setup" >&2
+if [ "${AGENTJAIL_ASSUME_YES:-0}" = "1" ]; then
+    "$INSTALL_DIR/agentjail" install --yes \
+        || echo "⚠️  agentjail install reported errors above — see output; continuing setup" >&2
+else
+    "$INSTALL_DIR/agentjail" install \
+        || echo "⚠️  agentjail install reported errors above — see output; continuing setup" >&2
+fi
 
 # --- Put agentjail on PATH (default on; opt out: AGENTJAIL_NO_MODIFY_PATH=1) ---
 

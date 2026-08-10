@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release chaos tunnel-lib macos-app
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release testbed-harness-test chaos tunnel-lib macos-app
 
 BIN ?= bin/agentjail
 
@@ -95,8 +95,14 @@ ssh-git-e2e: ## disposable SSH-agent + real Git clone/push/pull acceptance test
 e2e: ## full new-user E2E test (build, daemon, hook, store, replay, UI, filters, try)
 	bash test/e2e-newuser.sh
 
-e2e-release: ## RELEASE GATE: clean VM -> real installer -> policy enforcement (run before tagging)
-	bash test/testbed/testbed.sh gate --worktree .
+AGENTJAIL_TESTBED_AGENT ?= codex
+AGENTJAIL_TESTBED_NAME ?= release-gate-$(AGENTJAIL_TESTBED_AGENT)
+
+e2e-release: ## RELEASE GATE: clean VM -> selected real agent -> policy enforcement
+	AGENTJAIL_TESTBED_AGENT="$(AGENTJAIL_TESTBED_AGENT)" AGENTJAIL_TESTBED_NAME="$(AGENTJAIL_TESTBED_NAME)" bash test/testbed/testbed.sh gate --worktree .
+
+testbed-harness-test: ## deterministic testbed resource admission and lifecycle cleanup tests
+	bash test/testbed/resource-check-test.sh
 
 # Cadence: run locally before pushing to main, and before a major release. NOT
 # every PR, NOT minor/patch, NOT in CI -- a local gate like e2e-release, not a

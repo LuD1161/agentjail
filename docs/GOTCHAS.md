@@ -812,6 +812,16 @@ material.
   bearer request, not only environment variables or configuration output. See
   ADR 0129-credentialed-cli-bootstrap and AGE-279.
 
+## 60. One EXIT trap can silently disable another
+
+The macOS gate installed a VM-stop EXIT trap after the credential-cleanup trap.
+Both paths looked correct in isolation, but Bash retained only the last trap;
+Linux also had no gate-stop trap, so successful tests left VMs consuming RAM.
+
+- **Rule:** one lifecycle owner must compose credential, temporary-file, partial
+  creation, and VM cleanup. Test failure and retained-cache outcomes, and apply
+  the same lifecycle contract to every OS driver. See ADR 0053-vm-testbed-engine.
+
 ---
 
 ## Testing gotchas
