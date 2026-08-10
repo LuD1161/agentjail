@@ -18,16 +18,21 @@ hash_stream() {
 
 cleanup() {
     if [ -n "${STUB_PID:-}" ]; then
-        kill "$STUB_PID" >/dev/null 2>&1 || true
-        wait "$STUB_PID" 2>/dev/null || true
+        sudo -n kill "$STUB_PID" >/dev/null 2>&1 || true
     fi
+    if [ -n "${STUB_LAUNCH_PID:-}" ]; then
+        wait "$STUB_LAUNCH_PID" 2>/dev/null || true
+    fi
+    sudo -n rm -r /tmp/agentjail-credential-stub >/dev/null 2>&1 || true
     for name in aws/testbed kube/testbed github/testbed kube/unsafe-exec kube/unsafe-file; do
         "$AJ" credential remove "$name" >/dev/null 2>&1 || true
     done
     rm -f "$PROJECT/aws" /tmp/agentjail-unsafe-tool \
         /tmp/agentjail-aws-config-list /tmp/agentjail-aws-identity.json \
         /tmp/agentjail-kube-version.json /tmp/agentjail-credential-stub.js \
-        /tmp/agentjail-credential-stub.log /tmp/agentjail-credential-stub.port
+        /tmp/agentjail-credential-stub.stderr \
+        /tmp/agentjail-credential-stub.crt /tmp/agentjail-credential-stub.key \
+        /tmp/agentjail-credential-stub-openssl.cnf
     rm -f "$HOME/.aws/credentials" "$HOME/.kube/config" "$HOME/.config/gh/hosts.yml"
 }
 trap cleanup EXIT
@@ -59,13 +64,13 @@ GH_FINGERPRINT=$(printf %s ghp_testbed_not_real | hash_stream)
 cat > /tmp/agentjail-credential-stub.js <<'NODE'
 const crypto = require('crypto');
 const fs = require('fs');
-const http = require('http');
+const https = require('https');
 
 const accessKey = 'AKIATESTBED000000001';
 const secretKey = 'testbed-secret-not-real';
 const sessionToken = 'testbed-session-not-real';
 const kubeToken = 'kube-test-token-not-real';
-const log = label => fs.appendFileSync('/tmp/agentjail-credential-stub.log', label + '\n');
+const log = label => fs.appendFileSync('/tmp/agentjail-credential-stub/log', label + '\n');
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const hmac = (key, value) => crypto.createHmac('sha256', key).update(value).digest();
 const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -86,7 +91,7 @@ function verifySigV4(req, body) {
     const value = String(req.headers[name] || '').trim().replace(/\s+/g, ' ');
     return `${name}:${value}\n`;
   }).join('');
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = new URL(req.url, `https://${req.headers.host}`);
   const canonicalRequest = [req.method, url.pathname, url.searchParams.toString(), canonicalHeaders, signedHeaders, sha256(body)].join('\n');
   const amzDate = req.headers['x-amz-date'];
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256(canonicalRequest)].join('\n');
@@ -98,13 +103,18 @@ function verifySigV4(req, body) {
   return expected.length === match[4].length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(match[4]));
 }
 
-const server = http.createServer((req, res) => {
+const server = https.createServer({
+  cert: fs.readFileSync('/tmp/agentjail-credential-stub.crt'),
+  key: fs.readFileSync('/tmp/agentjail-credential-stub.key'),
+}, (req, res) => {
   const chunks = [];
   req.on('data', chunk => chunks.push(chunk));
   req.on('end', () => {
     const body = Buffer.concat(chunks);
     if (req.url === '/version') {
       if (req.headers.authorization !== `Bearer ${kubeToken}`) {
+        const auth = req.headers.authorization || '';
+        log(auth ? `KUBE_AUTH_HASH_${sha256(auth)}` : 'KUBE_AUTH_MISSING');
         res.writeHead(401); res.end('unauthorized'); return;
       }
       log('KUBE_BEARER_OK');
@@ -119,23 +129,51 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, {'content-type': 'text/xml'}); res.end(xml);
   });
 });
-server.listen(0, '127.0.0.1', () => {
-  fs.writeFileSync('/tmp/agentjail-credential-stub.port', String(server.address().port));
+server.listen(443, '127.0.0.1', () => {
+  fs.writeFileSync('/tmp/agentjail-credential-stub/port', String(server.address().port));
 });
 NODE
-rm -f /tmp/agentjail-credential-stub.log /tmp/agentjail-credential-stub.port
-node /tmp/agentjail-credential-stub.js >/dev/null 2>&1 &
-STUB_PID=$!
+: > /tmp/agentjail-credential-stub.stderr
+cat > /tmp/agentjail-credential-stub-openssl.cnf <<'OPENSSL'
+[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = loopback_ca
+[dn]
+CN = 127.0.0.1
+[loopback_ca]
+subjectAltName = IP:127.0.0.1
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,digitalSignature
+OPENSSL
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -config /tmp/agentjail-credential-stub-openssl.cnf -extensions loopback_ca \
+    -keyout /tmp/agentjail-credential-stub.key \
+    -out /tmp/agentjail-credential-stub.crt >/dev/null 2>&1
+chmod 0600 /tmp/agentjail-credential-stub.key
+STUB_CA_DATA=$(base64 < /tmp/agentjail-credential-stub.crt | tr -d '\r\n')
+NODE_BIN=$(command -v node)
+# Landlock's port-only contract permits 80/443, so the testbed root binds the
+# loopback-only TLS stub to 443 without changing production policy. See ADR 0039.
+sudo -n rm -r /tmp/agentjail-credential-stub >/dev/null 2>&1 || true
+sudo -n install -d -m 0755 /tmp/agentjail-credential-stub
+sudo -n sh -c 'echo $$ > /tmp/agentjail-credential-stub/pid; exec "$1" /tmp/agentjail-credential-stub.js' \
+    sh "$NODE_BIN" >/dev/null 2>/tmp/agentjail-credential-stub.stderr &
+STUB_LAUNCH_PID=$!
 for _ in $(seq 1 50); do
-    [ -s /tmp/agentjail-credential-stub.port ] && break
+    [ -s /tmp/agentjail-credential-stub/port ] \
+        && [ -s /tmp/agentjail-credential-stub/pid ] && break
     sleep 0.1
 done
-if [ ! -s /tmp/agentjail-credential-stub.port ]; then
+if [ ! -s /tmp/agentjail-credential-stub/port ] \
+    || [ ! -s /tmp/agentjail-credential-stub/pid ]; then
     bad "local credential protocol stub failed to start"
+    sed 's/^/STUB  /' /tmp/agentjail-credential-stub.stderr
     exit 1
 fi
-STUB_PORT=$(cat /tmp/agentjail-credential-stub.port)
-STUB_URL="http://127.0.0.1:$STUB_PORT"
+STUB_PID=$(cat /tmp/agentjail-credential-stub/pid)
+STUB_PORT=$(cat /tmp/agentjail-credential-stub/port)
+STUB_URL="https://127.0.0.1:$STUB_PORT"
 
 AWS_ACCESS_KEY_ID=AKIATESTBED000000001 \
 AWS_SECRET_ACCESS_KEY=testbed-secret-not-real \
@@ -163,6 +201,7 @@ clusters:
 - name: test
   cluster:
     server: $STUB_URL
+    certificate-authority-data: $STUB_CA_DATA
 users:
 - name: test
   user:
@@ -259,7 +298,9 @@ test "$(printf %s "$AWS_SECRET_ACCESS_KEY" | hash_stream)" = __AWS_SECRET_FINGER
 test "$(printf %s "$AWS_SESSION_TOKEN" | hash_stream)" = __AWS_SESSION_FINGERPRINT__
 test "$AWS_DEFAULT_REGION" = us-west-2
 test "$AWS_EC2_METADATA_DISABLED" = true
-aws sts get-caller-identity --endpoint-url "$AGENTJAIL_TEST_STUB_URL" --no-cli-pager > /tmp/agentjail-aws-identity.json
+aws sts get-caller-identity --endpoint-url "__STUB_URL__" \
+    --ca-bundle /tmp/agentjail-credential-stub.crt --no-cli-pager \
+    > /tmp/agentjail-aws-identity.json
 grep -q 123456789012 /tmp/agentjail-aws-identity.json
 test "$(kubectl config current-context)" = agentjail-test
 test "$(kubectl config view --raw --minify -o "jsonpath={.users[0].user.token}" | hash_stream)" = __KUBE_FINGERPRINT__
@@ -283,6 +324,7 @@ CHECK=${CHECK/__AWS_ACCESS_FINGERPRINT__/$AWS_ACCESS_FINGERPRINT}
 CHECK=${CHECK/__AWS_SECRET_FINGERPRINT__/$AWS_SECRET_FINGERPRINT}
 CHECK=${CHECK/__AWS_SESSION_FINGERPRINT__/$AWS_SESSION_FINGERPRINT}
 CHECK=${CHECK/__KUBE_FINGERPRINT__/$KUBE_FINGERPRINT}
+CHECK=${CHECK/__STUB_URL__/$STUB_URL}
 
 # This scenario tests broker credentials, not the seed project's default Git SSH
 # bootstrap. See ADR 0126-session-ssh-bootstrap.
@@ -292,7 +334,6 @@ OUT=$(AWS_ACCESS_KEY_ID=AMBIENT_AWS_ACCESS_NOT_SELECTED \
     AWS_DEFAULT_REGION=AMBIENT_AWS_REGION_NOT_SELECTED \
     GH_TOKEN=AMBIENT_GH_NOT_SELECTED \
     KUBECONFIG="$HOME/.kube/config" \
-    AGENTJAIL_TEST_STUB_URL="$STUB_URL" \
     timeout 60 "$AJ" run \
     --no-git-ssh \
     --credential=aws=aws/testbed \
@@ -312,15 +353,17 @@ else
     bad "credentialed CLI session failed (rc=$RC)"
 fi
 
-if grep -qx AWS_SIGV4_OK /tmp/agentjail-credential-stub.log 2>/dev/null; then
+if grep -qx AWS_SIGV4_OK /tmp/agentjail-credential-stub/log 2>/dev/null; then
     ok "AWS CLI made a provider request with a valid secret-derived SigV4 signature"
 else
     bad "AWS CLI did not complete a valid SigV4-authenticated provider request"
 fi
-if grep -qx KUBE_BEARER_OK /tmp/agentjail-credential-stub.log 2>/dev/null; then
+if grep -qx KUBE_BEARER_OK /tmp/agentjail-credential-stub/log 2>/dev/null; then
     ok "kubectl made an API request with the broker-delivered bearer token"
 else
     bad "kubectl did not complete a bearer-authenticated API request"
+    grep '^KUBE_AUTH_' /tmp/agentjail-credential-stub/log 2>/dev/null \
+        | sed 's/^/STUB  /'
 fi
 
 printf '%s\n' "$OUT" | grep -q 'aws ready with broker credential "aws/testbed"' \
