@@ -35,6 +35,7 @@ const (
 	CredentialRevoked           = "credential.revoked"
 	CredentialToolReady         = "credential.tool_ready"
 	CredentialSessionRegistered = "credential.session_registered"
+	CredentialSessionRevoked    = "credential.session_revoked"
 	CredentialListed            = "credential.listed"
 	CredentialAccessRequested   = "credential.access_requested"
 	CredentialAccessApproved    = "credential.access_approved"

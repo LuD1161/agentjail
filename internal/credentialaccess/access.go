@@ -29,6 +29,7 @@ type Session struct {
 	ID      string
 	Project string
 	Agent   string
+	Tools   []credentialtools.Tool
 }
 
 // Request asks for one exact discovered credential.
@@ -96,6 +97,9 @@ func (s *Service) List(ctx context.Context, session Session, toolFilter credenti
 		if toolFilter != "" && descriptor.Tool != toolFilter {
 			continue
 		}
+		if !sessionAllowsTool(session, descriptor.Tool) {
+			continue
+		}
 		if s.authorizer.Discover(session, descriptor) {
 			result = append(result, descriptor)
 		}
@@ -153,6 +157,10 @@ func (s *Service) RequestExact(ctx context.Context, session Session, request Req
 		return Issuance{}, fmt.Errorf("credential %q is not available", request.CredentialID)
 	}
 	descriptor := Describe(request.CredentialID, record)
+	if !sessionAllowsTool(session, descriptor.Tool) {
+		s.emitDenied(ctx, session, request.CredentialID, "tool_unavailable")
+		return Issuance{}, fmt.Errorf("credential %q is not available in this session", request.CredentialID)
+	}
 	if !s.authorizer.Discover(session, descriptor) {
 		s.emitDenied(ctx, session, request.CredentialID, "not_discoverable")
 		return Issuance{}, fmt.Errorf("credential %q is not available", request.CredentialID)
@@ -204,6 +212,18 @@ func (s *Service) RequestExact(ctx context.Context, session Session, request Req
 		"fingerprint", detail["fingerprint"],
 	)
 	return Issuance{Credential: descriptor, Delivery: delivery}, nil
+}
+
+func sessionAllowsTool(session Session, tool credentialtools.Tool) bool {
+	if len(session.Tools) == 0 {
+		return true
+	}
+	for _, allowed := range session.Tools {
+		if allowed == tool {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) loadRecord(id ID) (Record, bool, error) {

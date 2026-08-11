@@ -30,19 +30,20 @@ type RPCRequest struct {
 	Action string `json:"action"`
 	// Token authenticates the caller as a process outside the sandbox. Required
 	// on every action (ADR 0067).
-	Token        string `json:"token,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Value        string `json:"value,omitempty"`
-	Scope        string `json:"scope,omitempty"`
-	TTL          string `json:"ttl,omitempty"`
-	GrantID      string `json:"grant_id,omitempty"`
-	Tool         string `json:"tool,omitempty"`
-	SessionToken string `json:"session_token,omitempty"`
-	SessionID    string `json:"session_id,omitempty"`
-	Project      string `json:"project,omitempty"`
-	Agent        string `json:"agent,omitempty"`
-	CredentialID string `json:"credential_id,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+	Token        string   `json:"token,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	Value        string   `json:"value,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	TTL          string   `json:"ttl,omitempty"`
+	GrantID      string   `json:"grant_id,omitempty"`
+	Tool         string   `json:"tool,omitempty"`
+	SessionToken string   `json:"session_token,omitempty"`
+	SessionID    string   `json:"session_id,omitempty"`
+	Project      string   `json:"project,omitempty"`
+	Agent        string   `json:"agent,omitempty"`
+	CredentialID string   `json:"credential_id,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
 }
 
 // RPCResponse is the newline-delimited JSON response from the server.
@@ -281,6 +282,25 @@ func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitt
 			_ = enc.Encode(resp)
 			continue
 		}
+		if req.Action == "session_revoke" {
+			session, found := sessions.Lookup(req.SessionToken)
+			sessions.Remove(req.SessionToken)
+			if found {
+				_ = emitter.Emit(context.Background(), audit.Event{
+					EventType: audit.CredentialSessionRevoked,
+					Entity:    session.Project,
+					Actor:     session.Agent,
+					SessionID: session.ID,
+				})
+			}
+			_ = enc.Encode(RPCResponse{OK: true})
+			continue
+		}
+		if req.Action == "credential_inventory" {
+			resp := handleAgentCredentialRPC(context.Background(), &RPCRequest{Action: "credential_list"}, credentialaccess.Session{ID: req.SessionID, Project: req.Project, Agent: "shield"}, access)
+			_ = enc.Encode(resp)
+			continue
+		}
 
 		resp := handleRPC(&req, store, gm, emitter)
 		_ = enc.Encode(resp)
@@ -291,8 +311,24 @@ func registerAgentSession(ctx context.Context, req *RPCRequest, sessions *creden
 	if req.SessionID == "" || req.Agent == "" {
 		return RPCResponse{OK: false, Error: "session_id and agent are required"}
 	}
+	tools := make([]credentialtools.Tool, 0, len(req.Tools))
+	seenTools := make(map[credentialtools.Tool]struct{}, len(req.Tools))
+	for _, value := range req.Tools {
+		tool, err := credentialtools.ParseTool(value)
+		if err != nil {
+			return RPCResponse{OK: false, Error: err.Error()}
+		}
+		if _, exists := seenTools[tool]; exists {
+			continue
+		}
+		seenTools[tool] = struct{}{}
+		tools = append(tools, tool)
+	}
+	if len(tools) == 0 {
+		return RPCResponse{OK: false, Error: "at least one credential tool is required"}
+	}
 	token, expires, err := sessions.Register(credentialaccess.Session{
-		ID: req.SessionID, Project: req.Project, Agent: req.Agent,
+		ID: req.SessionID, Project: req.Project, Agent: req.Agent, Tools: tools,
 	}, credentialaccess.DefaultSessionTTL)
 	if err != nil {
 		return RPCResponse{OK: false, Error: err.Error()}

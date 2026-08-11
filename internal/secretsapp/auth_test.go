@@ -124,6 +124,9 @@ func TestBroker_EveryVerbRequiresToken(t *testing.T) {
 		{Action: "delete", Name: "MY_PROD_API_KEY"},
 		{Action: "grant", Name: "MY_PROD_API_KEY"},
 		{Action: "revoke", GrantID: "whatever"},
+		{Action: "session_register", SessionID: "session-1", Agent: "codex", Tools: []string{"aws"}},
+		{Action: "session_revoke", SessionToken: "whatever"},
+		{Action: "credential_inventory"},
 	} {
 		t.Run(req.Action, func(t *testing.T) {
 			resp := ask(t, sock, req)
@@ -189,7 +192,7 @@ func TestBroker_AgentCapabilityCanOnlyAccessTypedCredentials(t *testing.T) {
 	}
 
 	registered := ask(t, sock, RPCRequest{
-		Action: "session_register", Token: controlToken, SessionID: "session-1", Project: "/repo", Agent: "codex",
+		Action: "session_register", Token: controlToken, SessionID: "session-1", Project: "/repo", Agent: "codex", Tools: []string{"aws"},
 	})
 	if !registered.OK || registered.SessionToken == "" {
 		t.Fatalf("register agent session: %+v", registered)
@@ -220,5 +223,11 @@ func TestBroker_AgentCapabilityCanOnlyAccessTypedCredentials(t *testing.T) {
 	}
 	if got := ask(t, sock, RPCRequest{Action: "tool_grant", SessionToken: registered.SessionToken, Name: "aws/development", Tool: "aws"}); got.OK {
 		t.Fatalf("agent capability invoked control-plane tool grant: %+v", got)
+	}
+	if got := ask(t, sock, RPCRequest{Action: "session_revoke", Token: controlToken, SessionToken: registered.SessionToken}); !got.OK {
+		t.Fatalf("revoke session: %+v", got)
+	}
+	if got := ask(t, sock, RPCRequest{Action: "credential_list", SessionToken: registered.SessionToken}); got.OK {
+		t.Fatalf("revoked agent capability remained valid: %+v", got)
 	}
 }

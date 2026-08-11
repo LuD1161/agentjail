@@ -121,6 +121,52 @@ func TestRequestRequiresDurableReasonedAudit(t *testing.T) {
 	}
 }
 
+func TestSessionToolScopeFiltersListAndExactRequest(t *testing.T) {
+	t.Parallel()
+	kubeRecord, err := NewRecord(credentialtools.ToolKubernetes, `apiVersion: v1
+kind: Config
+clusters:
+- name: development
+  cluster:
+    server: https://127.0.0.1:6443
+users:
+- name: development
+  user:
+    token: test-token
+contexts:
+- name: development
+  context:
+    cluster: development
+    user: development
+current-context: development
+`, "Development cluster", "", "development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kubeRaw, err := Encode(kubeRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := memoryVault{
+		"aws/development":  encodedAWS(t, "Development", "111122223333", "AKIADEV"),
+		"kube/development": kubeRaw,
+	}
+	service := NewService(vault, AllowAllBrokerCredentials{}, &eventEmitter{}, true)
+	session := Session{ID: "session-1", Agent: "codex", Tools: []credentialtools.Tool{credentialtools.ToolAWS}}
+	items, err := service.List(context.Background(), session, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Tool != credentialtools.ToolAWS {
+		t.Fatalf("items = %#v", items)
+	}
+	if _, err := service.RequestExact(context.Background(), session, Request{
+		CredentialID: "kube/development", Reason: "Inspect the development cluster",
+	}); err == nil || !strings.Contains(err.Error(), "not available in this session") {
+		t.Fatalf("out-of-scope request error = %v", err)
+	}
+}
+
 func TestSessionsAuthenticateAndExpire(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(100, 0)
