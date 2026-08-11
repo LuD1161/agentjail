@@ -494,21 +494,29 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	ctlToken, _ := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, ctlToken)
 	env = append(env, grantEnvVars...)
-	credentialSession, credentialErr := prepareCredentialSession(credentialTools, ctlToken)
+	credentialSession, credentialErr := prepareCredentialSession(credentialTools, ctlToken, agentPath)
 	if credentialErr != nil {
 		cleanupGateway()
 		_, _ = exec.Command(appPath, "stop").CombinedOutput()
 		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", credentialErr)
 		os.Exit(1)
 	}
+	agentArgs, credentialErr = credentialSession.configureAgent(agentPath, agentArgs)
+	if credentialErr != nil {
+		credentialSession.cleanup(ctlToken)
+		cleanupGateway()
+		_, _ = exec.Command(appPath, "stop").CombinedOutput()
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential MCP configuration failed: %v\n", credentialErr)
+		os.Exit(1)
+	}
 	env = credentialSession.applyEnv(env)
 	for _, tool := range credentialTools {
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready with broker credential %q\n", tool.Tool, tool.Name)
-		logger.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath)
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready for %s broker credentials\n", tool.Tool, tool.deliveryMode())
+		logger.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath, "delivery", tool.deliveryMode())
 		_ = emitter.Emit(ctx, audit.Event{
 			EventType: audit.CredentialToolReady,
-			Entity:    tool.Name,
-			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath},
+			Entity:    tool.auditEntity(),
+			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath, "delivery": tool.deliveryMode()},
 			Actor:     "shield",
 		})
 	}

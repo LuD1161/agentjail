@@ -1,6 +1,7 @@
 package shieldapp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,53 @@ func TestCredentialSelections(t *testing.T) {
 	}
 	if err := selections.Set("gh"); err == nil {
 		t.Fatal("selection without name succeeded")
+	}
+}
+
+func TestMergeCredentialSelectionsKeepsExplicitIdentity(t *testing.T) {
+	t.Parallel()
+	explicit := credentialSelections{{Tool: credentialtools.ToolAWS, Name: "aws/production"}}
+	discovered := credentialSelections{{Tool: credentialtools.ToolAWS}, {Tool: credentialtools.ToolKubernetes}}
+	merged := mergeCredentialSelections(explicit, discovered)
+	if len(merged) != 2 || merged[0].Name != "aws/production" || merged[1].Tool != credentialtools.ToolKubernetes {
+		t.Fatalf("merged = %#v", merged)
+	}
+}
+
+func TestCredentialSessionConfiguresCodexAndClaudeNatively(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	session := &credentialSession{dir: dir, sessionToken: "session-capability", mcpCommand: "/opt/agentjail/bin/agentjail"}
+	codexArgs, err := session.configureAgent("/usr/bin/codex", []string{"exec", "inspect S3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(codexArgs, " ")
+	if !strings.Contains(joined, "mcp_servers.agentjail_credentials.command") || !strings.HasSuffix(joined, "exec inspect S3") {
+		t.Fatalf("Codex args = %#v", codexArgs)
+	}
+
+	claudeArgs, err := session.configureAgent("/usr/bin/claude", []string{"-p", "inspect cluster"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claudeArgs) < 4 || claudeArgs[0] != "--mcp-config" || claudeArgs[2] != "--append-system-prompt" || !strings.Contains(claudeArgs[3], "AgentJail never chooses") {
+		t.Fatalf("Claude args = %#v", claudeArgs)
+	}
+	data, err := os.ReadFile(claudeArgs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Servers map[string]struct {
+			Command string `json:"command"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Servers["agentjail_credentials"].Command != session.mcpCommand {
+		t.Fatalf("Claude MCP config = %s", data)
 	}
 }
 

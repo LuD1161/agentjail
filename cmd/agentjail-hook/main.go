@@ -47,6 +47,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/credentialguidance"
 	"github.com/LuD1161/agentjail/internal/telemetry"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
@@ -511,6 +512,9 @@ func writeCodexLifecycleAttestation() {
 	} else if shielded {
 		message = "⚠ AgentJail: sandbox active, policy daemon offline"
 	}
+	if os.Getenv("AGENTJAIL_CREDENTIAL_SESSION_TOKEN") != "" {
+		message += "\n\n" + credentialguidance.SessionInstructions
+	}
 	_ = json.NewEncoder(os.Stdout).Encode(codexLifecycleOutput{
 		Continue:      true,
 		SystemMessage: message,
@@ -873,7 +877,6 @@ func runClaude(agent string) {
 		writeCodexLifecycleAttestation()
 		return
 	}
-
 	// These outcome events are non-blocking: the tool already ran, so the hook
 	// reports the observation and always exits 0. Claude separates success
 	// (PostToolUse) from failure (PostToolUseFailure); Codex reports both
@@ -881,6 +884,17 @@ func runClaude(agent string) {
 	if input.HookEventName == "PostToolUse" ||
 		(agent == "claude" && input.HookEventName == claudePostToolUseFailure) {
 		handlePostToolUse(agent, input)
+		return
+	}
+	if agentCredentialTool(input.ToolName) && os.Getenv("AGENTJAIL_CREDENTIAL_SESSION_TOKEN") != "" {
+		if agent == "codex" && input.HookEventName == codexPermissionRequest {
+			writeCodexPermissionDecision("allow", "AgentJail session credential capability")
+			return
+		}
+		if agent == "codex" {
+			return
+		}
+		writeAllow("AgentJail session credential capability")
 		return
 	}
 	if agent == "codex" && input.HookEventName == codexPermissionRequest {
@@ -1000,6 +1014,15 @@ func runClaude(agent string) {
 		}
 		writeAllow(resp.Reason)
 		os.Exit(0)
+	}
+}
+
+func agentCredentialTool(toolName string) bool {
+	switch toolName {
+	case "mcp__agentjail_credentials__list_credentials", "mcp__agentjail_credentials__request_credential":
+		return true
+	default:
+		return false
 	}
 }
 

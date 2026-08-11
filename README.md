@@ -324,31 +324,44 @@ agentjail credential list
 
 The label, account, and context fields are non-secret discovery metadata. New
 imports store them with the material in one encrypted typed record; legacy
-
 `aws/`, `kube/`, and `github/` entries remain readable. Arbitrary raw broker
 secrets are never inferred to be coding-agent credentials.
 
-Select credentials before launching the coding agent:
+Launch Codex or Claude normally through the shield:
 
 ```sh
-agentjail run \
-  --credential=aws=aws/default \
-  --credential=kubectl=kube/dev \
-  --credential=gh=github/default \
-  -- codex
+agentjail run -- codex
 ```
 
-The shield resolves each CLI binary before sandbox activation, rejects binaries
-inside the working tree or temporary directory, retrieves the named credential
-over the authenticated broker socket, and creates only that session's standard
-interface: AWS environment variables, a mode-0600 generated kubeconfig named by
-`KUBECONFIG`, or `GH_TOKEN`. Generated files and grants are cleaned when the
-session exits; a later launch removes artifacts abandoned by a killed shield
-after verifying their owner process is gone.
+Before sandbox activation, the shield discovers which typed broker tools are
+available, resolves and pins their installed CLI binaries, and gives the coding
+agent a narrow session capability. AgentJail adds a session-only credential MCP
+and native guidance without modifying the repository's `AGENTS.md` or
+`CLAUDE.md`. The coding agent follows this sequence:
 
-The child process also receives `AGENTJAIL_CREDENTIAL_TOOLS` as a comma-separated
-list of ready tool IDs, while the startup notice names each selected broker
-entry without including credential values.
+1. Call `list_credentials` for non-secret IDs, labels, AWS accounts, or
+   Kubernetes contexts.
+2. Select the exact ID that matches the user's task. If more than one could
+   match, ask the user; AgentJail never guesses or chooses a default.
+3. Call `request_credential` with that exact ID and a concrete reason.
+4. Apply the returned environment variables or mode-0600 file for the requested
+   CLI operation.
+
+The current bootstrap authorizer auto-approves every typed broker credential
+(`discover: ["*"]`, `auto_approve: ["*"]`). The wildcard authorizes access; it
+does not select an identity. A session capability is limited to the CLI tools
+that were safely resolved before sandboxing and cannot list raw secrets or call
+broker set/delete operations.
+
+`--credential=TOOL=NAME` remains available as an eager, explicitly selected
+compatibility path. It retrieves the named credential before agent startup and
+creates the standard interface directly: AWS environment variables, a
+mode-0600 kubeconfig named by `KUBECONFIG`, or `GH_TOKEN`.
+
+The child process receives `AGENTJAIL_CREDENTIAL_TOOLS` as a comma-separated
+list of ready tool IDs. Credential discovery, the request reason, authorization,
+issuance, denial, and session lifecycle are audited without credential values;
+issuance fails closed when durable audit storage is unavailable.
 
 Kubeconfig import is strict and self-contained: `exec` and `auth-provider`
 plugins, `tokenFile`, certificate/key/CA file paths, unknown fields, and multiple

@@ -1,6 +1,7 @@
 package shieldapp
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/credentialguidance"
 	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
@@ -21,7 +23,38 @@ type credentialSelection struct {
 	binaryInfo os.FileInfo
 }
 
+func (s credentialSelection) auditEntity() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return string(s.Tool)
+}
+
+func (s credentialSelection) deliveryMode() string {
+	if s.Name != "" {
+		return "eager"
+	}
+	return "on_request"
+}
+
 type credentialSelections []credentialSelection
+
+func (s credentialSelections) hasTool(tool credentialtools.Tool) bool {
+	for _, selection := range s {
+		if selection.Tool == tool {
+			return true
+		}
+	}
+	return false
+}
+
+func (s credentialSelections) toolNames() []string {
+	result := make([]string, 0, len(s))
+	for _, selection := range s {
+		result = append(result, string(selection.Tool))
+	}
+	return result
+}
 
 func (s credentialSelections) binaryPaths() []string {
 	paths := make([]string, 0, len(s))
@@ -107,6 +140,72 @@ func resolveCredentialSelections(selections credentialSelections) (credentialSel
 	return resolved, nil
 }
 
+func discoverCredentialSelections(ctlToken string) (credentialSelections, error) {
+	if ctlToken == "" {
+		return nil, nil
+	}
+	socketPath := defaultSecretsSocketPath()
+	if !sandbox.SecretsBrokerRunning() {
+		if err := sandbox.EnsureSecretsBroker(socketPath); err != nil {
+			return nil, fmt.Errorf("start AgentJail credential broker: %w", err)
+		}
+	}
+	project, _ := os.Getwd()
+	response, err := secretsRPC(socketPath, &secretsRPCRequest{
+		Action: "credential_inventory", Token: ctlToken,
+		SessionID: fmt.Sprintf("shield-inventory-%d", os.Getpid()), Project: project,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("discover broker credentials: %w", err)
+	}
+	if !response.OK {
+		return nil, fmt.Errorf("discover broker credentials: %s", response.Error)
+	}
+	result := make(credentialSelections, 0, len(response.Credentials))
+	for _, descriptor := range response.Credentials {
+		if !result.hasTool(descriptor.Tool) {
+			result = append(result, credentialSelection{Tool: descriptor.Tool})
+		}
+	}
+	return result, nil
+}
+
+func resolveAvailableCredentialSelections(selections credentialSelections) (credentialSelections, []credentialtools.Tool, error) {
+	resolved := make(credentialSelections, 0, len(selections))
+	var unavailable []credentialtools.Tool
+	for _, selection := range selections {
+		one, err := resolveCredentialSelections(credentialSelections{selection})
+		if errors.Is(err, exec.ErrNotFound) {
+			unavailable = append(unavailable, selection.Tool)
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		resolved = append(resolved, one[0])
+	}
+	return resolved, unavailable, nil
+}
+
+func mergeCredentialSelections(explicit, discovered credentialSelections) credentialSelections {
+	result := append(credentialSelections(nil), explicit...)
+	for _, selection := range discovered {
+		if !result.hasTool(selection.Tool) {
+			result = append(result, selection)
+		}
+	}
+	return result
+}
+
+func supportsCredentialMCP(agentPath string) bool {
+	switch filepath.Base(agentPath) {
+	case "codex", "claude":
+		return true
+	default:
+		return false
+	}
+}
+
 func credentialExecutableUnsafeRoot(path string, roots ...string) (string, bool) {
 	for _, root := range roots {
 		root, err := filepath.Abs(root)
@@ -128,12 +227,14 @@ func credentialExecutableUnsafeRoot(path string, roots ...string) (string, bool)
 }
 
 type credentialSession struct {
-	dir    string
-	env    []credentialtools.EnvVar
-	grants []activeGrant
+	dir          string
+	env          []credentialtools.EnvVar
+	grants       []activeGrant
+	sessionToken string
+	mcpCommand   string
 }
 
-func prepareCredentialSession(selections credentialSelections, ctlToken string) (*credentialSession, error) {
+func prepareCredentialSession(selections credentialSelections, ctlToken, agentPath string) (*credentialSession, error) {
 	if len(selections) == 0 {
 		return &credentialSession{}, nil
 	}
@@ -178,6 +279,9 @@ func prepareCredentialSession(selections credentialSelections, ctlToken string) 
 		if err := os.Symlink(selection.BinaryPath, filepath.Join(binDir, adapter.Binary())); err != nil {
 			return fail(fmt.Errorf("pin credentialed tool %s: %w", adapter.Binary(), err))
 		}
+		if selection.Name == "" {
+			continue
+		}
 
 		resp, err := secretsRPC(socketPath, &secretsRPCRequest{
 			Action: "tool_grant",
@@ -207,6 +311,41 @@ func prepareCredentialSession(selections credentialSelections, ctlToken string) 
 			}
 		}
 	}
+	if !supportsCredentialMCP(agentPath) {
+		path := binDir
+		if inherited := os.Getenv("PATH"); inherited != "" {
+			path += string(os.PathListSeparator) + inherited
+		}
+		session.env = append(session.env,
+			credentialtools.EnvVar{Name: "PATH", Value: path},
+			credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_TOOLS", Value: selections.readyTools()},
+		)
+		return session, nil
+	}
+	project, err := os.Getwd()
+	if err != nil {
+		return fail(fmt.Errorf("resolve credential session project: %w", err))
+	}
+	registered, err := secretsRPC(socketPath, &secretsRPCRequest{
+		Action:    "session_register",
+		Token:     ctlToken,
+		SessionID: fmt.Sprintf("shield-%d", os.Getpid()),
+		Project:   project,
+		Agent:     filepath.Base(agentPath),
+		Tools:     selections.toolNames(),
+	})
+	if err != nil {
+		return fail(fmt.Errorf("register agent credential session: %w", err))
+	}
+	if !registered.OK || registered.SessionToken == "" {
+		return fail(fmt.Errorf("register agent credential session: %s", registered.Error))
+	}
+	session.sessionToken = registered.SessionToken
+	mcpCommand, err := credentialMCPCommand()
+	if err != nil {
+		return fail(err)
+	}
+	session.mcpCommand = mcpCommand
 	path := binDir
 	if inherited := os.Getenv("PATH"); inherited != "" {
 		path += string(os.PathListSeparator) + inherited
@@ -214,8 +353,80 @@ func prepareCredentialSession(selections credentialSelections, ctlToken string) 
 	session.env = append(session.env,
 		credentialtools.EnvVar{Name: "PATH", Value: path},
 		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_TOOLS", Value: selections.readyTools()},
+		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_BROKER_SOCKET", Value: socketPath},
+		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_SESSION_TOKEN", Value: session.sessionToken},
 	)
 	return session, nil
+}
+
+func credentialMCPCommand() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve AgentJail credential MCP command: %w", err)
+	}
+	candidate := filepath.Join(filepath.Dir(executable), "agentjail")
+	if filepath.Base(executable) == "agentjail" {
+		candidate = executable
+	}
+	candidate, err = filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve AgentJail credential MCP command symlinks: %w", err)
+	}
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve AgentJail credential MCP command %s: %w", candidate, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("AgentJail credential MCP command is not executable: %s", candidate)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory for credential MCP: %w", err)
+	}
+	if root, unsafe := credentialExecutableUnsafeRoot(candidate, cwd, os.TempDir()); unsafe {
+		return "", fmt.Errorf("AgentJail credential MCP command resolves inside agent-writable path %s", root)
+	}
+	return candidate, nil
+}
+
+func (s *credentialSession) configureAgent(agentPath string, arguments []string) ([]string, error) {
+	if s.sessionToken == "" {
+		return arguments, nil
+	}
+	switch filepath.Base(agentPath) {
+	case "codex":
+		prefix := []string{
+			"-c", "mcp_servers.agentjail_credentials.command=" + strconv.Quote(s.mcpCommand),
+			"-c", `mcp_servers.agentjail_credentials.args=["credential-mcp"]`,
+			"-c", `mcp_servers.agentjail_credentials.env_vars=["AGENTJAIL_CREDENTIAL_BROKER_SOCKET","AGENTJAIL_CREDENTIAL_SESSION_TOKEN"]`,
+			"-c", "mcp_servers.agentjail_credentials.required=true",
+			"-c", `mcp_servers.agentjail_credentials.enabled_tools=["list_credentials","request_credential"]`,
+			"-c", `mcp_servers.agentjail_credentials.default_tools_approval_mode="auto"`,
+		}
+		return append(prefix, arguments...), nil
+	case "claude":
+		configPath := filepath.Join(s.dir, "mcp.json")
+		config := struct {
+			Servers map[string]struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			} `json:"mcpServers"`
+		}{Servers: map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}{"agentjail_credentials": {Command: s.mcpCommand, Args: []string{"credential-mcp"}}}}
+		data, err := json.Marshal(config)
+		if err != nil {
+			return nil, fmt.Errorf("encode Claude credential MCP config: %w", err)
+		}
+		if err := os.WriteFile(configPath, data, 0o600); err != nil {
+			return nil, fmt.Errorf("write Claude credential MCP config: %w", err)
+		}
+		prefix := []string{"--mcp-config", configPath, "--append-system-prompt", credentialguidance.SessionInstructions}
+		return append(prefix, arguments...), nil
+	default:
+		return nil, fmt.Errorf("agent %s does not support session credential MCP configuration", filepath.Base(agentPath))
+	}
 }
 
 const credentialSessionPrefix = "agentjail-credentials-"
@@ -303,6 +514,12 @@ func (s *credentialSession) cleanup(ctlToken string) {
 	if len(s.grants) > 0 {
 		revokeSecretGrants(s.grants, ctlToken)
 		s.grants = nil
+	}
+	if s.sessionToken != "" {
+		_, _ = secretsRPC(defaultSecretsSocketPath(), &secretsRPCRequest{
+			Action: "session_revoke", Token: ctlToken, SessionToken: s.sessionToken,
+		})
+		s.sessionToken = ""
 	}
 	if s.dir != "" {
 		_ = os.RemoveAll(s.dir)

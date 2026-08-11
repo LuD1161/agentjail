@@ -105,3 +105,10 @@ contracts. The server supports the 2024-11-05, 2025-03-26, and 2025-06-18
 initialization versions and newline-delimited JSON-RPC stdio. Local verification
 used Codex CLI 0.147.0; its `mcp_2026_07_28` feature was disabled, so the stable
 initialization lifecycle remained the applicable contract.
+
+Codex configuration was also checked against the official
+[Codex MCP reference](https://developers.openai.com/codex/mcp) on 2026-08-10.
+The per-launch adapter uses documented stdio `command`, `args`, `env_vars`,
+`required`, `enabled_tools`, and `default_tools_approval_mode` settings. The
+same reference explicitly confirms that Codex consumes the MCP initialization
+`instructions` field as server-wide agent guidance.

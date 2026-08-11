@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/credentialaccess"
+	"github.com/LuD1161/agentjail/internal/credentialguidance"
 )
 
 const (
@@ -22,8 +23,6 @@ const (
 	EnvSessionToken = "AGENTJAIL_CREDENTIAL_SESSION_TOKEN"
 	protocolVersion = "2025-06-18"
 )
-
-const sessionInstructions = "You are running inside an AgentJail session without ambient CLI credentials. Before using a credentialed CLI, call list_credentials, select the exact credential ID matching the user's requested account or context, and call request_credential with a concrete reason. If more than one credential could match, ask the user; AgentJail never chooses one for you. Apply the returned environment variables or mode-0600 file only inside this session, and never print credential values."
 
 // Broker is the narrow capability consumed by the MCP server.
 type Broker interface {
@@ -100,7 +99,7 @@ func dispatch(ctx context.Context, request rpcRequest, broker Broker) rpcRespons
 			"protocolVersion": version,
 			"capabilities":    object{"tools": object{}},
 			"serverInfo":      object{"name": "agentjail-credentials", "version": "1"},
-			"instructions":    sessionInstructions,
+			"instructions":    credentialguidance.SessionInstructions,
 		})
 	case "ping":
 		return success(request.ID, object{})

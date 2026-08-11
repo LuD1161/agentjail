@@ -256,6 +256,35 @@ func TestCodexLifecycleAttestation(t *testing.T) {
 	}
 }
 
+func TestCodexCredentialSessionGuidanceAndInternalTools(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	env := []string{
+		"AGENTJAIL_SOCKET=" + filepath.Join(trustedHome(t), "missing.sock"),
+		"AGENTJAIL_SHIELDED=1",
+		"AGENTJAIL_CREDENTIAL_SESSION_TOKEN=session-capability",
+	}
+	lifecycle := `{"hook_event_name":"SessionStart","session_id":"credential-session","cwd":"/tmp/test-project"}`
+	stdout, stderr, code := runHookWithArgs(t, bin, lifecycle, env, []string{"--agent=codex"})
+	if code != 0 || len(stderr) != 0 || !bytes.Contains(stdout, []byte("list_credentials")) || !bytes.Contains(stdout, []byte("AgentJail never chooses")) {
+		t.Fatalf("lifecycle code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	preTool := makeStdinJSON("mcp__agentjail_credentials__list_credentials", map[string]interface{}{}, "credential-session")
+	stdout, stderr, code = runHookWithArgs(t, bin, preTool, env, []string{"--agent=codex"})
+	if code != 0 || len(stdout) != 0 || bytes.Contains(stderr, []byte("daemon")) {
+		t.Fatalf("internal PreToolUse code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	permission := makeCodexPermissionRequestJSON("mcp__agentjail_credentials__request_credential", map[string]interface{}{
+		"credential_id": "aws/production", "reason": "Read production S3 report",
+	}, "credential-session", "default")
+	stdout, stderr, code = runHookWithArgs(t, bin, permission, env, []string{"--agent=codex"})
+	if code != 0 || len(stderr) != 0 || !bytes.Contains(stdout, []byte(`"behavior":"allow"`)) {
+		t.Fatalf("internal PermissionRequest code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 // TestHook_Allow verifies that a stub daemon returning "allow" causes the hook
 // to exit 0 and write a valid allow response to stdout.
 func TestHook_Allow(t *testing.T) {

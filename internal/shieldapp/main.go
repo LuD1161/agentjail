@@ -40,6 +40,7 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/envaudit"
 	"github.com/LuD1161/agentjail/internal/netns"
 	"github.com/LuD1161/agentjail/internal/netpolicy"
@@ -308,11 +309,29 @@ func Run(args []string) int {
 		return 127
 	}
 	agentArgs := rest[1:]
-	credentialTools, err := resolveCredentialSelections(credentialFlags)
+	explicitCredentialTools, err := resolveCredentialSelections(credentialFlags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: %v\n", err)
 		return 1
 	}
+	var discoveredCredentialTools credentialSelections
+	if credentialToken, tokenErr := ctlauth.Load(); tokenErr == nil && supportsCredentialMCP(agentPath) {
+		discovered, discoverErr := discoverCredentialSelections(credentialToken)
+		if discoverErr != nil {
+			fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: credential discovery unavailable: %v\n", discoverErr)
+		} else {
+			resolvedDiscovered, unavailableTools, resolveErr := resolveAvailableCredentialSelections(discovered)
+			if resolveErr != nil {
+				fmt.Fprintf(os.Stderr, "agentjail-shield: %v\n", resolveErr)
+				return 1
+			}
+			discoveredCredentialTools = resolvedDiscovered
+			for _, tool := range unavailableTools {
+				fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: broker has %s credentials but the CLI is not installed; hiding them from this session\n", tool)
+			}
+		}
+	}
+	credentialTools := mergeCredentialSelections(explicitCredentialTools, discoveredCredentialTools)
 
 	// Run the environment audit before shield setup.  The audit is
 	// best-effort and non-blocking: warnings are printed to stderr.

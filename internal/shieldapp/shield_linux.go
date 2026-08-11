@@ -330,10 +330,17 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			Actor:     "shield",
 		})
 	}
-	credentialSession, err := prepareCredentialSession(credentialTools, ctlToken)
+	credentialSession, err := prepareCredentialSession(credentialTools, ctlToken, agentPath)
 	if err != nil {
 		cleanupNetproxy(netproxyCmd)
 		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", err)
+		os.Exit(1)
+	}
+	agentArgs, err = credentialSession.configureAgent(agentPath, agentArgs)
+	if err != nil {
+		credentialSession.cleanup(ctlToken)
+		cleanupNetproxy(netproxyCmd)
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential MCP configuration failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -366,12 +373,12 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	env = append(env, grantEnvVars...)
 	env = credentialSession.applyEnv(env)
 	for _, tool := range credentialTools {
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready with broker credential %q\n", tool.Tool, tool.Name)
-		slog.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath)
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready for %s broker credentials\n", tool.Tool, tool.deliveryMode())
+		slog.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath, "delivery", tool.deliveryMode())
 		_ = emitter.Emit(ctx, audit.Event{
 			EventType: audit.CredentialToolReady,
-			Entity:    tool.Name,
-			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath},
+			Entity:    tool.auditEntity(),
+			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath, "delivery": tool.deliveryMode()},
 			Actor:     "shield",
 		})
 	}

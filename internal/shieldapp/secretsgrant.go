@@ -8,6 +8,7 @@ import (
 	"time"
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
@@ -15,21 +16,28 @@ import (
 type secretsRPCRequest struct {
 	Action string `json:"action"`
 	// Token authenticates this shield as a caller outside the sandbox (ADR 0067).
-	Token   string `json:"token,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Scope   string `json:"scope,omitempty"`
-	TTL     string `json:"ttl,omitempty"`
-	GrantID string `json:"grant_id,omitempty"`
-	Tool    string `json:"tool,omitempty"`
+	Token        string   `json:"token,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	TTL          string   `json:"ttl,omitempty"`
+	GrantID      string   `json:"grant_id,omitempty"`
+	Tool         string   `json:"tool,omitempty"`
+	SessionToken string   `json:"session_token,omitempty"`
+	SessionID    string   `json:"session_id,omitempty"`
+	Project      string   `json:"project,omitempty"`
+	Agent        string   `json:"agent,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
 }
 
 type secretsRPCResponse struct {
-	OK       bool                      `json:"ok"`
-	Error    string                    `json:"error,omitempty"`
-	EnvVars  map[string]string         `json:"env_vars,omitempty"`
-	GrantID  string                    `json:"grant_id,omitempty"`
-	Expires  string                    `json:"expires,omitempty"`
-	Delivery *credentialtools.Delivery `json:"delivery,omitempty"`
+	OK           bool                          `json:"ok"`
+	Error        string                        `json:"error,omitempty"`
+	EnvVars      map[string]string             `json:"env_vars,omitempty"`
+	GrantID      string                        `json:"grant_id,omitempty"`
+	Expires      string                        `json:"expires,omitempty"`
+	Delivery     *credentialtools.Delivery     `json:"delivery,omitempty"`
+	SessionToken string                        `json:"session_token,omitempty"`
+	Credentials  []credentialaccess.Descriptor `json:"credentials,omitempty"`
 }
 
 type activeGrant struct {
