@@ -38,6 +38,10 @@ AgentJail exposes two MCP tools:
 2. `request_credential` requires one exact ID and a bounded non-empty reason.
    It returns that record's standard environment/file presentation directly.
 
+The MCP server also returns the discover/select/request rule in its initialization
+instructions. Agent-native session guidance repeats it so clients that do not
+surface MCP server instructions receive the same invariant.
+
 AgentJail never selects an identity. Agent-native session instructions require
 the coding agent to list first, select from the user's stated target, and ask
 the user when multiple descriptors remain plausible.
@@ -90,3 +94,14 @@ Static material is present in the MCP result and can be retained by the coding
 agent's local transcript. Operators must use credentials whose native IAM/RBAC
 authority is acceptable until JIT and phantom phases land. AgentJail documents
 this exposure and does not claim secret non-disclosure for the bootstrap.
+
+## Compatibility verification
+
+Verified 2026-08-10 against the official MCP 2025-06-18
+[lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle),
+[stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
+and [tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+contracts. The server supports the 2024-11-05, 2025-03-26, and 2025-06-18
+initialization versions and newline-delimited JSON-RPC stdio. Local verification
+used Codex CLI 0.147.0; its `mcp_2026_07_28` feature was disabled, so the stable
+initialization lifecycle remained the applicable contract.
