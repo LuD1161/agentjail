@@ -341,7 +341,7 @@ do_gate() {
     local codex_auth="${CODEX_AUTH_FILE:-$codex_home/auth.json}"
     local codex_bin="" codex_version="" needs_codex=0 s candidate
     for s in "${scenarios[@]}"; do
-        case "$s" in tunnel-agent|codex-approval) needs_codex=1 ;; esac
+        case "$s" in tunnel-agent|codex-approval|credentialed-cli) needs_codex=1 ;; esac
     done
     if [ "$needs_codex" -eq 1 ]; then
         while IFS= read -r candidate; do
@@ -398,7 +398,7 @@ do_gate() {
     for s in "${scenarios[@]}"; do
         log "RELEASE GATE: running scenario '$s' on a clean box"
         case "$s" in
-            tunnel-agent|codex-approval)
+            tunnel-agent|codex-approval|credentialed-cli)
                 do_test "$name" "$s" --codex-auth "$codex_auth" \
                     || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
                 ;;
@@ -426,8 +426,8 @@ do_test() {
             *) die "unknown test flag: $1" ;;
         esac
     done
-    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ] && [ "$scenario" != "tunnel-agent" ]; then
-        die "--codex-auth is accepted only by the codex-approval and tunnel-agent scenarios"
+    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ] && [ "$scenario" != "tunnel-agent" ] && [ "$scenario" != "credentialed-cli" ]; then
+        die "--codex-auth is accepted only by the codex-approval, credentialed-cli, and tunnel-agent scenarios"
     fi
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
     [ -f "$script" ] || die "scenario not found: $script"

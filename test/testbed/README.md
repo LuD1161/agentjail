@@ -118,8 +118,8 @@ tarball from the given worktree (default: this repo checkout), pushes it, and
 runs `guest-provision.sh` inside the guest, which:
 
 1. installs only the selected agent through npm,
-2. keeps Codex authentication out of provisioning and injects it only for the
-   live scenario,
+2. keeps Codex authentication out of provisioning and injects it only for
+   each live scenario,
 3. runs `install.sh` with `LOCAL_TARBALL=` once and fails unless that single
    non-interactive install leaves the daemon running and the selected agent wired,
 4. creates a seed project `~/work/demo` (git repo with an `origin` → allowed
@@ -194,6 +194,7 @@ stays healthy precisely when enforcement is off.
 | `chaos-daemon-outage` | daemon stopped mid-session; stale socket file | hook still renders a decision and never hangs; fail-open is **visible** on stdout `systemMessage` (ADR 0073 — Claude Code discards hook stderr on exit 0) on both the claude and codex paths; sentinel written; `doctor` reports the fail-open window; the divergence signature reproduces; daemon + sentinel restored |
 | `agent-conformance` | native hook JSON for Claude, Codex, and Cursor | common project allow and sensitive-path / destructive-command denies produce the correct adapter-specific result without requiring provider login |
 | `codex-approval` | real Codex 0.147 TUI, a guest-local bare Git remote, and a user-authored custom Bash `ask` | built-in and previously unknown custom rules open the same `shell-command` prompt; approve executes once; decline, `never`, and `--ignore-rules` leave no effect; guest auth is removed on exit |
+| `credentialed-cli` | two AWS accounts, one Kubernetes context, local SigV4/bearer verifiers, and real Codex with disposable auth | Codex lists non-secret choices, requests exact IDs with reasons, configures pinned `aws`/`kubectl`, completes authenticated reads, never selects the decoy account, and leaves reasoned value-free audit events |
 | `chaos-supervisor-restart` | `SIGTERM` (clean exit) then `SIGKILL` (crash) to the daemon PID | supervisor respawns on **both** paths; `Restart=always` / `KeepAlive=true` pinned per OS (ADR 0070 — the updater's clean `exit(0)` went un-restarted under `Restart=on-failure`); enforcement proven real again, not just `is-active` green |
 | `chaos-hook-tamper` | hook entry stripped / settings file deleted, daemon up **and** down | hookwatch re-injects with the daemon up (ADR 0026); does **not** with the daemon down — the watchdog is a goroutine inside the daemon, blind during the outage it should mitigate; a full file delete is a pinned gap (hookwatch only repairs an existing file) |
 
@@ -355,8 +356,8 @@ make e2e-release        # == testbed.sh gate --worktree .
 
 It resets the configured gate testbed to the clean golden (or creates it),
 provisions the current worktree through the real installer, then runs
-`e2e-smoke`, `credentialed-cli`, and the authenticated Codex `tunnel-agent`
-scenario. It **exits non-zero on insufficient host resources, missing
+`e2e-smoke`, the authenticated Codex `credentialed-cli` workflow, and the
+authenticated Codex `tunnel-agent` scenario. It **exits non-zero on insufficient host resources, missing
 authentication, scenario failure, or install failure** and deletes the gate VM
 afterward by default. Run it on Linux for the Linux build and on macOS for the
 macOS build.
