@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 )
 
 func TestBuildCredentialValueAWSFromEnvironment(t *testing.T) {
@@ -14,13 +16,18 @@ func TestBuildCredentialValueAWSFromEnvironment(t *testing.T) {
 		"AWS_SESSION_TOKEN":     "session",
 		"AWS_REGION":            "us-west-1",
 	}
-	value, err := buildCredentialValue(credentialSourceOptions{Tool: "aws", FromEnv: true}, strings.NewReader(""), func(key string) string { return env[key] }, nil)
+	value, err := buildCredentialValue(credentialSourceOptions{Tool: "aws", FromEnv: true, Label: "Development", Account: "111122223333"}, strings.NewReader(""), func(key string) string { return env[key] }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"AKIATEST", "secret", "session", "us-west-1"} {
 		if !strings.Contains(value, want) {
 			t.Fatalf("stored AWS JSON does not contain expected field %q", want)
+		}
+	}
+	for _, want := range []string{"Development", "111122223333", "agentjail_credential_version"} {
+		if !strings.Contains(value, want) {
+			t.Fatalf("stored credential record does not contain metadata %q", want)
 		}
 	}
 }
@@ -51,8 +58,9 @@ current-context: test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value != config {
-		t.Fatalf("value = %q, want kubeconfig", value)
+	record, recognized, err := credentialaccess.Decode(value)
+	if err != nil || !recognized || record.Material != config {
+		t.Fatalf("decoded value = %#v, %v, %v; want kubeconfig", record, recognized, err)
 	}
 }
 
@@ -62,7 +70,7 @@ func TestBuildCredentialValueGitHubFromStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value != "ghp_test" {
+	if !strings.Contains(value, "ghp_test") {
 		t.Fatalf("value = %q", value)
 	}
 }

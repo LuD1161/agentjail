@@ -21,6 +21,9 @@ var (
 	credentialSetFromEnv   bool
 	credentialSetFromFile  string
 	credentialSetFromStdin bool
+	credentialSetLabel     string
+	credentialSetAccount   string
+	credentialSetContext   string
 )
 
 var credentialSetCmd = &cobra.Command{
@@ -33,6 +36,9 @@ var credentialSetCmd = &cobra.Command{
 			FromEnv:   credentialSetFromEnv,
 			FromFile:  credentialSetFromFile,
 			FromStdin: credentialSetFromStdin,
+			Label:     credentialSetLabel,
+			Account:   credentialSetAccount,
+			Context:   credentialSetContext,
 		}, os.Stdin, os.Getenv, os.ReadFile)
 		if err != nil {
 			return err
@@ -68,6 +74,9 @@ func init() {
 	credentialSetCmd.Flags().BoolVar(&credentialSetFromEnv, "from-current-env", false, "import the tool's standard credential environment variables")
 	credentialSetCmd.Flags().StringVar(&credentialSetFromFile, "from-file", "", "import credential content from PATH")
 	credentialSetCmd.Flags().BoolVar(&credentialSetFromStdin, "from-stdin", false, "import credential content from stdin")
+	credentialSetCmd.Flags().StringVar(&credentialSetLabel, "label", "", "non-secret label shown to coding agents")
+	credentialSetCmd.Flags().StringVar(&credentialSetAccount, "account", "", "non-secret account or tenant identifier")
+	credentialSetCmd.Flags().StringVar(&credentialSetContext, "context", "", "non-secret cluster or context identifier")
 	_ = credentialSetCmd.MarkFlagRequired("tool")
 	credentialCmd.AddCommand(credentialSetCmd, credentialListCmd, credentialRemoveCmd)
 	rootCmd.AddCommand(credentialCmd)

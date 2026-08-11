@@ -309,16 +309,24 @@ Import a credential while outside the sandbox:
 
 ```sh
 # Reads AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and optional session/region vars.
-agentjail credential set aws/default --tool aws --from-current-env
+agentjail credential set aws/default --tool aws --label "Development" \
+  --account 111122223333 --from-current-env
 
 # Imports a single-cluster/context/user kubeconfig with inline credentials.
-agentjail credential set kube/dev --tool kubectl --from-file ./dev.kubeconfig
+agentjail credential set kube/dev --tool kubectl --label "Development cluster" \
+  --context dev-us-west --from-file ./dev.kubeconfig
 
 # Reads GH_TOKEN (or GITHUB_TOKEN).
 agentjail credential set github/default --tool gh --from-current-env
 
 agentjail credential list
 ```
+
+The label, account, and context fields are non-secret discovery metadata. New
+imports store them with the material in one encrypted typed record; legacy
+
+`aws/`, `kube/`, and `github/` entries remain readable. Arbitrary raw broker
+secrets are never inferred to be coding-agent credentials.
 
 Select credentials before launching the coding agent:
 
@@ -354,6 +362,8 @@ IAM/RBAC is the current scope boundary. Credential policy, company policy, and
 general JIT/Vault/OpenBao issuance are later layers that plug into the same
 issuer-independent adapter contract. See
 [ADR 0129-credentialed-cli-bootstrap](./docs/adr/0129-credentialed-cli-bootstrap.md).
+Agent-driven discovery and exact MCP issuance are defined by
+[ADR 0131-agent-credential-discovery](./docs/adr/0131-agent-credential-discovery.md).
 
 It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstall, `agentjail update`, and daemon auto-update all restore the complete shim set rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 

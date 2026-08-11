@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentials"
 	"github.com/LuD1161/agentjail/internal/credentialtools"
 )
@@ -104,6 +105,26 @@ func TestHandleToolGrantGitHubEnvironment(t *testing.T) {
 	}
 	if got := deliveryEnv(resp.Delivery.Env)["GH_TOKEN"]; got != "ghp_test" {
 		t.Fatalf("GH_TOKEN = %q, want test token", got)
+	}
+}
+
+func TestHandleToolGrantTypedRecordRejectsToolMismatch(t *testing.T) {
+	t.Parallel()
+	store, gm := newToolGrantFixture(t)
+	record, err := credentialaccess.NewRecord(credentialtools.ToolAWS, `{"access_key_id":"AKIATEST","secret_access_key":"secret"}`, "Development", "111122223333", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := credentialaccess.Encode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("aws/development", raw); err != nil {
+		t.Fatal(err)
+	}
+	resp := handleRPC(&RPCRequest{Action: "tool_grant", Tool: "gh", Name: "aws/development"}, store, gm, audit.NopEmitter{})
+	if resp.OK {
+		t.Fatal("typed AWS credential was issued as a GitHub credential")
 	}
 }
 

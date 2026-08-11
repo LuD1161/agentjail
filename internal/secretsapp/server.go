@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentials"
 	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
@@ -387,6 +388,18 @@ func (i localToolMaterialIssuer) Issue(ctx context.Context, tool credentialtools
 	raw, err := i.store.Get(req.Name)
 	if err != nil {
 		return credentialtools.Material{}, nil, fmt.Errorf("load credential %q: %w", req.Name, err)
+	}
+
+	record, recognized, recordErr := credentialaccess.Decode(raw)
+	if recordErr != nil {
+		return credentialtools.Material{}, nil, fmt.Errorf("credential %q: %w", req.Name, recordErr)
+	}
+	if recognized {
+		descriptor := credentialaccess.Describe(credentialaccess.ID(req.Name), record)
+		if descriptor.Tool != tool {
+			return credentialtools.Material{}, nil, fmt.Errorf("credential %q is for %s, not %s", req.Name, descriptor.Tool, tool)
+		}
+		raw = record.Material
 	}
 
 	// Existing AWS AssumeRole entries keep using the shipped STS issuer. Static

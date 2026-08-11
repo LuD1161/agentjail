@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentialtools"
 )
 
@@ -17,6 +18,9 @@ type credentialSourceOptions struct {
 	FromEnv   bool
 	FromFile  string
 	FromStdin bool
+	Label     string
+	Account   string
+	Context   string
 }
 
 func buildCredentialValue(options credentialSourceOptions, stdin io.Reader, getenv func(string) string, readFile func(string) ([]byte, error)) (string, error) {
@@ -66,7 +70,11 @@ func buildCredentialValue(options credentialSourceOptions, stdin io.Reader, gete
 	if _, err := adapter.Present(material); err != nil {
 		return "", err
 	}
-	return value, nil
+	record, err := credentialaccess.NewRecord(tool, value, options.Label, options.Account, options.Context)
+	if err != nil {
+		return "", err
+	}
+	return credentialaccess.Encode(record)
 }
 
 func credentialValueFromEnv(tool credentialtools.Tool, getenv func(string) string, readFile func(string) ([]byte, error)) (string, error) {
