@@ -102,9 +102,10 @@ Verified 2026-08-10 against the official MCP 2025-06-18
 [stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
 and [tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
 contracts. The server supports the 2024-11-05, 2025-03-26, and 2025-06-18
-initialization versions and newline-delimited JSON-RPC stdio. Local verification
-used Codex CLI 0.147.0; its `mcp_2026_07_28` feature was disabled, so the stable
-initialization lifecycle remained the applicable contract.
+initialization versions, newline-delimited JSON-RPC stdio, and the reserved
+request `_meta` field without relaxing each tool's argument schema. Local
+verification used Codex CLI 0.147.0; its `mcp_2026_07_28` feature was disabled,
+so the stable initialization lifecycle remained the applicable contract.
 
 Codex configuration was also checked against the official
 [Codex MCP reference](https://developers.openai.com/codex/mcp) on 2026-08-10.

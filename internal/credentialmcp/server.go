@@ -155,6 +155,7 @@ func callTool(ctx context.Context, request rpcRequest, broker Broker) rpcRespons
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
+		Meta      json.RawMessage `json:"_meta,omitempty"`
 	}
 	if err := decodeStrict(request.Params, &params); err != nil {
 		return errorResponse(request.ID, -32602, "Invalid tools/call parameters")

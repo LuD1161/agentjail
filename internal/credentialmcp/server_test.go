@@ -41,7 +41,7 @@ func TestServerListsMetadataThenRequestsExactCredential(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex","version":"0.147.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_credentials","arguments":{"tool":"aws"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_credentials","arguments":{"tool":"aws"},"_meta":{"progressToken":"codex-call-3"}}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"request_credential","arguments":{"credential_id":"aws/production","reason":"Read the requested production S3 report"}}}`,
 	}, "\n") + "\n"
 	broker := &fakeBroker{}
@@ -68,6 +68,22 @@ func TestServerListsMetadataThenRequestsExactCredential(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &response); err != nil {
 			t.Fatalf("invalid JSON-RPC response: %v", err)
 		}
+	}
+}
+
+func TestServerAcceptsProtocolMetadataButKeepsToolArgumentsStrict(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_credentials","arguments":{"tool":"aws"},"_meta":{"progressToken":7}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_credentials","arguments":{"tool":"aws","account":"guess"},"_meta":{"progressToken":8}}}`,
+	}, "\n") + "\n"
+	var output bytes.Buffer
+	if err := Run(context.Background(), strings.NewReader(input), &output, &fakeBroker{}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 || strings.Contains(lines[0], `"code":-32602`) || !strings.Contains(lines[1], `"code":-32602`) {
+		t.Fatalf("responses = %s", output.String())
 	}
 }
 

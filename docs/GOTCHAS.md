@@ -822,6 +822,17 @@ Linux also had no gate-stop trap, so successful tests left VMs consuming RAM.
   creation, and VM cleanup. Test failure and retained-cache outcomes, and apply
   the same lifecycle contract to every OS driver. See ADR 0053-vm-testbed-engine.
 
+## 61. Strict MCP parameters must include protocol metadata
+
+The credential MCP unit test sent only `name` and `arguments`, so its strict
+decoder passed. Real Codex also sent the MCP-reserved `_meta` request field;
+the server rejected the entire call before credential discovery reached the
+broker, despite advertising a valid tool schema.
+
+- **Rule:** keep tool arguments strict, but model protocol-level extension
+  fields separately at the serialization boundary and exercise them with a
+  real client. See ADR 0131-agent-credential-discovery and AGE-276.
+
 ---
 
 ## Testing gotchas
