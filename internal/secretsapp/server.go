@@ -30,24 +30,33 @@ type RPCRequest struct {
 	Action string `json:"action"`
 	// Token authenticates the caller as a process outside the sandbox. Required
 	// on every action (ADR 0067).
-	Token   string `json:"token,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Value   string `json:"value,omitempty"`
-	Scope   string `json:"scope,omitempty"`
-	TTL     string `json:"ttl,omitempty"`
-	GrantID string `json:"grant_id,omitempty"`
-	Tool    string `json:"tool,omitempty"`
+	Token        string `json:"token,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Value        string `json:"value,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	TTL          string `json:"ttl,omitempty"`
+	GrantID      string `json:"grant_id,omitempty"`
+	Tool         string `json:"tool,omitempty"`
+	SessionToken string `json:"session_token,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Agent        string `json:"agent,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 // RPCResponse is the newline-delimited JSON response from the server.
 type RPCResponse struct {
-	OK       bool                      `json:"ok"`
-	Error    string                    `json:"error,omitempty"`
-	Names    []string                  `json:"names,omitempty"`
-	EnvVars  map[string]string         `json:"env_vars,omitempty"`
-	GrantID  string                    `json:"grant_id,omitempty"`
-	Expires  string                    `json:"expires,omitempty"`
-	Delivery *credentialtools.Delivery `json:"delivery,omitempty"`
+	OK           bool                          `json:"ok"`
+	Error        string                        `json:"error,omitempty"`
+	Names        []string                      `json:"names,omitempty"`
+	EnvVars      map[string]string             `json:"env_vars,omitempty"`
+	GrantID      string                        `json:"grant_id,omitempty"`
+	Expires      string                        `json:"expires,omitempty"`
+	Delivery     *credentialtools.Delivery     `json:"delivery,omitempty"`
+	SessionToken string                        `json:"session_token,omitempty"`
+	Credentials  []credentialaccess.Descriptor `json:"credentials,omitempty"`
+	Issuance     *credentialaccess.Issuance    `json:"issuance,omitempty"`
 }
 
 // defaultSocketPath returns ~/.agentjail/secrets.sock.
@@ -129,14 +138,18 @@ func runServer(args []string) {
 
 	// Open audit emitter (best-effort; fall back to NopEmitter).
 	var emitter audit.Emitter = audit.NopEmitter{}
+	durableAudit := false
 	home, _ := os.UserHomeDir()
 	if home != "" {
 		dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
 		if st, err := auditstore.Open(dbPath); err == nil {
 			emitter = st
+			durableAudit = true
 			defer st.Close()
 		}
 	}
+	access := credentialaccess.NewService(store, credentialaccess.AllowAllBrokerCredentials{}, emitter, durableAudit)
+	sessions := credentialaccess.NewSessions()
 
 	// Fail CLOSED: without a token this broker would serve credentials to any
 	// caller that connects (ADR 0067).
@@ -180,7 +193,7 @@ func runServer(args []string) {
 				return
 			}
 			activity.touch()
-			go handleConn(conn, store, gm, emitter, ctlToken)
+			go handleConn(conn, store, gm, emitter, ctlToken, sessions, access)
 		}
 	}()
 
@@ -230,7 +243,7 @@ func idleWatchdog(timeout time.Duration, clock *idleClock, gm *credentials.Grant
 }
 
 // handleConn serves one client connection.
-func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitter audit.Emitter, token string) {
+func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitter audit.Emitter, token string, sessions *credentialaccess.Sessions, access *credentialaccess.Service) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -244,17 +257,81 @@ func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitt
 			continue
 		}
 
-		// Every verb here is privileged (grant returns credentials; set/delete
-		// mutate the store), so authenticate per request, before dispatch.
-		// The token is the boundary -- see ADR 0067.
+		if req.Action == "credential_list" || req.Action == "credential_request" {
+			session, ok := sessions.Lookup(req.SessionToken)
+			if !ok {
+				_ = enc.Encode(RPCResponse{OK: false, Error: "unauthorized: agent session token required"})
+				continue
+			}
+			_ = enc.Encode(handleAgentCredentialRPC(context.Background(), &req, session, access))
+			continue
+		}
+
+		// Control-plane verbs can mutate or enumerate the raw store. The narrow
+		// agent capability above can only discover and request typed records.
+		// See ADR 0131-agent-credential-discovery.
 		if !ctlauth.Valid(req.Token, token) {
 			slog.Warn("secrets: rejecting unauthenticated request", "action", req.Action)
 			_ = enc.Encode(RPCResponse{OK: false, Error: "unauthorized: control token required"})
 			continue
 		}
 
+		if req.Action == "session_register" {
+			resp := registerAgentSession(context.Background(), &req, sessions, emitter)
+			_ = enc.Encode(resp)
+			continue
+		}
+
 		resp := handleRPC(&req, store, gm, emitter)
 		_ = enc.Encode(resp)
+	}
+}
+
+func registerAgentSession(ctx context.Context, req *RPCRequest, sessions *credentialaccess.Sessions, emitter audit.Emitter) RPCResponse {
+	if req.SessionID == "" || req.Agent == "" {
+		return RPCResponse{OK: false, Error: "session_id and agent are required"}
+	}
+	token, expires, err := sessions.Register(credentialaccess.Session{
+		ID: req.SessionID, Project: req.Project, Agent: req.Agent,
+	}, credentialaccess.DefaultSessionTTL)
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	_ = emitter.Emit(ctx, audit.Event{
+		EventType: audit.CredentialSessionRegistered,
+		Entity:    req.Project,
+		Actor:     req.Agent,
+		SessionID: req.SessionID,
+	})
+	return RPCResponse{OK: true, SessionToken: token, Expires: expires.Format(time.RFC3339)}
+}
+
+func handleAgentCredentialRPC(ctx context.Context, req *RPCRequest, session credentialaccess.Session, access *credentialaccess.Service) RPCResponse {
+	switch req.Action {
+	case "credential_list":
+		var tool credentialtools.Tool
+		if req.Tool != "" {
+			parsed, err := credentialtools.ParseTool(req.Tool)
+			if err != nil {
+				return RPCResponse{OK: false, Error: err.Error()}
+			}
+			tool = parsed
+		}
+		credentials, err := access.List(ctx, session, tool)
+		if err != nil {
+			return RPCResponse{OK: false, Error: err.Error()}
+		}
+		return RPCResponse{OK: true, Credentials: credentials}
+	case "credential_request":
+		issuance, err := access.RequestExact(ctx, session, credentialaccess.Request{
+			CredentialID: credentialaccess.ID(req.CredentialID), Reason: req.Reason,
+		})
+		if err != nil {
+			return RPCResponse{OK: false, Error: err.Error()}
+		}
+		return RPCResponse{OK: true, Issuance: &issuance}
+	default:
+		return RPCResponse{OK: false, Error: "unknown agent credential action: " + req.Action}
 	}
 }
 

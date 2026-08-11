@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentials"
 )
 
@@ -42,13 +43,15 @@ func brokerFixture(t *testing.T, token string) (string, *Store) {
 	t.Cleanup(func() { _ = ln.Close() })
 
 	gm := credentials.NewGrantManager()
+	sessions := credentialaccess.NewSessions()
+	access := credentialaccess.NewService(store, credentialaccess.AllowAllBrokerCredentials{}, audit.NopEmitter{}, true)
 	go func() {
 		for {
 			conn, aerr := ln.Accept()
 			if aerr != nil {
 				return
 			}
-			go handleConn(conn, store, gm, audit.NopEmitter{}, token)
+			go handleConn(conn, store, gm, audit.NopEmitter{}, token, sessions, access)
 		}
 	}()
 	return sock, store
@@ -167,5 +170,55 @@ func TestBroker_EmptyServerTokenFailsClosed(t *testing.T) {
 		if resp := ask(t, sock, req); resp.OK {
 			t.Errorf("server with no token served %q", req.Action)
 		}
+	}
+}
+
+func TestBroker_AgentCapabilityCanOnlyAccessTypedCredentials(t *testing.T) {
+	const controlToken = "the-real-token"
+	sock, store := brokerFixture(t, controlToken)
+	record, err := credentialaccess.NewRecord("aws", `{"access_key_id":"AKIADEV","secret_access_key":"secret"}`, "development", "111111111111", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := credentialaccess.Encode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("aws/development", encoded); err != nil {
+		t.Fatal(err)
+	}
+
+	registered := ask(t, sock, RPCRequest{
+		Action: "session_register", Token: controlToken, SessionID: "session-1", Project: "/repo", Agent: "codex",
+	})
+	if !registered.OK || registered.SessionToken == "" {
+		t.Fatalf("register agent session: %+v", registered)
+	}
+
+	listed := ask(t, sock, RPCRequest{Action: "credential_list", SessionToken: registered.SessionToken})
+	if !listed.OK || len(listed.Credentials) != 1 || listed.Credentials[0].ID != "aws/development" {
+		t.Fatalf("typed discovery: %+v", listed)
+	}
+	if got := ask(t, sock, RPCRequest{Action: "list", SessionToken: registered.SessionToken}); got.OK || len(got.Names) != 0 {
+		t.Fatalf("agent capability enumerated raw store: %+v", got)
+	}
+	if got := ask(t, sock, RPCRequest{Action: "delete", SessionToken: registered.SessionToken, Name: "aws/development"}); got.OK {
+		t.Fatalf("agent capability deleted a credential: %+v", got)
+	}
+	if got := ask(t, sock, RPCRequest{Action: "credential_list", Token: controlToken}); got.OK {
+		t.Fatalf("control token substituted for narrow session capability: %+v", got)
+	}
+	issued := ask(t, sock, RPCRequest{
+		Action: "credential_request", SessionToken: registered.SessionToken,
+		CredentialID: "aws/development", Reason: "Inspect the requested development S3 bucket",
+	})
+	if !issued.OK || issued.Issuance == nil {
+		t.Fatalf("exact credential request: %+v", issued)
+	}
+	if got := deliveryEnv(issued.Issuance.Delivery.Env)["AWS_ACCESS_KEY_ID"]; got != "AKIADEV" {
+		t.Fatalf("issued access key = %q", got)
+	}
+	if got := ask(t, sock, RPCRequest{Action: "tool_grant", SessionToken: registered.SessionToken, Name: "aws/development", Tool: "aws"}); got.OK {
+		t.Fatalf("agent capability invoked control-plane tool grant: %+v", got)
 	}
 }
