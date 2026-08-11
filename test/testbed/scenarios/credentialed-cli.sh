@@ -406,12 +406,12 @@ else
         && ok "Codex accepts the disposable authenticated session" \
         || bad "Codex accepts the disposable authenticated session"
 
-    : > /tmp/agentjail-credential-stub/log
+    sudo -n truncate -s 0 /tmp/agentjail-credential-stub/log
     rm -f "$PROJECT/credential-agent-proof.json" "$PROJECT/.credential-agent.log" \
         /tmp/agentjail-agent-kubeconfig
     TASK="You are inside AgentJail without ambient cloud credentials. Use the AgentJail credential MCP workflow: first list AWS credentials and Kubernetes credentials. The user target is AWS account 123456789012 and Kubernetes context agentjail-test. Select the exact matching credential IDs from the list; do not choose the other AWS account. Request each credential with a concrete reason. Use the returned values only in the command environment or a mode-0600 temporary file. Run: aws sts get-caller-identity --endpoint-url '$STUB_URL' --ca-bundle /tmp/agentjail-credential-stub.crt --no-cli-pager. Also run kubectl get --raw /version with the requested kubeconfig. Remove the temporary kubeconfig afterward. Write only non-secret proof to $PROJECT/credential-agent-proof.json as valid JSON with keys aws_account, kubernetes_version, aws_binary, and kubectl_binary. Do not print any credential value."
     timeout 900 "$AJ" run --no-git-ssh -- \
-        "$CODEX_REAL" --dangerously-bypass-approvals-and-sandbox \
+        codex --dangerously-bypass-approvals-and-sandbox \
         --dangerously-bypass-hook-trust -C "$PROJECT" \
         exec --ephemeral "$TASK" \
         >"$PROJECT/.credential-agent.log" 2>&1
