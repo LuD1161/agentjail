@@ -440,6 +440,7 @@ agentjail cost --period 7d
 same complete local-flag help is available on reporting, replay, UI,
 installation, MCP inventory, skill-policy, and shielded-launch commands.
 Duration flags name the accepted forms, such as `30m`, `24h`, and `7d`.
+Every user-facing command and nested subcommand also includes copyable examples.
 
 Each run recalculates eligible historical Claude Code and Codex sessions from
 their local token totals, so newly supported model prices apply retroactively.

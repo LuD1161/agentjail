@@ -21,15 +21,8 @@ var runCmd = &cobra.Command{
 The agent inherits Landlock (Linux) or Seatbelt (macOS) restrictions
 that prevent access to credentials, host processes, and unrestricted network.
 
-Examples:
-  agentjail run -- claude
-  agentjail run --verbose -- claude
-  agentjail run --credential=aws=aws/default -- claude
-  agentjail run --credential=kubectl=kube/dev --credential=gh=github/default -- codex
-  agentjail run --git-ssh -- codex
-  agentjail run --no-git-ssh -- claude
-  agentjail run -- codex --approval-mode full-auto
-  agentjail run -- cursor`,
+Use --git-ssh to delegate loaded SSH-agent identities for the session, or
+--no-git-ssh to override a policy default that enables delegation.`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		// --help before "--" prints help; after "--" it is forwarded to the
@@ -51,12 +44,7 @@ This is equivalent to: agentjail run -- claude [args...]
 
 The session is protected by Landlock (Linux) or Seatbelt (macOS) by default:
 credential paths, host processes, and unrestricted network access are blocked
-at the kernel level.
-
-  agentjail claude                Sandboxed compatibility alias.
-  agentjail claude --git-ssh      Enable Git over SSH for this launch.
-  agentjail claude --no-sandbox   Hook-only policy, no OS sandbox (for hosts
-                                  that cannot sandbox, or an explicit opt-out).`,
+at the kernel level. Use --git-ssh to delegate loaded SSH-agent identities.`,
 	Deprecated:         "use `agentjail run -- claude` so every coding agent has the same launch pattern",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
