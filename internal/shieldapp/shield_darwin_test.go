@@ -86,12 +86,14 @@ func TestGenerateSBProfileSensitivePaths(t *testing.T) {
 	}
 }
 
-func TestGenerateSBProfileCredentialMCPReadCapabilityIsExact(t *testing.T) {
+func TestGenerateSBProfileCredentialMCPCapabilityIsExact(t *testing.T) {
 	t.Parallel()
 	home := "/Users/me"
 	executable := home + "/.agentjail/bin/agentjail"
+	brokerSocket := home + "/.agentjail/secrets.sock"
 	profile := generateSBProfileWithCapabilities(nil, home, nil, false, darwinProfileCapabilities{
 		CredentialMCPExecutable: executable,
+		CredentialBrokerSocket:  brokerSocket,
 	})
 
 	if !strings.Contains(profile, "(allow file-read*\n    (literal \""+executable+"\"))") {
@@ -100,9 +102,24 @@ func TestGenerateSBProfileCredentialMCPReadCapabilityIsExact(t *testing.T) {
 	if strings.Contains(profile, "(allow file-read*\n    (subpath \""+home+"/.agentjail/bin\"))") {
 		t.Fatal("profile broadly grants the AgentJail bin directory")
 	}
+	brokerAllow := "(allow network-outbound\n    (literal \"" + brokerSocket + "\"))"
+	if !strings.Contains(profile, brokerAllow) {
+		t.Fatalf("profile missing exact credential broker network capability:\n%s", profile)
+	}
+	brokerDeny := "(deny network-outbound\n    (literal \"" + brokerSocket + "\"))"
+	denyAt := strings.Index(profile, brokerDeny)
+	if denyAt == -1 {
+		t.Fatal("profile missing defence-in-depth credential broker socket deny")
+	}
+	if strings.Index(profile, brokerAllow) < denyAt {
+		t.Fatal("credential broker capability does not override the control-socket deny")
+	}
 	withoutCapability := generateSBProfileWithCapabilities(nil, home, nil, false, darwinProfileCapabilities{})
 	if strings.Contains(withoutCapability, "(literal \""+executable+"\")") {
 		t.Fatal("profile grants credential MCP executable without a session capability")
+	}
+	if strings.Contains(withoutCapability, brokerAllow) {
+		t.Fatal("profile grants credential broker socket without a session capability")
 	}
 }
 

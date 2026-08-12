@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestGenerateTunnelProfileCredentialMCPReadCapabilityIsExact(t *testing.T) {
+func TestGenerateTunnelProfileCredentialMCPCapabilityIsExact(t *testing.T) {
 	t.Parallel()
 	home := "/Users/me"
 	executable := home + "/.agentjail/bin/agentjail"
