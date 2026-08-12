@@ -86,6 +86,26 @@ func TestGenerateSBProfileSensitivePaths(t *testing.T) {
 	}
 }
 
+func TestGenerateSBProfileCredentialMCPReadCapabilityIsExact(t *testing.T) {
+	t.Parallel()
+	home := "/Users/me"
+	executable := home + "/.agentjail/bin/agentjail"
+	profile := generateSBProfileWithCapabilities(nil, home, nil, false, darwinProfileCapabilities{
+		CredentialMCPExecutable: executable,
+	})
+
+	if !strings.Contains(profile, "(allow file-read*\n    (literal \""+executable+"\"))") {
+		t.Fatalf("profile missing exact credential MCP read capability:\n%s", profile)
+	}
+	if strings.Contains(profile, "(allow file-read*\n    (subpath \""+home+"/.agentjail/bin\"))") {
+		t.Fatal("profile broadly grants the AgentJail bin directory")
+	}
+	withoutCapability := generateSBProfileWithCapabilities(nil, home, nil, false, darwinProfileCapabilities{})
+	if strings.Contains(withoutCapability, "(literal \""+executable+"\")") {
+		t.Fatal("profile grants credential MCP executable without a session capability")
+	}
+}
+
 // TestGenerateSBProfileRegexPatterns verifies that regex patterns for
 // sensitive extensions appear in the profile.
 func TestGenerateSBProfileRegexPatterns(t *testing.T) {
