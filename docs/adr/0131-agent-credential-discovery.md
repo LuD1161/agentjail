@@ -63,6 +63,12 @@ discovery and exact credential requests for its session. It cannot set, delete,
 or enumerate arbitrary raw secrets. The global control token remains outside
 the sandbox.
 
+On macOS, Seatbelt grants that session the exact validated MCP executable and
+the exact broker socket. No AgentJail directory is exposed, and the broker
+still requires the random session token for every agent-facing operation. The
+socket exception exists only for sessions configured with credential MCP tools;
+ordinary shield sessions retain the control-socket deny.
+
 The current authorizer is a named bootstrap implementation equivalent to:
 
 ```yaml

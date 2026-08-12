@@ -849,12 +849,13 @@ indefinitely for additional input instead of starting the MCP session.
 Credential discovery and MCP protocol tests passed, and Linux could launch the
 server. The macOS profile denied reads of all `~/.agentjail`, including the
 validated multicall binary Codex needed to spawn as the credential MCP server;
-the real client reported only `ENOENT` during required-server initialization.
+after that was fixed, its blanket control-socket deny still blocked the MCP
+server from reaching the exact broker socket with its session token.
 
-- **Rule:** when a trusted session helper lives beneath a broad self-protection
-  deny, carry its validated executable as a typed launch capability and grant
-  only that literal in every OS profile. Test the deny and carve-out together.
-  See ADR 0131-agent-credential-discovery and AGE-279.
+- **Rule:** when a trusted session helper lives beneath broad self-protection
+  denies, carry its validated executable and session-authorized socket as typed
+  launch capabilities, granting only those literals. Test each deny and its
+  carve-out together. See ADR 0131-agent-credential-discovery and AGE-279.
 
 ---
 

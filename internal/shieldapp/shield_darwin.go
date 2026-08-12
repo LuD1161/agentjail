@@ -336,6 +336,7 @@ func generateSBProfileWithTrustedSSHAuthSock(cfg *config.PolicyConfig, home stri
 type darwinProfileCapabilities struct {
 	SSHAuthSock             sandbox.SSHAuthSock
 	CredentialMCPExecutable string
+	CredentialBrokerSocket  string
 }
 
 func resolveDarwinProfileCapabilities(agentPath string, credentialTools credentialSelections, sshAuthSock sandbox.SSHAuthSock) (darwinProfileCapabilities, error) {
@@ -348,6 +349,7 @@ func resolveDarwinProfileCapabilities(agentPath string, credentialTools credenti
 		return darwinProfileCapabilities{}, err
 	}
 	capabilities.CredentialMCPExecutable = executable
+	capabilities.CredentialBrokerSocket = defaultSecretsSocketPath()
 	return capabilities, nil
 }
 
@@ -677,6 +679,7 @@ func generateSBProfileWithCapabilities(cfg *config.PolicyConfig, home string, al
 		fmt.Fprintf(&sb, "(deny network-outbound\n    (literal %q))\n", p)
 	}
 	sb.WriteString("\n")
+	appendCredentialMCPNetworkCapability(&sb, capabilities.CredentialBrokerSocket)
 
 	// Default deny for all remaining network traffic.
 	// This blocks: C2 on non-standard ports (4444, 8888, etc.), raw IP/ICMP
@@ -693,6 +696,15 @@ func appendCredentialMCPReadCapability(sb *strings.Builder, executable string) {
 	// The session MCP executable is validated before profile construction; grant
 	// only that literal beneath the self-read deny. See ADR 0131-agent-credential-discovery.
 	fmt.Fprintf(sb, "(allow file-read*\n    (literal %q))\n\n", executable)
+}
+
+func appendCredentialMCPNetworkCapability(sb *strings.Builder, socket string) {
+	if socket == "" {
+		return
+	}
+	// The session token remains the authorization boundary; Seatbelt grants only
+	// its exact broker socket. See ADR 0131-agent-credential-discovery.
+	fmt.Fprintf(sb, "(allow network-outbound\n    (literal %q))\n\n", socket)
 }
 
 // resolvePathBestEffort canonicalizes s as far as the filesystem allows.
