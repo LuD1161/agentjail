@@ -57,7 +57,7 @@ TASK="Create pelican.html in the current directory: a single self-contained HTML
 
 echo "  === running the agent through the tunnel ==="
 RUN_LOG="$WORK/.run.log"
-timeout 900 "$AJ" run --tunnel --no-git-ssh -- \
+timeout 900 "$AJ" run --tunnel --verbose --no-git-ssh -- \
   codex --dangerously-bypass-approvals-and-sandbox \
   --dangerously-bypass-hook-trust -C "$WORK" \
   exec --ephemeral "$TASK" \
@@ -66,7 +66,7 @@ tail -6 "$RUN_LOG" | grep -vE "landlock_add_rule|skip /home|denying read" | sed 
 
 # 0. The transparent tunnel must actually come up — a netproxy fallback means the
 #    h2 MITM path was never exercised (e.g. unprivileged userns blocked).
-if grep -qiE 'falling back to netproxy|tunnel not available' "$RUN_LOG"; then
+if grep -qiE 'falling back to|tunnel (unavailable|not available)' "$RUN_LOG"; then
   scn_fail "transparent tunnel came up (no netproxy fallback)"
   echo "  --- fallback reason + userns diagnostics ---"
   grep -iE 'tunnel unavailable|could not create|could not attach|tun-helper' "$RUN_LOG" | sed 's/^/    reason: /'
