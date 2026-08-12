@@ -667,7 +667,8 @@ handling argv. Cobra then printed only `--help` and the global `--agent` flag,
 while real options such as `cost --period` worked but were invisible.
 
 - **Rule:** until a legacy parser is fully migrated, mirror every supported
-  runtime flag into its Cobra command and test the live command metadata.
+  runtime flag into its Cobra command and test the complete live command
+  metadata. Spot-checking a subset let later `run` flags disappear from help.
   See ADR 0027-cobra-cli-framework.
 
 ## 48. A cache-write total is not a pricing category
