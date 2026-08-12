@@ -298,4 +298,53 @@ else
 fi
 rm -f "$IGNORE_LOG"
 
+HOST_PROXY_DIR="$HOME/hostproxy-fixture"
+HOST_PROXY_HELPER="$HOST_PROXY_DIR/benign-host-cli"
+HOST_PROXY_APPROVED="$PROJECT/hostproxy-approved.txt"
+HOST_PROXY_REJECTED="$PROJECT/hostproxy-rejected.txt"
+mkdir -p "$HOST_PROXY_DIR"
+cat >"$HOST_PROXY_HELPER" <<'SH'
+#!/bin/sh
+printf '%s' "$2" > "$1"
+SH
+chmod 0700 "$HOST_PROXY_HELPER"
+PROMPT_MARKER="agentjail approval-exec --operation host-proxy"
+DISPLAY_MARKER="🔐 AgentJail host access approval required:"
+
+EXPECTED_CONTEXT="hostproxy-approved"
+if start_and_wait_for_approval "agentjail proxy -- $HOST_PROXY_HELPER $HOST_PROXY_APPROVED hostproxy-approved"; then
+    scn_ok "host proxy shows its exact outside-shield boundary in a native prompt"
+    tmux send-keys -t "$SESSION:0.0" "1" Enter
+else
+    scn_fail "host proxy shows its exact outside-shield boundary in a native prompt"
+    print_sanitized_pane
+    finish_and_exit
+fi
+for i in $(seq 1 30); do
+    [ -f "$HOST_PROXY_APPROVED" ] && break
+    sleep 1
+done
+if [ "$(cat "$HOST_PROXY_APPROVED" 2>/dev/null || true)" = "hostproxy-approved" ]; then
+    scn_ok "approved host proxy proof executes the exact helper once"
+else
+    scn_fail "approved host proxy proof executes the exact helper once"
+    print_sanitized_pane
+fi
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+EXPECTED_CONTEXT="hostproxy-rejected"
+if start_and_wait_for_approval "agentjail proxy -- $HOST_PROXY_HELPER $HOST_PROXY_REJECTED hostproxy-rejected"; then
+    scn_ok "host proxy rejection reaches the same native prompt"
+    tmux send-keys -t "$SESSION:0.0" Escape
+    sleep 5
+else
+    scn_fail "host proxy rejection reaches the same native prompt"
+fi
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+if [ -e "$HOST_PROXY_REJECTED" ]; then
+    scn_fail "rejected host proxy prompt creates no execution effect"
+else
+    scn_ok "rejected host proxy prompt creates no execution effect"
+fi
+
 scn_finish

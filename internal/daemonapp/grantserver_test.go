@@ -201,6 +201,40 @@ func TestGrantServerE2E_UpdateAudit(t *testing.T) {
 	}
 }
 
+func TestGrantServerE2E_RegisterSessionLaunch(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	ctlSock := filepath.Join(tmpDir, "daemon-ctl.sock")
+	emitter := &updateAuditEmitter{}
+	activeSessions := newActiveTracker(tmpDir)
+	gs, err := newGrantServer(ctlSock, testCtlToken, grantctl.NewRegistry(), emitter, false, activeSessions, nil)
+	if err != nil {
+		t.Fatalf("newGrantServer: %v", err)
+	}
+	defer gs.close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go gs.serveCtl(ctx)
+
+	if err := grantctl.RegisterSessionLaunch(ctlSock, testCtlToken, os.Getpid()+100000, tmpDir, "/trusted/bin", time.Second); err == nil {
+		t.Fatal("accepted launch PID that did not match the authenticated control peer")
+	}
+	if err := grantctl.RegisterSessionLaunch(ctlSock, testCtlToken, os.Getpid(), tmpDir, "/trusted/bin", time.Second); err != nil {
+		t.Fatalf("RegisterSessionLaunch: %v", err)
+	}
+	if launch, ok := activeSessions.launches[os.Getpid()]; !ok || launch.Root != tmpDir || launch.Path != "/trusted/bin" {
+		t.Fatalf("launch = %+v, %v", launch, ok)
+	}
+	if len(emitter.events) != 1 || emitter.events[0].EventType != audit.HostProxySessionRegistered {
+		t.Fatalf("events = %+v", emitter.events)
+	}
+	if err := grantctl.UnregisterSessionLaunch(ctlSock, testCtlToken, os.Getpid(), time.Second); err != nil {
+		t.Fatalf("UnregisterSessionLaunch: %v", err)
+	}
+	if _, ok := activeSessions.launches[os.Getpid()]; ok {
+		t.Fatal("launch registration survived authenticated shield revocation")
+	}
+}
+
 // TestHandleGrantRequest_CWDMismatchLeavesGrantUnbound is an end-to-end P10
 // regression test: a grant_request whose session-tracked (self-reported)
 // CWD does not match the connecting process's real, kernel-verified CWD

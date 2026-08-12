@@ -67,6 +67,11 @@ const (
 	// ReqUpdateAudit records a completed or recovered manual update through the
 	// daemon-owned audit store. Control-socket only; CtlToken required.
 	ReqUpdateAudit RequestType = "update_audit"
+	// ReqSessionLaunchRegister pins pre-sandbox launch metadata to the shield
+	// process. A later verified agent descendant may bind its hook session ID.
+	ReqSessionLaunchRegister RequestType = "session_launch_register"
+	// ReqSessionLaunchUnregister revokes the calling shield's launch metadata.
+	ReqSessionLaunchUnregister RequestType = "session_launch_unregister"
 )
 
 // UpdateAuditStatus is the fixed outcome vocabulary for manual-update audit
@@ -95,6 +100,9 @@ type Request struct {
 	UpdateStatus  UpdateAuditStatus `json:"update_status,omitempty"`
 	UpdateVersion string            `json:"update_version,omitempty"`
 	UpdateOS      string            `json:"update_os,omitempty"`
+	LaunchPID     int               `json:"launch_pid,omitempty"`
+	LaunchRoot    string            `json:"launch_root,omitempty"`
+	LaunchPath    string            `json:"launch_path,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).

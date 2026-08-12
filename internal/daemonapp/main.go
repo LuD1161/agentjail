@@ -58,6 +58,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/custompolicy"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hookwatch"
+	"github.com/LuD1161/agentjail/internal/hostproxy"
 	"github.com/LuD1161/agentjail/internal/logrotate"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/policyeval"
@@ -80,8 +81,10 @@ type Response = policyeval.Response
 type server struct {
 	// evaluator owns the OPA engine, LRU cache, per-project engines,
 	// repo-root cache, and AWS profile cache.
-	evaluator policyeval.Evaluator
-	approvals *approvalexec.Manager
+	evaluator          policyeval.Evaluator
+	approvals          *approvalexec.Manager
+	hostProxyApprovals *hostproxy.Manager
+	hostProxyExecutor  hostproxy.Executor
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
@@ -441,6 +444,15 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		if len(line) == 0 {
 			continue
 		}
+		{
+			var probe struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(line, &probe) == nil && probe.Type == hostproxy.RequestType {
+				s.handleHostProxyExec(ctx, conn, enc, line)
+				continue
+			}
+		}
 
 		// Route grant_request to the grant server.
 		{
@@ -596,7 +608,9 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		if req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
-			s.activeSessions.update(req.SessionID, req.AgentPID, req.CWD)
+			if verifiedCodexPID <= 0 || !s.activeSessions.bindVerified(req.SessionID, verifiedCodexPID, policyeval.CanonicalizeCWD(req.CWD)) {
+				s.activeSessions.update(req.SessionID, req.AgentPID, req.CWD)
+			}
 		}
 
 		start := time.Now()
@@ -628,8 +642,26 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			resp.TranslationReason = translation.TranslationReason
 			resp.DeferToNativePermission = translation.DeferToNativePermission
 			resp.CodexApprovalBridge = translation.CodexApprovalBridge
+			bridgeEligible := translation.CodexApprovalBridge
 			approvalOperation := codexApprovalOperationFor(req.Capabilities)
-			if translation.CodexApprovalBridge && s.approvals != nil && verifiedCodexPID > 0 {
+			var preparedHostProxyTarget hostproxy.Target
+			if resp.RuleID == "command_policy/confirm-host-proxy" {
+				var prepErr error
+				if preparedHostProxyTarget, prepErr = s.prepareHostProxy(req); prepErr != nil {
+					resp.Action = "deny"
+					resp.PolicyAction = "deny"
+					resp.EffectiveAction = "deny"
+					resp.CodexApprovalBridge = false
+					bridgeEligible = false
+					resp.RuleID = "host_proxy/preflight-deny"
+					resp.Reason = prepErr.Error()
+					resp.TranslationReason = "host proxy preflight failed closed"
+					s.emitHostProxyEvent(ctx, audit.HostProxyDenied, req.SessionID, "preflight")
+				} else {
+					approvalOperation = approvalexec.HostProxyOperation
+				}
+			}
+			if bridgeEligible && s.approvals != nil && verifiedCodexPID > 0 {
 				command, _ := req.ToolInput["command"].(string)
 				meta, mintErr := s.approvals.Mint(approvalexec.MintRequest{
 					SessionID: approvalexec.SessionID(req.SessionID),
@@ -643,17 +675,32 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					resp.EffectiveAction = "deny"
 					resp.TranslationReason = "Codex approval challenge mint failed; fail closed"
 					slog.Warn("codex approval challenge mint failed", "session_id", req.SessionID, "err", mintErr)
+					if approvalOperation == approvalexec.HostProxyOperation {
+						s.emitHostProxyEvent(ctx, audit.HostProxyDenied, req.SessionID, "challenge_mint")
+					}
 				} else {
 					resp.ApprovalChallenge = string(meta.ChallengeID)
 					resp.ApprovalOperation = string(meta.Operation)
 					resp.ApprovalDisplay = approvalDisplayCommand(req.ToolInput)
 					slog.Info("codex approval challenge minted", "session_id", req.SessionID, "rule_id", resp.RuleID)
 					s.emitApprovalAudit(ctx, audit.CodexApprovalMinted, meta)
+					if approvalOperation == approvalexec.HostProxyOperation {
+						if s.eventStore != nil {
+							_ = s.eventStore.Emit(ctx, audit.Event{
+								EventType: audit.HostProxyRequested, Actor: "daemon", SessionID: req.SessionID,
+								RefID:  hostProxyTargetRef(preparedHostProxyTarget),
+								Detail: map[string]string{"reason": "approval_required", "cwd_ref": hostProxyPathRef(req.CWD)},
+							})
+						}
+					}
 				}
-			} else if translation.CodexApprovalBridge {
+			} else if bridgeEligible {
 				resp.CodexApprovalBridge = false
 				resp.EffectiveAction = "deny"
 				resp.TranslationReason = "Codex approval broker identity unavailable; fail closed"
+				if approvalOperation == approvalexec.HostProxyOperation {
+					s.emitHostProxyEvent(ctx, audit.HostProxyDenied, req.SessionID, "broker_identity")
+				}
 			}
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
@@ -877,9 +924,11 @@ func (s *server) handleApprovalRedeem(
 	meta, err := s.approvals.Inspect(req.ChallengeID, time.Now())
 	var verifiedSession approvalexec.SessionID
 	peerFresh := false
+	peerPID := 0
 	if err == nil {
 		peerUID, uidErr := extractPeerUID(conn)
-		peerPID, pidErr := extractPeerPID(conn)
+		var pidErr error
+		peerPID, pidErr = extractPeerPID(conn)
 		if uidErr == nil && pidErr == nil && peerUID == os.Getuid() && s.activeSessions != nil {
 			sessionID, _, active := s.activeSessions.findSessionByPID(peerPID)
 			if active && sessionID == string(meta.SessionID) {
@@ -911,6 +960,10 @@ func (s *server) handleApprovalRedeem(
 			err = fmt.Errorf("record approval outcome: %w", outcomeErr)
 		}
 	}
+	var proxyAuth hostproxy.Authorization
+	if err == nil && redeemed.Operation == approvalexec.HostProxyOperation {
+		proxyAuth, err = s.issueHostProxyAuthorization(redeemed, meta, peerPID)
+	}
 	if err != nil {
 		slog.Warn("codex approval redemption rejected", "challenge_ref", approvalRef(req.ChallengeID), "err", err)
 		if s.eventStore != nil {
@@ -919,14 +972,188 @@ func (s *server) handleApprovalRedeem(
 				Actor:     "daemon", RefID: approvalRef(req.ChallengeID),
 			})
 		}
+		if meta.Operation == approvalexec.HostProxyOperation {
+			s.emitHostProxyEvent(ctx, audit.HostProxyDenied, string(meta.SessionID), "approval_redemption")
+		}
 		_ = enc.Encode(approvalexec.WireRedeemResponse{Error: "approval unavailable or no longer valid"})
 		return
 	}
 	slog.Info("codex approval redeemed", "challenge_ref", approvalRef(req.ChallengeID), "session_id", redeemed.SessionID)
+	if redeemed.Operation == approvalexec.HostProxyOperation {
+		_ = enc.Encode(approvalexec.WireRedeemResponse{
+			OK: true, CWD: redeemed.CWD, ToolUseID: redeemed.ToolUseID,
+			HostProxyProof: string(proxyAuth.Proof), HostProxyExecutable: proxyAuth.Target.Executable,
+			HostProxyArgv: proxyAuth.Target.Argv,
+		})
+		return
+	}
 	_ = enc.Encode(approvalexec.WireRedeemResponse{
 		OK: true, Command: redeemed.Command, CWD: redeemed.CWD,
 		ToolUseID: redeemed.ToolUseID,
 	})
+}
+
+func (s *server) prepareHostProxy(req policyeval.Request) (hostproxy.Target, error) {
+	if s.activeSessions == nil {
+		return hostproxy.Target{}, errors.New("host proxy session metadata unavailable")
+	}
+	state, ok := s.activeSessions.metadata(req.SessionID)
+	if !ok {
+		return hostproxy.Target{}, errors.New("host proxy requires an authenticated shield launch")
+	}
+	cwd := policyeval.CanonicalizeCWD(req.CWD)
+	if !hostproxy.WithinRoot(state.Root, cwd) {
+		return hostproxy.Target{}, errors.New("host proxy working directory is outside the registered session root")
+	}
+	command, _ := req.ToolInput["command"].(string)
+	argv, err := hostproxy.ParseCommand(command)
+	if err != nil {
+		return hostproxy.Target{}, err
+	}
+	target, err := hostproxy.Resolve(state.Path, cwd, argv)
+	if err != nil {
+		return hostproxy.Target{}, err
+	}
+	decision := hostproxy.Evaluate(target)
+	if decision.Action != hostproxy.ActionAsk {
+		return hostproxy.Target{}, errors.New(decision.Reason)
+	}
+	return target, nil
+}
+
+func (s *server) issueHostProxyAuthorization(redeemed approvalexec.Redemption, meta approvalexec.Metadata, peerPID int) (hostproxy.Authorization, error) {
+	if s.hostProxyApprovals == nil || s.activeSessions == nil {
+		return hostproxy.Authorization{}, errors.New("host proxy authorization unavailable")
+	}
+	state, ok := s.activeSessions.metadata(string(redeemed.SessionID))
+	if !ok {
+		return hostproxy.Authorization{}, errors.New("host proxy session metadata unavailable")
+	}
+	argv, err := hostproxy.ParseCommand(string(redeemed.Command))
+	if err != nil {
+		return hostproxy.Authorization{}, err
+	}
+	cwd := policyeval.CanonicalizeCWD(redeemed.CWD)
+	if !hostproxy.WithinRoot(state.Root, cwd) {
+		return hostproxy.Authorization{}, errors.New("host proxy working directory is outside the registered session root")
+	}
+	target, err := hostproxy.Resolve(state.Path, cwd, argv)
+	if err != nil {
+		return hostproxy.Authorization{}, err
+	}
+	if decision := hostproxy.Evaluate(target); decision.Action != hostproxy.ActionAsk {
+		return hostproxy.Authorization{}, errors.New(decision.Reason)
+	}
+	return s.hostProxyApprovals.Issue(hostproxy.Authorization{
+		SessionID: hostproxy.SessionID(redeemed.SessionID), Target: target,
+		CWD: cwd, Root: state.Root, Path: state.Path, BrokerPID: peerPID,
+		FreshAfter: meta.FreshAfter,
+	}, time.Now())
+}
+
+func (s *server) handleHostProxyExec(ctx context.Context, conn net.Conn, enc *json.Encoder, line []byte) {
+	deny := func(reason string) {
+		s.emitHostProxyEvent(ctx, audit.HostProxyDenied, "", reason)
+		_ = enc.Encode(hostproxy.WireResponse{Error: "host proxy authorization unavailable or invalid"})
+	}
+	if s.hostProxyApprovals == nil || s.hostProxyExecutor == nil || s.activeSessions == nil {
+		deny("unavailable")
+		return
+	}
+	var wireReq hostproxy.WireRequest
+	if err := json.Unmarshal(line, &wireReq); err != nil || wireReq.Request.Proof == "" {
+		deny("malformed")
+		return
+	}
+	peerUID, uidErr := extractPeerUID(conn)
+	peerPID, pidErr := extractPeerPID(conn)
+	if uidErr != nil || pidErr != nil || peerUID != os.Getuid() {
+		deny("peer_identity")
+		return
+	}
+	auth, err := s.hostProxyApprovals.Inspect(wireReq.Request.Proof, time.Now())
+	if err != nil {
+		deny("proof")
+		return
+	}
+	if len(line) > hostproxy.MaxRequestBytes {
+		_, _ = s.hostProxyApprovals.Redeem(hostproxy.RedeemRequest{Proof: wireReq.Request.Proof, CurrentTime: time.Now()})
+		deny("request_too_large")
+		return
+	}
+	sessionID, _, active := s.activeSessions.findSessionByPID(peerPID)
+	state, metadataOK := s.activeSessions.metadata(sessionID)
+	verifiedCWD := policyeval.CanonicalizeCWD(wireReq.Request.CWD)
+	peerFresh := false
+	if active && metadataOK {
+		peerFresh = procutil.DescendantChainStartedAtOrAfter(peerPID, state.PID, procutil.StartMarker(auth.FreshAfter))
+	}
+	auth, err = s.hostProxyApprovals.Redeem(hostproxy.RedeemRequest{
+		Proof: wireReq.Request.Proof, SessionID: hostproxy.SessionID(sessionID), Target: wireReq.Request.Target,
+		CWD: verifiedCWD, PeerPID: peerPID, PeerChainFresh: peerFresh, CurrentTime: time.Now(),
+	})
+	if err != nil {
+		deny("redeem")
+		return
+	}
+	if !hostproxy.WithinRoot(auth.Root, auth.CWD) {
+		deny("cwd_outside_root")
+		return
+	}
+	resolved, err := hostproxy.Resolve(auth.Path, auth.CWD, auth.Target.Argv)
+	if err != nil || resolved.Executable != auth.Target.Executable || hostproxy.Evaluate(resolved).Action != hostproxy.ActionAsk {
+		deny("revalidation")
+		return
+	}
+	if s.eventStore == nil {
+		deny("audit_unavailable")
+		return
+	}
+	ref := hostProxyTargetRef(resolved)
+	if err := s.eventStore.Emit(ctx, audit.Event{
+		EventType: audit.HostProxyAuthorizationRedeemed, Actor: "daemon", SessionID: sessionID, RefID: ref,
+	}); err != nil {
+		deny("audit_failed")
+		return
+	}
+	result := s.hostProxyExecutor.Execute(ctx, resolved, auth.CWD, hostproxy.DefaultTimeout, hostproxy.DefaultOutputLimit, func(int) {
+		slog.Info("host proxy process started", "session_id", sessionID, "target_ref", ref)
+		_ = s.eventStore.Emit(ctx, audit.Event{EventType: audit.HostProxyStarted, Actor: "daemon", SessionID: sessionID, RefID: ref})
+	})
+	slog.Info("host proxy process completed", "session_id", sessionID, "target_ref", ref, "exit_code", result.ExitCode, "reason", result.Reason)
+	_ = s.eventStore.Emit(ctx, audit.Event{
+		EventType: audit.HostProxyCompleted, Actor: "daemon", SessionID: sessionID, RefID: ref,
+		Detail: map[string]string{"exit_code": strconv.Itoa(result.ExitCode), "reason": result.Reason,
+			"timed_out": strconv.FormatBool(result.TimedOut), "truncated": strconv.FormatBool(result.Truncated),
+			"duration_ns": strconv.FormatInt(result.Duration.Nanoseconds(), 10), "cwd_ref": hostProxyPathRef(auth.CWD)},
+	})
+	_ = enc.Encode(hostproxy.WireResponse{OK: true, Result: result})
+}
+
+func hostProxyTargetRef(target hostproxy.Target) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(target.Executable))
+	for _, arg := range target.Argv {
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(arg))
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+func hostProxyPathRef(path string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(path)))
+	return hex.EncodeToString(sum[:8])
+}
+
+func (s *server) emitHostProxyEvent(ctx context.Context, eventType, sessionID, reason string) {
+	if s.eventStore == nil {
+		return
+	}
+	detail := map[string]string{}
+	if reason != "" {
+		detail["reason"] = reason
+	}
+	_ = s.eventStore.Emit(ctx, audit.Event{EventType: eventType, Actor: "daemon", SessionID: sessionID, Detail: detail})
 }
 
 // acceptConn admits conn onto an agent-socket worker goroutine, subject to
@@ -1340,13 +1567,15 @@ func Run(args []string) int {
 	}
 
 	srv := &server{
-		evaluator:      policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), initModules, cfg),
-		approvals:      approvalexec.NewManager(nil, 0, 0),
-		activeSessions: newActiveTracker(filepath.Dir(*policyPath)),
-		connSem:        make(chan struct{}, maxAgentConns),
-		rulesDir:       *rulesDir,
-		policyPath:     *policyPath,
-		idleTimeout:    defaultAgentConnIdleTimeout,
+		evaluator:          policyeval.New(eng, policy.NewLRUCache(policy.DefaultCacheSize), initModules, cfg),
+		approvals:          approvalexec.NewManager(nil, 0, 0),
+		hostProxyApprovals: hostproxy.NewManager(nil, 0),
+		hostProxyExecutor:  hostproxy.NewExecutor(),
+		activeSessions:     newActiveTracker(filepath.Dir(*policyPath)),
+		connSem:            make(chan struct{}, maxAgentConns),
+		rulesDir:           *rulesDir,
+		policyPath:         *policyPath,
+		idleTimeout:        defaultAgentConnIdleTimeout,
 	}
 
 	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
