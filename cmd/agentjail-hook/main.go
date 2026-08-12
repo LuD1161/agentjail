@@ -440,7 +440,7 @@ func writeCodexApprovalRewrite(operation string, challenge approvalexec.Challeng
 		return false
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(codexApprovalRewriteOutput{
-		SystemMessage: "🔐 AgentJail approval required for:\n$ " + display,
+		SystemMessage: codexApprovalSystemMessage(operation, display),
 		HookSpecificOutput: codexApprovalRewriteSpecificOutput{
 			HookEventName:      canonicalPreToolUse,
 			PermissionDecision: "allow",
@@ -450,6 +450,15 @@ func writeCodexApprovalRewrite(operation string, challenge approvalexec.Challeng
 		},
 	})
 	return true
+}
+
+func codexApprovalSystemMessage(operation, display string) string {
+	if operation == string(approvalexec.HostProxyOperation) {
+		return "🔐 AgentJail host access approval required:\n" +
+			"Run this exact command outside the AgentJail shield as your user?\n$ " + display +
+			"\nThe process may use your normal host filesystem, network, configuration, and credentials."
+	}
+	return "🔐 AgentJail approval required for:\n$ " + display
 }
 
 func codexApprovalOperation(resp daemonResponse) string {

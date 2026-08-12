@@ -507,6 +507,17 @@ contains_sensitive_path(c) if regex.match(`(~|(\$HOME)|/Users/[^/\s'"]+)/Library
 # ASK rules - ambiguous; require operator confirmation
 # ---------------------------------------------------------------------------
 
+candidate contains r if {
+	is_bash
+	_has_command_intent("host-proxy")
+	r := {
+		"action":  "ask",
+		"rule_id": "command_policy/confirm-host-proxy",
+		"reason":  "host proxy execution leaves the immutable shield; confirm the exact command",
+		"impact":  "would execute the selected program as the daemon user outside the shield",
+	}
+}
+
 # A non-force remote update may target a protected branch or production remote.
 candidate contains r if {
 	is_bash
@@ -636,6 +647,10 @@ any_dangerous_pattern if {
 
 any_dangerous_pattern if {
 	_has_git_push_intent
+}
+
+any_dangerous_pattern if {
+	_has_command_intent("host-proxy")
 }
 
 any_dangerous_pattern if {

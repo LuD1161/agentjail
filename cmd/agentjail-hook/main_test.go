@@ -609,6 +609,16 @@ func TestCodexApprovalOperationUsesExplicitValueOrLegacyGitFallback(t *testing.T
 	}
 }
 
+func TestCodexHostProxyApprovalStatesBoundary(t *testing.T) {
+	display := "agentjail proxy -- rdt --help"
+	got := codexApprovalSystemMessage(string(approvalexec.HostProxyOperation), display)
+	for _, want := range []string{display, "outside the AgentJail shield", "normal host filesystem", "network", "credentials"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("systemMessage %q does not contain %q", got, want)
+		}
+	}
+}
+
 func TestCodexHook_AskBridgeWithoutChallengeFailsClosed(t *testing.T) {
 	resp := daemonResponse{
 		Action:          "ask",

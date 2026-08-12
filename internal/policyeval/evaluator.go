@@ -20,6 +20,7 @@ import (
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/agentpolicy/policy"
 	"github.com/LuD1161/agentjail/internal/commandintent"
+	"github.com/LuD1161/agentjail/internal/hostproxy"
 	"github.com/LuD1161/agentjail/internal/shellparse"
 )
 
@@ -155,6 +156,9 @@ func (e *evaluator) Eval(ctx context.Context, req Request) (Response, error) {
 			input.CommandBinaries = parsed.Binaries
 			for _, intent := range commandintent.Analyze(parsed) {
 				input.CommandIntents = append(input.CommandIntents, policy.CommandIntent(intent))
+			}
+			if _, err := hostproxy.ParseCommand(cmd); err == nil {
+				input.CommandIntents = append(input.CommandIntents, policy.CommandIntent("host-proxy"))
 			}
 		}
 	}
