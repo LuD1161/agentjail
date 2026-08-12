@@ -109,24 +109,18 @@ func loadSessionNames() map[string]string {
 }
 
 func runSessions(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: agentjail sessions <list>")
-		return 2
+	if len(args) > 0 && args[0] == "list" {
+		args = args[1:]
 	}
-	switch args[0] {
-	case "list":
-		return runSessionsList(args[1:])
-	case "help", "-h", "--help":
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
 		sessionsUsage()
 		return 0
-	default:
-		fmt.Fprintf(os.Stderr, "agentjail sessions: unknown subcommand %q\n", args[0])
-		return 2
 	}
+	return runSessionsList(args)
 }
 
 func sessionsUsage() {
-	fmt.Fprintln(os.Stderr, "usage: agentjail sessions list [--active] [--json] [--no-color] [--since DURATION]")
+	fmt.Fprintln(os.Stderr, "usage: agentjail sessions [--active] [--json] [--no-color] [--since DURATION]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  --active     show only sessions with an active daemon connection")
 	fmt.Fprintln(os.Stderr, "  --json       output as JSON array")
@@ -134,9 +128,9 @@ func sessionsUsage() {
 	fmt.Fprintln(os.Stderr, "  --since      only sessions active within this duration (e.g. 1h, 7d, 30m)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Examples:")
-	fmt.Fprintln(os.Stderr, "  agentjail sessions list")
-	fmt.Fprintln(os.Stderr, "  agentjail sessions list --active --json")
-	fmt.Fprintln(os.Stderr, "  agentjail sessions list --since 7d")
+	fmt.Fprintln(os.Stderr, "  agentjail sessions")
+	fmt.Fprintln(os.Stderr, "  agentjail sessions --active --json")
+	fmt.Fprintln(os.Stderr, "  agentjail sessions --since 7d")
 }
 
 func runSessionsList(args []string) int {

@@ -141,6 +141,16 @@ type installResult struct {
 //	--allow-unsupported  deprecated no-op; Linux is fully supported now
 func runInstallCmd(args []string) {
 	forAgent, all, yes, allowUnsupported := parseInstallFlags(args)
+	chain := hasFlag(args, "--chain")
+	replace := hasFlag(args, "--replace")
+	if chain && replace {
+		fmt.Fprintln(os.Stderr, "agentjail install: --chain and --replace are mutually exclusive")
+		os.Exit(2)
+	}
+	if (chain || replace) && forAgent != "vscode" && forAgent != "cursor-ide" {
+		fmt.Fprintln(os.Stderr, "agentjail install: --chain and --replace require --for vscode or --for cursor-ide")
+		os.Exit(2)
+	}
 
 	u := ui.New(os.Stdout)
 	_ = u // used below on macOS path
@@ -150,8 +160,6 @@ func runInstallCmd(args []string) {
 	home, homeErr := os.UserHomeDir()
 	if homeErr == nil {
 		if forAgent == "vscode" || forAgent == "cursor-ide" {
-			chain := hasFlag(args, "--chain")
-			replace := hasFlag(args, "--replace")
 			app := "Code"
 			if forAgent == "cursor-ide" {
 				app = "Cursor"
@@ -550,6 +558,18 @@ func runUninstallCmd(args []string) {
 
 	// ── Single-agent path ─────────────────────────────────────────────────
 	if target != "" {
+		if target == "vscode" || target == "cursor-ide" {
+			app := "Code"
+			if target == "cursor-ide" {
+				app = "Cursor"
+			}
+			if err := uninstallVSCodeWrapper(home, app); err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail uninstall: %v", err)))
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stdout, "%s\n", ui.New(os.Stdout).Badge("ok", fmt.Sprintf("agentjail: IDE wrapper removed for %s.", target)))
+			return
+		}
 		env := buildAgentsEnv(home)
 		ag := agentByID(target)
 		if ag == nil {
@@ -578,7 +598,8 @@ func runUninstallCmd(args []string) {
 	}
 
 	// ── Full teardown path ────────────────────────────────────────────────
-	result := performFullUninstall(home, currentGOOS, hasFlag(args, "--keep-secrets"), hasFlag(args, "--force"))
+	keepCredentials := hasFlag(args, "--keep-credentials") || hasFlag(args, "--keep-secrets")
+	result := performFullUninstall(home, currentGOOS, keepCredentials, hasFlag(args, "--force"))
 	printUninstallResult(result)
 	if result.HardFailed {
 		os.Exit(1)
@@ -1157,7 +1178,7 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 	if r.InstallDirErr != nil {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("fail", "FAILED to remove: "+r.InstallDirErr.Error())))
 	} else if r.SecretsKept {
-		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed (secrets store + key preserved: --keep-secrets)")))
+		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed (credential vault + key preserved: --keep-credentials)")))
 	} else {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed")))
 	}
@@ -1168,7 +1189,7 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 		if r.SecretsKept {
 			lines = append(lines, u.KeyValue("secrets", "", u.Badge("ok", "kept — encrypted store + master key left in place")))
 		} else {
-			lines = append(lines, u.KeyValue("secrets", "", u.Badge("dim", "deleted — encrypted store + master key removed (re-run with --keep-secrets to preserve)")))
+			lines = append(lines, u.KeyValue("credentials", "", u.Badge("dim", "deleted — encrypted vault + master key removed (re-run with --keep-credentials to preserve)")))
 		}
 	}
 

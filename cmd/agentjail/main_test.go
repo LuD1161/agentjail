@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -48,9 +47,7 @@ func TestUsageIncludesGeneratedCommands(t *testing.T) {
 		"sessions",
 		"skill",
 		"trust",
-		"untrust",
 		"allow",
-		"grants",
 		"grant",
 	}
 	for _, cmd := range previouslyOmitted {
@@ -143,61 +140,4 @@ func stripANSI(s string) string {
 		i++
 	}
 	return out.String()
-}
-
-func TestParseTopLevelFlags(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []string
-		rest []string
-		slug string
-	}{
-		{
-			name: "no flag",
-			in:   []string{"claude", "-p", "hi"},
-			rest: []string{"claude", "-p", "hi"},
-			slug: "",
-		},
-		{
-			name: "long form",
-			in:   []string{"--agent", "comp-intel", "claude", "-p", "hi"},
-			rest: []string{"claude", "-p", "hi"},
-			slug: "comp-intel",
-		},
-		{
-			name: "inline form",
-			in:   []string{"--agent=comp-intel", "claude", "-p", "hi"},
-			rest: []string{"claude", "-p", "hi"},
-			slug: "comp-intel",
-		},
-		{
-			name: "flag stops at first positional, child flags pass through",
-			in:   []string{"--agent", "comp-intel", "claude", "--help"},
-			rest: []string{"claude", "--help"},
-			slug: "comp-intel",
-		},
-		{
-			name: "subcommand also receives unchanged args",
-			in:   []string{"--agent", "x", "tail", "--json"},
-			rest: []string{"tail", "--json"},
-			slug: "x",
-		},
-		{
-			name: "empty input",
-			in:   []string{},
-			rest: []string{},
-			slug: "",
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rest, slug := parseTopLevelFlags(c.in)
-			if !reflect.DeepEqual(rest, c.rest) {
-				t.Errorf("rest = %v, want %v", rest, c.rest)
-			}
-			if slug != c.slug {
-				t.Errorf("slug = %q, want %q", slug, c.slug)
-			}
-		})
-	}
 }

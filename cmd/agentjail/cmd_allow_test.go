@@ -82,7 +82,7 @@ func TestRunAllowHost_PendingOnAccepted(t *testing.T) {
 	fake := startFakeDaemonSocket(t, home, "g-123", "")
 
 	stdout, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("api.example.com", "1h", "need it for tests")
+		return runAllowHost("api.example.com", "need it for tests")
 	})
 
 	if code != 0 {
@@ -118,7 +118,7 @@ func TestRunAllowHost_ServerRefusal(t *testing.T) {
 	startFakeDaemonSocket(t, home, "", "pending cap exceeded")
 
 	_, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("api.example.com", "1h", "")
+		return runAllowHost("api.example.com", "")
 	})
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero when the daemon refuses the request")
@@ -135,7 +135,7 @@ func TestRunAllowHost_NoDaemonRunning(t *testing.T) {
 	// under an empty temp $HOME, so the dial must fail.
 
 	_, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("api.example.com", "1h", "")
+		return runAllowHost("api.example.com", "")
 	})
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero when no daemon socket exists")
@@ -151,7 +151,7 @@ func TestRunAllowHost_LocalValidationFailsBeforeNetwork(t *testing.T) {
 	fake := startFakeDaemonSocket(t, home, "g-xyz", "")
 
 	_, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("not-a-valid-bare-hostname", "1h", "")
+		return runAllowHost("not-a-valid-bare-hostname", "")
 	})
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero for a host that fails hostgrant.Validate")
@@ -164,25 +164,6 @@ func TestRunAllowHost_LocalValidationFailsBeforeNetwork(t *testing.T) {
 	}
 }
 
-func TestRunAllowHost_InvalidTTL(t *testing.T) {
-	home := shortHomeDir(t)
-	t.Setenv("HOME", home)
-	fake := startFakeDaemonSocket(t, home, "g-xyz", "")
-
-	_, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("api.example.com", "not-a-duration", "")
-	})
-	if code == 0 {
-		t.Fatal("exit code = 0, want non-zero for an invalid --ttl")
-	}
-	if !strings.Contains(stderr, "ttl") {
-		t.Errorf("stderr should mention ttl: %q", stderr)
-	}
-	if fake.calls != 0 {
-		t.Errorf("daemon socket was called even though --ttl should have failed validation first")
-	}
-}
-
 func TestRunAllowHost_ReasonTooLong(t *testing.T) {
 	home := shortHomeDir(t)
 	t.Setenv("HOME", home)
@@ -190,7 +171,7 @@ func TestRunAllowHost_ReasonTooLong(t *testing.T) {
 
 	longReason := strings.Repeat("x", 257)
 	_, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("api.example.com", "1h", longReason)
+		return runAllowHost("api.example.com", longReason)
 	})
 	if code == 0 {
 		t.Fatal("exit code = 0, want non-zero for an over-long --reason")
@@ -217,7 +198,7 @@ func TestRunAllowHost_UsesWireDefaultSocketPath(t *testing.T) {
 	startFakeDaemonSocket(t, home, "g-verify", "")
 
 	_, stderr, code := captureOutput(t, func() int {
-		return runAllowHost("api.example.com", "1h", "")
+		return runAllowHost("api.example.com", "")
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)

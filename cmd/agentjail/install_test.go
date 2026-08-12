@@ -1251,13 +1251,13 @@ func TestUsageCommandLabelsNoWrap(t *testing.T) {
 		want string // substring expected on the same line as cmd
 	}{
 		{"install", "supported coding agents"},
-		{"uninstall", "local policy state"},
-		{"status", "policy health"},
+		{"uninstall", "local AgentJail data"},
+		{"status", "component snapshot"},
 		{"version", "version information"},
 		{"logs", "policy decisions"},
 		{"policy", "optional hardening rules"},
 		{"ui", "local web UI"},
-		{"help", "Show help"},
+		{"help", "command help"},
 	}
 
 	for _, tc := range cases {

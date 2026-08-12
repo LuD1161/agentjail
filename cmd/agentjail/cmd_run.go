@@ -15,14 +15,17 @@ import (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run -- <command> [args...]",
+	Use:   "run [flags] -- <command> [args...]",
 	Short: "Run a command inside the agentjail shield",
 	Long: `Run any coding agent inside the agentjail OS-native sandbox.
 The agent inherits Landlock (Linux) or Seatbelt (macOS) restrictions
 that prevent access to credentials, host processes, and unrestricted network.
 
 Use --git-ssh to delegate loaded SSH-agent identities for the session, or
---no-git-ssh to override a policy default that enables delegation.`,
+--no-git-ssh to override a policy default that enables delegation. AgentJail
+launch flags must appear before --; everything after -- is passed unchanged to
+the child command. --no-sandbox disables OS isolation and provides only the
+weaker hook-based policy layer.`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		// --help before "--" prints help; after "--" it is forwarded to the

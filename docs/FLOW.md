@@ -102,11 +102,10 @@ The shield registers the resolved (global + trusted-overlay) allowlist as that
 session's policy -- so two trusted repos get different egress through one proxy,
 with no bleed. See [ADR 0043](./adr/0043-per-folder-policy-overlay-trust-gate.md).
 
-## Runtime host grants (mid-session)
+## Project host requests
 
-Sometimes a session needs one more host right now, and relaunching just to add
-it to `policy.yaml` is overkill. `agentjail allow host <h>` lets the agent FILE
-a request for its own session; a human approves it from a second, unsandboxed
+When a project needs another host, `agentjail allow host <h>` lets a shielded
+agent file an inert request; a human reviews it from a second, unsandboxed
 terminal:
 
 ```
@@ -114,10 +113,9 @@ $ agentjail allow host db.staging.internal --reason "run migration check"
   requested -- pending approval (grant_id 7f2c...)
 
 # from a normal (unsandboxed) terminal:
-$ agentjail grants
-  7f2c...  db.staging.internal  ttl=1h  cwd=~/work/backend  "run migration check"
-$ agentjail grant approve 7f2c...            # live for this session only
-$ agentjail grant approve 7f2c... --persist  # also widen ./.agentjail/policy.yaml
+$ agentjail grant list
+  7f2c...  db.staging.internal  cwd=~/work/backend  "run migration check"
+$ agentjail grant approve 7f2c...            # persist for future launches
 ```
 
 The request is filed over `daemon.sock`, the same agent-reachable channel the
@@ -131,14 +129,9 @@ the same mechanism as the legacy `netproxy-ctl.sock`
 so the agent cannot approve its own request no matter what it does inside the
 sandbox.
 
-This whole flow -- file, approve, persist -- works in the
-default configuration with no `--netproxy` flag: the daemon persists an
-approved host into the owning session's trusted overlay automatically, so
-future sessions inherit it. Widening the *current, still-running* session's live egress
-mid-session still needs `--netproxy`, since that is the component that
-actually enforces the per-session allowlist against outbound traffic; without
-it, approval affects the next launch, not the live process.
-See [ADR 0044](./adr/0044-runtime-host-grants.md).
+Approval persists the host into the owning project's trusted overlay, so future
+sessions inherit it. The currently running sandbox is unchanged. See
+[ADR 0047-daemon-grant-server](./adr/0047-daemon-grant-server.md).
 
 ## How a network request is allowed or blocked
 

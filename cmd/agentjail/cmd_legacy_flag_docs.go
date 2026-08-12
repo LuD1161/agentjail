@@ -16,7 +16,7 @@ func init() {
 	logPath := filepath.Join(home, ".agentjail", "daemon.log")
 	policyPath := filepath.Join(home, ".agentjail", "policy.yaml")
 
-	documentStringFlag(costCmd, "period", "7d", "report window: 24h, 7d, or 30d (maximum 90d)")
+	documentStringFlag(costCmd, "period", "7d", "positive report duration up to 90d (for example: 12h, 7d, 30d)")
 	documentStringFlag(costCmd, "project", "", "include only sessions for project directory PATH")
 	documentBoolFlag(costCmd, "json", "write machine-readable JSON instead of the terminal dashboard")
 
@@ -26,8 +26,8 @@ func init() {
 	documentStringFlag(logsCmd, "action", "", "include actions LIST (comma-separated: allow,ask,deny)")
 	documentStringFlag(logsCmd, "tool", "", "filter by exact tool name")
 	documentStringFlag(logsCmd, "since", "", "include decisions from the last DURATION (for example: 10m, 2h, 24h)")
-	documentBoolFlag(logsCmd, "json", "pass through raw daemon log lines")
-	documentBoolFlag(logsCmd, "all", "include non-decision INFO lines")
+	documentBoolFlag(logsCmd, "json", "write normalized JSON from SQLite; with --log, pass through raw daemon lines")
+	documentBoolFlag(logsCmd, "all", "with --log, include non-decision INFO lines")
 	documentBoolFlag(logsCmd, "no-color", "disable ANSI color output")
 	documentBoolFlag(logsCmd, "v", "show input summary, reason, and session ID")
 	documentStringFlag(logsCmd, "session", "", "filter by session ID substring")
@@ -43,11 +43,11 @@ func init() {
 	documentStringFlag(replayCmd, "session", "", "session ID or unique ID prefix to replay")
 	documentBoolFlag(replayCmd, "verbose", "include redacted tool input")
 	documentBoolFlag(replayCmd, "follow", "follow new decisions for the session")
-	documentBoolFlag(replayCmd, "list", "list sessions")
+	documentBoolFlag(replayCmd, "list", "deprecated compatibility flag; use 'agentjail sessions'")
 	documentBoolFlag(replayCmd, "no-color", "disable ANSI colors")
 	documentBoolFlag(replayCmd, "basic", "force plain text output")
 
-	sessionsCmd.Use = "sessions list [flags]"
+	sessionsCmd.Use = "sessions"
 	documentStringFlag(sessionsCmd, "db", dbPath, "read sessions from SQLite database at PATH")
 	documentBoolFlag(sessionsCmd, "active", "show only active sessions")
 	documentBoolFlag(sessionsCmd, "json", "output as JSON")
@@ -76,43 +76,48 @@ func init() {
 	installCmd.Flags().BoolP("yes", "y", false, "assume yes for non-interactive setup")
 	documentBoolFlag(installCmd, "with-path-shim", "install agent launch shims in ~/.agentjail/bin")
 	documentBoolFlag(installCmd, "with-apparmor", "install the Linux AppArmor user-namespace profile")
-	documentBoolFlag(installCmd, "chain", "chain an existing IDE wrapper")
-	documentBoolFlag(installCmd, "replace", "replace an existing IDE wrapper")
+	documentBoolFlag(installCmd, "chain", "with --for vscode or cursor-ide, chain an existing wrapper")
+	documentBoolFlag(installCmd, "replace", "with --for vscode or cursor-ide, replace an existing wrapper")
 	documentBoolFlag(installCmd, "allow-unsupported", "deprecated compatibility flag")
 
 	uninstallCmd.Use = "uninstall [flags]"
-	documentStringFlag(uninstallCmd, "for", "", "uninstall one agent hook: claude-code, codex, or cursor")
+	documentStringFlag(uninstallCmd, "for", "", "remove one hook or IDE wrapper: claude-code, codex, cursor, vscode, or cursor-ide")
 	documentBoolFlag(uninstallCmd, "path-shim-only", "remove only agent launch shims")
-	documentBoolFlag(uninstallCmd, "keep-secrets", "preserve the local credential vault")
+	documentBoolFlag(uninstallCmd, "keep-credentials", "during full uninstall, preserve the encrypted credential vault")
+	documentBoolFlag(uninstallCmd, "keep-secrets", "deprecated alias for --keep-credentials")
 	documentBoolFlag(uninstallCmd, "force", "continue teardown past recoverable failures")
 
 	updateCmd.Use = "update [flags]"
 	documentBoolFlag(updateCmd, "force", "reinstall the current version")
 
 	runCmd.Flags().Bool("tunnel", false, "route egress through the L7 policy tunnel")
-	runCmd.Flags().Bool("no-sandbox", false, "use hook-only policy without the OS sandbox")
+	runCmd.Flags().Bool("no-sandbox", false, "disable OS isolation and use weaker hook-only enforcement")
 	runCmd.Flags().Bool("git-ssh", false, "enable Git over SSH by delegating all loaded SSH-agent identities")
 	runCmd.Flags().Bool("no-git-ssh", false, "disable policy-default Git over SSH for this launch")
 	runCmd.Flags().Bool("verbose", false, "mirror shield diagnostics to stderr")
 	runCmd.Flags().StringArray("credential", nil, "select broker credential as TOOL=NAME, for example aws=aws/dev (repeatable)")
 	claudeCmd.Flags().Bool("tunnel", false, "route egress through the L7 policy tunnel")
-	claudeCmd.Flags().Bool("no-sandbox", false, "use hook-only policy without the OS sandbox")
+	claudeCmd.Flags().Bool("no-sandbox", false, "disable OS isolation and use weaker hook-only enforcement")
 	claudeCmd.Flags().Bool("git-ssh", false, "enable Git over SSH by delegating all loaded SSH-agent identities")
 	claudeCmd.Flags().Bool("no-git-ssh", false, "disable policy-default Git over SSH for this launch")
 	claudeCmd.Flags().Bool("verbose", false, "mirror shield diagnostics to stderr")
 	claudeCmd.Flags().StringArray("credential", nil, "select broker credential as TOOL=NAME, for example aws=aws/dev (repeatable)")
 
 	feedbackCmd.Use = "feedback [message...]"
-	feedbackCmd.Long = "Send feedback plus the AgentJail version and OS. If no message is supplied, prompt interactively."
-	telemetryCmd.Use = "telemetry [status|enable|disable|view|reset]"
+	feedbackCmd.Long = "Send your message, AgentJail version, OS, random installation ID, and optional follow-up contact. If no message is supplied, prompt interactively."
+	telemetryCmd.Use = "telemetry"
 
 	documentBoolFlag(mcpScanCmd, "json", "output as JSON")
 	documentBoolFlag(mcpWhereCmd, "json", "output as JSON")
 	documentBoolFlag(mcpToolsCmd, "json", "output as JSON")
 	documentBoolFlag(skillListCmd, "json", "output as JSON")
+	documentBoolFlag(mcpToolListCmd, "json", "output as JSON")
 	for _, cmd := range []*cobra.Command{skillAllowCmd, skillBlockCmd, skillAskCmd, skillClearCmd} {
 		documentStringFlag(cmd, "project", "", "apply policy only to project directory PATH (default: global)")
 	}
+	_ = installCmd.Flags().MarkHidden("allow-unsupported")
+	_ = uninstallCmd.Flags().MarkHidden("keep-secrets")
+	_ = replayCmd.Flags().MarkHidden("list")
 }
 
 func documentStringFlag(cmd *cobra.Command, name, value, usage string) {

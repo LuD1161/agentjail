@@ -78,7 +78,7 @@ func TestMCPCobraHelp(t *testing.T) {
 	rootCmd.SetArgs([]string{"mcp", "--help"})
 	_ = rootCmd.Execute()
 	out := buf.String()
-	for _, want := range []string{"allow", "block", "list", "scan", "where", "tools", "tool"} {
+	for _, want := range []string{"allow", "block", "list", "scan", "where", "tool"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("mcp --help (cobra) missing %q in output:\n%s", want, out)
 		}

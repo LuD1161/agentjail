@@ -8,10 +8,10 @@ agentjail's CLI surface has grown from 6 top-level commands at launch to 12+
 subcommands with deep nesting:
 
 ```
-agentjail mcp allow/block/list/scan/where/tools/tool
-agentjail mcp tool allow/block/ask/clear
+agentjail mcp allow/block/list/scan/where
+agentjail mcp tool list/allow/block/ask/clear
 agentjail skill list/allow/block/ask/clear
-agentjail help <topic>
+agentjail help <command> [subcommand]
 agentjail policy enable/disable/list
 ```
 
@@ -42,7 +42,7 @@ Adopt [spf13/cobra](https://github.com/spf13/cobra) as the CLI framework.
 
 - De facto Go CLI standard (used by kubectl, docker, gh, hugo, etc.)
 - Automatic `--help` on every command and subcommand
-- Built-in shell completion (bash, zsh, fish, powershell)
+- Built-in shell completion generation
 - Persistent flags (e.g. `--project` propagates to all subcommands)
 - Consistent error handling and usage formatting
 - Single dependency tree: cobra + pflag (no transitive bloat beyond these)
@@ -69,9 +69,19 @@ During the incremental migration, any command that retains
 help and completion. Cobra does not discover flags owned by a downstream
 stdlib or manual parser merely because the wrapper forwards argv to it.
 
+The user-facing completion tree exposes bash, zsh, and fish. Cobra also
+generates a PowerShell command by default, but AgentJail removes it because the
+supported product surface is macOS/Linux and native Windows remains deferred
+by ADR 0007-windows-support-deferred. Restore it when Windows becomes a shipped
+and tested platform.
+
+The later command hierarchy and compatibility policy are defined by ADR
+0132-cli-command-surface.
+
 ### What does NOT change
 
-- Command names and behavior stay identical
+- The initial migration preserves command names and behavior; later cleanup is
+  governed by ADR 0132-cli-command-surface
 - Policy evaluation, store, hook, daemon -- untouched
 - No new runtime behavior (cobra is CLI scaffolding only)
 
