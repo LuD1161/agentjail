@@ -233,16 +233,15 @@ Each `apply_patch` target is normalized to the same file-policy contract as an
 Edit, so a multi-file patch is denied when any target is protected.
 
 ```sh
-agentjail status                      # verify everything is wired
-agentjail doctor                      # diagnose a specific setup problem
+agentjail status                      # quick installed-component snapshot
+agentjail doctor                      # comprehensive protection diagnostics
 agentjail doctor --fix                # repair what it can (dead daemon, dangling shim, stale service unit), then re-check
 agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail logs --latest 1000 --json   # newest 1000 matching decisions, chronological JSON
 agentjail stats                       # aggregate final outcomes, policy denies, latency, and coverage
-agentjail sessions list               # active and past agent sessions
-agentjail replay --list               # list recorded sessions
-agentjail replay -session 625d86f1    # interactive TUI replay
+agentjail sessions                    # active and past agent sessions
+agentjail replay --session 625d86f1   # interactive TUI replay
 ```
 
 Each shielded launch writes structured JSON diagnostics to a private
@@ -307,6 +306,10 @@ from AgentJail's encrypted local broker without exposing the host's `~/.aws`,
 
 Import a credential while outside the sandbox:
 
+The first argument after `credential set` is a user-chosen broker name, not an
+AWS profile or file path. Give each credential a memorable name such as
+`aws/development`; use that exact name later when launching a shielded tool.
+
 ```sh
 # Reads AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and optional session/region vars.
 agentjail credential set aws/default --tool aws --label "Development" \
@@ -321,6 +324,9 @@ agentjail credential set github/default --tool gh --from-current-env
 
 agentjail credential list
 ```
+
+`agentjail credential list` prints only the stored broker identifiers, one per
+line; it never prints credential values. An empty result means none are stored.
 
 The label, account, and context fields are non-secret discovery metadata. New
 imports store them with the material in one encrypted typed record; legacy
@@ -471,10 +477,10 @@ only when you intentionally want enable/disable controls.
 <summary><b>Interactive replay TUI</b></summary>
 
 ```sh
-agentjail replay --list                    # list sessions (8-char IDs)
-agentjail replay -session 625d86f1         # interactive TUI
-agentjail replay -session 625d86f1 --basic # plain text
-agentjail replay -session 625d86f1 -follow # live tail
+agentjail sessions                         # list and filter session IDs
+agentjail replay --session 625d86f1         # interactive TUI
+agentjail replay --session 625d86f1 --basic # plain text
+agentjail replay --session 625d86f1 --follow # live tail
 ```
 
 The TUI provides vim-like navigation for browsing session decisions:
@@ -540,8 +546,9 @@ For systemd-managed daemons (Linux), set via an environment override file:
 
 ```sh
 agentjail uninstall                   # remove everything
-agentjail uninstall --keep-secrets    # keep the encrypted store + master key
+agentjail uninstall --keep-credentials # keep the encrypted vault + master key
 agentjail uninstall --for claude-code # just unhook one agent
+agentjail uninstall --for vscode     # just remove one IDE wrapper
 ```
 
 Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. AgentJail's Claude Code and Cursor CLI status lines are removed too — and if agentjail wrapped a status line you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md), [ADR 0113](./docs/adr/0113-cursor-status-line.md)).
@@ -550,7 +557,7 @@ Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the s
 > ```sh
 > cp ~/.agentjail/policy.yaml ~/policy.yaml.bak
 > ```
-> `--keep-secrets` preserves only `secrets/` and `secrets.key`, not your policy.
+> `--keep-credentials` preserves only the encrypted vault (`secrets/`) and its key (`secrets.key`), not your policy, database, logs, or trust state.
 
 **If the daemon wasn't started by your service manager** (a manual run, a different install channel, an upgrade transition), uninstall stops and removes nothing:
 
@@ -623,7 +630,12 @@ agentjail policy disable file_policy/sensitive_in_project   # stop asking on in-
 agentjail policy enable  file_policy/sensitive_in_project   # turn it back on
 ```
 
-Disabling a **core** rule requires `--force` + interactive confirmation (agents are refused even with `--force`). The **locked self-protection set** (`file_policy/agentjail_self`, `library/no-daemon-kill`, `command_policy/no-policy-mutation`, `resolver/default`) can never be disabled.
+Most **core** rules are user-tunable, but disabling one requires `--force` plus
+interactive human confirmation; agents and scripts are refused even with
+`--force`. The **locked self-protection set**
+(`file_policy/agentjail_self`, `command_policy/no-policy-mutation`, and
+`resolver/default`) can never be disabled. Run `agentjail policy list` to see
+which rules are marked `locked`.
 
 **Managing MCP servers:**
 ```sh
@@ -640,23 +652,23 @@ Install auto-seeds the allowlist from your existing MCP config (including Claude
 **Per-folder policy (trusted projects):**
 ```sh
 # a repo can widen its own session's allowlist via ./.agentjail/policy.yaml
-agentjail trust                   # approve THIS project's overlay (shows what it adds)
+agentjail trust add              # approve THIS project's overlay (shows what it adds)
 agentjail trust list              # trusted overlays + ok / CHANGED / MISSING
-agentjail untrust                 # remove it
+agentjail trust remove            # remove it
 ```
 
 A project's `./.agentjail/policy.yaml` is **ignored until you trust it** (direnv-style), can only *widen* egress (never drop essentials, un-block a blocked MCP, or clear rules), and trust auto-revokes if the file changes. The trust list is agent-unwritable, so a sandboxed agent can't self-trust. See [ADR 0043](./docs/adr/0043-per-folder-policy-overlay-trust-gate.md).
 
-**Runtime host grants (mid-session):**
+**Project host requests:**
 ```sh
 agentjail allow host db.staging.internal --reason "..."   # agent: file a request, pending only
-agentjail grants                                          # human, unsandboxed: list pending
+agentjail grant list                                      # human, unsandboxed: list pending
 agentjail grant approve <grant_id>                        # approve and persist for future sessions
 agentjail grant deny <grant_id>
-agentjail grants --log                                    # show grant history from audit log
+agentjail grant history                                   # show grant history from audit log
 ```
 
-The agent can only file a request for its own session -- it grants nothing by itself. `grant approve`/`grant deny`/`grants` only run over an agent-unreachable control socket, so the agent can never approve its own request. The daemon hosts this control plane on `daemon-ctl.sock`, so filing and approving a grant works in the default configuration -- no `--netproxy` required -- and an approval persists into the trusted overlay for future sessions automatically. Widening the *current* session's live egress mid-session still requires `--netproxy` (the session-aware proxy that actually enforces the allowlist); without it, an approval persists for next launch but does not retroactively open a socket this run. See [ADR 0044](./docs/adr/0044-runtime-host-grants.md).
+The agent can only file a request for its own project -- it grants nothing by itself. `grant approve`, `grant deny`, and `grant list` use an agent-unreachable control socket, so the agent can never approve its own request. Approval writes the host to the trusted project overlay for future launches; it does not widen the currently running sandbox. See [ADR 0047-daemon-grant-server](./docs/adr/0047-daemon-grant-server.md).
 
 </details>
 
@@ -896,7 +908,7 @@ Top Policy Deny Rules
 
 Scope with `--since` (`24h`, `7d`, `0` for all time), widen tables with
 `--top N`, disable the default semantic colors with `--no-color`, and get the
-machine-readable form with `--json`. The `cost` and `sessions list` reports use
+machine-readable form with `--json`. The `cost` and `sessions` reports use
 the same palette and accept the same local color override. Latency is
 microseconds and is a local engineering surface only —
 [ADR 0002](docs/adr/0002-latency-as-engineering-metric.md) forbids citing raw

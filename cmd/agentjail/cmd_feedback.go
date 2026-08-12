@@ -8,7 +8,7 @@ import (
 
 var feedbackCmd = &cobra.Command{
 	Use:                "feedback",
-	Short:              "Send anonymous feedback to the maintainers",
+	Short:              "Send feedback with disclosed diagnostic metadata",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {

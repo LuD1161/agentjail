@@ -1,8 +1,9 @@
-// cmd_grants.go -- cobra command tree for `agentjail grants` / `agentjail grant`.
+// cmd_grants.go -- Cobra command tree for `agentjail grant`.
 //
 // Subcommands:
 //
-//	agentjail grants                              list pending grant requests
+//	agentjail grant list                         list pending grant requests
+//	agentjail grant history                      show recent decisions
 //	agentjail grant approve <grant_id>
 //	agentjail grant deny <grant_id>
 //
@@ -40,16 +41,11 @@ const grantsLogLimit = 50
 var grantsLog bool
 
 var grantsCmd = &cobra.Command{
-	Use:   "grants",
-	Short: "List pending runtime host grant requests",
-	Long: `Lists the grant requests currently pending on the running daemon, across
-all shielded sessions being served. Requests are filed by a sandboxed agent
-via 'agentjail allow host <h>' and expire on their own if never approved.
-Approve or deny one with 'agentjail grant approve|deny <grant_id>'.
-
---log shows the history of approved/denied grants from the local SQLite
-audit log instead of the currently pending requests.`,
-	Args: cobra.NoArgs,
+	Use:    "grants",
+	Short:  "Compatibility alias for 'agentjail grant list'",
+	Hidden: true,
+	Long:   "Compatibility alias for 'agentjail grant list' and 'agentjail grant history'.",
+	Args:   cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if grantsLog {
 			os.Exit(runGrantsLog())
@@ -60,16 +56,43 @@ audit log instead of the currently pending requests.`,
 
 var grantCmd = &cobra.Command{
 	Use:   "grant",
-	Short: "Approve or deny a pending runtime host grant request",
+	Short: "Review and decide project host requests",
+	Long: `Review project host requests filed by shielded agents and approve or deny
+them from a trusted terminal outside the sandbox. Approval persists the host
+in the requesting project's policy for future sessions; it does not modify the
+currently running sandbox.`,
+}
+
+var grantListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List pending project host requests",
+	Long: `List requests currently pending on the running daemon across all shielded
+sessions. Copy a GRANT_ID from this output, then use 'agentjail grant approve'
+or 'agentjail grant deny' from this trusted terminal.`,
+	Args: cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		os.Exit(runGrantsList())
+	},
+}
+
+var grantHistoryCmd = &cobra.Command{
+	Use:   "history",
+	Short: "Show recent project host request decisions",
+	Long:  "Show the 50 most recent requested, approved, and denied host-grant events from the local SQLite audit log.",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		os.Exit(runGrantsLog())
+	},
 }
 
 var grantApproveCmd = &cobra.Command{
 	Use:   "approve <grant_id>",
 	Short: "Approve a pending grant request",
 	Long: `Approves the pending grant request identified by <grant_id> (see 'agentjail
-grants'). The daemon persists the host into the owning session's
+grant list'). The daemon persists the host into the owning session's
 .agentjail/policy.yaml overlay and re-trusts it so future sessions inherit
-the grant. The current sandboxed session picks up the change on next launch.`,
+the grant. The currently running sandbox is unchanged; launch a new session
+in that project to use the updated policy.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		os.Exit(runGrantApprove(args[0]))
@@ -87,7 +110,7 @@ var grantDenyCmd = &cobra.Command{
 
 func init() {
 	grantsCmd.Flags().BoolVar(&grantsLog, "log", false, "show history of approved/denied grants from the SQLite audit log")
-	grantCmd.AddCommand(grantApproveCmd, grantDenyCmd)
+	grantCmd.AddCommand(grantListCmd, grantHistoryCmd, grantApproveCmd, grantDenyCmd)
 	rootCmd.AddCommand(grantsCmd)
 	rootCmd.AddCommand(grantCmd)
 }
@@ -107,13 +130,13 @@ func ctlToken(cmdName string) (string, bool) {
 
 func runGrantsList() int {
 	sock := grantctl.ControlSocketPath()
-	tok, ok := ctlToken("grants")
+	tok, ok := ctlToken("grant list")
 	if !ok {
 		return 1
 	}
 	grants, err := grantctl.GrantList(sock, tok, grantControlTimeout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agentjail grant list: %v\n", err)
 		return 1
 	}
 	if len(grants) == 0 {
@@ -122,7 +145,7 @@ func runGrantsList() int {
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "GRANT_ID\tHOST\tTTL\tCWD\tREASON")
+	fmt.Fprintln(tw, "GRANT_ID\tHOST\tCWD\tREASON")
 	for _, g := range grants {
 		reason := g.Reason
 		if reason == "" {
@@ -132,10 +155,10 @@ func runGrantsList() int {
 		if cwd == "" {
 			cwd = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", g.GrantID, g.Host, time.Duration(g.TTLMs)*time.Millisecond, cwd, reason)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", g.GrantID, g.Host, cwd, reason)
 	}
 	if err := tw.Flush(); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agentjail grant list: %v\n", err)
 		return 1
 	}
 	return 0
@@ -193,21 +216,21 @@ type grantLogDetail struct {
 func runGrantsLog() int {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants --log: resolve home directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agentjail grant history: resolve home directory: %v\n", err)
 		return 1
 	}
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
 
 	st, err := store.OpenReadOnly(dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants --log: open %s: %v\n", dbPath, err)
+		fmt.Fprintf(os.Stderr, "agentjail grant history: open %s: %v\n", dbPath, err)
 		return 1
 	}
 	defer st.Close()
 
 	entries, err := st.ListGrantAuditLog(context.Background(), grantsLogLimit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants --log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agentjail grant history: %v\n", err)
 		return 1
 	}
 	if len(entries) == 0 {
@@ -235,7 +258,7 @@ func runGrantsLog() int {
 			e.Ts.Local().Format(time.RFC3339), e.EventType, host, grantID, status)
 	}
 	if err := tw.Flush(); err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail grants --log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agentjail grant history: %v\n", err)
 		return 1
 	}
 	return 0

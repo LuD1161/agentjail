@@ -24,13 +24,15 @@ import (
 var skillCmd = &cobra.Command{
 	Use:   "skill",
 	Short: "Manage skill allow/block/ask lists",
+	Long:  "Review skills observed in AgentJail's audit history and manage their policy. Mutations must run from a trusted interactive terminal.",
 }
 
 // skillListCmd: runSkillList already handles --json via flag.FlagSet, so we
 // disable cobra flag parsing and hand args through as-is.
 var skillListCmd = &cobra.Command{
-	Use:                "list [--json]",
-	Short:              "Show all known skills with policy status",
+	Use:                "list",
+	Short:              "Show skills observed in audit history with policy status",
+	Long:               "List skill names observed in recorded agent activity together with their effective policy. This does not scan installed skill files.",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
@@ -45,8 +47,9 @@ var skillListCmd = &cobra.Command{
 // runSkillMutate intact.
 
 var skillAllowCmd = &cobra.Command{
-	Use:                "allow [--project <dir>] <skill>",
+	Use:                "allow <skill>",
 	Short:              "Permit a specific skill",
+	Long:               "Permit an exact skill name from 'agentjail skill list'. Run from a trusted interactive terminal. Without --project, update global policy.",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
@@ -57,8 +60,9 @@ var skillAllowCmd = &cobra.Command{
 }
 
 var skillBlockCmd = &cobra.Command{
-	Use:                "block [--project <dir>] <skill>",
+	Use:                "block <skill>",
 	Short:              "Deny a specific skill",
+	Long:               "Deny an exact skill name from 'agentjail skill list'. Run from a trusted interactive terminal. Without --project, update global policy.",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
@@ -69,8 +73,9 @@ var skillBlockCmd = &cobra.Command{
 }
 
 var skillAskCmd = &cobra.Command{
-	Use:                "ask [--project <dir>] <skill>",
+	Use:                "ask <skill>",
 	Short:              "Require confirmation for a specific skill",
+	Long:               "Require confirmation for an exact skill name from 'agentjail skill list'. Run from a trusted interactive terminal. Without --project, update global policy.",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
@@ -81,8 +86,9 @@ var skillAskCmd = &cobra.Command{
 }
 
 var skillClearCmd = &cobra.Command{
-	Use:                "clear [--project <dir>] <skill>",
+	Use:                "clear <skill>",
 	Short:              "Remove per-skill policy (revert to inherited behavior)",
+	Long:               "Clear explicit policy for an exact skill name from 'agentjail skill list'. Run from a trusted interactive terminal. Without --project, update global policy.",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {

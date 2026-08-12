@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/daemonapp"
@@ -36,35 +35,6 @@ func main() {
 	}
 
 	Execute()
-}
-
-// parseTopLevelFlags pulls long-form wrapper options out of the raw
-// argument vector before the subcommand switch. Today's surface is
-// minimal (no top-level flags), but the parser is preserved so future
-// flags can be added without disturbing per-subcommand parsers.
-func parseTopLevelFlags(in []string) (rest []string, agentSlug string) {
-	rest = make([]string, 0, len(in))
-	i := 0
-	for i < len(in) {
-		a := in[i]
-		switch {
-		case a == "--agent":
-			if i+1 >= len(in) {
-				fmt.Fprintln(os.Stderr, "agentjail: --agent requires a value")
-				os.Exit(2)
-			}
-			agentSlug = in[i+1]
-			i += 2
-			continue
-		case strings.HasPrefix(a, "--agent="):
-			agentSlug = strings.TrimPrefix(a, "--agent=")
-			i++
-			continue
-		}
-		rest = append(rest, in[i:]...)
-		return rest, agentSlug
-	}
-	return rest, agentSlug
 }
 
 // cmdInfo is a name/description pair used to render the command list in
@@ -113,7 +83,7 @@ func commandLists(root *cobra.Command) (cmds, maintenance []cmdInfo) {
 		}
 		all = append(all, cmdInfo{name: c.Name(), desc: c.Short})
 	}
-	all = append(all, cmdInfo{name: "help", desc: "Show help (agentjail help <topic> for details)"})
+	all = append(all, cmdInfo{name: "help", desc: "Show command help or the getting-started guide"})
 	sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
 
 	for _, c := range all {
@@ -144,7 +114,6 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, bodyIndent+"agentjail <command> [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Global Flags"))
-	fmt.Fprintln(w, bodyIndent+u.KeyValue("--agent <slug>", "Attribute the command to an agent", ""))
 	fmt.Fprintln(w, bodyIndent+u.KeyValue("--no-color", "Disable color in human-readable output", ""))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Commands"))

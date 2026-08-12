@@ -763,7 +763,7 @@ func printPolicyUsage(w io.Writer) {
 	}{
 		{"list", "Show core, optional, and custom policy rules with status"},
 		{"enable <name|rule_id>", "Enable a library rule or re-enable a disabled rule_id"},
-		{"disable <name|rule_id> [--force]", "Disable a rule (rule_ids require --force + TTY for core rules)"},
+		{"disable <name|rule_id> [--force]", "Disable a library rule or a non-locked core rule"},
 		{"add <file.rego>", "Validate + install a custom rule file into ~/.agentjail/rules/"},
 		{"remove <name>", "Remove a custom rule by file stem (refuses core/library names)"},
 		{"help", "Show policy help"},
@@ -788,8 +788,8 @@ func printPolicyUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, u.Section("Notes"))
 	notes := []string{
-		"Locked rules (file_policy/agentjail_self, library/no-daemon-kill,",
-		"  command_policy/no-policy-mutation, resolver/default) can NEVER be disabled — they protect",
+		"Locked rules (file_policy/agentjail_self, command_policy/no-policy-mutation,",
+		"  resolver/default) can NEVER be disabled — they protect",
 		"  agentjail's own integrity.",
 		"Core rules require --force AND interactive terminal confirmation to disable.",
 		"Non-interactive invocations (scripts, agents) are refused even with --force.",

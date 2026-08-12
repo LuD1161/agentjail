@@ -151,6 +151,9 @@ Known limitations / follow-ups:
 always-running daemon so grants work without `--netproxy`. The request/approve
 model, fail-closed audit, and security invariants described here are preserved;
 the daemon adds peer-PID session binding and transactional persist-on-approve.
+ADR 0132-cli-command-surface later narrowed the shipped daemon-only CLI to
+persist-only project requests, so the live-grant TTL and `--persist` syntax in
+this ADR are design history rather than current public commands.
 
 See also: [ADR 0042] (session-aware netproxy control plane), [ADR 0043]
 (per-folder policy overlay trust gate), [ADR 0047] (daemon grant server),

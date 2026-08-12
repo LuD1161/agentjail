@@ -27,8 +27,8 @@ var doctorFix bool
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Check agentjail installation health",
-	Long:  "Diagnose the agentjail installation: platform capabilities, daemon status,\nhook configuration, shield availability, and IDE wrapper setup.\n\nWith --fix, repair the failures agentjail can safely repair itself, then\nre-check and report the real post-repair state.",
+	Short: "Run comprehensive protection diagnostics",
+	Long:  "Diagnose platform capabilities, daemon status, hook configuration, shield\navailability, network enforcement, SSH delegation, and IDE wrappers. Use\n'agentjail status' for a quick installed-component snapshot.\n\nWith --fix, repair the failures agentjail can safely repair itself, then\nre-check and report the real post-repair state.",
 	Run: func(cmd *cobra.Command, args []string) {
 		mode := diagnoseOnly
 		if doctorFix {

@@ -652,7 +652,7 @@ func tildeHome(path, home string) string {
 }
 
 // ---------------------------------------------------------------------------
-// mcp tools -- list all tools per server with policy status
+// mcp tool list -- list all tools per server with policy status
 // ---------------------------------------------------------------------------
 
 func runMCPTools(args []string) int {
@@ -666,7 +666,7 @@ func runMCPToolsOutput(args []string, out, errOut io.Writer) int {
 		if a == "--json" {
 			jsonMode = true
 		} else if a == "help" || a == "-h" || a == "--help" {
-			fmt.Fprintln(out, "usage: agentjail mcp tools [<server>] [--json]")
+			fmt.Fprintln(out, "usage: agentjail mcp tool list [<server>] [--json]")
 			return 0
 		} else if !strings.HasPrefix(a, "-") && filterServer == "" {
 			filterServer = a
@@ -675,18 +675,18 @@ func runMCPToolsOutput(args []string, out, errOut io.Writer) int {
 
 	cfgPath, err := policyConfigPath()
 	if err != nil {
-		fmt.Fprintf(errOut, "agentjail mcp tools: %v\n", err)
+		fmt.Fprintf(errOut, "agentjail mcp tool list: %v\n", err)
 		return 1
 	}
 	cfg, err := config.LoadOrDefault(cfgPath)
 	if err != nil {
-		fmt.Fprintf(errOut, "agentjail mcp tools: load policy: %v\n", err)
+		fmt.Fprintf(errOut, "agentjail mcp tool list: load policy: %v\n", err)
 		return 1
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(errOut, "agentjail mcp tools: %v\n", err)
+		fmt.Fprintf(errOut, "agentjail mcp tool list: %v\n", err)
 		return 1
 	}
 	dbPath := filepath.Join(home, ".agentjail", "agentjail.db")
@@ -849,7 +849,7 @@ func renderMCPToolsJSON(out, errOut io.Writer, servers []string, serverTools map
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(result); err != nil {
-		fmt.Fprintf(errOut, "agentjail mcp tools: json encode: %v\n", err)
+		fmt.Fprintf(errOut, "agentjail mcp tool list: json encode: %v\n", err)
 		return 1
 	}
 	return 0
@@ -1161,9 +1161,9 @@ func printMCPUsage(w io.Writer) {
 		{"allow <server>", "Add a server to the MCP allowed list"},
 		{"block <server>", "Add a server to the MCP blocked list (and remove from allowed)"},
 		{"list", "Show current allowed and blocked MCP servers"},
-		{"tools", "List all MCP tools per server with policy status"},
-		{"tools <server>", "List tools for a specific server"},
-		{"tools --json", "Machine-readable tool listing"},
+		{"tool list", "List all MCP tools per server with policy status"},
+		{"tool list <server>", "List tools for a specific server"},
+		{"tool list --json", "Machine-readable tool listing"},
 		{"tool allow <server> <tool>", "Allow a specific tool on a server"},
 		{"tool block <server> <tool>", "Block a specific tool on a server"},
 		{"tool ask <server> <tool>", "Require confirmation for a specific tool"},
@@ -1183,7 +1183,7 @@ func printMCPUsage(w io.Writer) {
 		"agentjail mcp allow claude-mem",
 		"agentjail mcp block my-payment-bot",
 		"agentjail mcp list",
-		"agentjail mcp tools linear-server",
+		"agentjail mcp tool list linear-server",
 		"agentjail mcp tool block linear-server save_issue",
 		"agentjail mcp tool ask filesystem write_file --project /path/to/project",
 	}

@@ -18,7 +18,7 @@ import (
 // trust until re-approved.
 var trustCmd = &cobra.Command{
 	Use:   "trust [path]",
-	Short: "Trust a project's ./.agentjail/policy.yaml so it applies to shielded sessions",
+	Short: "Manage trusted project policy overlays",
 	Long: `Trust the ./.agentjail/policy.yaml overlay found at PATH (default: current
 directory, searching up to the git root).
 
@@ -33,9 +33,21 @@ trust until you run 'agentjail trust' again.`,
 	},
 }
 
+var trustAddCmd = &cobra.Command{
+	Use:   "add [path]",
+	Short: "Trust a project policy overlay",
+	Long: `Trust the .agentjail/policy.yaml found at PATH. With no PATH, search from
+the current directory up to the git root. Trust is tied to the file's content
+hash, so editing the overlay requires approving it again.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTrust(args)
+	},
+}
+
 var trustListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List trusted project overlays and whether each still matches",
+	Short: "List trusted overlays and whether their content is unchanged",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runTrustList()
@@ -43,16 +55,29 @@ var trustListCmd = &cobra.Command{
 }
 
 var untrustCmd = &cobra.Command{
-	Use:   "untrust [path]",
-	Short: "Remove a project's ./.agentjail/policy.yaml from the trust list",
-	Args:  cobra.MaximumNArgs(1),
+	Use:    "untrust [path]",
+	Short:  "Compatibility alias for 'agentjail trust remove'",
+	Hidden: true,
+	Args:   cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runUntrust(args)
+	},
+}
+
+var trustRemoveCmd = &cobra.Command{
+	Use:   "remove [path]",
+	Short: "Remove a project policy overlay from the trust list",
+	Long: `Remove the .agentjail/policy.yaml found at PATH from the trust list. With
+no PATH, search from the current directory up to the git root; if the overlay
+was deleted, target the conventional overlay path under the current directory.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runUntrust(args)
 	},
 }
 
 func init() {
-	trustCmd.AddCommand(trustListCmd)
+	trustCmd.AddCommand(trustAddCmd, trustRemoveCmd, trustListCmd)
 	rootCmd.AddCommand(trustCmd)
 	rootCmd.AddCommand(untrustCmd)
 }

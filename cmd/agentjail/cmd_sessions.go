@@ -8,7 +8,8 @@ import (
 
 var sessionsCmd = &cobra.Command{
 	Use:                "sessions",
-	Short:              "List and inspect agent sessions",
+	Short:              "List recorded agent sessions",
+	Long:               "List recorded sessions from the local SQLite event store. Use the session ID with 'agentjail replay --session ID'.",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {

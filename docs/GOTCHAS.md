@@ -858,6 +858,28 @@ server from reaching the exact broker socket with its session token.
   launch capabilities, granting only those literals. Test each deny and its
   carve-out together. See ADR 0131-agent-credential-discovery and AGE-279.
 
+## 64. A parsed flag is not necessarily a working feature
+
+The user-facing CLI accepted and advertised `--agent <slug>`, and parser tests
+confirmed that its value survived argument parsing. Nothing ever read the
+value, so every command silently behaved exactly the same with or without the
+flag. The real agent selector belongs to the separate hook adapter.
+
+- **Rule:** test the observable effect of every public option, not only that it
+  parses. A compatibility flag with no consumer must be hidden or removed.
+
+## 65. Generated help can faithfully describe the wrong command tree
+
+Cobra rendered every registered flag and the help tests passed, but several
+"subcommands" were opaque positional parsers, static help topics duplicated the
+live tree, and `allow --ttl` described authority the daemon never applied.
+Complete output did not make the underlying contract coherent.
+
+- **Rule:** audit help against observable behavior and one canonical command
+  hierarchy. Compatibility syntax belongs in hidden aliases, and an option with
+  no effect on the resulting authority must not remain public. See ADR
+  0132-cli-command-surface.
+
 ---
 
 ## Testing gotchas
