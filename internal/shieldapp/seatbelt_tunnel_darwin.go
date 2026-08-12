@@ -35,6 +35,10 @@ import (
 // on this or any other path that needs an explicit read-deny. See
 // tunnel_shield_darwin.go's startTunnelDarwin.
 func generateSBProfileTunnel(cfg *config.PolicyConfig, home string) string {
+	return generateSBProfileTunnelWithCapabilities(cfg, home, darwinProfileCapabilities{})
+}
+
+func generateSBProfileTunnelWithCapabilities(cfg *config.PolicyConfig, home string, capabilities darwinProfileCapabilities) string {
 	var sb strings.Builder
 
 	sb.WriteString("(version 1)\n")
@@ -101,6 +105,7 @@ func generateSBProfileTunnel(cfg *config.PolicyConfig, home string) string {
 		fmt.Fprintf(&sb, "(allow file-read*\n    (literal %q))\n", home+"/"+g.Path)
 	}
 	sb.WriteString("\n")
+	appendCredentialMCPReadCapability(&sb, capabilities.CredentialMCPExecutable)
 
 	// --- network egress: broad allow (tunnel mode) ---
 	// Every outbound connection attempt must actually leave the process so

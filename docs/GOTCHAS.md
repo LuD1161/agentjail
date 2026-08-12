@@ -844,6 +844,18 @@ indefinitely for additional input instead of starting the MCP session.
   argv directly. Keep the separate interactive `ssh` command attached. See ADR
   0130-codex-live-gate and AGE-279.
 
+## 63. A session tool inside self-protected state needs an exact capability
+
+Credential discovery and MCP protocol tests passed, and Linux could launch the
+server. The macOS profile denied reads of all `~/.agentjail`, including the
+validated multicall binary Codex needed to spawn as the credential MCP server;
+the real client reported only `ENOENT` during required-server initialization.
+
+- **Rule:** when a trusted session helper lives beneath a broad self-protection
+  deny, carry its validated executable as a typed launch capability and grant
+  only that literal in every OS profile. Test the deny and carve-out together.
+  See ADR 0131-agent-credential-discovery and AGE-279.
+
 ---
 
 ## Testing gotchas

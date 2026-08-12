@@ -483,7 +483,14 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	if homeErr != nil {
 		home = "/Users/unknown"
 	}
-	profile := generateSBProfileTunnel(cfg, home)
+	profileCapabilities, credentialErr := resolveDarwinProfileCapabilities(agentPath, credentialTools, sshAuthSock)
+	if credentialErr != nil {
+		cleanupGateway()
+		_, _ = exec.Command(appPath, "stop").CombinedOutput()
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential MCP profile setup failed: %v\n", credentialErr)
+		os.Exit(1)
+	}
+	profile := generateSBProfileTunnelWithCapabilities(cfg, home, profileCapabilities)
 
 	env := buildBaseEnv(os.Environ(), cfg, sshAuthSock)
 	env = AppendShieldedEnv(env, Sandboxed)

@@ -330,6 +330,28 @@ func generateSBProfileWithIPs(cfg *config.PolicyConfig, home string, allowedIPs 
 // generateSBProfileWithTrustedSSHAuthSock grants an AF_UNIX connect exception
 // only for a launch capability validated before the shield profile is built.
 func generateSBProfileWithTrustedSSHAuthSock(cfg *config.PolicyConfig, home string, allowedIPs []string, withNetproxy bool, sshAuthSock sandbox.SSHAuthSock) string {
+	return generateSBProfileWithCapabilities(cfg, home, allowedIPs, withNetproxy, darwinProfileCapabilities{SSHAuthSock: sshAuthSock})
+}
+
+type darwinProfileCapabilities struct {
+	SSHAuthSock             sandbox.SSHAuthSock
+	CredentialMCPExecutable string
+}
+
+func resolveDarwinProfileCapabilities(agentPath string, credentialTools credentialSelections, sshAuthSock sandbox.SSHAuthSock) (darwinProfileCapabilities, error) {
+	capabilities := darwinProfileCapabilities{SSHAuthSock: sshAuthSock}
+	if len(credentialTools) == 0 || !supportsCredentialMCP(agentPath) {
+		return capabilities, nil
+	}
+	executable, err := credentialMCPCommand()
+	if err != nil {
+		return darwinProfileCapabilities{}, err
+	}
+	capabilities.CredentialMCPExecutable = executable
+	return capabilities, nil
+}
+
+func generateSBProfileWithCapabilities(cfg *config.PolicyConfig, home string, allowedIPs []string, withNetproxy bool, capabilities darwinProfileCapabilities) string {
 	var sb strings.Builder
 
 	sb.WriteString("(version 1)\n")
@@ -475,6 +497,7 @@ func generateSBProfileWithTrustedSSHAuthSock(cfg *config.PolicyConfig, home stri
 	// ~/.agentjail. The connect allow is with the network rules below.
 	fmt.Fprintf(&sb, "(allow file-read*\n    (literal %q))\n", home+"/.agentjail/daemon.sock")
 	sb.WriteString("\n")
+	appendCredentialMCPReadCapability(&sb, capabilities.CredentialMCPExecutable)
 
 	// AgentPaths.HomeRO / AgentPaths.Runtimes are consumed here only to keep
 	// them wired against future drift protection (a future capability test
@@ -590,7 +613,7 @@ func generateSBProfileWithTrustedSSHAuthSock(cfg *config.PolicyConfig, home stri
 	// Seatbelt grants the exact socket only after validated delegation;
 	// AgentJail control sockets remain denied. See ADR
 	// 0124-explicit-ssh-delegation and ADR 0067-control-plane-token-auth.
-	if sock := sshAuthSock.Path; sock != "" {
+	if sock := capabilities.SSHAuthSock.Path; sock != "" {
 		if isControlSocketPath(sock, home) {
 			fmt.Fprintf(os.Stderr,
 				"agentjail-shield WARNING: SSH_AUTH_SOCK (%s) names an agentjail control socket -- refusing to emit an allow rule for it.\n", sock)
@@ -661,6 +684,15 @@ func generateSBProfileWithTrustedSSHAuthSock(cfg *config.PolicyConfig, home stri
 	sb.WriteString("(deny network*)\n")
 
 	return sb.String()
+}
+
+func appendCredentialMCPReadCapability(sb *strings.Builder, executable string) {
+	if executable == "" {
+		return
+	}
+	// The session MCP executable is validated before profile construction; grant
+	// only that literal beneath the self-read deny. See ADR 0131-agent-credential-discovery.
+	fmt.Fprintf(sb, "(allow file-read*\n    (literal %q))\n\n", executable)
 }
 
 // resolvePathBestEffort canonicalizes s as far as the filesystem allows.
@@ -820,11 +852,16 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	// (it emits the control-socket deny + localhost-only egress); it does not
 	// need the proxy to be running yet, so we generate before starting it and
 	// avoid spawning a proxy just to print the profile.
+	capabilities, credentialErr := resolveDarwinProfileCapabilities(agentPath, credentialTools, sshAuthSock)
+	if credentialErr != nil {
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential MCP profile setup failed: %v\n", credentialErr)
+		os.Exit(1)
+	}
 	var profile string
 	if withNetproxy {
-		profile = generateSBProfileWithTrustedSSHAuthSock(cfg, home, resolveAllowedHosts(cfg), true, sshAuthSock)
+		profile = generateSBProfileWithCapabilities(cfg, home, resolveAllowedHosts(cfg), true, capabilities)
 	} else {
-		profile = generateSBProfileWithTrustedSSHAuthSock(cfg, home, resolveAllowedHosts(cfg), false, sshAuthSock)
+		profile = generateSBProfileWithCapabilities(cfg, home, resolveAllowedHosts(cfg), false, capabilities)
 	}
 
 	if profilePrint {
