@@ -320,11 +320,12 @@ test "$(kubectl config view --raw --minify -o "jsonpath={.users[0].user.token}" 
 kubectl get --raw /version > /tmp/agentjail-kube-version.json
 grep -q v1.30.0 /tmp/agentjail-kube-version.json
 test "$(stat -c %a "$KUBECONFIG" 2>/dev/null || stat -f %Lp "$KUBECONFIG")" = 600
-case "$KUBECONFIG" in /tmp/agentjail-credentials-*/kubeconfig) ;; *) exit 21 ;; esac
-case "$(command -v aws)" in /tmp/agentjail-credentials-*/bin/aws) ;; *) exit 22 ;; esac
-case "$(command -v kubectl)" in /tmp/agentjail-credentials-*/bin/kubectl) ;; *) exit 23 ;; esac
-case "$(command -v gh)" in /tmp/agentjail-credentials-*/bin/gh) ;; *) exit 24 ;; esac
-case "$GH_CONFIG_DIR" in /tmp/agentjail-credentials-*/gh-config) ;; *) exit 25 ;; esac
+temp_root=${TMPDIR:-/tmp}; temp_root=${temp_root%/}
+case "$KUBECONFIG" in "$temp_root"/agentjail-credentials-*/kubeconfig) ;; *) exit 21 ;; esac
+case "$(command -v aws)" in "$temp_root"/agentjail-credentials-*/bin/aws) ;; *) exit 22 ;; esac
+case "$(command -v kubectl)" in "$temp_root"/agentjail-credentials-*/bin/kubectl) ;; *) exit 23 ;; esac
+case "$(command -v gh)" in "$temp_root"/agentjail-credentials-*/bin/gh) ;; *) exit 24 ;; esac
+case "$GH_CONFIG_DIR" in "$temp_root"/agentjail-credentials-*/gh-config) ;; *) exit 25 ;; esac
 test "$(stat -c %a "$GH_CONFIG_DIR" 2>/dev/null || stat -f %Lp "$GH_CONFIG_DIR")" = 700
 test "$AGENTJAIL_CREDENTIAL_TOOLS" = aws,kubectl,gh
 test "$(gh auth token | tr -d "\\n" | hash_stream)" = __GH_FINGERPRINT__
