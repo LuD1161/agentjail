@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -39,6 +40,15 @@ func TestLegacyCommandsExposeTheirRuntimeFlagsInHelp(t *testing.T) {
 			if tt.cmd.Flags().Lookup(name) == nil && tt.cmd.InheritedFlags().Lookup(name) == nil {
 				t.Errorf("%s help omits runtime flag --%s", tt.cmd.CommandPath(), name)
 			}
+		}
+	}
+}
+
+func TestStatsHelpExplainsDurationValues(t *testing.T) {
+	usage := statsCmd.Flags().Lookup("since").Usage
+	for _, want := range []string{"30m", "24h", "7d", "0"} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("stats --since help %q does not explain %q", usage, want)
 		}
 	}
 }
