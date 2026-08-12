@@ -228,6 +228,28 @@ upgrading to install or repair this managed rule; AgentJail never overwrites a
 locally changed rule. See
 [ADR 0118-codex-approval-broker](./docs/adr/0118-codex-approval-broker.md) and
 [ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md).
+
+On Linux, a shielded Codex session can request one bounded host-side CLI run:
+
+```sh
+agentjail proxy -- rdt --help
+```
+
+Eligible executables open Codex's native allow-once prompt for the exact command.
+Approval authorizes one execution from the registered project root; rejection,
+expiry, replay, changed arguments or cwd, and direct proxy/socket calls fail closed.
+Git/GitHub, cloud and infrastructure clients, AgentJail control binaries, shells,
+direct interpreters, and generic/runtime wrappers such as `env`, `xargs`, `sudo`,
+`npx`, and `uv` are always denied. Symlinks are resolved before this check. This is a UX guardrail for accidental footguns, not a
+containment boundary for renamed programs or approved tools that start helpers.
+
+The daemon starts the approved absolute executable outside the shield without a
+shell, stdin, or TTY, with a 30-second timeout and 1 MiB combined output limit. It
+uses the daemon service environment—not the interactive login-shell environment—and
+does not forward caller environment variables. Host configuration and keychain
+access may work; environment-only credentials and interactive programs are not
+supported. See [ADR 0132-host-proxy-mvp](./docs/adr/0132-host-proxy-mvp.md).
+
 `SessionStart` and `Stop` also display a live shield-and-daemon attestation.
 Each `apply_patch` target is normalized to the same file-policy contract as an
 Edit, so a multi-file patch is denied when any target is protected.
