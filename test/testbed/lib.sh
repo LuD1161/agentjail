@@ -247,7 +247,9 @@ tart_stop_other_testbeds() {
 tart_guest_exec() {
     local name=$1; shift
     # Run through a login shell so brew-installed tools (node, git) are on PATH.
-    ${_tart_ssh_prefix[@]+"${_tart_ssh_prefix[@]}"} ssh "${TART_SSH_OPTS[@]}" "${TART_SSH_USER}@$(tart_ip "$name")" "bash -lc $(printf '%q' "$*")"
+    # Guest exec is non-interactive; inherited stdin makes Codex wait for EOF.
+    # See ADR 0130-codex-live-gate.
+    ${_tart_ssh_prefix[@]+"${_tart_ssh_prefix[@]}"} ssh -n "${TART_SSH_OPTS[@]}" "${TART_SSH_USER}@$(tart_ip "$name")" "bash -lc $(printf '%q' "$*")"
 }
 
 tart_guest_push() {

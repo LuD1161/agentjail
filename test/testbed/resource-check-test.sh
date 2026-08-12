@@ -70,6 +70,17 @@ EOF
 
 check_pass "macOS reclaimable memory is parsed" darwin_vm_stat_is_parsed
 
+tart_guest_exec_detaches_stdin() (
+    TART_SSH_OPTS=()
+    TART_SSH_USER=admin
+    _tart_ssh_prefix=()
+    tart_ip() { echo 127.0.0.1; }
+    ssh() { [ "${1:-}" = -n ]; }
+    tart_guest_exec fixture true
+)
+
+check_pass "Tart guest exec detaches stdin" tart_guest_exec_detaches_stdin
+
 fake_bin="$fixture_dir/bin"
 mkdir -p "$fake_bin" "$fixture_dir/home" "$fixture_dir/lima"
 

@@ -833,6 +833,17 @@ broker, despite advertising a valid tool schema.
   fields separately at the serialization boundary and exercise them with a
   real client. See ADR 0131-agent-credential-discovery and AGE-276.
 
+## 62. A remote command can inherit an interactive stdin
+
+The deterministic testbed harness ran every guest command without a terminal,
+so the real Codex gate passed locally. Tart's SSH executor inherited stdin from
+an interactive host invocation; Codex consumed its prompt argument, then waited
+indefinitely for additional input instead of starting the MCP session.
+
+- **Rule:** detach stdin for non-interactive remote execution and test the SSH
+  argv directly. Keep the separate interactive `ssh` command attached. See ADR
+  0130-codex-live-gate and AGE-279.
+
 ---
 
 ## Testing gotchas
