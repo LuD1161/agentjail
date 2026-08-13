@@ -92,7 +92,9 @@ EOF
 chmod 755 "$agent"
 
 phase1_log="$workdir/phase1.log"
-phase1_cmd="cd '$project' && env -u SSH_AUTH_SOCK -u SSH_AGENT_PID HOME='$home' PATH='$home/.agentjail/bin:$project:/usr/sbin:/usr/bin:/bin' codex resume"
+session_tmp="$workdir/session-tmp"
+mkdir -p "$session_tmp"
+phase1_cmd="cd '$project' && env -u SSH_AUTH_SOCK -u SSH_AGENT_PID HOME='$home' TMPDIR='$session_tmp/' PATH='$home/.agentjail/bin:$project:/usr/sbin:/usr/bin:/bin' codex resume"
 if ! printf '\n' | script -qefc "$phase1_cmd" /dev/null >"$phase1_log" 2>&1; then
 	sed -n '1,200p' "$phase1_log"
 	fail "guided shield launch"
@@ -105,6 +107,9 @@ if ! grep -q "Multiple SSH identities match github-work" "$phase1_log"; then
 	fail "missing configured identity chooser"
 fi
 observed_socket="$(cat "$project/observed-socket")"
+case "$observed_socket" in
+	*//*) fail "session SSH agent exposed an unclean socket path: $observed_socket" ;;
+esac
 for _ in $(seq 1 20); do
 	if ! SSH_AUTH_SOCK="$observed_socket" ssh-add -l >/dev/null 2>&1; then
 		break

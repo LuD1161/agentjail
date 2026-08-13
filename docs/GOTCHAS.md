@@ -880,6 +880,19 @@ Complete output did not make the underlying contract coherent.
   no effect on the resulting authority must not remain public. See ADR
   0132-cli-command-surface.
 
+## 66. A generated capability can violate its own validator
+
+The SSH bootstrap tests passed argv through a fake exec and the standalone
+acceptance test passed on Linux. On macOS, the system `TMPDIR` ended in `/`;
+OpenSSH appended another separator, so AgentJail created a live session socket
+whose `//` spelling its shield then rejected as unclean. Tart's release
+scenarios explicitly disabled Git SSH and never entered this path.
+
+- **Rule:** preserve strict validation for ambient capabilities, but normalize
+  environment inputs before invoking a capability producer you own. Assert the
+  exec environment and force native platform path shapes in acceptance tests.
+  See ADR 0126-session-ssh-bootstrap.
+
 ---
 
 ## Testing gotchas

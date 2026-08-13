@@ -24,6 +24,14 @@ connecting. These contracts are documented in the current OpenSSH manuals:
 - <https://man.openbsd.org/ssh-add.1>
 - <https://man.openbsd.org/ssh_config.5>
 
+Compatibility was reverified on 2026-08-12 with macOS 26.2 and its installed
+OpenSSH 10.0p2. macOS exported its per-user `TMPDIR` with a trailing slash, and
+OpenSSH's command mode appended `/ssh-.../agent...` literally, producing a
+valid socket spelling with `//` that the shield correctly refused as unclean.
+The upstream OpenBSD `ssh-agent(1)` manual was rechecked the same day for the
+command-lifetime and `SSH_AUTH_SOCK` contracts; the Apple path spelling was
+established by the local compatibility check.
+
 ## Decision
 
 For an interactive `agentjail run` whose effective policy enables Git SSH,
@@ -66,6 +74,11 @@ shield remains authoritative: it revalidates and probes the newly inherited
 socket before delegation. OpenSSH owns the agent lifetime and terminates it
 when the shielded coding session ends. The private-key files remain outside
 the shield.
+
+The launcher lexically cleans a non-empty `TMPDIR` only in the child environment
+used to start AgentJail's session-only OpenSSH agent. It does not rewrite an
+ambient `SSH_AUTH_SOCK`; the shield continues to reject inherited socket paths
+that are not already clean, absolute, owned, live Unix sockets.
 
 Noninteractive standard launches never prompt and continue without Git SSH.
 An explicit `--git-ssh` launch remains fail-closed when no ready agent or

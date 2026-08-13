@@ -188,6 +188,32 @@ func TestShouldOfferSSHBootstrapHonorsStrictPolicyAndExplicitOverride(t *testing
 	}
 }
 
+func TestSessionSSHAgentEnvCleansTempDirWithoutMutatingCaller(t *testing.T) {
+	input := []string{
+		"PATH=/usr/bin:/bin",
+		"TMPDIR=/var/folders/xx/yyyy/T/",
+		"EMPTY=",
+	}
+	want := []string{
+		"PATH=/usr/bin:/bin",
+		"TMPDIR=/var/folders/xx/yyyy/T",
+		"EMPTY=",
+	}
+	got := sessionSSHAgentEnv(input)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sessionSSHAgentEnv = %v, want %v", got, want)
+	}
+	if input[1] != "TMPDIR=/var/folders/xx/yyyy/T/" {
+		t.Fatalf("sessionSSHAgentEnv mutated caller: %v", input)
+	}
+
+	for _, input := range [][]string{{"PATH=/usr/bin"}, {"TMPDIR="}} {
+		if got := sessionSSHAgentEnv(input); !reflect.DeepEqual(got, input) {
+			t.Errorf("sessionSSHAgentEnv(%v) = %v", input, got)
+		}
+	}
+}
+
 func TestCompleteSSHBootstrapUsesTTYAndPreservesCommand(t *testing.T) {
 	var tty bytes.Buffer
 	args := []string{"/path/to/agentjail-shield", "--git-ssh", "--", "/usr/bin/codex", "resume"}

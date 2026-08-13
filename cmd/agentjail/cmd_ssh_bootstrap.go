@@ -130,11 +130,25 @@ func maybeBootstrapSSH(options runOptions, home string, shieldArgs []string) (bo
 	}
 	agentArgs = append(agentArgs, "--")
 	agentArgs = append(agentArgs, shieldArgs...)
-	if err := syscall.Exec(agentPath, agentArgs, os.Environ()); err != nil {
+	if err := syscall.Exec(agentPath, agentArgs, sessionSSHAgentEnv(os.Environ())); err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail: cannot start OpenSSH ssh-agent: %v\n", err)
 		return true, 1
 	}
 	return true, 0
+}
+
+// OpenSSH appends its socket suffix literally, so normalize the session-agent
+// temp root before handoff. See ADR 0126-session-ssh-bootstrap.
+func sessionSSHAgentEnv(environ []string) []string {
+	env := append([]string(nil), environ...)
+	for i, entry := range env {
+		value, ok := strings.CutPrefix(entry, "TMPDIR=")
+		if !ok || value == "" {
+			continue
+		}
+		env[i] = "TMPDIR=" + filepath.Clean(value)
+	}
+	return env
 }
 
 func promptSSHBootstrap(tty io.ReadWriter, selection sshagent.IdentitySelection, home string) ([]string, bool) {
