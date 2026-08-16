@@ -94,6 +94,55 @@ listed on the task board.
 - Production behavior change: none
 - Remote action: none
 
+## 2026-08-15 — Plans 016 and 031 accepted
+
+- Plan 016 commit: `c72a4c440a00af2081827b842c58fa716b0314f8`
+- Plan 031 commit: `f3eed6e215e368d99364af100788d3b1e8930179`
+- Changed paths matched both ownership lists: yes
+- Security review: Darwin CWD uses the Apple XNU `SYS_PROC_INFO` PID-info ABI,
+  exact checked buffer layout, strict decode validation, and no cgo or
+  self-reported fallback. Resolver failure/mismatch leaves a grant unbound and
+  an attempted approval writes no project overlay.
+- Test-isolation review: only the two SIGHUP subprocess tests changed; each now
+  passes explicit log/database paths beneath its existing `t.TempDir()` and
+  neither production defaults nor `HOME` changed.
+- Orchestrator reruns:
+  - focused Darwin binding, grant, and both SIGHUP tests: PASS;
+  - the same focused set with `-race`: PASS;
+  - daemon package vet: PASS;
+  - CGO-disabled Darwin arm64 and amd64 daemon test compiles to distinct
+    `/private/tmp` outputs: PASS;
+  - DCO, owned paths, and diff checks: PASS.
+- Board verdicts: Plan 016 DONE; Plan 031 DONE
+- Dependent release: Plan 029 still waits only for Plan 017 review.
+- Remote action: none
+
+## 2026-08-15 — Plans 017 and 019 accepted; Plan 029 claimed
+
+- Plan 017 commit: `f3f10053422fd9839e13e311b1cd08906e7b39f3`
+- Plan 019 commit: `8e327f1afd53a83c681e3c7ecffca2f4125ab47c`
+- Changed paths matched both ownership lists; DCO and diff checks passed.
+- Protocol review: v1 types are named/additive; snapshots use only complete
+  verified `BoundCWD` authority, are deterministic/newest-first, filter
+  `Expires <= now`, cap at three, keep worst-case frames below 64 KiB, and make
+  unbound/unrepresentable reviews deny-only. The golden fixture has no token,
+  challenge, command, or tool input.
+- Orchestrator reruns: grantctl race, grantctl vet, daemon grant tests, golden
+  fixture, and privacy scan passed.
+- Scaffold review: exact product/binary/bundle identity, macOS 13 target,
+  dependency-free target graph, `MenuBarExtra(.window)`, plist, placeholder,
+  DCO, and forbidden-import scans passed.
+- SwiftPM's build engine cannot atomically write its generated output map under
+  this running AgentJail sandbox. Direct official Xcode-toolchain `swiftc` and
+  Darwin `xctest` fallback compiled both modules, ran both scaffold tests, and
+  type-checked production sources for arm64 and x86_64. Plan 019 permits a
+  genuine local runner blocker when recorded; its product code is accepted.
+- Board verdicts: Plan 017 DONE; Plan 019 DONE
+- Plan 029 agent: `plan017_protocol` (Terra)
+- Plan 029 starting product baseline: `f3f10053`; ownership is registry expiry
+  paths, the narrow daemon call site/tests, one GOTCHAS entry, and handoff 029.
+- Remote action: none
+
 ## Execution entry template
 
 The orchestrator appends one entry after reviewing each task:

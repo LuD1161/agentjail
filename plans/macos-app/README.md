@@ -11,11 +11,11 @@ executors own only their assigned source paths and unique handoff file.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |---|---|---:|---:|---|---|
 | 015 | Record the menu-review architecture | P0 | S | — | DONE — e1220db9 |
-| 016 | Verify macOS grant project binding | P0 | M | 015 | CLAIMED — plan016_prep |
-| 017 | Add the versioned review wire contract | P0 | S | 015 | CLAIMED — plan017_protocol |
-| 019 | Scaffold the standalone Swift package | P0 | S | 015 | CLAIMED — plan019_prep |
-| 031 | Isolate daemon subprocess test state | P0 | XS | — | CLAIMED — plan016_prep |
-| 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | TODO |
+| 016 | Verify macOS grant project binding | P0 | M | 015 | DONE — c72a4c44 |
+| 017 | Add the versioned review wire contract | P0 | S | 015 | DONE — f3f10053 |
+| 019 | Scaffold the standalone Swift package | P0 | S | 015 | DONE — 8e327f1a |
+| 031 | Isolate daemon subprocess test state | P0 | XS | — | DONE — f3eed6e2 |
+| 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | CLAIMED — plan017_protocol |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | TODO |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | TODO |
 | 021 | Build the approval state store | P0 | M | 020 | TODO |
