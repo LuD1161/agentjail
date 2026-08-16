@@ -10,10 +10,10 @@ executors own only their assigned source paths and unique handoff file.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |---|---|---:|---:|---|---|
-| 015 | Record the menu-review architecture | P0 | S | — | TODO |
-| 016 | Verify macOS grant project binding | P0 | M | 015 | TODO |
-| 017 | Add the versioned review wire contract | P0 | S | 015 | TODO |
-| 019 | Scaffold the standalone Swift package | P0 | S | 015 | TODO |
+| 015 | Record the menu-review architecture | P0 | S | — | DONE — e1220db9 |
+| 016 | Verify macOS grant project binding | P0 | M | 015 | CLAIMED — plan016_prep |
+| 017 | Add the versioned review wire contract | P0 | S | 015 | CLAIMED — plan017_protocol |
+| 019 | Scaffold the standalone Swift package | P0 | S | 015 | CLAIMED — plan019_prep |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | TODO |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | TODO |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | TODO |

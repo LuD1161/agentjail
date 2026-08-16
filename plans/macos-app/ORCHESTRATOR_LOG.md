@@ -44,9 +44,41 @@ common-worktree orchestration.
 
 ## Dispatch state
 
-No implementation task is claimed. The first safe task is plan 015. After its
-orchestrator review, Wave B may run plans 016, 017, and 019 concurrently because
-their product paths do not overlap. Later waves are listed on the task board.
+At planning completion no implementation task was claimed. The first safe task
+was plan 015. After its orchestrator review, Wave B may run plans 016, 017, and
+019 concurrently because their product paths do not overlap. Later waves are
+listed on the task board.
+
+## 2026-08-15 — Plan 015 claimed
+
+- Agent: `plan015_architecture` (Terra)
+- Starting HEAD: `7e34bdbdc5e744df74c8239645dc7cc859dd5356`
+- Reserved ADR: `docs/adr/0133-macos-menu-review.md`
+- Owned handoff: `plans/macos-app/handoffs/015.md`
+- State: CLAIMED
+- Remote action: none authorized
+
+## 2026-08-15 — Plan 015 accepted; Wave B claimed
+
+- Plan 015 agent: `plan015_architecture` (Terra)
+- Commit: `e1220db91d13e43482d2529b42e5d419050f6b18`
+- Changed paths matched ownership: yes
+- Review rerun: `rtk make adr-check` passed with 129 ADRs and no duplicate
+  numbers; `rtk git diff --check e1220db9^ e1220db9` passed; signed-off
+  trailer present.
+- Security/architecture verdict: PASS. ADR 0133 fixes the app identity,
+  daemon-only authority, future-session approval semantics, macOS CWD and
+  atomic-expiry release gates, strict framing, notification privacy, and local
+  distribution posture.
+- Board verdict: DONE
+- Wave B agents at starting HEAD `e1220db9`:
+  - Plan 016: `plan016_prep` (Darwin verified CWD/fail-closed binding)
+  - Plan 017: `plan017_protocol` (typed review protocol)
+  - Plan 019: `plan019_prep` (standalone SwiftPM scaffold)
+- Pre-existing `go.work.sum` drift appeared during baseline tooling and is not
+  owned by any Wave B agent; it remains unstaged and reserved for orchestrator
+  review.
+- Remote action: none
 
 ## Execution entry template
 
