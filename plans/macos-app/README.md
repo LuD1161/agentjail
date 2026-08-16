@@ -18,7 +18,7 @@ executors own only their assigned source paths and unique handoff file.
 | 032 | Add sandbox-safe Swift test harness | P0 | S | 019 | DONE — de698f31 |
 | 033 | Sanitize untrusted display text | P0 | S | 019, 032 | CLAIMED — plan016_prep |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | DONE — 980057e1 |
-| 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | TODO |
+| 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | CLAIMED — plan019_prep; acceptance waits on 030 |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | CLAIMED — plan017_protocol |
 | 021 | Build the approval state store | P0 | M | 020 | TODO |
 | 018 | Serve authenticated review snapshots | P0 | S | 029, 030 | TODO |

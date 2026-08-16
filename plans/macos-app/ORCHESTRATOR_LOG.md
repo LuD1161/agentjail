@@ -144,6 +144,23 @@ listed on the task board.
   type-check, Darwin XCTest discovery, and no dependency/authority/action code.
 - Remote action: none
 
+## 2026-08-15 — Plan 020 parallel implementation claimed
+
+- Agent: `plan019_prep` (Terra)
+- Contract prerequisite: Plan 030's exact claim was acknowledged at
+  `15af2111`; its normative frame rule is unchanged from the reviewed plan.
+- Concurrency decision: Models/Transport Swift paths and Go framing paths are
+  disjoint. Plan 020 may implement and run fake-server tests in parallel, but
+  it cannot receive DONE until Plan 030 lands and the Swift behavior is checked
+  against the reviewed Go helpers/tests.
+- Ownership: Swift core `Models/**`, `Transport/**`, their matching tests, and
+  handoff 020 only. The canonical Go fixture is read-only.
+- Required inherited interfaces: `ReviewID` is bounded/validated, Hashable and
+  Sendable; errors are typed and token-free; mutations carry IDs only; snapshot
+  retains order/truncation; token loads once per request; one bounded frame and
+  connection per operation; no mutation retry.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

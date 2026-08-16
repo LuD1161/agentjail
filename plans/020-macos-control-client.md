@@ -1,9 +1,12 @@
 # Plan 020: Build the Swift Unix-socket review client
 
-> **Executor instructions:** Start only after plans 017, 019, and 030 are
-> reviewed DONE. Read their diffs/handoffs, the Go golden fixture, accepted ADR,
-> `AGENTS.md`, and coordination protocol. Plan 030 is the framing authority;
-> mirror it exactly. Implement Foundation/Darwin only; no third-party package.
+> **Executor instructions:** Plans 017 and 019 must be reviewed DONE. Parallel
+> implementation may begin after the orchestrator acknowledges plan 030's
+> exact claim because its normative frame rule is already locked; plan 020
+> cannot be reviewed DONE until plan 030 lands and its implementation/handoff
+> has been cross-checked. Read the Go fixture, accepted ADR, `AGENTS.md`, and
+> coordination protocol. Plan 030 is the framing authority; mirror it exactly.
+> Implement Foundation/Darwin only; no third-party package.
 >
 > **Drift check:** run the coordination protocol's scoped diff/status checks
 > for the exact new Models/Transport/test paths and handoff. Read, but never
@@ -36,9 +39,10 @@ Plan 017 defines the v1 JSON contract and golden fixture in
 `cmd/agentjail/cmd_grants.go:118-137`. Plan 019 supplies a dependency-free
 Swift package but deliberately has no models or transport.
 
-Plan 030 supplies the reviewed one-newline-frame rule, including exact size,
-invalid-UTF-8, additive-field, and second-frame behavior. Swift must match that
-implementation rather than independently interpreting the planning prose.
+Plan 030 supplies the normative one-newline-frame rule, including exact size,
+invalid-UTF-8, additive-field, and second-frame behavior. Swift may implement
+against that locked contract in parallel, but must cross-check the landed Go
+helpers/tests before handoff and match the reviewed implementation exactly.
 
 The default paths are:
 
