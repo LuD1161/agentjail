@@ -114,20 +114,49 @@ branch_exists() {
 }
 
 require_daemon() {
-    local phase="$1" output rc
-    output="$(printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"README.md"},"session_id":"codex-approval-liveness","cwd":"'"$PROJECT"'"}' \
-        | "$HOOK" 2>&1 >/dev/null)"
-    rc=$?
-    if [ "$rc" -eq 0 ] && ! printf '%s\n' "$output" | grep -qiE 'daemon unreachable|daemon not running'; then
-        scn_ok "policy daemon remains available $phase"
-        return 0
+    local phase="$1" output="" rc=1 i
+    # A tunnel child can still be draining after a non-interactive probe exits.
+    # Require control ping and hook round trip. See ADR 0118-codex-approval-broker.
+    for i in $(seq 1 10); do
+        output="$("$AJ" doctor 2>&1 || true)"
+        printf '%s\n' "$output" | grep -q 'Socket.*daemon answered ping' && break
+        sleep 0.25
+    done
+    if ! printf '%s\n' "$output" | grep -q 'Socket.*daemon answered ping'; then
+        scn_fail "policy daemon answers its control ping $phase"
+        printf '%s\n' "$output" | tail -10 | sed 's/^/    /'
+        finish_and_exit
     fi
+    for i in $(seq 1 10); do
+        output="$(printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"README.md"},"session_id":"codex-approval-liveness","cwd":"'"$PROJECT"'"}' \
+            | "$HOOK" 2>&1 >/dev/null)"
+        rc=$?
+        if [ "$rc" -eq 0 ] && ! printf '%s\n' "$output" | grep -qiE 'daemon unreachable|daemon not running'; then
+            scn_ok "policy daemon remains available $phase"
+            return 0
+        fi
+        sleep 0.25
+    done
     scn_fail "policy daemon remains available $phase"
     printf '%s\n' "$output" \
         | sed -E "s|$HOME|<guest-home>|g; s|$USER|agent|g" \
         | tail -10 \
         | sed 's/^/    /'
     finish_and_exit
+}
+
+stop_probe_group() {
+    local pid="$1" i
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null || true; return; }
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    for i in $(seq 1 40); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.25
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
 }
 
 wait_for_approval_prompt() {
@@ -277,6 +306,8 @@ require_daemon "after a declined native prompt"
 
 NEVER_BRANCH="agentjail-approval-never"
 NEVER_LOG="/tmp/codex-approval-never.log"
+# Match terminal teardown by assigning the probe its own process group.
+set -m
 (
     cd "$PROJECT" || exit 1
     exec "$CODEX_SHIM" -a never \
@@ -285,6 +316,7 @@ NEVER_LOG="/tmp/codex-approval-never.log"
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$NEVER_BRANCH"
 ) >"$NEVER_LOG" 2>&1 &
 NEVER_PID=$!
+set +m
 for i in $(seq 1 60); do
     kill -0 "$NEVER_PID" 2>/dev/null || break
     if [ $((i % 10)) -eq 0 ]; then
@@ -294,10 +326,8 @@ for i in $(seq 1 60); do
 done
 if kill -0 "$NEVER_PID" 2>/dev/null; then
     echo "  INFO  stopping timed-out approval_policy=never probe"
-    pkill -TERM -P "$NEVER_PID" 2>/dev/null || true
-    kill -TERM "$NEVER_PID" 2>/dev/null || true
 fi
-wait "$NEVER_PID" 2>/dev/null || true
+stop_probe_group "$NEVER_PID"
 if "$AJ" logs --latest=100 --json 2>/dev/null \
     | grep -F "$NEVER_BRANCH" \
     | grep -q 'command_policy/confirm-git-push'; then
@@ -318,6 +348,8 @@ require_daemon "after approval_policy=never"
 
 IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
+# Match terminal teardown by assigning the probe its own process group.
+set -m
 (
     cd "$PROJECT" || exit 1
     exec "$CODEX_SHIM" \
@@ -326,6 +358,7 @@ IGNORE_LOG="/tmp/codex-approval-ignore.log"
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$IGNORE_BRANCH"
 ) >"$IGNORE_LOG" 2>&1 &
 IGNORE_PID=$!
+set +m
 for i in $(seq 1 60); do
     kill -0 "$IGNORE_PID" 2>/dev/null || break
     if [ $((i % 10)) -eq 0 ]; then
@@ -335,10 +368,8 @@ for i in $(seq 1 60); do
 done
 if kill -0 "$IGNORE_PID" 2>/dev/null; then
     echo "  INFO  stopping timed-out --ignore-rules probe"
-    pkill -TERM -P "$IGNORE_PID" 2>/dev/null || true
-    kill -TERM "$IGNORE_PID" 2>/dev/null || true
 fi
-wait "$IGNORE_PID" 2>/dev/null || true
+stop_probe_group "$IGNORE_PID"
 if "$AJ" logs --latest=100 --json 2>/dev/null \
     | grep -F "$IGNORE_BRANCH" \
     | grep -q 'command_policy/confirm-git-push'; then
