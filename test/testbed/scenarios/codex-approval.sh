@@ -163,6 +163,10 @@ wait_for_approval_prompt() {
     local i output
     for i in $(seq 1 60); do
         output="$(tmux capture-pane -p -t "$SESSION:0.0" 2>/dev/null || true)"
+        if [ -s "$PANE_LOG" ]; then
+            output="$output
+$(tail -80 "$PANE_LOG")"
+        fi
         if printf '%s' "$output" | grep -q "Press enter to continue"; then
             echo "  INFO  acknowledging Codex first-run continuation screen"
             tmux send-keys -t "$SESSION:0.0" Enter
@@ -173,6 +177,9 @@ wait_for_approval_prompt() {
             && printf '%s' "$output" | grep -Fq "$DISPLAY_MARKER" \
             && printf '%s' "$output" | grep -Fq "$EXPECTED_CONTEXT"; then
             return 0
+        fi
+        if [ "$(tmux display-message -p -t "$SESSION:0.0" '#{pane_dead}' 2>/dev/null || true)" = "1" ]; then
+            return 1
         fi
         if [ $((i % 10)) -eq 0 ]; then
             echo "  INFO  waiting for Codex native approval prompt (${i}s/60s)"
@@ -217,8 +224,42 @@ start_interactive_command() {
 }
 
 transport_failed_before_tool() {
-    tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null \
+    {
+        tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null || true
+        [ ! -s "$PANE_LOG" ] || tail -80 "$PANE_LOG"
+    } \
         | grep -qiE 'reconnecting|stream disconnected|websocket protocol error|handshake not finished'
+}
+
+print_sanitized_log() {
+    local label="$1" path="$2"
+    echo "  $label (challenge redacted):"
+    sed -E 's/[A-Za-z0-9_-]{43}/<challenge>/g' "$path" 2>/dev/null \
+        | sed -E "s|$HOME|<guest-home>|g; s|$USER@[^ ]*|agent@guest|g; s|(Booting MCP server:).*|\1 <redacted>|" \
+        | tail -30 \
+        | sed 's/^/    /'
+}
+
+sql_quote() {
+    printf '%s' "$1" | sed "s/'/''/g"
+}
+
+decision_record_for_command() {
+    local after_id="$1" command="$2" command_sql cwd_sql
+    command_sql="$(sql_quote "$command")"
+    cwd_sql="$(sql_quote "$PROJECT")"
+    sqlite3 "$AUDIT_DB" "select session_id || '|' || action || '|' || coalesce(rule_id,'') from decisions where id > $after_id and agent='codex' and tool_name='Bash' and cwd='$cwd_sql' and json_valid(tool_input_redacted) and json_extract(tool_input_redacted,'$.command')='$command_sql' order by id desc limit 1;" 2>/dev/null || true
+}
+
+host_proxy_ref() {
+    local executable="$1" arg
+    shift
+    {
+        printf '%s' "$executable"
+        for arg in "$@"; do
+            printf '\0%s' "$arg"
+        done
+    } | shasum -a 256 | cut -c1-16
 }
 
 start_and_wait_for_approval() {
@@ -403,6 +444,7 @@ printf 'host-only-input' >"$HOST_PROXY_SENTINEL"
 chmod 0600 "$HOST_PROXY_SENTINEL"
 cat >"$HOST_PROXY_HELPER" <<'SH'
 #!/bin/sh
+printf 'helper-started' > "$1.attempt" || exit 72
 test "$(cat "$HOME/.ssh/agentjail-hostproxy-test")" = host-only-input || exit 73
 printf '%s' "$2" > "$1"
 SH
@@ -412,25 +454,41 @@ DISPLAY_MARKER="🔐 AgentJail host access approval required:"
 HOST_PROXY_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 
 DIRECT_LOG="/tmp/codex-hostproxy-direct.log"
+DIRECT_COMMAND="$HOST_PROXY_HELPER $HOST_PROXY_DIRECT direct"
+DIRECT_ATTEMPT="$HOST_PROXY_DIRECT.attempt"
+DIRECT_DECISION_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from decisions;' 2>/dev/null || echo 0)"
 timeout 120 "$CODEX_SHIM" --dangerously-bypass-approvals-and-sandbox \
     --dangerously-bypass-hook-trust -C "$PROJECT" exec --ephemeral \
-    "Run exactly this command once and then stop: $HOST_PROXY_HELPER $HOST_PROXY_DIRECT direct" \
+    "Run exactly this command once and then stop: $DIRECT_COMMAND" \
     >"$DIRECT_LOG" 2>&1 || true
-if grep -Fq "$HOST_PROXY_HELPER" "$DIRECT_LOG" && [ ! -e "$HOST_PROXY_DIRECT" ]; then
-    scn_ok "real Codex direct execution cannot read the host-only fixture"
+DIRECT_DECISION="$(decision_record_for_command "$DIRECT_DECISION_BEFORE" "$DIRECT_COMMAND")"
+DIRECT_SESSION="${DIRECT_DECISION%%|*}"
+DIRECT_ACTION_RULE="${DIRECT_DECISION#*|}"
+if [ -n "$DIRECT_SESSION" ] \
+    && [ "$DIRECT_ACTION_RULE" = "allow|command_policy/default-allow" ] \
+    && [ "$(cat "$DIRECT_ATTEMPT" 2>/dev/null || true)" = "helper-started" ] \
+    && [ ! -e "$HOST_PROXY_DIRECT" ]; then
+    scn_ok "decision and process evidence prove real Codex ran the exact direct command before the shield denied host-only access"
 else
-    scn_fail "real Codex direct execution cannot read the host-only fixture"
+    scn_fail "decision and process evidence prove real Codex ran the exact direct command before the shield denied host-only access"
+    echo "  direct decision: ${DIRECT_DECISION:-<missing>}"
+    print_sanitized_log "Codex direct-access output" "$DIRECT_LOG"
 fi
 require_daemon "after a direct-access denial"
 
+rm -f "$DIRECT_ATTEMPT"
+NO_PROOF_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 env -u AGENTJAIL_HOST_PROXY_PROOF -u AGENTJAIL_HOST_PROXY_EXECUTABLE \
     "$AJ" proxy -- "$HOST_PROXY_HELPER" "$HOST_PROXY_DIRECT" no-proof >/dev/null 2>&1 || true
-if [ ! -e "$HOST_PROXY_DIRECT" ]; then
-    scn_ok "direct proxy invocation without a native proof creates no effect"
+NO_PROOF_DENIED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $NO_PROOF_AUDIT_BEFORE and event_type='host_proxy.denied' and json_extract(detail,'$.reason')='malformed';" 2>/dev/null || echo 0)"
+if [ "$NO_PROOF_DENIED" -eq 1 ] && [ ! -e "$DIRECT_ATTEMPT" ] && [ ! -e "$HOST_PROXY_DIRECT" ]; then
+    scn_ok "direct proxy invocation without a native proof records its denial and creates no effect"
 else
-    scn_fail "direct proxy invocation without a native proof creates no effect"
+    scn_fail "direct proxy invocation without a native proof records its denial and creates no effect"
+    echo "  proofless denial count: $NO_PROOF_DENIED"
 fi
 
+HOST_PROXY_APPROVED_REF="$(host_proxy_ref "$HOST_PROXY_HELPER" "$HOST_PROXY_HELPER" "$HOST_PROXY_APPROVED" hostproxy-approved)"
 EXPECTED_CONTEXT="hostproxy-approved"
 if start_and_wait_for_approval "agentjail proxy -- $HOST_PROXY_HELPER $HOST_PROXY_APPROVED hostproxy-approved"; then
     scn_ok "host proxy shows its exact outside-shield boundary in a native prompt"
@@ -452,42 +510,65 @@ else
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+HOST_PROXY_REJECTED_REF="$(host_proxy_ref "$HOST_PROXY_HELPER" "$HOST_PROXY_HELPER" "$HOST_PROXY_REJECTED" hostproxy-rejected)"
+REJECTED_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 EXPECTED_CONTEXT="hostproxy-rejected"
 if start_and_wait_for_approval "agentjail proxy -- $HOST_PROXY_HELPER $HOST_PROXY_REJECTED hostproxy-rejected"; then
     scn_ok "host proxy rejection reaches the same native prompt"
     tmux send-keys -t "$SESSION:0.0" Escape
-    sleep 5
+    sleep 1
 else
     scn_fail "host proxy rejection reaches the same native prompt"
+    print_sanitized_pane
+    finish_and_exit
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
-if [ -e "$HOST_PROXY_REJECTED" ]; then
-    scn_fail "rejected host proxy prompt creates no execution effect"
+REJECTED_REQUESTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $REJECTED_AUDIT_BEFORE and event_type='host_proxy.requested' and ref_id='$HOST_PROXY_REJECTED_REF';" 2>/dev/null || echo 0)"
+REJECTED_EXECUTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $REJECTED_AUDIT_BEFORE and ref_id='$HOST_PROXY_REJECTED_REF' and event_type in ('host_proxy.authorization_redeemed','host_proxy.started','host_proxy.completed');" 2>/dev/null || echo 0)"
+if [ "$REJECTED_REQUESTED" -eq 1 ] \
+    && [ "$REJECTED_EXECUTED" -eq 0 ] \
+    && [ ! -e "$HOST_PROXY_REJECTED.attempt" ] \
+    && [ ! -e "$HOST_PROXY_REJECTED" ]; then
+    scn_ok "rejected host proxy prompt has one exact request, no execution lifecycle, and no effect"
 else
-    scn_ok "rejected host proxy prompt creates no execution effect"
+    scn_fail "rejected host proxy prompt has one exact request, no execution lifecycle, and no effect"
+    echo "  rejected target ref=$HOST_PROXY_REJECTED_REF requested=$REJECTED_REQUESTED executed=$REJECTED_EXECUTED"
+    print_sanitized_pane
 fi
 
 BYPASS_LOG="/tmp/codex-hostproxy-bypass.log"
+BYPASS_COMMAND="agentjail proxy -- /bin/sh -c 'printf bypass > $HOST_PROXY_BYPASS'"
+BYPASS_DECISION_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from decisions;' 2>/dev/null || echo 0)"
+BYPASS_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 timeout 120 "$CODEX_SHIM" --dangerously-bypass-approvals-and-sandbox \
     --dangerously-bypass-hook-trust -C "$PROJECT" exec --ephemeral \
-    "Run exactly this command once and then stop: agentjail proxy -- /bin/sh -c 'printf bypass > $HOST_PROXY_BYPASS'" \
+    "Run exactly this command once and then stop: $BYPASS_COMMAND" \
     >"$BYPASS_LOG" 2>&1 || true
-if [ ! -e "$HOST_PROXY_BYPASS" ]; then
-    scn_ok "host proxy policy denies a shell bypass from real Codex"
+BYPASS_DECISION="$(decision_record_for_command "$BYPASS_DECISION_BEFORE" "$BYPASS_COMMAND")"
+BYPASS_SESSION="${BYPASS_DECISION%%|*}"
+BYPASS_ACTION_RULE="${BYPASS_DECISION#*|}"
+BYPASS_DENIED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $BYPASS_AUDIT_BEFORE and event_type='host_proxy.denied' and session_id='$(sql_quote "$BYPASS_SESSION")' and json_extract(detail,'$.reason')='preflight';" 2>/dev/null || echo 0)"
+if [ -n "$BYPASS_SESSION" ] \
+    && [ "$BYPASS_ACTION_RULE" = "deny|host_proxy/preflight-deny" ] \
+    && [ "$BYPASS_DENIED" -eq 1 ] \
+    && [ ! -e "$HOST_PROXY_BYPASS" ]; then
+    scn_ok "decision and audit evidence prove real Codex attempted the exact shell bypass and policy denied it"
 else
-    scn_fail "host proxy policy denies a shell bypass from real Codex"
+    scn_fail "decision and audit evidence prove real Codex attempted the exact shell bypass and policy denied it"
+    echo "  bypass decision=${BYPASS_DECISION:-<missing>} preflight_denials=$BYPASS_DENIED"
+    print_sanitized_log "Codex shell-bypass output" "$BYPASS_LOG"
 fi
 
-REQUESTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.requested';" 2>/dev/null || echo 0)"
-REDEEMED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.authorization_redeemed';" 2>/dev/null || echo 0)"
-STARTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.started';" 2>/dev/null || echo 0)"
-COMPLETED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.completed';" 2>/dev/null || echo 0)"
+REQUESTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.requested' and ref_id='$HOST_PROXY_APPROVED_REF';" 2>/dev/null || echo 0)"
+REDEEMED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.authorization_redeemed' and ref_id='$HOST_PROXY_APPROVED_REF';" 2>/dev/null || echo 0)"
+STARTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.started' and ref_id='$HOST_PROXY_APPROVED_REF';" 2>/dev/null || echo 0)"
+COMPLETED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.completed' and ref_id='$HOST_PROXY_APPROVED_REF';" 2>/dev/null || echo 0)"
 DENIED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.denied';" 2>/dev/null || echo 0)"
-if [ "$REQUESTED" -ge 2 ] && [ "$REDEEMED" -eq 1 ] && [ "$STARTED" -eq 1 ] && [ "$COMPLETED" -eq 1 ] && [ "$DENIED" -ge 1 ]; then
-    scn_ok "audit proves one approved proxy execution plus rejected and denied attempts"
+if [ "$REQUESTED" -eq 1 ] && [ "$REDEEMED" -eq 1 ] && [ "$STARTED" -eq 1 ] && [ "$COMPLETED" -eq 1 ] && [ "$DENIED" -ge 2 ]; then
+    scn_ok "audit proves the exact approved proxy target executed once plus rejected and denied attempts"
 else
-    echo "  host proxy audit counts: requested=$REQUESTED redeemed=$REDEEMED started=$STARTED completed=$COMPLETED denied=$DENIED"
-    scn_fail "audit proves one approved proxy execution plus rejected and denied attempts"
+    echo "  approved target ref=$HOST_PROXY_APPROVED_REF requested=$REQUESTED redeemed=$REDEEMED started=$STARTED completed=$COMPLETED denied=$DENIED"
+    scn_fail "audit proves the exact approved proxy target executed once plus rejected and denied attempts"
 fi
 
 if sqlite3 "$AUDIT_DB" "select detail from audit_log where id > $HOST_PROXY_AUDIT_BEFORE;" 2>/dev/null \
