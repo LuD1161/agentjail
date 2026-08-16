@@ -131,10 +131,8 @@ private final class RecordingTransport: ControlFraming, @unchecked Sendable {
 
     var calls: Int { lock.withLock { frames.count } }
 
-    func roundTrip(_ frame: Data) throws -> Data {
-        lock.lock()
-        frames.append(frame)
-        lock.unlock()
+    func roundTrip(_ frame: Data) async throws -> Data {
+        lock.withLock { frames.append(frame) }
         return reply
     }
 
@@ -164,7 +162,7 @@ private final class ThreadRecordingTransport: ControlFraming, @unchecked Sendabl
 
     init(reply: Data) { self.reply = reply }
     var wasCalledOnMainThread: Bool { lock.withLock { calledOnMainThread } }
-    func roundTrip(_ frame: Data) throws -> Data {
+    func roundTrip(_ frame: Data) async throws -> Data {
         lock.withLock { calledOnMainThread = Thread.isMainThread }
         return reply
     }
@@ -182,5 +180,5 @@ private struct ThrowingTokenLoader: ControlTokenLoading {
 
 private struct ThrowingTransport: ControlFraming {
     let error: LeakyError
-    func roundTrip(_ frame: Data) throws -> Data { throw error }
+    func roundTrip(_ frame: Data) async throws -> Data { throw error }
 }

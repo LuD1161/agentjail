@@ -24,7 +24,7 @@ public struct ReviewControlClient: ReviewControlling {
     }
 
     private func send(type: String, reviewID: ReviewID?) async throws -> Response {
-        return try await Task.detached(priority: .userInitiated) {
+        let token = try await Task.detached(priority: .userInitiated) {
             let token: String
             do {
                 token = try tokenLoader.loadToken()
@@ -33,23 +33,27 @@ public struct ReviewControlClient: ReviewControlling {
             } catch {
                 throw ApprovalControlError.tokenUnreadable
             }
-            let request = Request(type: type, token: token, protocolVersion: type == "review_snapshot" ? ReviewSnapshotV1.protocolVersion : nil, grantID: reviewID)
-            let frame: Data
-            do {
-                frame = try request.frame()
-            } catch {
-                throw ApprovalControlError.malformedReply
-            }
-            let reply: Data
-            do {
-                reply = try transport.roundTrip(frame)
-            } catch let error as ApprovalControlError {
-                throw error
-            } catch {
-                throw ApprovalControlError.daemonUnavailable
-            }
-            return try Response.decode(frame: reply, redacting: token)
+            return token
         }.value
+        try Task.checkCancellation()
+        let request = Request(type: type, token: token, protocolVersion: type == "review_snapshot" ? ReviewSnapshotV1.protocolVersion : nil, grantID: reviewID)
+        let frame: Data
+        do {
+            frame = try request.frame()
+        } catch {
+            throw ApprovalControlError.malformedReply
+        }
+        let reply: Data
+        do {
+            reply = try await transport.roundTrip(frame)
+        } catch let error as ApprovalControlError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ApprovalControlError.daemonUnavailable
+        }
+        return try Response.decode(frame: reply, redacting: token)
     }
 }
 
