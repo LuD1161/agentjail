@@ -207,13 +207,14 @@ func supportsCredentialMCP(agentPath string) bool {
 }
 
 func credentialExecutableUnsafeRoot(path string, roots ...string) (string, bool) {
+	path, err := canonicalPath(path)
+	if err != nil {
+		return "", false
+	}
 	for _, root := range roots {
-		root, err := filepath.Abs(root)
+		root, err := canonicalPath(root)
 		if err != nil {
 			continue
-		}
-		if resolved, err := filepath.EvalSymlinks(root); err == nil {
-			root = resolved
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil || filepath.IsAbs(rel) {
@@ -224,6 +225,30 @@ func credentialExecutableUnsafeRoot(path string, roots ...string) (string, bool)
 		}
 	}
 	return "", false
+}
+
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := abs
+	var suffix []string
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs, nil
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 type credentialSession struct {
