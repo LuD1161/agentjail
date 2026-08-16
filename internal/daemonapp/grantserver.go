@@ -414,9 +414,8 @@ func (gs *grantServer) approve(grantID string) error {
 
 // decideBoundCWD decides what directory (if any) a grant should be bound to,
 // given the session's self-reported CWD (spoofable -- just a JSON field an
-// agent sends on eval requests) and the kernel-verified CWD read from
-// /proc/<peerPID>/cwd for the process that filed the grant request
-// (verifyErr is the error from that read, if any).
+// agent sends on eval requests) and the kernel-verified CWD for the process
+// that filed the grant request (verifyErr is the error from that lookup, if any).
 //
 //   - Verification succeeded and matches: trust it -- this is the normal,
 //     honest-agent case.
@@ -424,19 +423,10 @@ func (gs *grantServer) approve(grantID string) error {
 //     somewhere it verifiably was not. Refuse to bind (fail closed) rather
 //     than let an approval write a policy.yaml overlay into a directory
 //     chosen entirely by the agent's own say-so.
-//   - Verification was unavailable (verifyErr != nil, e.g. macOS, where
-//     resolvePeerCWD has no libproc-free implementation, or a transient
-//     /proc read race): fall back to the self-reported value. This is a
-//     known gap on platforms without a verified CWD primitive -- it
-//     preserves pre-fix (best-effort) behavior there rather than disabling
-//     grant binding entirely, but it means P10's guarantee is Linux-only
-//     today. A stricter policy (refuse whenever unverifiable) is a
-//     reasonable follow-up if grants need to be hardened on macOS too.
+//   - Verification was unavailable: refuse to bind. An unavailable verifier
+//     is not a verified match. See ADR 0133-macos-menu-review.
 func decideBoundCWD(selfReportedCWD, verifiedCWD string, verifyErr error) (cwd string, ok bool) {
-	if verifyErr != nil {
-		return selfReportedCWD, selfReportedCWD != ""
-	}
-	if verifiedCWD == "" || verifiedCWD != selfReportedCWD {
+	if verifyErr != nil || verifiedCWD == "" || verifiedCWD != selfReportedCWD {
 		return "", false
 	}
 	return verifiedCWD, true
@@ -480,7 +470,7 @@ func (gs *grantServer) handleGrantRequest(conn net.Conn, req grantctl.Request) g
 	// process, so this cannot be spoofed) and cross-check its self-reported
 	// CWD (tracked in activeSessions from prior eval requests, which IS
 	// spoofable -- it's just a JSON field the agent sends) against the
-	// kernel-verified CWD read from /proc/<peerPID>/cwd. Only an exact match
+	// kernel-verified CWD. Only an exact match
 	// is trusted; anything else leaves the grant unbound rather than writing
 	// a policy.yaml overlay into a directory the agent merely claimed to be
 	// in (P10). approve() already refuses to persist an unbound grant

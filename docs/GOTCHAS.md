@@ -893,6 +893,19 @@ scenarios explicitly disabled Git SSH and never entered this path.
   exec environment and force native platform path shapes in acceptance tests.
   See ADR 0126-session-ssh-bootstrap.
 
+## 67. An unavailable verifier is not a verified match
+
+Linux CWD-mismatch tests passed, while Darwin returned an unsupported resolver
+error and grant binding treated that error as permission to trust the agent's
+self-reported CWD. A host approval could therefore persist an overlay in a
+project selected by unverified input.
+
+- **Rule:** cross-platform authorization fails closed when its verifier is
+  unavailable; live-test every backend, not just its layout. See ADR
+  0133-macos-menu-review. The Darwin ABI was verified against [Apple XNU
+  `proc_info_private.h`](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/proc_info_private.h)
+  on 2026-08-15.
+
 ---
 
 ## Testing gotchas

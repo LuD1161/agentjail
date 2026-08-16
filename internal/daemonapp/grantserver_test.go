@@ -327,12 +327,12 @@ func TestDecideBoundCWD(t *testing.T) {
 			wantOK:       false,
 		},
 		{
-			name:         "unverifiable falls back to self-reported",
+			name:         "unverifiable is refused",
 			selfReported: "/home/agent/project",
 			verified:     "",
 			verifyErr:    verifyFailed,
-			wantCWD:      "/home/agent/project",
-			wantOK:       true,
+			wantCWD:      "",
+			wantOK:       false,
 		},
 		{
 			name:         "unverifiable with empty self-reported CWD is refused",
@@ -351,5 +351,36 @@ func TestDecideBoundCWD(t *testing.T) {
 					tc.selfReported, tc.verified, tc.verifyErr, gotCWD, gotOK, tc.wantCWD, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestDecideBoundCWD_UnverifiableLeavesGrantUnbound(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	registry := grantctl.NewRegistry()
+	grant, err := registry.RequestGrant("s1", tmpDir, "api.example.com", 3600000, "", time.Now())
+	if err != nil {
+		t.Fatalf("RequestGrant: %v", err)
+	}
+
+	if cwd, ok := decideBoundCWD(tmpDir, "", errors.New("simulated resolver failure")); ok || cwd != "" {
+		t.Fatalf("decideBoundCWD on resolver failure = (%q, %v), want (\"\", false)", cwd, ok)
+	}
+
+	ctlSock := filepath.Join(tmpDir, "daemon-ctl.sock")
+	gs, err := newGrantServer(ctlSock, testCtlToken, registry, audit.NopEmitter{}, true, nil, nil)
+	if err != nil {
+		t.Fatalf("newGrantServer: %v", err)
+	}
+	defer gs.close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go gs.serveCtl(ctx)
+
+	if err := grantctl.GrantApprove(ctlSock, testCtlToken, grant.GrantID, 3*time.Second); err == nil {
+		t.Fatal("expected unbound grant approval to fail")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, ".agentjail", "policy.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("unverifiable grant wrote an overlay: %v", err)
 	}
 }
