@@ -161,6 +161,22 @@ listed on the task board.
   connection per operation; no mutation retry.
 - Remote action: none
 
+## 2026-08-15 — Supplemental Plan 033 accepted
+
+- Agent: `plan016_prep` (Terra)
+- Commit: `5424f3d33a751f40e832ed5a88525425d694797f`
+- Changed paths matched ownership: yes; exact sanitizer, matching XCTest, and
+  handoff 033 only. DCO/diff/source-scope scans passed.
+- Review: ESC and all specified bidi scalars are removed before remaining
+  C0/C1 replacement; whitespace is normalized; truncation uses extended
+  grapheme clusters plus one ellipsis; empty untrusted reasons receive the
+  exact non-misleading fallback.
+- Orchestrator rerun: eight sanitizer tests plus existing suites were
+  runtime-discovered and passed; arm64 and x86_64 macOS production type-checks
+  passed; task-specific artifacts cleaned successfully.
+- Board verdict: DONE; Plan 022 may consume this helper after Plan 021.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

@@ -16,7 +16,7 @@ executors own only their assigned source paths and unique handoff file.
 | 019 | Scaffold the standalone Swift package | P0 | S | 015 | DONE — 8e327f1a |
 | 031 | Isolate daemon subprocess test state | P0 | XS | — | DONE — f3eed6e2 |
 | 032 | Add sandbox-safe Swift test harness | P0 | S | 019 | DONE — de698f31 |
-| 033 | Sanitize untrusted display text | P0 | S | 019, 032 | CLAIMED — plan016_prep |
+| 033 | Sanitize untrusted display text | P0 | S | 019, 032 | DONE — 5424f3d3 |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | DONE — 980057e1 |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | CLAIMED — plan019_prep; acceptance waits on 030 |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | CLAIMED — plan017_protocol |
