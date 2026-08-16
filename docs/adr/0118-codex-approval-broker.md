@@ -145,7 +145,8 @@ not expose the original per-call shell/login selection in the hook contract, so
 the live compatibility matrix must cover shell syntax and initialization; an
 unverified dialect is a release blocker rather than a reason to guess.
 
-Bridge-capable Codex hook requests use a 2 second daemon round-trip ceiling
+Bridge-capable Codex hook requests use a 500 ms connect ceiling and a 2 second
+daemon round-trip ceiling
 while the 50 ms end-to-end latency target remains unchanged. A cold request
 combines policy evaluation, process-ancestry work, and the required approval
 audit write. Codex CLI `0.147.0` was live-tested on 2026-08-13: an audit write

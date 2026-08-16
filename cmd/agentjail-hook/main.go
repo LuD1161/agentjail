@@ -783,8 +783,20 @@ func dialDaemon(sockPath string) (net.Conn, error) {
 
 const (
 	defaultRoundTripDeadline       = 45 * time.Millisecond
+	codexApprovalDialDeadline      = 500 * time.Millisecond
 	codexApprovalRoundTripDeadline = 2 * time.Second
 )
+
+func approvalCapableCodexPreTool(agent, hookEvent string) bool {
+	return agent == "codex" && hookEvent == "PreToolUse"
+}
+
+func dialDaemonForHook(sockPath, agent, hookEvent string) (net.Conn, error) {
+	if approvalCapableCodexPreTool(agent, hookEvent) {
+		return net.DialTimeout("unix", sockPath, codexApprovalDialDeadline)
+	}
+	return dialDaemon(sockPath)
+}
 
 func codexApprovalCapable(req daemonRequest) bool {
 	if req.Agent == "codex" {
@@ -931,8 +943,12 @@ func runClaude(agent string) {
 	sockPath := resolveSocketPath()
 
 	// 3. Connect to daemon with a short dial timeout (30 ms).
-	conn, err := dialDaemon(sockPath)
+	conn, err := dialDaemonForHook(sockPath, agent, input.HookEventName)
 	if err != nil {
+		if approvalCapableCodexPreTool(agent, input.HookEventName) {
+			failClosedCodexApproval("dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
+			return
+		}
 		failOpenClaudeLike(agent, "dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err), input.ToolName, input.ToolInput, input.CWD)
 		return
 	}
