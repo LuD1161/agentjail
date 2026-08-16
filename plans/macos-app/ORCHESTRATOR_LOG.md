@@ -80,6 +80,20 @@ listed on the task board.
   review.
 - Remote action: none
 
+## 2026-08-15 — Plan 032 claimed; Plan 029 scope clarified
+
+- Plan 032 agent: `plan019_prep` (Terra)
+- Starting HEAD: `f10e5285` plus any independent committed task movement
+- Ownership: new `scripts/test-macos-approval.sh` and handoff 032 only.
+- Acceptance: official Xcode `swiftc`/Darwin `xctest`, all current tests,
+  arm64+x86_64 production type-check, isolated validated `/private/tmp`
+  artifacts, no policy/environment/SwiftPM workaround.
+- Plan 029 additionally owns the smallest mechanical `ListPending(now)` and
+  expired-assertion migration in `internal/grantctl/review_test.go`. Plan 017
+  made that test the only compile-time consumer outside the originally named
+  registry/daemon files. No JSON/fixture/projection-semantic edit is authorized.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

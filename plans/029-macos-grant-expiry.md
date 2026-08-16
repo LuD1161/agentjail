@@ -53,12 +53,14 @@ with the reaper retained only for cleanup.
 
 - `internal/grantctl/registry.go`
 - `internal/grantctl/registry_test.go`
+- the smallest time-aware call/assertion migration in
+  `internal/grantctl/review_test.go` (orchestrator-approved after plan 017)
 - smallest expiry/call-site edits in `internal/daemonapp/grantserver.go`
 - focused daemon tests in `internal/daemonapp/grantserver_test.go`
 - one concise entry in `docs/GOTCHAS.md`
 - `plans/macos-app/handoffs/029.md`
 
-**Out of scope:** review JSON fields, framing, CWD resolution, audit durability,
+**Out of scope:** review JSON fields/fixture/projection semantics, framing, CWD resolution, audit durability,
 policy persistence, Swift, UI, README, reaper interval, or a new dependency.
 
 ## Git workflow
@@ -159,4 +161,3 @@ Run all gates, write the handoff, and commit under the shared lock.
 The periodic reaper controls memory retention, not permission. Future pending
 authorization types must accept an explicit decision time at the same atomic
 transition that consumes them.
-
