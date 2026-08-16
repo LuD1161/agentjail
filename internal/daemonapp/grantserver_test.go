@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/grantctl"
+	"github.com/LuD1161/agentjail/internal/projectpolicy"
 )
 
 // testCtlToken is the injected control token for tests. Injecting it keeps the
@@ -165,10 +167,111 @@ func TestGrantServerE2E_UnboundGrantApproveRejected(t *testing.T) {
 		t.Fatal("expected approve to fail for unbound grant")
 	}
 	// Grant should be rolled back to pending (retryable)
-	grants := registry.ListPending()
+	grants := registry.ListPending(time.Now())
 	if len(grants) != 1 {
 		t.Errorf("expected grant to be rolled back to pending, got %d", len(grants))
 	}
+}
+
+func TestGrantServerApprove_ExpiryBoundary(t *testing.T) {
+	home := shortTempDir(t)
+	t.Setenv("HOME", home)
+	created := time.Unix(1_700_000_000, 0)
+	expires := created.Add(grantctl.PendingGrantTTL)
+
+	t.Run("one nanosecond before expiry persists", func(t *testing.T) {
+		project := filepath.Join(home, "live-project")
+		if err := os.MkdirAll(project, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		registry := grantctl.NewRegistry()
+		grant, err := registry.RequestGrant("s1", project, "api.example.com", 3600000, "", created)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry.SetBoundCWD(grant.GrantID, project)
+		emitter := &updateAuditEmitter{}
+		gs := &grantServer{registry: registry, emitter: emitter, durableAudit: true}
+
+		if err := gs.approve(grant.GrantID, expires.Add(-time.Nanosecond)); err != nil {
+			t.Fatalf("approve before expiry: %v", err)
+		}
+		overlayPath := filepath.Join(project, projectpolicy.ProjectDirName, projectpolicy.ProjectPolicyFile)
+		cfg, err := config.Load(overlayPath)
+		if err != nil {
+			t.Fatalf("load persisted overlay: %v", err)
+		}
+		if len(cfg.Network.AllowedHosts) != 1 || cfg.Network.AllowedHosts[0] != "api.example.com" {
+			t.Fatalf("allowed hosts = %+v", cfg.Network.AllowedHosts)
+		}
+		if len(emitter.events) != 2 || emitter.events[0].EventType != audit.PolicyChangeRequested || emitter.events[1].EventType != audit.PolicyChanged {
+			t.Fatalf("approval audit order = %+v", emitter.events)
+		}
+	})
+
+	t.Run("at expiry refuses without side effects", func(t *testing.T) {
+		project := filepath.Join(home, "expired-project")
+		if err := os.MkdirAll(project, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		registry := grantctl.NewRegistry()
+		grant, err := registry.RequestGrant("s2", project, "expired.example.com", 3600000, "", created)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry.SetBoundCWD(grant.GrantID, project)
+		emitter := &updateAuditEmitter{}
+		gs := &grantServer{registry: registry, emitter: emitter, durableAudit: true}
+
+		if err := gs.approve(grant.GrantID, expires); !errors.Is(err, grantctl.ErrGrantExpired) {
+			t.Fatalf("approve at expiry = %v, want ErrGrantExpired", err)
+		}
+		if len(emitter.events) != 0 {
+			t.Fatalf("expired approval emitted audit events: %+v", emitter.events)
+		}
+		overlayPath := filepath.Join(project, projectpolicy.ProjectDirName, projectpolicy.ProjectPolicyFile)
+		if _, err := os.Stat(overlayPath); !os.IsNotExist(err) {
+			t.Fatalf("expired approval wrote overlay: %v", err)
+		}
+		if pending := registry.ListPending(expires); len(pending) != 0 {
+			t.Fatalf("expired approval remained pending: %+v", pending)
+		}
+	})
+
+	t.Run("control response distinguishes expiry", func(t *testing.T) {
+		project := filepath.Join(home, "expired-control-project")
+		if err := os.MkdirAll(project, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		registry := grantctl.NewRegistry()
+		past := time.Now().Add(-grantctl.PendingGrantTTL - time.Second)
+		grant, err := registry.RequestGrant("s3", project, "control.example.com", 3600000, "", past)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry.SetBoundCWD(grant.GrantID, project)
+		emitter := &updateAuditEmitter{}
+		ctlSock := filepath.Join(home, "expired-control.sock")
+		gs, err := newGrantServer(ctlSock, testCtlToken, registry, emitter, true, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer gs.close()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go gs.serveCtl(ctx)
+
+		err = grantctl.GrantApprove(ctlSock, testCtlToken, grant.GrantID, time.Second)
+		if err == nil || err.Error() != "grant approve refused: grant expired" {
+			t.Fatalf("expired control refusal = %v", err)
+		}
+		if len(emitter.events) != 0 {
+			t.Fatalf("expired control approval emitted audit events: %+v", emitter.events)
+		}
+		if _, err := os.Stat(filepath.Join(project, projectpolicy.ProjectDirName, projectpolicy.ProjectPolicyFile)); !os.IsNotExist(err) {
+			t.Fatalf("expired control approval wrote overlay: %v", err)
+		}
+	})
 }
 
 func TestGrantServerE2E_UpdateAudit(t *testing.T) {
@@ -276,7 +379,7 @@ func TestHandleGrantRequest_CWDMismatchLeavesGrantUnbound(t *testing.T) {
 		t.Fatal("expected approve to fail: grant should be unbound because claimed CWD did not verify")
 	}
 
-	grants := registry.ListPending()
+	grants := registry.ListPending(time.Now())
 	if len(grants) != 1 {
 		t.Errorf("expected grant to remain pending (unbound, not applied), got %d pending", len(grants))
 	}

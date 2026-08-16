@@ -252,17 +252,18 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 		gs.reply(conn, grantctl.Response{OK: false, Error: "unauthorized"})
 		return
 	}
+	now := time.Now()
 
 	switch req.Type {
 	case grantctl.ReqGrantList:
-		gs.reply(conn, grantctl.Response{OK: true, Grants: gs.registry.ListPending()})
+		gs.reply(conn, grantctl.Response{OK: true, Grants: gs.registry.ListPending(now)})
 
 	case grantctl.ReqGrantApprove:
 		if req.GrantID == "" {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "grant_approve requires grant_id"})
 			return
 		}
-		if err := gs.approve(req.GrantID); err != nil {
+		if err := gs.approve(req.GrantID, now); err != nil {
 			gs.reply(conn, grantctl.Response{OK: false, Error: err.Error()})
 			return
 		}
@@ -274,7 +275,7 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "grant_deny requires grant_id"})
 			return
 		}
-		if err := gs.registry.DenyGrant(req.GrantID); err != nil {
+		if err := gs.registry.DenyGrant(req.GrantID, now); err != nil {
 			gs.reply(conn, grantctl.Response{OK: false, Error: err.Error()})
 			return
 		}
@@ -351,8 +352,8 @@ func updateAuditEventType(status grantctl.UpdateAuditStatus) (string, bool) {
 
 // approve runs the transactional approval flow for grantID:
 //  1. refuse outright if audit is not durable (fail-closed, ADR 0044/0047)
-//  2. look up the grant and require a bound CWD (errGrantUnbound otherwise)
-//  3. claim the grant (making it invisible to ListPending/FindGrant)
+//  2. atomically claim a grant that is live at now
+//  3. require a bound CWD (errGrantUnbound otherwise)
 //  4. emit PolicyChangeRequested (fail-closed) before touching disk
 //  5. persist the host into the bound CWD's policy.yaml overlay
 //  6. emit PolicyChanged (best-effort)
@@ -360,20 +361,12 @@ func updateAuditEventType(status grantctl.UpdateAuditStatus) (string, bool) {
 //
 // Any failure after the claim rolls it back so the grant remains pending and
 // retryable -- no partial state is left behind.
-func (gs *grantServer) approve(grantID string) error {
+func (gs *grantServer) approve(grantID string, now time.Time) error {
 	if !gs.durableAudit {
 		return fmt.Errorf("audit unavailable, refusing to approve grant (fail closed)")
 	}
 
-	// FindGrant's GrantInfo is display-only (no BoundCWD); it just confirms
-	// the grant still exists and is unclaimed before we attempt to claim it.
-	// The authoritative BoundCWD check happens below, once ClaimGrant hands
-	// back the full ClaimedGrant snapshot.
-	if _, ok := gs.registry.FindGrant(grantID); !ok {
-		return grantctl.ErrGrantNotFound
-	}
-
-	claimed, commit, rollback, err := gs.registry.ClaimGrant(grantID)
+	claimed, commit, rollback, err := gs.registry.ClaimGrant(grantID, now)
 	if err != nil {
 		return err
 	}

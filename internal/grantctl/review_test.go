@@ -174,8 +174,8 @@ func TestReviewSnapshotExcludesClaimedAndExpiredBeforeReap(t *testing.T) {
 	if snapshot.TotalPending != 1 || len(snapshot.Reviews) != 1 || snapshot.Reviews[0].ReviewID != "live" {
 		t.Fatalf("snapshot included claimed or expired review: %+v", snapshot)
 	}
-	if got := r.ListPending(); len(got) != 2 {
-		t.Fatalf("expiry test must run before reap; ListPending returned %d", len(got))
+	if got := r.ListPending(now); len(got) != 1 || got[0].GrantID != "live" {
+		t.Fatalf("time-aware list included expired state before reap: %+v", got)
 	}
 }
 

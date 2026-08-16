@@ -12,11 +12,10 @@ import (
 	"unicode/utf8"
 )
 
-// PendingGrantTTL bounds how long an undecided grant request sits in the
-// pending queue before the reaper prunes it. This is independent of the
-// grant's own requested TTLMs (which governs the *applied* grant's lifetime
-// once approved); PendingGrantTTL only bounds how long a human has to
-// approve/deny before the request itself goes stale.
+// PendingGrantTTL bounds how long an undecided grant remains actionable.
+// Expired records may remain retained until a timed operation removes them.
+// This is independent of the grant's own requested TTLMs (which governs the
+// *applied* grant's lifetime once approved).
 const PendingGrantTTL = time.Hour
 
 // Sentinel errors returned by Registry methods. Callers (the control-socket
@@ -29,6 +28,9 @@ var (
 	// currently held by an in-flight claim (another approver, or a claim
 	// that has not yet been committed or rolled back).
 	ErrGrantAlreadyClaimed = errors.New("grant already claimed")
+	// ErrGrantExpired is returned when a decision reaches a pending grant at
+	// or after its server-side expiry. The stale record is removed atomically.
+	ErrGrantExpired = errors.New("grant expired")
 	// ErrPerSessionCapExceeded is returned by RequestGrant when the
 	// requesting session already has MaxPendingPerSession outstanding
 	// requests.
@@ -127,12 +129,40 @@ func NewRegistry() *Registry {
 	}
 }
 
-// countPendingForSession returns the number of non-claimed grants currently
-// filed by sessionID. Caller must hold at least r.mu (read or write lock).
-func (r *Registry) countPendingForSession(sessionID string) int {
+// grantExpired is the single pending-expiry predicate. Equality is expired.
+func grantExpired(pg *pendingGrant, now time.Time) bool {
+	return !now.Before(pg.Expires)
+}
+
+// removeGrantLocked removes pg and its coalescing index if pg is still the
+// record stored for its ID. Caller must hold r.mu for writing.
+func (r *Registry) removeGrantLocked(pg *pendingGrant) {
+	if current, ok := r.grants[pg.GrantID]; !ok || current != pg {
+		return
+	}
+	delete(r.grants, pg.GrantID)
+	key := sessionHostKey{sessionID: pg.SessionID, host: pg.Host}
+	if r.bySessionHost[key] == pg.GrantID {
+		delete(r.bySessionHost, key)
+	}
+}
+
+// removeExpiredLocked removes every expired grant not already held by an
+// in-flight claim. Caller must hold r.mu for writing.
+func (r *Registry) removeExpiredLocked(now time.Time) {
+	for _, pg := range r.grants {
+		if !pg.claimed && grantExpired(pg, now) {
+			r.removeGrantLocked(pg)
+		}
+	}
+}
+
+// countPendingForSession returns the number of live, unclaimed grants filed by
+// sessionID at now. Caller must hold at least r.mu (read or write lock).
+func (r *Registry) countPendingForSession(sessionID string, now time.Time) int {
 	n := 0
 	for _, pg := range r.grants {
-		if pg.claimed {
+		if pg.claimed || grantExpired(pg, now) {
 			continue
 		}
 		if pg.SessionID == sessionID {
@@ -142,12 +172,12 @@ func (r *Registry) countPendingForSession(sessionID string) int {
 	return n
 }
 
-// countPendingGlobal returns the number of non-claimed grants across all
-// sessions. Caller must hold at least r.mu (read or write lock).
-func (r *Registry) countPendingGlobal() int {
+// countPendingGlobal returns the number of live, unclaimed grants across all
+// sessions at now. Caller must hold at least r.mu (read or write lock).
+func (r *Registry) countPendingGlobal(now time.Time) int {
 	n := 0
 	for _, pg := range r.grants {
-		if !pg.claimed {
+		if !pg.claimed && !grantExpired(pg, now) {
 			n++
 		}
 	}
@@ -166,22 +196,27 @@ func (r *Registry) RequestGrant(sessionID, cwd, host string, ttlMs int64, reason
 
 	key := sessionHostKey{sessionID: sessionID, host: host}
 	if existingID, ok := r.bySessionHost[key]; ok {
-		if pg, ok := r.grants[existingID]; ok && !pg.claimed {
+		if pg, ok := r.grants[existingID]; ok && !pg.claimed && !grantExpired(pg, now) {
 			pg.TTLMs = ttlMs
 			pg.Reason = reason
 			pg.CWD = cwd
 			pg.Expires = now.Add(PendingGrantTTL)
 			return pg.info(), nil
 		}
-		// Stale index entry (grant claimed/removed without cleanup); fall
-		// through and treat as a fresh request.
-		delete(r.bySessionHost, key)
+		if pg, ok := r.grants[existingID]; ok && !pg.claimed && grantExpired(pg, now) {
+			r.removeGrantLocked(pg)
+		} else {
+			// A claimed record can finish independently; the fresh request owns
+			// this coalescing key from here onward.
+			delete(r.bySessionHost, key)
+		}
 	}
+	r.removeExpiredLocked(now)
 
-	if r.countPendingForSession(sessionID) >= MaxPendingPerSession {
+	if r.countPendingForSession(sessionID, now) >= MaxPendingPerSession {
 		return GrantInfo{}, ErrPerSessionCapExceeded
 	}
-	if r.countPendingGlobal() >= MaxPendingGlobal {
+	if r.countPendingGlobal(now) >= MaxPendingGlobal {
 		return GrantInfo{}, ErrGlobalCapExceeded
 	}
 
@@ -205,15 +240,15 @@ func (r *Registry) RequestGrant(sessionID, cwd, host string, ttlMs int64, reason
 	return pg.info(), nil
 }
 
-// ListPending returns the display-only view of every currently pending
-// (unclaimed) grant request. The order is unspecified.
-func (r *Registry) ListPending() []GrantInfo {
+// ListPending returns the display-only view of every unclaimed grant that is
+// live at now. The order is unspecified.
+func (r *Registry) ListPending(now time.Time) []GrantInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	out := make([]GrantInfo, 0, len(r.grants))
 	for _, pg := range r.grants {
-		if pg.claimed {
+		if pg.claimed || grantExpired(pg, now) {
 			continue
 		}
 		out = append(out, pg.info())
@@ -233,7 +268,7 @@ func (r *Registry) ReviewSnapshot(now time.Time) ReviewSnapshotV1 {
 	r.mu.RLock()
 	projected := make([]projectedReview, 0, len(r.grants))
 	for _, pg := range r.grants {
-		if pg.claimed || !pg.Expires.After(now) {
+		if pg.claimed || grantExpired(pg, now) {
 			continue
 		}
 		projected = append(projected, projectedReview{
@@ -342,15 +377,14 @@ func (r *Registry) SetBoundCWD(grantID, cwd string) {
 	}
 }
 
-// FindGrant looks up a still-pending (unclaimed) grant by ID without
-// claiming it. It returns (GrantInfo{}, false) if the grant does not exist
-// or is currently claimed.
-func (r *Registry) FindGrant(grantID string) (GrantInfo, bool) {
+// FindGrant looks up a grant that is unclaimed and live at now without
+// claiming it.
+func (r *Registry) FindGrant(grantID string, now time.Time) (GrantInfo, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	pg, ok := r.grants[grantID]
-	if !ok || pg.claimed {
+	if !ok || pg.claimed || grantExpired(pg, now) {
 		return GrantInfo{}, false
 	}
 	return pg.info(), true
@@ -374,8 +408,10 @@ func (r *Registry) FindGrant(grantID string) (GrantInfo, bool) {
 // While a grant is claimed, no other caller can claim it (ErrGrantAlreadyClaimed)
 // and it is invisible to ListPending/FindGrant. Both returned functions are
 // idempotent-safe to call once; calling ClaimGrant again for the same ID
-// before commit/rollback returns ErrGrantAlreadyClaimed.
-func (r *Registry) ClaimGrant(grantID string) (ClaimedGrant, func(), func(), error) {
+// before commit/rollback returns ErrGrantAlreadyClaimed. A live claim may
+// finish after expiry; a rollback after expiry is removed by the next timed
+// operation. See ADR 0133-macos-menu-review.
+func (r *Registry) ClaimGrant(grantID string, now time.Time) (ClaimedGrant, func(), func(), error) {
 	r.mu.Lock()
 
 	pg, ok := r.grants[grantID]
@@ -387,6 +423,11 @@ func (r *Registry) ClaimGrant(grantID string) (ClaimedGrant, func(), func(), err
 		r.mu.Unlock()
 		return ClaimedGrant{}, nil, nil, ErrGrantAlreadyClaimed
 	}
+	if grantExpired(pg, now) {
+		r.removeGrantLocked(pg)
+		r.mu.Unlock()
+		return ClaimedGrant{}, nil, nil, ErrGrantExpired
+	}
 	pg.claimed = true
 	snapshot := pg.toClaimedGrant()
 	r.mu.Unlock()
@@ -394,11 +435,7 @@ func (r *Registry) ClaimGrant(grantID string) (ClaimedGrant, func(), func(), err
 	commitFn := func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		delete(r.grants, grantID)
-		key := sessionHostKey{sessionID: pg.SessionID, host: pg.Host}
-		if r.bySessionHost[key] == grantID {
-			delete(r.bySessionHost, key)
-		}
+		r.removeGrantLocked(pg)
 	}
 	rollbackFn := func() {
 		r.mu.Lock()
@@ -411,12 +448,9 @@ func (r *Registry) ClaimGrant(grantID string) (ClaimedGrant, func(), func(), err
 	return snapshot, commitFn, rollbackFn, nil
 }
 
-// DenyGrant discards the pending grant identified by grantID without
-// applying it. It returns ErrGrantNotFound if grantID does not match any
-// pending grant. Denying a claimed grant is not supported by this method
-// (the claim holder must roll back first); this mirrors the netproxy
-// sessionRegistry.denyGrant which operates only on unclaimed entries.
-func (r *Registry) DenyGrant(grantID string) error {
+// DenyGrant discards a live, unclaimed grant at now. An expired grant is
+// removed with ErrGrantExpired; an in-flight claim is left to its owner.
+func (r *Registry) DenyGrant(grantID string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -424,11 +458,14 @@ func (r *Registry) DenyGrant(grantID string) error {
 	if !ok {
 		return ErrGrantNotFound
 	}
-	delete(r.grants, grantID)
-	key := sessionHostKey{sessionID: pg.SessionID, host: pg.Host}
-	if r.bySessionHost[key] == grantID {
-		delete(r.bySessionHost, key)
+	if pg.claimed {
+		return ErrGrantAlreadyClaimed
 	}
+	if grantExpired(pg, now) {
+		r.removeGrantLocked(pg)
+		return ErrGrantExpired
+	}
+	r.removeGrantLocked(pg)
 	return nil
 }
 
@@ -444,14 +481,10 @@ func (r *Registry) Reap(now time.Time) ReapResult {
 		if pg.claimed {
 			continue
 		}
-		if now.Before(pg.Expires) {
+		if !grantExpired(pg, now) {
 			continue
 		}
-		delete(r.grants, id)
-		key := sessionHostKey{sessionID: pg.SessionID, host: pg.Host}
-		if r.bySessionHost[key] == id {
-			delete(r.bySessionHost, key)
-		}
+		r.removeGrantLocked(pg)
 		result.Reaped = append(result.Reaped, id)
 	}
 	return result

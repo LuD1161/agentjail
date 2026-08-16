@@ -906,6 +906,17 @@ project selected by unverified input.
   `proc_info_private.h`](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/proc_info_private.h)
   on 2026-08-15.
 
+## 68. Periodic cleanup is not an expiry check
+
+The grant reaper made the pending queue look TTL-bounded, while list, deny,
+coalescing, and approval could still act on an expired record until the next
+tick. Tests that ran the reaper first stayed green and hid the authorization
+window.
+
+- **Rule:** check server time under the same lock that claims or removes an
+  authorization record. A reaper controls retention, not permission. See ADR
+  0133-macos-menu-review.
+
 ---
 
 ## Testing gotchas
