@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -54,8 +56,12 @@ func TestResolveAndPolicyCanonicalizeSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Executable != denied {
-		t.Fatalf("executable = %q, want %q", target.Executable, denied)
+	want, err := filepath.EvalSymlinks(denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Executable != want {
+		t.Fatalf("executable = %q, want %q", target.Executable, want)
 	}
 	if got := Evaluate(target); got.Action != ActionDeny {
 		t.Fatalf("decision = %+v", got)
@@ -140,9 +146,9 @@ func TestAuthorizationRejectsExpiredCWDAndSession(t *testing.T) {
 	}
 }
 
-func TestLinuxExecutorArgvExitAndOutput(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux executor")
+func TestUnixExecutorArgvExitAndOutput(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix executor")
 	}
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "helper.sh")
@@ -155,9 +161,9 @@ func TestLinuxExecutorArgvExitAndOutput(t *testing.T) {
 	}
 }
 
-func TestLinuxExecutorOutputLimit(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux executor")
+func TestUnixExecutorOutputLimit(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix executor")
 	}
 	result := NewExecutor().Execute(context.Background(), Target{Executable: "/usr/bin/yes", Argv: []string{"yes"}}, t.TempDir(), time.Second, 4096, nil)
 	if !result.Truncated || result.Reason != "output_limit" || len(result.Stdout)+len(result.Stderr) != 4096 {
@@ -165,9 +171,9 @@ func TestLinuxExecutorOutputLimit(t *testing.T) {
 	}
 }
 
-func TestLinuxExecutorOutputLimitFastExit(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux executor")
+func TestUnixExecutorOutputLimitFastExit(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix executor")
 	}
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "overflow.sh")
@@ -182,9 +188,9 @@ func TestLinuxExecutorOutputLimitFastExit(t *testing.T) {
 	}
 }
 
-func TestLinuxExecutorTimeoutKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux executor")
+func TestUnixExecutorTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix executor")
 	}
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "child.pid")
@@ -199,9 +205,9 @@ func TestLinuxExecutorTimeoutKillsProcessGroup(t *testing.T) {
 	assertRecordedProcessGone(t, pidFile)
 }
 
-func TestLinuxExecutorCancellationKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux executor")
+func TestUnixExecutorCancellationKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix executor")
 	}
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "child.pid")
@@ -235,6 +241,17 @@ func assertRecordedProcessGone(t *testing.T, pidFile string) {
 	}
 	pid := strings.TrimSpace(string(raw))
 	for i := 0; i < 50; i++ {
+		if runtime.GOOS == "darwin" {
+			processID, convErr := strconv.Atoi(pid)
+			if convErr != nil {
+				t.Fatal(convErr)
+			}
+			if errors.Is(syscall.Kill(processID, 0), syscall.ESRCH) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
 		stat, err := os.ReadFile(filepath.Join("/proc", pid, "stat"))
 		if os.IsNotExist(err) || (err == nil && strings.Contains(string(stat), ") Z ")) {
 			return
@@ -244,9 +261,9 @@ func assertRecordedProcessGone(t *testing.T, pidFile string) {
 	t.Fatalf("descendant %s remained live after process-group kill", pid)
 }
 
-func TestLinuxExecutorSpawnFailure(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux executor")
+func TestUnixExecutorSpawnFailure(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix executor")
 	}
 	result := NewExecutor().Execute(context.Background(), Target{Executable: "/definitely/missing", Argv: []string{"missing"}}, t.TempDir(), time.Second, 1024, nil)
 	if result.ExitCode != -1 || result.Reason != "spawn_failed" {

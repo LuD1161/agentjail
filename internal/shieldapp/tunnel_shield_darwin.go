@@ -498,7 +498,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 
 	// Not yet sandboxed here (sbpl applies at exec.Command below), so the
 	// token is readable at this point - unlike Linux (ADR 0067).
-	ctlToken, _ := ctlauth.Load()
+	ctlToken, ctlTokenErr := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, ctlToken)
 	env = append(env, grantEnvVars...)
 	credentialSession, credentialErr := prepareCredentialSession(credentialTools, ctlToken, agentPath)
@@ -542,6 +542,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		Detail:    map[string]string{"mode": "tunnel"},
 		Actor:     "shield",
 	})
+	registeredHostProxy := registerHostProxyLaunch(ctx, ctlToken, ctlTokenErr, env, emitter)
 
 	// Register the SHIELD's PID before spawning the child. The extension's
 	// ancestorMatches starts at the flow process's PARENT (not the process
@@ -581,6 +582,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, "")
 	revokeSecretGrants(activeGrants, ctlToken)
 	credentialSession.cleanup(ctlToken)
+	unregisterHostProxyLaunch(registeredHostProxy, ctlToken)
 
 	os.Exit(exitCode)
 }

@@ -229,7 +229,8 @@ locally changed rule. See
 [ADR 0118-codex-approval-broker](./docs/adr/0118-codex-approval-broker.md) and
 [ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md).
 
-On Linux, a shielded Codex session can request one bounded host-side CLI run:
+On Linux and macOS, a shielded Codex session can request one bounded host-side
+CLI run:
 
 ```sh
 agentjail proxy -- rdt --help
@@ -248,7 +249,8 @@ shell, stdin, or TTY, with a 30-second timeout and 1 MiB combined output limit. 
 uses the daemon service environment—not the interactive login-shell environment—and
 does not forward caller environment variables. Host configuration and keychain
 access may work; environment-only credentials and interactive programs are not
-supported. See [ADR 0132-host-proxy-mvp](./docs/adr/0132-host-proxy-mvp.md).
+supported. See [ADR 0132-host-proxy-mvp](./docs/adr/0132-host-proxy-mvp.md) and
+[ADR 0134-macos-host-proxy](./docs/adr/0134-macos-host-proxy.md).
 
 `SessionStart` and `Stop` also display a live shield-and-daemon attestation.
 Each `apply_patch` target is normalized to the same file-policy contract as an

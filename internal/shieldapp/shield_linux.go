@@ -20,7 +20,6 @@ import (
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
-	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 
@@ -438,9 +437,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	}()
 
 	runErr := agentCmd.Run()
-	if registeredHostProxy {
-		_ = grantctl.UnregisterSessionLaunch(grantctl.ControlSocketPath(), ctlToken, os.Getpid(), 500*time.Millisecond)
-	}
+	unregisterHostProxyLaunch(registeredHostProxy, ctlToken)
 	sessionDuration := time.Since(startTime)
 
 	// Kill and reap the netproxy child (zombie cleanup).
@@ -458,38 +455,6 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		fmt.Fprintf(os.Stderr, "agentjail-shield: agent failed: %v\n", runErr)
 		os.Exit(1)
 	}
-}
-
-func registerHostProxyLaunch(ctx context.Context, ctlToken string, tokenErr error, env []string, emitter audit.Emitter) bool {
-	root, err := os.Getwd()
-	if err == nil {
-		root, err = filepath.EvalSymlinks(root)
-	}
-	pathValue := environmentValue(env, "PATH")
-	if tokenErr == nil && err == nil && pathValue != "" {
-		err = grantctl.RegisterSessionLaunch(grantctl.ControlSocketPath(), ctlToken, os.Getpid(), root, pathValue, 500*time.Millisecond)
-	} else if tokenErr != nil {
-		err = tokenErr
-	}
-	if err == nil {
-		return true
-	}
-	fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: host proxy unavailable for this session: %v\n", err)
-	_ = emitter.Emit(ctx, audit.Event{
-		EventType: audit.HostProxySessionRegisterFailed, Actor: "shield",
-		Detail: map[string]string{"reason": "session launch registration failed"},
-	})
-	return false
-}
-
-func environmentValue(env []string, key string) string {
-	prefix := key + "="
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			return strings.TrimPrefix(entry, prefix)
-		}
-	}
-	return ""
 }
 
 func printSessionSummary(noColor bool, duration time.Duration) {
