@@ -265,6 +265,25 @@ listed on the task board.
   notifications, and the state store only.
 - Remote action: none
 
+## 2026-08-15 — Public review-window and macOS 13 Settings clarification
+
+- Trigger: Plan 024 local SDK verification found that `MenuBarExtra` exposes an
+  insertion binding but no public panel-presentation action. It also proved
+  `openSettings`/`SettingsLink` unavailable at the macOS 13 deployment floor.
+- Toolchain/source check: Xcode 26.6, Swift 6.3.3, macOS SDK 26.5, strict Swift
+  6 type-check at `arm64-apple-macosx13.0`, and current Apple Window,
+  OpenWindowAction, Settings, MenuBarExtra, notification, and SMAppService docs.
+- Decision: the menu panel stays canonical. Notification Review may open one
+  supplemental public singleton review Window, sharing the sole store/panel and
+  using a generation-stamped ID route from the persistent menu label. macOS 13
+  uses a public singleton settings Window; macOS 14+ may use openSettings.
+- Removal contract: use the MenuBarExtra insertion binding and terminate cleanly
+  on removal so no invisible LSUIElement poller remains. No private status-item,
+  window-enumeration, selector, second-store, or second-authority fallback.
+- Updated: ADR 0133, DESIGN, plans 024 and 026. `make adr-check` and diff check
+  PASS. Product code unchanged.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

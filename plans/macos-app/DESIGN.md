@@ -51,7 +51,11 @@ failure domain.
 ## Platform decisions
 
 - **Deployment target:** macOS 13 or later.
-- **UI:** SwiftUI `MenuBarExtra` with `.window` style, plus a Settings scene.
+- **UI:** SwiftUI `MenuBarExtra` with `.window` style is the canonical manual
+  review surface, plus a Settings scene. Notification **Review** may open one
+  supplemental singleton SwiftUI review window that reuses the same panel,
+  store, and ID-only actions. macOS 13 uses a separate singleton settings
+  window as the public programmatic fallback for the Settings scene.
 - **Dock behavior:** `LSUIElement=true`; the app is a menu-bar utility.
 - **Identity:** SwiftPM product/binary `AgentjailApproval`, display name
   `AgentJail Approval`, bundle ID `com.blinkerlm.agentjail.approval`.
@@ -68,7 +72,18 @@ Apple source verification (accessed 2026-08-15):
 
 - [`MenuBarExtra`](https://developer.apple.com/documentation/swiftui/menubarextra)
   is the native persistent menu-bar scene; `.window` is intended for richer
-  controls, and `LSUIElement` hides a menu-only app from the Dock.
+  controls, and `LSUIElement` hides a menu-only app from the Dock. Its public
+  binding controls insertion, not whether its panel is presented.
+- [`Window`](https://developer.apple.com/documentation/swiftui/window) and
+  [`OpenWindowAction`](https://developer.apple.com/documentation/swiftui/openwindowaction)
+  provide an addressable macOS 13+ singleton that is ordered forward when
+  already open. A strict local Swift 6/macOS 13 probe passed on Xcode 26.6 and
+  SDK 26.5 on 2026-08-15.
+- [`Settings`](https://developer.apple.com/documentation/swiftui/settings) is
+  available at the deployment floor. Local SDK interfaces show
+  [`openSettings`](https://developer.apple.com/documentation/swiftui/environmentvalues/opensettings)
+  and `SettingsLink` begin at macOS 14, so macOS 13 uses the public singleton
+  settings-window route rather than selector-based AppKit fallbacks.
 - [`SMAppService`](https://developer.apple.com/documentation/servicemanagement/smappservice)
   is the macOS 13+ login-item API.
 - [Actionable notifications](https://developer.apple.com/documentation/usernotifications/declaring-your-actionable-notification-types)
@@ -177,6 +192,10 @@ bounded before the new endpoint is served.
 6. Footer: Settings and Quit. Dashboard integration is deferred until its
    launch/URL contract is explicit.
 
+The same `ApprovalPanelView` may appear in one supplemental singleton window
+only when an explicit notification Review route needs an addressable surface.
+This does not create a second client, store, poller, or authority path.
+
 Agent-controlled strings are untrusted. Strip C0/C1 controls and bidi
 overrides, replace line breaks/tabs with spaces, bound displayed length, and
 label the reason as agent-provided. Never interpolate these strings into a
@@ -194,12 +213,24 @@ shell command, URL, notification identifier, or log format.
 - Review uses the foreground action option. Deny is destructive and requires
   device authentication. Foreground delivery is handled explicitly through
   the notification delegate's `willPresent` callback.
+- Review publishes a generation-stamped ID route, activates the app, opens the
+  one supplemental review window through public SwiftUI `OpenWindowAction`,
+  refreshes authority, and focuses the matching row. Repeated IDs are distinct
+  events. Missing, expired, or resolved IDs remain non-actionable with bounded
+  feedback. The persistent MenuBarExtra label owns the route bridge because
+  menu content is not mounted while the panel is closed.
 - Notification request identifiers use an app-owned prefix plus a one-way hash
   of the daemon review ID; raw IDs appear only in the minimal callback payload.
 - Before Deny, refetch the snapshot and confirm the ID is still pending. A
   stale, expired, or already-decided request becomes a benign race result.
 - Notification permission denial never degrades the menu-bar workflow.
 - Do not request Time Sensitive or Critical alert capability.
+
+The MenuBarExtra uses the public `isInserted` binding because the app also has
+Settings and supplemental Window scenes. If the user removes the extra, the app
+stops polling and terminates normally rather than remaining as an invisible
+`LSUIElement` process. A later explicit/login launch inserts it again; removal
+does not mutate daemon authority or silently change login-item registration.
 
 ## State model
 
