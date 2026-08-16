@@ -54,3 +54,11 @@ These are real but need a maintainer decision on scope before planning:
 - **netproxy empties allowlist on empty/partial config** (`cmd/agentjail-netproxy/main.go:52-59,141-148`): fail-closed (denies all egress) but a silent DoS of the agent's network; mirror the daemon's "keep old config on reload error".
 - **config EOF detection by substring** (`agentpolicy/config/config.go:178`): `strings.Contains(err.Error(), "EOF")` should be `errors.Is(err, io.EOF)`; a truncated YAML is currently swallowed as an empty file.
 - **Direction**: Linux daemon wiring (systemd), credential broker (ADR 0004), eslogger tamper-evidence graduation, PATH-shim wiring. See the audit summary.
+
+## 2026-08-15 macOS approval companion
+
+Plans 015–030 design and decompose a local-only native macOS menu-bar
+companion. The dedicated board, dependency graph, file ownership, shared
+worktree commit lock, and product-wide acceptance criteria live in
+[`plans/macos-app/README.md`](./macos-app/README.md). Product source remains
+unchanged at planning time.
