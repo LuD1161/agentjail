@@ -192,6 +192,25 @@ listed on the task board.
   per-byte underlying read loop.
 - Remote action: none
 
+## 2026-08-15 — Plan 030 accepted; Plan 018 claimed
+
+- Plan 030 agent: `plan017_protocol` (Terra)
+- Commit: `a20039773fc3d0da90c1744ba40775733b0f6ac1`
+- Changed paths matched ownership: yes; DCO/diff checks passed.
+- Security review: complete frames include LF in the 64-KiB limit; fixed 4-KiB
+  reads use exactly `Max+1` storage; only the first delimiter prefix is decoded;
+  invalid UTF-8/trailing values fail; unknown fields remain additive; complete
+  writers size-check before output and oversize responses become one refusal.
+- Authentication audit: peer UID remains first, bounded frame decode second,
+  token validation third, and typed dispatch only afterward. The agent-facing
+  socket and proxy protocols are unchanged.
+- Orchestrator reruns: focused request/client/server framing, two-package race,
+  vet, and CGO-disabled CLI/daemon builds: PASS.
+- Board verdict: Plan 030 DONE. Plan 020 may finish its Go/Swift cross-check.
+- Plan 018 agent: `plan017_protocol` (Terra); owns only the narrow projector,
+  authenticated review dispatch/tests, and handoff 018.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

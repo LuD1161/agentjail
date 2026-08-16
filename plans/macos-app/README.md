@@ -19,9 +19,9 @@ executors own only their assigned source paths and unique handoff file.
 | 033 | Sanitize untrusted display text | P0 | S | 019, 032 | DONE — 5424f3d3 |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | DONE — 980057e1 |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | CLAIMED — plan019_prep; acceptance waits on 030 |
-| 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | CLAIMED — plan017_protocol |
+| 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | DONE — a2003977 |
 | 021 | Build the approval state store | P0 | M | 020 | TODO |
-| 018 | Serve authenticated review snapshots | P0 | S | 029, 030 | TODO |
+| 018 | Serve authenticated review snapshots | P0 | S | 029, 030 | CLAIMED — plan017_protocol |
 | 022 | Build the menu-bar review UI | P1 | M | 019, 021, 033 | TODO |
 | 023 | Add privacy-bounded notifications | P1 | M | 020, 021 | TODO |
 | 024 | Compose the production app and settings | P0 | M | 016, 018, 022, 023 | TODO |
