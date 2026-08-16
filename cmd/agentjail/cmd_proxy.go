@@ -17,9 +17,10 @@ var proxyCmd = &cobra.Command{
 	Use:                "proxy -- <command> [args...]",
 	Short:              "Run one approved non-interactive command outside the shield",
 	DisableFlagParsing: true,
-	Long: `Run one exact command through the unsandboxed AgentJail daemon after a
-native allow-once approval. The command receives no stdin or TTY. It runs with
-the daemon service environment, not your interactive login-shell environment.`,
+	Long: `Run one exact command through the unsandboxed AgentJail daemon on Linux or
+macOS after a native allow-once approval. The command receives no stdin or TTY.
+It runs with the daemon service environment, not your interactive login-shell
+environment. Unsupported platforms and missing approval/session state fail closed.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
 			return
