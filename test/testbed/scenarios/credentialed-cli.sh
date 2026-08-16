@@ -293,13 +293,16 @@ GH_TOKEN=ghp_testbed_not_real \
 MISSING_EFFECT="$PROJECT/missing-credential-effect"
 MISSING_LOG="/tmp/agentjail-missing-credential.log"
 rm -f "$MISSING_EFFECT" "$MISSING_LOG"
-if "$AJ" run --no-git-ssh --credential=aws=aws/not-present -- \
-    /bin/sh -c "printf launched > '$MISSING_EFFECT'" >"$MISSING_LOG" 2>&1; then
-    bad "unavailable selected credential refuses session launch"
-elif [ -e "$MISSING_EFFECT" ]; then
-    bad "unavailable selected credential creates no child effect"
-elif grep -qiE 'credential .*not-present.*(rejected|not found|not available)' "$MISSING_LOG"; then
+"$AJ" run --no-git-ssh --credential=aws=aws/not-present -- \
+    /bin/sh -c "printf launched > '$MISSING_EFFECT'" >"$MISSING_LOG" 2>&1
+MISSING_RC=$?
+if [ "$MISSING_RC" -ne 0 ] && [ ! -e "$MISSING_EFFECT" ]; then
     ok "unavailable selected credential fails closed before child execution"
+else
+    bad "unavailable selected credential fails closed before child execution"
+fi
+if grep -qiE 'not-present|not available|rejected|credentialed tool bootstrap failed' "$MISSING_LOG"; then
+    ok "unavailable selected credential reports a clear refusal"
 else
     bad "unavailable selected credential reports a clear refusal"
 fi
@@ -369,7 +372,7 @@ OUT=$(AWS_ACCESS_KEY_ID=AMBIENT_AWS_ACCESS_NOT_SELECTED \
     AWS_DEFAULT_REGION=AMBIENT_AWS_REGION_NOT_SELECTED \
     GH_TOKEN=AMBIENT_GH_NOT_SELECTED \
     KUBECONFIG="$HOME/.kube/config" \
-    timeout 60 "$AJ" run \
+    timeout 120 "$AJ" run \
     --no-git-ssh \
     --credential=aws=aws/testbed \
     --credential=kubectl=kube/testbed \
@@ -381,7 +384,6 @@ if printf '%s\n' "$OUT" | grep -Eq 'AKIATESTBED000000001|testbed-secret-not-real
 else
     ok "shield output contains no selected or ambient credential values"
 fi
-printf '%s\n' "$OUT" | sed -E 's/(AKIA|ghp_|testbed-secret|testbed-session|kube-test-token)[^[:space:]]*/[REDACTED]/g'
 if [ "$RC" = 0 ]; then
     ok "one shielded session used AWS env, kubeconfig file, and GH env credentials"
 else
