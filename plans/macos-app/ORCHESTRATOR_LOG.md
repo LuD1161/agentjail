@@ -227,6 +227,44 @@ listed on the task board.
   decisions are single-flight and mutation failures never auto-retry.
 - Remote action: none
 
+## 2026-08-15 — Plan 020 accepted; Plan 021 released
+
+- Agent: `plan019_prep` (Terra)
+- Product commit: `afec1180dfa9cfd9e17ee7926b847e93e67c528f`
+- Cancellation follow-up: `ab3dc63366f73656dc375b1302ba4010fe3c6a69`
+- Changed paths matched ownership; both commits carry valid DCO sign-off.
+- Protocol review: the dependency-free Swift client uses the exact v1 typed
+  model, reloads the bearer token per request, enforces the 64-KiB newline frame
+  bound, tolerates additive fields, and never retries mutations.
+- Cancellation review: active socket ownership serializes `shutdown` and
+  `close` so a reused descriptor cannot receive a late shutdown. Cancellation
+  unblocks a pending AF_UNIX request; incomplete HUP replies are malformed;
+  connect/write HUP remains unavailable; EINTR handling is iterative.
+- Orchestrator rerun: direct Xcode-toolchain harness PASS (28 core and one app
+  XCTest, macOS 13 production compile, arm64/x86_64 typechecks). Scoped status,
+  DCO, and diff checks passed with no SwiftPM debris.
+- Board verdict: Plan 020 DONE. Plan 021 may finish and commit.
+- Remote action: none
+
+## 2026-08-15 — Plan 018 accepted
+
+- Agent: `plan017_protocol` (Terra)
+- Commit: `bc02eededde3fd166d012828b46acbe50f9d2afa`
+- Changed paths matched the four-path claim; DCO and diff checks passed.
+- Security review: peer UID, strict bounded frame parsing, and bearer-token
+  validation remain above dispatch. Missing/future protocol versions never call
+  the projector. The handler captures one timestamp and returns the typed v1
+  registry projection without logging, audit emission, SQLite access, or hook
+  path changes.
+- Coverage review: canonical fixture, bound/unbound authority, empty versus
+  unavailable, deterministic cap/truncation, malformed/oversize/trailing and
+  second-frame handling, concurrency, and legacy control verbs are exercised.
+- Orchestrator reruns: focused Review/Grant tests, full two-package race, vet,
+  and CGO-disabled CLI/daemon builds all PASS.
+- Board verdict: Plan 018 DONE. Production composition now waits on UI,
+  notifications, and the state store only.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)
