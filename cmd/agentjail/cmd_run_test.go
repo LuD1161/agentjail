@@ -22,6 +22,17 @@ func TestParseRunOptionsCredentialMappings(t *testing.T) {
 	}
 }
 
+func TestParseRunOptionsRequireTunnel(t *testing.T) {
+	t.Parallel()
+	options, rest := parseRunOptions([]string{"--require-tunnel", "--", "codex", "exec"})
+	if !options.requireTunnel {
+		t.Fatalf("options = %#v, want requireTunnel", options)
+	}
+	if len(rest) != 3 || rest[0] != "--" || rest[1] != "codex" || rest[2] != "exec" {
+		t.Fatalf("rest = %#v", rest)
+	}
+}
+
 // TestResolveRealAgent_SkipsShimDir verifies that resolveRealAgent finds the
 // real binary even when the agentjail shim dir (~/.agentjail/bin) is FIRST on
 // PATH -- the ordering transparent interception needs. A naive exec.LookPath

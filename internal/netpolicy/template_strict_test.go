@@ -65,6 +65,18 @@ match:
 			wantErr: "has no action",
 		},
 		{
+			name: "invalid transport port",
+			yaml: `
+id: bad-port
+info:
+  name: invalid transport port
+match:
+  port: [70000]
+action: deny
+`,
+			wantErr: "cannot unmarshal",
+		},
+		{
 			name: "content but no id",
 			yaml: `
 info:

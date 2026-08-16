@@ -386,6 +386,14 @@ consent to decrypt-in-memory is not consent to a 90-day transcript of your
 source code. **AGE-171 (default-on) must be argued afresh with this ADR in
 hand**, not treated as already decided.
 
+Backend discovery is not proof that a body key is usable. At session start the
+shield must complete an authenticated wrap/unwrap probe before announcing
+encrypted recording. A locked or interaction-gated keychain is an unavailable
+key source even when its command exists; the session follows D1's explicit
+plaintext-degradation posture and audits that achieved state. It must never
+retain a deferred-failing wrapper that makes every body write fail after the
+launch banner claimed recording was active.
+
 ## Consequences
 
 - **The product does what it claimed.** AGE-79's "complete visibility" and

@@ -24,8 +24,9 @@ that prevent access to credentials, host processes, and unrestricted network.
 Use --git-ssh to delegate loaded SSH-agent identities for the session, or
 --no-git-ssh to override a policy default that enables delegation. AgentJail
 launch flags must appear before --; everything after -- is passed unchanged to
-the child command. --no-sandbox disables OS isolation and provides only the
-weaker hook-based policy layer.`,
+the child command. --require-tunnel makes tunnel setup fail closed instead of
+falling back to another network mode. --no-sandbox disables OS isolation and
+provides only the weaker hook-based policy layer.`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		// --help before "--" prints help; after "--" it is forwarded to the
@@ -79,6 +80,9 @@ func runClaudeCmd(args []string) int {
 func runRunCmd(args []string) int {
 	// Launch flags are recognized only before the child command.
 	options, args := parseRunOptions(args)
+	if options.requireTunnel {
+		options.tunnelMode = true
+	}
 	if options.noSandbox && options.tunnelMode {
 		fmt.Fprintln(os.Stderr, "agentjail run: --no-sandbox cannot be combined with --tunnel (the tunnel needs the sandbox)")
 		return 2
@@ -175,6 +179,9 @@ func runRunCmd(args []string) int {
 	if options.tunnelMode {
 		shieldArgs = append(shieldArgs, "--tunnel")
 	}
+	if options.requireTunnel {
+		shieldArgs = append(shieldArgs, "--require-tunnel")
+	}
 	if options.gitSSH {
 		shieldArgs = append(shieldArgs, "--git-ssh")
 	}
@@ -203,12 +210,13 @@ func runRunCmd(args []string) int {
 }
 
 type runOptions struct {
-	tunnelMode  bool
-	noSandbox   bool
-	gitSSH      bool
-	noGitSSH    bool
-	verbose     bool
-	credentials []string
+	tunnelMode    bool
+	requireTunnel bool
+	noSandbox     bool
+	gitSSH        bool
+	noGitSSH      bool
+	verbose       bool
+	credentials   []string
 }
 
 func isRunLaunchFlag(arg string) bool {
@@ -216,7 +224,7 @@ func isRunLaunchFlag(arg string) bool {
 		return true
 	}
 	switch arg {
-	case "--tunnel", "--no-sandbox", "--git-ssh", "--no-git-ssh", "--verbose":
+	case "--tunnel", "--require-tunnel", "--no-sandbox", "--git-ssh", "--no-git-ssh", "--verbose":
 		return true
 	default:
 		return false
@@ -240,6 +248,8 @@ func parseRunOptions(args []string) (runOptions, []string) {
 		switch args[0] {
 		case "--tunnel":
 			options.tunnelMode = true
+		case "--require-tunnel":
+			options.requireTunnel = true
 		case "--no-sandbox":
 			options.noSandbox = true
 		case "--git-ssh":

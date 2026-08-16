@@ -46,7 +46,7 @@ func Open(path string) (EventStore, error) {
 		return nil, fmt.Errorf("store: mkdir %s: %w", dir, err)
 	}
 	dsn := fmt.Sprintf(
-		"file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)",
+		"file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=secure_delete(ON)",
 		sqliteutil.EscapeDSNPath(path),
 	)
 	db, err := sql.Open("sqlite", dsn)
@@ -411,6 +411,7 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 		d.Agent = AgentUnknown
 	}
 	redacted := RedactToolInput(d.ToolInput)
+	summary := RedactText(d.Summary)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -419,7 +420,7 @@ func (s *sqliteStore) RecordDecision(ctx context.Context, d DecisionRecord) erro
 	if _, err := tx.ExecContext(ctx, `INSERT INTO decisions
 		(ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, policy_action, effective_action, adapter, translation_reason, tool_use_id, final_action, enforcer)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		ts, d.SessionID, d.Agent, d.ToolName, d.Summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction, d.PolicyAction, d.EffectiveAction, d.Adapter, d.TranslationReason, d.ToolUseID, d.FinalAction, d.Enforcer,
+		ts, d.SessionID, d.Agent, d.ToolName, summary, d.Action, d.RuleID, d.Reason, d.Impact, d.ElapsedUs, d.CWD, redacted, d.WouldAction, d.PolicyAction, d.EffectiveAction, d.Adapter, d.TranslationReason, d.ToolUseID, d.FinalAction, d.Enforcer,
 	); err != nil {
 		return fmt.Errorf("store: insert decision: %w", err)
 	}

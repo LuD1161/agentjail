@@ -246,7 +246,7 @@ func TestRecognizeTCPFallback(t *testing.T) {
 		t.Errorf("recognized = true for TLS fallback, want false")
 	}
 
-	// Port 80 should get "http".
+	// An incomplete port-80 header is not confidently recognized.
 	op, recognized = g.recognizeTCP("example.com", 80, []byte("GET / HTTP/1.1\r\n"))
 	if op.Protocol != "http" {
 		t.Errorf("Protocol = %q, want %q for port 80", op.Protocol, "http")

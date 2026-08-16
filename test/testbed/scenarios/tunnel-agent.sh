@@ -14,10 +14,13 @@
 # testbed-mode: single
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
+command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
+command -v timeout >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
 SHIELD="$HOME/.agentjail/bin/agentjail-shield"
-AJ="$HOME/.agentjail/bin/agentjail"
+CODEX_SHIM="$HOME/.agentjail/bin/codex"
 DB="$HOME/.agentjail/network.db"
+AUDIT_DB="$HOME/.agentjail/agentjail.db"
 WORK="$HOME/work/pelican"
 
 # Auth is copied only for this scenario and removed on every exit. Treat it as
@@ -30,7 +33,44 @@ trap cleanup EXIT INT TERM
 scn_init "tunnel-agent" "real Codex session through --tunnel; tunnel decrypts its own model traffic"
 [ -x "$SHIELD" ] && scn_ok "agentjail-shield installed" || { scn_fail "agentjail-shield installed"; scn_finish; exit; }
 command -v codex >/dev/null 2>&1 && scn_ok "Codex CLI installed" || { scn_fail "Codex CLI installed"; scn_finish; exit; }
+[ -x "$CODEX_SHIM" ] && scn_ok "Codex PATH shim installed" || { scn_fail "Codex PATH shim installed"; scn_finish; exit; }
 command -v sqlite3 >/dev/null 2>&1 || { scn_fail "sqlite3 installed"; scn_finish; exit; }
+if [ "$(uname -s)" = "Darwin" ]; then
+    EXT_ID="com.blinkerlm.agentjail.app.extension"
+    EXT_LINES="$(systemextensionsctl list 2>&1 | grep -F "$EXT_ID" || true)"
+    EXT_LINE="$(grep -i '\[activated enabled\]' <<<"$EXT_LINES" | tail -1)"
+    if [ -n "$EXT_LINE" ]; then
+        scn_ok "macOS tunnel extension is present and activated"
+    else
+        echo "  extension state: ${EXT_LINES:-missing}"
+        scn_fail "macOS tunnel extension is present and activated"
+        scn_finish
+        exit
+    fi
+    if [ -x /Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel ]; then
+        scn_ok "containing tunnel app remains installed in /Applications"
+    else
+        scn_fail "containing tunnel app remains installed in /Applications"
+        scn_finish
+        exit
+    fi
+    STRICT_SMOKE="/tmp/testbed/tunnel-e2e/smoke_darwin.sh"
+    STRICT_RESULT="${SCN_JSON:-/tmp/testbed/results/tunnel-agent.result.json}"
+    STRICT_RESULT="${STRICT_RESULT%.result.json}.strict.result.json"
+    if [ ! -f "$STRICT_SMOKE" ]; then
+        scn_fail "strict Darwin tunnel matrix is available"
+        scn_finish
+        exit
+    fi
+    if PATH="$HOME/.agentjail/bin:$PATH" TUNNEL_SMOKE_RESULT="$STRICT_RESULT" \
+        bash "$STRICT_SMOKE" --strict; then
+        scn_ok "strict Darwin host/path/port/protocol/bypass matrix passes"
+    else
+        scn_fail "strict Darwin host/path/port/protocol/bypass matrix passes"
+        scn_finish
+        exit
+    fi
+fi
 if [ ! -f /tmp/codex-auth.json ]; then
     scn_fail "disposable Codex auth was explicitly provided"
     scn_finish
@@ -48,6 +88,7 @@ rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK" || { scn_fail "workspace writable";
 git init -q 2>/dev/null || true
 
 BEFORE="$(sqlite3 "$DB" 'select coalesce(max(id),0) from network_requests;' 2>/dev/null || echo 0)"
+AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 echo "  workspace: $WORK"
 echo "  network.db watermark before: $BEFORE"
 
@@ -57,26 +98,22 @@ TASK="Create pelican.html in the current directory: a single self-contained HTML
 
 echo "  === running the agent through the tunnel ==="
 RUN_LOG="$WORK/.run.log"
-timeout 900 "$AJ" run --tunnel --verbose --no-git-ssh -- \
-  codex --dangerously-bypass-approvals-and-sandbox \
+RUN_RC=0
+AGENTJAIL_REQUIRE_TUNNEL=1 timeout 900 "$CODEX_SHIM" --dangerously-bypass-approvals-and-sandbox \
   --dangerously-bypass-hook-trust -C "$WORK" \
   exec --ephemeral "$TASK" \
-  >"$RUN_LOG" 2>&1 || true
+  >"$RUN_LOG" 2>&1 || RUN_RC=$?
 tail -6 "$RUN_LOG" | grep -vE "landlock_add_rule|skip /home|denying read" | sed 's/^/    /'
 
-# 0. The transparent tunnel must actually come up — a netproxy fallback means the
-#    h2 MITM path was never exercised (e.g. unprivileged userns blocked).
-if grep -qiE 'falling back to|tunnel (unavailable|not available)' "$RUN_LOG"; then
-  scn_fail "transparent tunnel came up (no netproxy fallback)"
-  echo "  --- fallback reason + userns diagnostics ---"
-  grep -iE 'tunnel unavailable|could not create|could not attach|tun-helper' "$RUN_LOG" | sed 's/^/    reason: /'
-  echo "    apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"
-  echo "    unshare -Urn: $(unshare -Urn true 2>&1 && echo OK || echo BLOCKED)"
-  echo "    /dev/net/tun: $(ls -l /dev/net/tun 2>&1)"
-  echo "    newuidmap: $(command -v newuidmap || echo MISSING)  newgidmap: $(command -v newgidmap || echo MISSING)"
-  echo "    /etc/subuid: $(grep "^$USER:" /etc/subuid 2>/dev/null || echo 'no entry')"
+# 0. SQLite lifecycle events are the source of truth. Terminal output is kept
+#    only as bounded diagnostics and cannot turn a fallback into a pass.
+TUNNEL_SESSION="$(sqlite3 "$AUDIT_DB" "select session_id from audit_log where id > $AUDIT_BEFORE and event_type='tunnel.session_registered' and coalesce(json_extract(detail,'$.failure_reason'),'') = '' order by id desc limit 1;" 2>/dev/null || true)"
+TUNNEL_FAILURE="$(sqlite3 "$AUDIT_DB" "select json_extract(detail,'$.failure_reason') from audit_log where id > $AUDIT_BEFORE and event_type='tunnel.extension_started' and coalesce(json_extract(detail,'$.failure_reason'),'') != '' order by id desc limit 1;" 2>/dev/null || true)"
+if [ "$RUN_RC" -eq 0 ] && [ -n "$TUNNEL_SESSION" ] && [ -z "$TUNNEL_FAILURE" ]; then
+  scn_ok "structured lifecycle proves the required tunnel started"
 else
-  scn_ok "transparent tunnel came up (no netproxy fallback)"
+  echo "  tunnel launch: exit=$RUN_RC session=${TUNNEL_SESSION:+present} failure=${TUNNEL_FAILURE:-none}"
+  scn_fail "structured lifecycle proves the required tunnel started"
 fi
 
 # 1. The agent actually did the work (proves the session ran, not just started).
@@ -86,12 +123,28 @@ grep -qi "<svg" "$WORK/pelican.html" 2>/dev/null && scn_ok "artifact contains in
 # 2. The tunnel DECRYPTED the model traffic. A tunnel that fell back to netproxy,
 #    or that failed to MITM TLS, captures zero OpenAI/Codex model rows.
 NEW_TOTAL="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE;" 2>/dev/null || echo 0)"
-API_REQS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%') and (path like '%responses%' or path like '%codex%');" 2>/dev/null || echo 0)"
+MODEL_ROWS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%') and (path like '%responses%' or path like '%codex%');" 2>/dev/null || echo 0)"
+RESPONSE_POSTS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses';" 2>/dev/null || echo 0)"
+RESPONSE_COMPLETED="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and status_code between 200 and 299 and coalesce(error,'')='';" 2>/dev/null || echo 0)"
+RESPONSE_ERRORS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and coalesce(error,'')<>'';" 2>/dev/null || echo 0)"
+REQUEST_BODY_PATHS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and coalesce(request_body_path,'')<>'';" 2>/dev/null || echo 0)"
+RESPONSE_BODY_PATHS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and coalesce(response_body_path,'')<>'';" 2>/dev/null || echo 0)"
+API_REQ_BYTES="$(sqlite3 "$DB" "select coalesce(sum(request_size),0) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%');" 2>/dev/null || echo 0)"
 API_RESP="$(sqlite3 "$DB" "select coalesce(sum(response_size),0) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%');" 2>/dev/null || echo 0)"
-echo "  captured: $NEW_TOTAL new rows, $API_REQS model turns, ${API_RESP}B decrypted response"
+METRICS="${SCN_JSON%.result.json}.metrics.json"
+jq -nc --argjson rows "$NEW_TOTAL" --argjson model_rows "$MODEL_ROWS" \
+  --argjson response_posts "$RESPONSE_POSTS" --argjson completed "$RESPONSE_COMPLETED" \
+  --argjson response_errors "$RESPONSE_ERRORS" --argjson request_bytes "$API_REQ_BYTES" \
+  --argjson response_bytes "$API_RESP" --argjson request_body_paths "$REQUEST_BODY_PATHS" \
+  --argjson response_body_paths "$RESPONSE_BODY_PATHS" \
+  '{schema_version:1,network_rows:$rows,model_endpoint_rows:$model_rows,response_posts:$response_posts,response_posts_completed:$completed,response_posts_with_error:$response_errors,request_bytes:$request_bytes,response_bytes:$response_bytes,request_body_paths:$request_body_paths,response_body_paths:$response_body_paths}' \
+  >"$METRICS"
+echo "  captured: $NEW_TOTAL new rows, $MODEL_ROWS model endpoint rows, $RESPONSE_POSTS response POSTs ($RESPONSE_COMPLETED completed, $RESPONSE_ERRORS errors), ${API_REQ_BYTES}B decrypted request, ${API_RESP}B decrypted response"
 [ "$NEW_TOTAL" -gt 0 ] && scn_ok "tunnel captured new requests" || scn_fail "tunnel captured new requests"
-[ "$API_REQS" -gt 0 ] && scn_ok "tunnel decrypted Codex model traffic" || scn_fail "tunnel decrypted Codex model traffic"
+[ "$RESPONSE_POSTS" -gt 0 ] && [ "$RESPONSE_COMPLETED" -gt 0 ] && scn_ok "tunnel decrypted completed Codex response requests" || scn_fail "tunnel decrypted completed Codex response requests"
+[ "$API_REQ_BYTES" -gt 0 ] && scn_ok "tunnel saw decrypted request bytes" || scn_fail "tunnel saw decrypted request bytes"
 [ "$API_RESP" -gt 0 ] && scn_ok "tunnel saw decrypted response bytes" || scn_fail "tunnel saw decrypted response bytes"
+[ "$REQUEST_BODY_PATHS" -gt 0 ] && [ "$RESPONSE_BODY_PATHS" -gt 0 ] && scn_ok "tunnel persisted encrypted or explicitly degraded request and response bodies" || scn_fail "tunnel persisted encrypted or explicitly degraded request and response bodies"
 
 # 3. Credential hygiene — the capture is only publishable if nothing secret
 #    reaches the DB in the clear. AGE-232 was exactly this (Dd-Api-Key leak).
@@ -104,5 +157,7 @@ else
   echo "  LEAK — reached the DB unredacted:"; sed 's/^/    /' <<<"$LEAKS"
   scn_fail "every credential-shaped header is [REDACTED]"
 fi
+
+scn_auth_scan "$WORK"
 
 scn_finish

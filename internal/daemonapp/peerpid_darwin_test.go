@@ -85,7 +85,11 @@ func TestResolvePeerCWD_Child(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolvePeerCWD(child): %v", err)
 	}
-	if want := filepath.Clean(childDir); got != want {
+	want, err := filepath.EvalSymlinks(childDir)
+	if err != nil {
+		t.Fatalf("canonicalize child CWD: %v", err)
+	}
+	if got != want {
 		t.Errorf("resolvePeerCWD(child) = %q, want %q", got, want)
 	}
 }

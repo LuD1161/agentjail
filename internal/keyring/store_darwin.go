@@ -60,6 +60,9 @@ func (darwinKeychain) Get(account string) ([]byte, error) {
 		if errors.As(err, &ee) && ee.ExitCode() == 44 {
 			return nil, fmt.Errorf("%w: %s", errNotFound, account)
 		}
+		if errors.As(err, &ee) && ee.ExitCode() == 36 {
+			return nil, fmt.Errorf("%w: %s", ErrKeychainLocked, strings.TrimSpace(errOut.String()))
+		}
 		return nil, fmt.Errorf("keyring: find-generic-password %s: %w: %s", account, err, strings.TrimSpace(errOut.String()))
 	}
 	raw, err := hex.DecodeString(strings.TrimSpace(out.String()))
@@ -82,6 +85,10 @@ func (darwinKeychain) Set(account string, secret []byte) error {
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("%w: keychain did not answer within %s", ErrNoKeychain, keychainDeadline)
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 36 {
+			return fmt.Errorf("%w: %s", ErrKeychainLocked, strings.TrimSpace(errOut.String()))
 		}
 		return fmt.Errorf("keyring: add-generic-password %s: %w: %s", account, err, strings.TrimSpace(errOut.String()))
 	}

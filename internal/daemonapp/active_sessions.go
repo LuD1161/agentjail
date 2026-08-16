@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/LuD1161/agentjail/internal/procutil"
@@ -18,8 +19,17 @@ type activeEntry struct {
 
 // sessionState is the in-memory record kept for each tracked session.
 type sessionState struct {
-	PID int    `json:"pid"`
-	CWD string `json:"cwd"`
+	PID       int    `json:"pid"`
+	CWD       string `json:"cwd"`
+	Root      string `json:"-"`
+	Path      string `json:"-"`
+	LaunchPID int    `json:"-"`
+}
+
+type launchState struct {
+	Root        string
+	Path        string
+	StartMarker procutil.StartMarker
 }
 
 // activeTracker maintains a map of session IDs to their agent PIDs and CWDs.
@@ -28,14 +38,100 @@ type sessionState struct {
 type activeTracker struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionState // sessionID → agent PID/CWD
+	launches map[int]launchState
 	path     string
 }
 
 func newActiveTracker(agentjailDir string) *activeTracker {
 	return &activeTracker{
 		sessions: make(map[string]*sessionState),
+		launches: make(map[int]launchState),
 		path:     filepath.Join(agentjailDir, "active-sessions.json"),
 	}
+}
+
+func (t *activeTracker) registerLaunch(pid int, root, pathValue string) bool {
+	root = filepath.Clean(root)
+	if pid <= 1 || !filepath.IsAbs(root) || pathValue == "" {
+		return false
+	}
+	startMarker, err := procutil.ReadProcessStartMarker(pid)
+	if err != nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for existingPID := range t.launches {
+		if !procutil.Alive(existingPID) {
+			delete(t.launches, existingPID)
+		}
+	}
+	t.launches[pid] = launchState{Root: root, Path: pathValue, StartMarker: startMarker}
+	return true
+}
+
+func (t *activeTracker) unregisterLaunch(pid int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.launches[pid]; !ok {
+		return false
+	}
+	delete(t.launches, pid)
+	for sessionID, state := range t.sessions {
+		if state.LaunchPID == pid {
+			delete(t.sessions, sessionID)
+		}
+	}
+	t.flush()
+	return true
+}
+
+// bindVerified associates a hook session only with an agent descended from an
+// authenticated shield launch. Claimed cwd is accepted only beneath that root.
+func (t *activeTracker) bindVerified(sessionID string, agentPID int, cwd string) bool {
+	if sessionID == "" || agentPID <= 1 {
+		return false
+	}
+	t.mu.Lock()
+	launches := make(map[int]launchState, len(t.launches))
+	for pid, launch := range t.launches {
+		launches[pid] = launch
+	}
+	t.mu.Unlock()
+	launchPID, ok := procutil.FindAncestorPID(agentPID, func(pid int) bool {
+		_, exists := launches[pid]
+		return exists
+	})
+	if !ok {
+		return false
+	}
+	launch := launches[launchPID]
+	currentStart, err := procutil.ReadProcessStartMarker(launchPID)
+	if err != nil || currentStart != launch.StartMarker {
+		return false
+	}
+	canonicalCWD := filepath.Clean(cwd)
+	if canonicalCWD != launch.Root && !strings.HasPrefix(canonicalCWD, launch.Root+string(filepath.Separator)) {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, exists := t.launches[launchPID]; !exists {
+		return false
+	}
+	t.sessions[sessionID] = &sessionState{PID: agentPID, CWD: canonicalCWD, Root: launch.Root, Path: launch.Path, LaunchPID: launchPID}
+	t.flush()
+	return true
+}
+
+func (t *activeTracker) metadata(sessionID string) (sessionState, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state, ok := t.sessions[sessionID]
+	if !ok || state.Root == "" || state.Path == "" {
+		return sessionState{}, false
+	}
+	return *state, true
 }
 
 // update records or refreshes the PID and CWD for a session.
@@ -45,6 +141,11 @@ func (t *activeTracker) update(sessionID string, pid int, cwd string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if existing := t.sessions[sessionID]; existing != nil && existing.Root != "" {
+		// Authenticated launch bindings are refreshed only by bindVerified.
+		// See ADR 0134-host-proxy-mvp.
+		return
+	}
 	t.sessions[sessionID] = &sessionState{PID: pid, CWD: cwd}
 	t.flush()
 }

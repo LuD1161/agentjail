@@ -1,12 +1,15 @@
 package tunnel
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/LuD1161/agentjail/internal/netpolicy"
 )
@@ -15,7 +18,9 @@ const (
 	// peekSize is how many bytes we read for protocol detection.
 	// Must be large enough for TLS ClientHello SNI, Postgres startup,
 	// Redis RESP, MongoDB OpMsg header, and SSH version string.
-	peekSize = 1024
+	peekSize              = 1024
+	maxHTTPHeaderSize     = 16 << 10
+	httpHeaderReadTimeout = 2 * time.Second
 
 	// maxManagedInspections bounds how many client→upstream chunks we
 	// re-inspect on a managed-port connection (S-D2). After this many chunks
@@ -88,13 +93,15 @@ func (g *Gateway) handleConn(c net.Conn) {
 	// Step 2: Peek at the first bytes for protocol detection.
 	// We use a peekConn to buffer the peeked bytes so they can be
 	// replayed to the upstream connection.
-	peek := make([]byte, peekSize)
-	n, err := c.Read(peek)
-	if err != nil && n == 0 {
+	peek, completeHTTPHeader, err := readInitialPayload(c, dstPort)
+	if err != nil && len(peek) == 0 {
 		log.Debug("connection closed before data", "err", err)
 		return
 	}
-	peek = peek[:n]
+	if dstPort == 80 && g.matcher != nil && !completeHTTPHeader {
+		log.Warn("incomplete HTTP header; denying (fail-closed)", "err", err)
+		return
+	}
 
 	// Step 3: Protocol detection via netpolicy.RecognizeTCP. recognized is true
 	// only when a real protocol parser matched; false means we fell back to the
@@ -126,6 +133,9 @@ func (g *Gateway) handleConn(c net.Conn) {
 				"template", result.Template.ID,
 				"reason", result.Reason,
 			)
+			if mh != nil {
+				mh.RecordPolicyDecision(op, result, http.StatusForbidden, int64(len(peek)))
+			}
 			return
 		}
 		if result != nil {
@@ -231,7 +241,40 @@ func (g *Gateway) recognizeTCP(hostname string, port int, data []byte) (*operati
 		Service:  hostname,
 		Verb:     "connect",
 		Host:     fmt.Sprintf("%s:%d", hostname, port),
+		Port:     netpolicy.Port(port),
 	}, false
+}
+
+func readInitialPayload(c net.Conn, port int) ([]byte, bool, error) {
+	limit := peekSize
+	if port == 80 {
+		limit = maxHTTPHeaderSize
+		_ = c.SetReadDeadline(time.Now().Add(httpHeaderReadTimeout))
+		defer c.SetReadDeadline(time.Time{})
+	}
+
+	payload := make([]byte, 0, limit)
+	buf := make([]byte, peekSize)
+	for len(payload) < limit {
+		remaining := limit - len(payload)
+		if remaining < len(buf) {
+			buf = buf[:remaining]
+		}
+		n, err := c.Read(buf)
+		if n > 0 {
+			payload = append(payload, buf[:n]...)
+			if port != 80 {
+				return payload, true, err
+			}
+			if bytes.Contains(payload, []byte("\r\n\r\n")) {
+				return payload, true, nil
+			}
+		}
+		if err != nil {
+			return payload, false, err
+		}
+	}
+	return payload, false, fmt.Errorf("HTTP header exceeds %d bytes", limit)
 }
 
 // operation is an alias to avoid a stutter import path.

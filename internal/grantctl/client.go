@@ -216,6 +216,35 @@ func UpdateAudit(sockPath, ctlToken string, status UpdateAuditStatus, version, g
 	return nil
 }
 
+// RegisterSessionLaunch records daemon-authoritative launch metadata before
+// the shield starts the agent. The authenticated control token is the authority.
+func RegisterSessionLaunch(sockPath, ctlToken string, pid int, root, pathValue string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{
+		Type: ReqSessionLaunchRegister, CtlToken: ctlToken,
+		LaunchPID: pid, LaunchRoot: root, LaunchPath: pathValue,
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return &RefusedError{Op: ReqSessionLaunchRegister, Reason: resp.Error}
+	}
+	return nil
+}
+
+func UnregisterSessionLaunch(sockPath, ctlToken string, pid int, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{
+		Type: ReqSessionLaunchUnregister, CtlToken: ctlToken, LaunchPID: pid,
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return &RefusedError{Op: ReqSessionLaunchUnregister, Reason: resp.Error}
+	}
+	return nil
+}
+
 // RefusedError reports that the round trip COMPLETED and the daemon answered
 // ok=false. It is distinct from a transport error on purpose: "the daemon
 // rejected your policy" and "no daemon answered" demand opposite responses from

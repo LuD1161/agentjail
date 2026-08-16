@@ -65,6 +65,13 @@ func redactSecretsInText(s string) string {
 	return s
 }
 
+// RedactText removes recognized credential values from unstructured text
+// before it crosses a persistence or structured-log boundary.
+// See ADR 0084-redact-secret-values.
+func RedactText(s string) string {
+	return redactSecretsInText(s)
+}
+
 // mayContainSecret is the cheap pre-filter keeping ordinary input off the
 // regex path (~180ns vs ~18us).
 func mayContainSecret(s string) bool {

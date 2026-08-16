@@ -1,6 +1,6 @@
 # ADR 0126-session-ssh-bootstrap
 
-**Status:** Accepted
+**Status:** Accepted; temp-root handling amended by ADR 0139-canonical-ssh-temp
 
 ## Context
 
@@ -75,8 +75,12 @@ socket before delegation. OpenSSH owns the agent lifetime and terminates it
 when the shielded coding session ends. The private-key files remain outside
 the shield.
 
-The launcher lexically cleans a non-empty `TMPDIR` only in the child environment
-used to start AgentJail's session-only OpenSSH agent. It does not rewrite an
+The launcher canonicalizes a non-empty `TMPDIR` only in the child environment
+used to start AgentJail's session-only OpenSSH agent. This removes both trailing
+separators and macOS's system `/var` symlink before OpenSSH derives the socket
+path. If canonicalization cannot resolve the directory, the launcher retains
+the lexically cleaned spelling and the shield's validator fails closed if
+OpenSSH produces a symlinked socket path. The launcher does not rewrite an
 ambient `SSH_AUTH_SOCK`; the shield continues to reject inherited socket paths
 that are not already clean, absolute, owned, live Unix sockets.
 

@@ -37,8 +37,9 @@ Two consequences, both easy to get wrong:
    a regression signal. Verify such a change on an unshielded box (`guest-carveout.sh`
    reproduces that test's assertions there) before believing either its pass or its fail.
 
-`test/testbed` already boots an unshielded macOS box (`golden-macos` via tart); that is the
-venue.
+`test/testbed` already boots an unshielded macOS session from
+`golden-macos-mitm` via Tart; the installed extension remains inert unless a
+tunnel session starts it. That is the venue.
 
     # from an UNSHIELDED terminal on the Mac
     tart run --no-graphics tb-release-gate &

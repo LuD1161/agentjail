@@ -1,6 +1,7 @@
 package netpolicy
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,6 +55,37 @@ impact: "Would {{.Verb}} {{.ResourceType}}/{{.ResourceName}} in production names
 	}
 	if result.Template.ID != "k8s/deny-production-destructive" {
 		t.Errorf("unexpected template ID: %s", result.Template.ID)
+	}
+}
+
+func TestMatchHTTPHostAndPort(t *testing.T) {
+	dir := writeTestTemplate(t, "http.yaml", `
+id: deny-http-control
+info:
+  name: Block cleartext HTTP control
+match:
+  protocol: [http]
+  host: [www.cloudflare.com]
+  port: [80]
+action: deny
+reason: cleartext HTTP denied
+`)
+	m, err := NewMatcher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, "http://www.cloudflare.com/cdn-cgi/trace", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := RecognizeHTTPAt("www.cloudflare.com", Port(80), request, nil)
+	if result := m.Evaluate(op); result == nil || result.Template.ID != "deny-http-control" {
+		t.Fatalf("HTTP host+port policy did not match: %#v", result)
+	}
+	op.Port = Port(443)
+	if result := m.Evaluate(op); result != nil {
+		t.Fatalf("port-80 policy matched port 443: %#v", result)
 	}
 }
 

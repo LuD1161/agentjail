@@ -1,6 +1,11 @@
 package netpolicy
 
-import "net/http"
+import (
+	"bufio"
+	"bytes"
+	"net"
+	"net/http"
+)
 
 // Recognizer converts an HTTP request into a normalized Operation.
 // Returns nil if this recognizer doesn't handle the request.
@@ -21,8 +26,14 @@ var recognizers = []Recognizer{
 // RecognizeHTTP runs all registered recognizers against an HTTP request.
 // Returns the first match, or a generic HTTP operation if none match.
 func RecognizeHTTP(host string, req *http.Request, bodyBytes []byte) *Operation {
+	return RecognizeHTTPAt(host, 0, req, bodyBytes)
+}
+
+// RecognizeHTTPAt normalizes an HTTP request with its transport destination.
+func RecognizeHTTPAt(host string, port Port, req *http.Request, bodyBytes []byte) *Operation {
 	for _, r := range recognizers {
 		if op := r.Recognize(host, req, bodyBytes); op != nil {
+			op.Port = port
 			return op
 		}
 	}
@@ -33,6 +44,7 @@ func RecognizeHTTP(host string, req *http.Request, bodyBytes []byte) *Operation 
 		Service:  host,
 		Verb:     methodToVerb(req.Method),
 		Host:     host,
+		Port:     port,
 		Method:   req.Method,
 		Path:     req.URL.Path,
 	}
@@ -64,6 +76,8 @@ func ManagedPort(port int) bool {
 // parser matches or the data is unrecognizable.
 func RecognizeTCP(host string, port int, data []byte) *Operation {
 	switch port {
+	case 80:
+		return recognizeRawHTTP(data)
 	case 5432:
 		return ParsePostgresMessage(data)
 	case 6379:
@@ -75,6 +89,27 @@ func RecognizeTCP(host string, port int, data []byte) *Operation {
 	default:
 		return nil
 	}
+}
+
+func recognizeRawHTTP(data []byte) *Operation {
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(data)))
+	if err != nil {
+		return nil
+	}
+	defer req.Body.Close()
+	host := normalizeHTTPHost(req.Host, "80")
+	if host == "" {
+		return nil
+	}
+	return RecognizeHTTPAt(host, Port(80), req, nil)
+}
+
+func normalizeHTTPHost(host, defaultPort string) string {
+	parsedHost, parsedPort, err := net.SplitHostPort(host)
+	if err == nil && parsedPort == defaultPort {
+		return parsedHost
+	}
+	return host
 }
 
 // methodToVerb converts an HTTP method to a lowercase verb string.

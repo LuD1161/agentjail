@@ -148,3 +148,23 @@ func TestIsActive(t *testing.T) {
 		t.Error("expected session-2 to remain inactive")
 	}
 }
+
+func TestAuthenticatedSessionIgnoresUnverifiedRefresh(t *testing.T) {
+	dir := t.TempDir()
+	at := newActiveTracker(dir)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !at.registerLaunch(os.Getpid(), cwd, "/trusted/bin") {
+		t.Fatal("register launch")
+	}
+	if !at.bindVerified("session-1", os.Getpid(), cwd) {
+		t.Fatal("bind verified session")
+	}
+	at.update("session-1", 4242, "/untrusted")
+	state, ok := at.metadata("session-1")
+	if !ok || state.PID != os.Getpid() || state.CWD != filepath.Clean(cwd) || state.Path != "/trusted/bin" {
+		t.Fatalf("authenticated state changed: %+v, %v", state, ok)
+	}
+}

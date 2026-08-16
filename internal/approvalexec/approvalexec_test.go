@@ -126,7 +126,7 @@ func TestManagerRejectsUnknownOperation(t *testing.T) {
 
 func TestBrokerCommandRoundTripsSupportedOperations(t *testing.T) {
 	valid := ChallengeID("A" + strings.Repeat("B", 42))
-	for _, operation := range []Operation{GitPushOperation, ShellCommandOperation} {
+	for _, operation := range []Operation{GitPushOperation, ShellCommandOperation, HostProxyOperation} {
 		invocation := BrokerInvocation{Operation: operation, ChallengeID: valid}
 		got, ok := ParseBrokerCommand(BrokerCommand(invocation))
 		if !ok || got != invocation {

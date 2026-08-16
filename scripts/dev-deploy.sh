@@ -131,7 +131,7 @@ esac
 echo "==> waiting for daemon health"
 daemon_ready=false
 for _ in $(seq 1 15); do
-	if "$BIN/agentjail" status 2>&1 | grep -q 'daemon              ✓ running'; then
+	if "$BIN/agentjail" status --no-color 2>&1 | grep -Eq 'daemon[[:space:]]+(✓|\[x\])[[:space:]]+running'; then
 		daemon_ready=true
 		break
 	fi

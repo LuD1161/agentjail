@@ -3,7 +3,7 @@ package shieldapp
 import "testing"
 
 // Mirrors mitm_optin_test.go's TestResolveMITM for the tunnel IPv6 knob
-// (AGE-262). Off by default, and the precedence is CLI > env > config >
+// (AGE-262). On by default, and the precedence is CLI > env > config >
 // default, with --no-tunnel-ipv6 beating everything. ADR 0110.
 func TestResolveTunnelIPv6(t *testing.T) {
 	tests := []struct {
@@ -13,14 +13,14 @@ func TestResolveTunnelIPv6(t *testing.T) {
 		cfg                  *bool
 		want                 bool
 	}{
-		{name: "default is off", want: false},
-		{name: "--tunnel-ipv6 turns it on", ipv6Flag: true, want: true},
-		{name: "--no-tunnel-ipv6 is redundant but harmless", noIPv6Flag: true, want: false},
+		{name: "default is on", want: true},
+		{name: "--tunnel-ipv6 is redundant but harmless", ipv6Flag: true, want: true},
+		{name: "--no-tunnel-ipv6 turns it off", noIPv6Flag: true, want: false},
 		{name: "env var turns it on", envSet: true, want: true},
-		{name: "config true is a standing opt-in", cfg: boolPtr(true), want: true},
+		{name: "config true preserves the default", cfg: boolPtr(true), want: true},
 		{name: "config false is a standing opt-out", cfg: boolPtr(false), want: false},
 		{name: "env overrides a config opt-out", envSet: true, cfg: boolPtr(false), want: true},
-		{name: "config wins over default when env absent", cfg: boolPtr(true), want: true},
+		{name: "config wins over default when env absent", cfg: boolPtr(false), want: false},
 		{name: "--tunnel-ipv6 overrides env absent, config opt-out", ipv6Flag: true, cfg: boolPtr(false), want: true},
 		{name: "--tunnel-ipv6 overrides env", ipv6Flag: false, noIPv6Flag: false, envSet: true, want: true},
 		{name: "--no-tunnel-ipv6 overrides env", noIPv6Flag: true, envSet: true, want: false},

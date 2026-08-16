@@ -25,6 +25,7 @@
 // Provider configuration keys:
 //   "wg-conf"  -- wg-quick conf string (parsed in Go)
 //   "mode"     -- "per-process" (default) or "whole-machine"
+//   "session-generation" -- binds readiness and PID registration to one start
 import Darwin
 import Foundation
 import Network
@@ -33,6 +34,35 @@ import os.log
 
 private let log = OSLog(subsystem: "com.blinkerlm.agentjail.app.extension", category: "proxy")
 private let parentBundleID = "com.blinkerlm.agentjail.app"
+private let providerStateLock = NSLock()
+private var activeSessionGeneration = ""
+private var activeSessionReady = false
+
+private func setProviderState(generation: String, ready: Bool) {
+    providerStateLock.lock()
+    activeSessionGeneration = generation
+    activeSessionReady = ready
+    providerStateLock.unlock()
+}
+
+private func setProviderReady(generation: String) {
+    providerStateLock.lock()
+    if activeSessionGeneration == generation { activeSessionReady = true }
+    providerStateLock.unlock()
+}
+
+private func providerStatus(generation: String) -> String {
+    providerStateLock.lock()
+    defer { providerStateLock.unlock() }
+    if activeSessionGeneration != generation { return "stale" }
+    return activeSessionReady ? "ready" : "not-ready"
+}
+
+private func readyProviderGeneration() -> String? {
+    providerStateLock.lock()
+    defer { providerStateLock.unlock() }
+    return activeSessionReady ? activeSessionGeneration : nil
+}
 
 // System daemons that must never be tunneled, even in whole-machine
 // mode. Tunneling these through a WG gateway that might be down
@@ -57,6 +87,7 @@ private let systemDaemonExclusions: Set<String> = [
 class TransparentProxyProvider: NETransparentProxyProvider {
     private var wholeMachine = false
     private var wgReady = false
+    private var sessionGeneration = ""
 
     override func startProxy(options: [String: Any]?,
                              completionHandler: @escaping (Error?) -> Void) {
@@ -69,6 +100,16 @@ class TransparentProxyProvider: NETransparentProxyProvider {
         }
         let mode = cfg["mode"] as? String ?? ""
         wholeMachine = (mode == "whole-machine")
+
+        guard let generation = cfg["session-generation"] as? String,
+              !generation.isEmpty else {
+            completionHandler(NSError(domain: "agentjail", code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "missing session generation"]))
+            return
+        }
+        sessionGeneration = generation
+        wgReady = false
+        setProviderState(generation: generation, ready: false)
 
         guard let conf = cfg["wg-conf"] as? String, !conf.isEmpty else {
             completionHandler(NSError(domain: "agentjail", code: 1,
@@ -125,6 +166,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
                 os_log("wg handshake did not complete in 30s -- tunnel flows will bypass until gateway is reachable", log: log, type: .error)
             } else {
                 self.wgReady = true
+                setProviderReady(generation: generation)
                 os_log("wg handshake complete -- tunnel flows active", log: log, type: .info)
             }
         }
@@ -192,6 +234,8 @@ class TransparentProxyProvider: NETransparentProxyProvider {
 
     override func stopProxy(with reason: NEProviderStopReason,
                             completionHandler: @escaping () -> Void) {
+        wgReady = false
+        setProviderState(generation: sessionGeneration, ready: false)
         closeAllActiveCIDs()
         stopSessionListener()
         stopSessionReaper()
@@ -207,6 +251,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
     override func sleep(completionHandler: @escaping () -> Void) {
         reasserting = true
         wgReady = false
+        setProviderState(generation: sessionGeneration, ready: false)
         closeAllActiveCIDs()
         completionHandler()
     }
@@ -222,6 +267,7 @@ class TransparentProxyProvider: NETransparentProxyProvider {
             let hrc = wg_netstack_wait_handshake(30000)
             if hrc == 0 {
                 self.wgReady = true
+                setProviderReady(generation: self.sessionGeneration)
                 os_log("wake handshake complete -- tunnel flows active", log: log, type: .info)
             }
         }
@@ -610,8 +656,12 @@ private func startSessionReaper() {
     let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     t.schedule(deadline: .now() + 5, repeating: 5)
     t.setEventHandler {
-        for pid in sessionPids() where kill(pid, 0) != 0 {
-            sessionUnregister(pid)
+        for pid in sessionPids() {
+            // EPERM proves the PID exists; only ESRCH permits reaping it.
+            // See GOTCHAS.md #69.
+            if kill(pid, 0) != 0 && errno == ESRCH {
+                sessionUnregister(pid)
+            }
         }
     }
     t.resume()
@@ -691,12 +741,19 @@ private func serviceSessionClient(_ fd: Int32) {
         while let nl = pending.firstIndex(of: "\n") {
             let line = String(pending[..<nl])
             pending = String(pending[pending.index(after: nl)...])
-            let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
+            let parts = line.split(separator: " ").map(String.init)
             var reply = "err\n"
-            if parts.count == 2, let pid = pid_t(parts[1]) {
+            if parts.count == 1, parts[0] == "generation",
+               let generation = readyProviderGeneration() {
+                reply = "generation \(generation)\n"
+            } else if parts.count == 2, parts[0] == "status" {
+                reply = providerStatus(generation: parts[1]) + "\n"
+            } else if parts.count == 3, let pid = pid_t(parts[1]) {
                 switch parts[0] {
-                case "register":   sessionRegister(pid);   reply = "ok\n"
-                case "unregister": sessionUnregister(pid); reply = "ok\n"
+                case "register" where providerStatus(generation: parts[2]) == "ready":
+                    sessionRegister(pid); reply = "ok\n"
+                case "unregister" where providerStatus(generation: parts[2]) != "stale":
+                    sessionUnregister(pid); reply = "ok\n"
                 default: break
                 }
             }

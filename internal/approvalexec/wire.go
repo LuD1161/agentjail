@@ -9,9 +9,12 @@ type WireRedeemRequest struct {
 }
 
 type WireRedeemResponse struct {
-	OK        bool      `json:"ok"`
-	Command   Command   `json:"command,omitempty"`
-	CWD       string    `json:"cwd,omitempty"`
-	ToolUseID ToolUseID `json:"tool_use_id,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	OK                  bool      `json:"ok"`
+	Command             Command   `json:"command,omitempty"`
+	CWD                 string    `json:"cwd,omitempty"`
+	ToolUseID           ToolUseID `json:"tool_use_id,omitempty"`
+	Error               string    `json:"error,omitempty"`
+	HostProxyProof      string    `json:"host_proxy_proof,omitempty"`
+	HostProxyExecutable string    `json:"host_proxy_executable,omitempty"`
+	HostProxyArgv       []string  `json:"host_proxy_argv,omitempty"`
 }

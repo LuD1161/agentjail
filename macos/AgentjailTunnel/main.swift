@@ -7,7 +7,7 @@
 //
 // CLI invocation:
 //   AgentjailTunnel install             - activate sysext + save proxy profile
-//   AgentjailTunnel start <wg-conf>     - load WG conf, start proxy
+//   AgentjailTunnel start <wg-conf> [generation] - load WG conf, start proxy
 //   AgentjailTunnel stop                - stop proxy
 //   AgentjailTunnel run -- <cmd> [args] - fork+exec cmd as child of AgentjailTunnel
 //                                         so the extension's PPID-walk picks it up
@@ -46,7 +46,9 @@ switch cmd {
 case "install": installSystemExtension()
 case "start":
     guard CommandLine.arguments.count >= 3 else { usage() }
-    startProxy(confPath: CommandLine.arguments[2])
+    let generation = CommandLine.arguments.count >= 4
+        ? CommandLine.arguments[3] : UUID().uuidString
+    startProxy(confPath: CommandLine.arguments[2], generation: generation)
 case "stop": stopProxy()
 case "run": runWrapped()    // synchronous; calls exit() - never reaches runloop
 case "wipe": wipeAllConfigs()
@@ -64,12 +66,17 @@ func runWrapped() {
     let argv = Array(CommandLine.arguments.dropFirst(2)).filter { $0 != "--" }
     if argv.isEmpty { usage() }
 
-    // IPC handshake - synchronously register our PID with the
-    // extension's session listener before posix_spawn'ing the child.
-    // The handshake guarantees the ext has the PID in its registry
-    // before the child's first flow can fire.
-    sessionIPC("register \(getpid())")
-    defer { sessionIPC("unregister \(getpid())") }
+    guard let generationReply = sessionIPC("generation"),
+          generationReply.hasPrefix("generation ") else {
+        fail("tunnel provider is not ready")
+    }
+    let generation = generationReply
+        .replacingOccurrences(of: "generation ", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard sessionIPC("register \(getpid()) \(generation)") == "ok\n" else {
+        fail("tunnel session registration failed")
+    }
+    defer { _ = sessionIPC("unregister \(getpid()) \(generation)") }
 
     var pid: pid_t = 0
     let cargs = argv.map { strdup($0) } + [nil]
@@ -88,13 +95,10 @@ func runWrapped() {
 }
 
 // sessionIPC dials /tmp/agentjail.sock and sends a single newline-
-// framed verb.  Best-effort: failures (sysext not yet running, sandbox
-// quirk) just no-op.  The wrapped child won't be tunneled in that
-// case, but blocking the user's command on extension plumbing is
-// worse than passthrough.
-func sessionIPC(_ msg: String) {
+// framed verb and returns the provider's bounded acknowledgement.
+func sessionIPC(_ msg: String) -> String? {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    if fd < 0 { return }
+    if fd < 0 { return nil }
     defer { Darwin.close(fd) }
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
@@ -112,15 +116,17 @@ func sessionIPC(_ msg: String) {
             Darwin.connect(fd, sa, len)
         }
     }
-    if rc != 0 { return }
+    if rc != 0 { return nil }
     var line = msg + "\n"
     _ = line.withUTF8 { buf in
         Darwin.write(fd, buf.baseAddress, buf.count)
     }
-    var reply = [UInt8](repeating: 0, count: 8)
-    _ = reply.withUnsafeMutableBufferPointer { p in
+    var reply = [UInt8](repeating: 0, count: 256)
+    let count = reply.withUnsafeMutableBufferPointer { p in
         Darwin.read(fd, p.baseAddress, p.count)
     }
+    if count <= 0 { return nil }
+    return String(bytes: reply[0..<count], encoding: .utf8)
 }
 
 class ExtDelegate: NSObject, OSSystemExtensionRequestDelegate {
@@ -194,29 +200,43 @@ func saveProxyProfileAndExit() {
 // .disconnected, then starts it again.  Used after a config change
 // (conf swap) that providerConfiguration alone won't surface to
 // the running extension.
-func reloadTunnelAndExit(manager: NETransparentProxyManager, label: String) {
-    debugLog("reloading tunnel for new \(label)")
-    manager.connection.stopVPNTunnel()
+func waitForDisconnected(manager: NETransparentProxyManager,
+                         label: String,
+                         completion: @escaping () -> Void) {
     var attempts = 0
     func tick() {
         let s = manager.connection.status
-        if s == .disconnected || s == .invalid || attempts > 50 {
-            do {
-                try manager.connection.startVPNTunnel()
-                debugLog("tunnel reloaded")
-                exit(0)
-            } catch {
-                fail("startVPNTunnel: \(error)")
-            }
+        if s == .disconnected || s == .invalid {
+            completion()
             return
         }
+        if attempts > 150 { fail("timed out waiting for \(label) to disconnect") }
         attempts += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: tick)
     }
     tick()
 }
 
-func startProxy(confPath: String) {
+func startTunnelWhenDisconnectedAndExit(manager: NETransparentProxyManager,
+                                        label: String) {
+    waitForDisconnected(manager: manager, label: label) {
+        do {
+            try manager.connection.startVPNTunnel()
+            debugLog("tunnel started after \(label)")
+            exit(0)
+        } catch {
+            fail("startVPNTunnel: \(error)")
+        }
+    }
+}
+
+func reloadTunnelAndExit(manager: NETransparentProxyManager, label: String) {
+    debugLog("reloading tunnel for new \(label)")
+    manager.connection.stopVPNTunnel()
+    startTunnelWhenDisconnectedAndExit(manager: manager, label: label)
+}
+
+func startProxy(confPath: String, generation: String) {
     guard let conf = try? String(contentsOfFile: confPath, encoding: .utf8) else {
         fail("read \(confPath)")
     }
@@ -230,6 +250,7 @@ func startProxy(confPath: String) {
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
             var cfg = proto.providerConfiguration ?? [:]
             cfg["wg-conf"] = conf
+            cfg["session-generation"] = generation
             proto.providerConfiguration = cfg
             manager.protocolConfiguration = proto
         }
@@ -252,6 +273,10 @@ func startProxy(confPath: String) {
                     debugLog("proxy already up (no change)")
                     exit(0)
                 }
+                if manager.connection.status == .disconnecting {
+                    startTunnelWhenDisconnectedAndExit(manager: manager, label: "prior stop")
+                    return
+                }
                 do {
                     try manager.connection.startVPNTunnel()
                     debugLog("proxy up")
@@ -271,8 +296,10 @@ func stopProxy() {
             print("no profile to stop"); exit(0)
         }
         manager.connection.stopVPNTunnel()
-        print("proxy down")
-        exit(0)
+        waitForDisconnected(manager: manager, label: "proxy") {
+            print("proxy down")
+            exit(0)
+        }
     }
 }
 

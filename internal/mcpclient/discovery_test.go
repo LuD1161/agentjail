@@ -2,47 +2,43 @@ package mcpclient
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestDiscoverServersWithConfig(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("cannot determine home directory")
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{
+  "mcpServers": {"fixture-stdio": {"command": "fixture-command"}}
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Cursor 2026.07.23 remote-server shape, verified 2026-08-13.
+	// https://docs.cursor.com/context/model-context-protocol
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "mcp.json"), []byte(`{
+  "mcpServers": {"fixture-http": {"url": "https://example.invalid/mcp"}}
+}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	entries := DiscoverServersWithConfig(home)
-	if len(entries) == 0 {
-		t.Skip("no MCP servers configured on this machine")
+	if len(entries) != 2 {
+		t.Fatalf("entries=%d, want 2", len(entries))
 	}
 
-	for _, e := range entries {
-		t.Logf("server=%q source=%q type=%q command=%q url=%q",
-			e.Name, e.Source, e.Config.Type, e.Config.Command, e.Config.URL)
+	byName := make(map[string]MCPServerEntry, len(entries))
+	for _, entry := range entries {
+		byName[entry.Name] = entry
 	}
-
-	// The exact set of servers is environment-dependent, so assert the shape
-	// of each discovered entry rather than requiring a specific server.
-	for _, e := range entries {
-		if e.Name == "" {
-			t.Error("discovered server has empty Name")
-		}
-		if e.Source == "" {
-			t.Errorf("server %q has empty Source", e.Name)
-		}
-		if e.Config.Type == "" {
-			t.Errorf("server %q has empty Type", e.Name)
-		}
-		// A stdio server must carry a command; an http/sse server a URL.
-		switch e.Config.Type {
-		case "stdio":
-			if e.Config.Command == "" {
-				t.Errorf("stdio server %q has empty Command", e.Name)
-			}
-		case "http", "sse":
-			if e.Config.URL == "" {
-				t.Errorf("%s server %q has empty URL", e.Config.Type, e.Name)
-			}
-		}
+	stdio := byName["fixture-stdio"]
+	if stdio.Source != "claude" || stdio.Config.Type != "stdio" || stdio.Config.Command != "fixture-command" {
+		t.Fatalf("stdio entry = %#v", stdio)
+	}
+	http := byName["fixture-http"]
+	if http.Source != "cursor" || http.Config.Type != "http" || http.Config.URL != "https://example.invalid/mcp" {
+		t.Fatalf("http entry = %#v", http)
 	}
 }

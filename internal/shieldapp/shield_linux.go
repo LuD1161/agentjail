@@ -158,7 +158,7 @@ func buildLandlockNetPlan(abi int, netproxyPort int, oauthPorts []int) LandlockN
 // the agent unsandboxed unless AGENTJAIL_SHIELD_ALLOW_UNSANDBOXED=1.
 //
 // Privilege requirement: none.  Landlock is designed for unprivileged use.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, requireTunnel bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	// ipv6Mode gates the macOS tunnel's IPv6 datapath only (AGE-262); Linux
 	// has no equivalent knob yet, so the resolved value is a no-op here.
 	_ = ipv6Mode
@@ -186,6 +186,10 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 				fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m transparent tunnel active (userns) · %s\n", posture)
 			}
 		} else {
+			if requireTunnel {
+				fmt.Fprintln(os.Stderr, "agentjail-shield: required transparent tunnel is unavailable; refusing to launch")
+				os.Exit(1)
+			}
 			fmt.Fprintln(os.Stderr, "  ⚠ tunnel not available, falling back to netproxy")
 		}
 	}
@@ -420,6 +424,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	agentCmd.Stdin = os.Stdin
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr
+	registeredHostProxy := registerHostProxyLaunch(ctx, ctlToken, ctlTokenErr, env, emitter)
 
 	// Intercept SIGINT and SIGTERM so the shield survives to print the
 	// session summary. The agent child is in the same process group and
@@ -436,6 +441,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	}()
 
 	runErr := agentCmd.Run()
+	unregisterHostProxyLaunch(registeredHostProxy, ctlToken)
 	sessionDuration := time.Since(startTime)
 
 	// Kill and reap the netproxy child (zombie cleanup).

@@ -106,23 +106,46 @@ if [ "$NOTARIZE" = "1" ]; then
         "$APP"
 
     echo "==> Step 6: notarizing (set NOTARIZE=0 to skip)"
-    if [ -f "$REPO_ROOT/.env" ]; then
-        # shellcheck disable=SC1091
-        source "$REPO_ROOT/.env"
+    CREDENTIAL_FILE="${CREDENTIAL_FILE:-$REPO_ROOT/.env}"
+    ASC_KEY="${ASC_KEY:-$REPO_ROOT/.secrets/asc.p8}"
+    if [ -f "$CREDENTIAL_FILE" ]; then
+        # shellcheck disable=SC1090
+        source "$CREDENTIAL_FILE"
     fi
-    : "${APPLE_ID:?APPLE_ID not set - add it to .env or export it, or run with NOTARIZE=0}"
-    : "${APP_PASSWORD:?APP_PASSWORD not set - add it to .env or export it, or run with NOTARIZE=0}"
     : "${TEAM_ID:?TEAM_ID not set - add it to .env or export it, or run with NOTARIZE=0}"
 
     ZIP="$BUILD/AgentjailTunnel.zip"
     rm -f "$ZIP"
     ditto -c -k --keepParent "$APP" "$ZIP"
 
-    xcrun notarytool submit "$ZIP" \
-        --apple-id "$APPLE_ID" \
-        --team-id "$TEAM_ID" \
-        --password "$APP_PASSWORD" \
-        --wait
+    if [ -f "$ASC_KEY" ] && [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ]; then
+        NOTARY_AUTH=(--key "$ASC_KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+        echo "    auth: App Store Connect API key"
+    else
+        : "${APPLE_ID:?APPLE_ID not set - add it to .env or export it, or run with NOTARIZE=0}"
+        : "${APP_PASSWORD:?APP_PASSWORD not set - add it to .env or export it, or run with NOTARIZE=0}"
+        NOTARY_AUTH=(--apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD")
+        echo "    auth: Apple ID app-specific password"
+    fi
+
+    submitted=0
+    for delay in 0 5 15 30; do
+        [ "$delay" -eq 0 ] || sleep "$delay"
+        submit_output="$(xcrun notarytool submit "$ZIP" "${NOTARY_AUTH[@]}" --wait 2>&1)" && submit_rc=0 || submit_rc=$?
+        printf '%s\n' "$submit_output"
+        if [ "$submit_rc" -eq 0 ]; then
+            submitted=1
+            break
+        fi
+        if grep -qE 'Submission ID received|^[[:space:]]*id:' <<<"$submit_output"; then
+            echo "error: notarization created a submission but did not succeed; inspect that submission before retrying" >&2
+            exit "$submit_rc"
+        fi
+        echo "warning: notary service failed before creating a submission; bounded retry follows" >&2
+    done
+    [ "$submitted" -eq 1 ] || { echo "error: notary service did not accept the archive" >&2; exit 1; }
+
+    unset APP_PASSWORD ASC_KEY_ID ASC_ISSUER_ID NOTARY_AUTH
 
     xcrun stapler staple "$APP"
 

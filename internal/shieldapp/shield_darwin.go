@@ -794,7 +794,7 @@ func isControlSocketPath(p, home string) bool {
 //
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, requireTunnel bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	if !profilePrint {
 		ensureLocalUI(context.Background(), emitter)
 	}
@@ -816,7 +816,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			os.Exit(0)
 		}
 		ctx := context.Background()
-		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, ipv6Mode, sshAuthSock, credentialTools, emitter, func() {
+		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), requireTunnel, mitmMode, ipv6Mode, sshAuthSock, credentialTools, emitter, func() {
 			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, credentialTools, policyPath, startTime, emitter)
 		})
 		// startTunnelDarwin either os.Exit's on success/fatal-error, or (on a
@@ -937,7 +937,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	}
 	// Not yet sandboxed here (sbpl applies at syscall.Exec below), so the token
 	// is readable at this point -- unlike Linux (ADR 0067).
-	darwinCtlToken, _ := ctlauth.Load()
+	darwinCtlToken, darwinCtlTokenErr := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
 	credentialSession, credentialErr := prepareCredentialSession(credentialTools, darwinCtlToken, agentPath)
@@ -1019,6 +1019,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		child := exec.Command(sandboxExecPath, argv...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		child.Env = env
+		registeredHostProxy := registerHostProxyLaunch(ctx, darwinCtlToken, darwinCtlTokenErr, env, emitter)
 
 		stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
 		exitCode := startAndWaitChild(child, logger)
@@ -1043,6 +1044,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		}
 		credentialSession.cleanup(darwinCtlToken)
 		revokeSecretGrants(activeGrants, darwinCtlToken)
+		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		os.Exit(exitCode)
 	}
 
@@ -1066,6 +1068,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		child := exec.Command(sandboxExecPath, childArgv...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		child.Env = env
+		registeredHostProxy := registerHostProxyLaunch(ctx, darwinCtlToken, darwinCtlTokenErr, env, emitter)
 		stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
 		exitCode := startAndWaitChild(child, slog.Default())
 		stopSignalDrain()
@@ -1074,11 +1077,14 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		if netproxyCmd != nil {
 			_ = netproxyCmd.Process.Signal(syscall.SIGTERM)
 		}
+		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		os.Exit(exitCode)
 	}
 
 	// syscall.Exec replaces this process entirely.  If it returns, it failed.
+	registeredHostProxy := registerHostProxyLaunch(ctx, darwinCtlToken, darwinCtlTokenErr, env, emitter)
 	if err := syscall.Exec(sandboxExecPath, argv, env); err != nil {
+		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		recordSandboxExecFailure(ctx, emitter, err)
 		fmt.Fprintf(os.Stderr, "agentjail-shield: exec sandbox-exec failed: %v\n", err)
 		os.Exit(1)
@@ -1112,7 +1118,7 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 	}
 	// Unlike Linux, this process is not yet sandboxed -- the sbpl profile
 	// applies at syscall.Exec below -- so the token can be read here (ADR 0067).
-	darwinCtlToken, _ := ctlauth.Load()
+	darwinCtlToken, darwinCtlTokenErr := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
 	credentialSession, credentialErr := prepareCredentialSession(credentialTools, darwinCtlToken, agentPath)
@@ -1169,6 +1175,7 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 		child := exec.Command(agentPath, agentArgs...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		child.Env = env
+		registeredHostProxy := registerHostProxyLaunch(ctx, darwinCtlToken, darwinCtlTokenErr, env, emitter)
 
 		stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
 		exitCode := startAndWaitChild(child, logger)
@@ -1185,22 +1192,27 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 		_ = store.Close()
 		credentialSession.cleanup(darwinCtlToken)
 		revokeSecretGrants(activeGrants, darwinCtlToken)
+		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		os.Exit(exitCode)
 	}
 	if len(credentialTools) > 0 {
 		child := exec.Command(agentPath, agentArgs...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		child.Env = env
+		registeredHostProxy := registerHostProxyLaunch(ctx, darwinCtlToken, darwinCtlTokenErr, env, emitter)
 		stopSignalDrain := armSignalDrain(syscall.SIGINT, syscall.SIGTERM)
 		exitCode := startAndWaitChild(child, slog.Default())
 		stopSignalDrain()
 		credentialSession.cleanup(darwinCtlToken)
 		revokeSecretGrants(activeGrants, darwinCtlToken)
+		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		os.Exit(exitCode)
 	}
 
 	argv := append([]string{agentPath}, agentArgs...)
+	registeredHostProxy := registerHostProxyLaunch(ctx, darwinCtlToken, darwinCtlTokenErr, env, emitter)
 	if err := syscall.Exec(agentPath, argv, env); err != nil {
+		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		fmt.Fprintf(os.Stderr, "agentjail-shield: exec agent failed: %v\n", err)
 		os.Exit(1)
 	}

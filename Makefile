@@ -103,6 +103,7 @@ e2e-release: ## RELEASE GATE: clean VM -> selected real agent -> policy enforcem
 
 testbed-harness-test: ## deterministic testbed resource admission and lifecycle cleanup tests
 	bash test/testbed/resource-check-test.sh
+	bash test/testbed/reportlib-test.sh
 
 # Cadence: run locally before pushing to main, and before a major release. NOT
 # every PR, NOT minor/patch, NOT in CI -- a local gate like e2e-release, not a

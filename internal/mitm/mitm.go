@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -275,7 +276,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 		// Run policy engine if a matcher is configured.
 		denied := false
 		if h.Matcher != nil {
-			op := netpolicy.RecognizeHTTP(host, req, bodyBuf)
+			op := netpolicy.RecognizeHTTPAt(host, parsePort(port), req, bodyBuf)
 			reqLog.Service = op.Service
 			reqLog.Verb = op.Verb
 			reqLog.ResourceType = op.ResourceType
@@ -399,6 +400,46 @@ func (h *MITMHandler) emit(rl *RequestLog) {
 	if h.OnRequest != nil {
 		h.OnRequest(rl)
 	}
+}
+
+// RecordPolicyDecision persists a raw HTTP decision through the same request
+// sink used by decrypted HTTPS traffic.
+func (h *MITMHandler) RecordPolicyDecision(op *netpolicy.Operation, result *netpolicy.MatchResult, statusCode int, requestSize int64) {
+	if h == nil || op == nil || result == nil {
+		return
+	}
+	h.emit(&RequestLog{
+		Ts:              time.Now(),
+		Host:            op.Host,
+		Method:          op.Method,
+		Path:            op.Path,
+		URL:             fmt.Sprintf("http://%s%s", op.Host, op.Path),
+		StatusCode:      statusCode,
+		RequestSize:     requestSize,
+		SessionID:       h.SessionID,
+		ClaudeSessionID: h.ClaudeSession.Get(),
+		OwnerPID:        h.OwnerPID,
+		Agent:           h.Agent,
+		Cwd:             h.Cwd,
+		PolicyAction:    result.Action,
+		PolicyTemplate:  result.Template.ID,
+		PolicyReason:    result.Reason,
+		Service:         op.Service,
+		Verb:            op.Verb,
+		ResourceType:    op.ResourceType,
+	})
+}
+
+func parsePort(value string) netpolicy.Port {
+	port, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	parsed, err := netpolicy.NewPort(port)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 // startCapture opens a body file, or returns nil: recording is not allowed to

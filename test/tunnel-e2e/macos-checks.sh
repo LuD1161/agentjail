@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
-# What to check on macOS for the feat/network-visibility work.
+# macOS tunnel and shield checks.
 #
-# The tunnel is NOT wired on darwin (AGE-172): shield_darwin.go's runShield
-# accepts tunnelMode/mitmMode and never uses them. So scenarios.sh -- which is
-# all tunnel -- cannot pass here, and running it would only tell you the tunnel
-# is missing, which we already know.
-#
-# This script checks the parts that ARE reachable on darwin, plus the two
-# claims made about macOS from a Linux box that need a Mac to confirm.
+# The Network Extension tunnel is wired on Darwin. Its release assertion needs
+# the approved golden-macos-mitm guest and the strict smoke contract; a fresh
+# unapproved guest is not equivalent. See ADR 0136-tunnel-golden-image.
 #
 # Usage:  bash test/tunnel-e2e/macos-checks.sh
 #
-# NOTE: written on Linux and never executed on a Mac. If a check misfires,
-# that is this script's bug, not necessarily the product's -- read what it
-# prints before believing it.
-
 set -uo pipefail
 
 PASS=0; FAIL=0; SKIP=0; INFO=0
@@ -116,24 +108,24 @@ else
 fi
 
 # ============================================================ 4
-group "4 — the tunnel is not wired here (AGE-172), and says nothing about it"
+group "4 — approved extension and strict tunnel matrix"
 
-OUT="$("$SHIELD" --tunnel -- /bin/echo ran 2>&1)"
-if grep -qiE "tunnel active|interception ON" <<<"$OUT"; then
-  note "4a  --tunnel appears to do something on darwin now — AGE-172 may have landed; re-run scenarios.sh"
-elif grep -qiE "not supported|unavailable|no.?op|linux only|ignored" <<<"$OUT"; then
-  ok "4a  --tunnel is unsupported here and SAYS so"
+SMOKE_RESULT="$WORK/darwin-tunnel-smoke.json"
+if PATH="$WORK:$PATH" TUNNEL_SMOKE_RESULT="$SMOKE_RESULT" \
+    bash "$REPO_ROOT/test/tunnel-e2e/smoke_darwin.sh" --strict; then
+  ok "4a  strict Darwin tunnel smoke executed with no all-SKIP result"
 else
-  bad "4a  --tunnel is a silent no-op on macOS" \
-      "the flag parsed, the agent ran, nothing tunnelled, and nothing said so. ADR 0077 D4: every launch states its posture. Worth a ticket."
+  bad "4a  strict Darwin tunnel smoke" \
+      "requires golden-macos-mitm with the extension [activated enabled]; see the strict smoke output above"
 fi
+[ -s "$SMOKE_RESULT" ] \
+  && note "4b  structured result: $(cat "$SMOKE_RESULT")" \
+  || bad "4b  strict smoke writes a structured result" "$SMOKE_RESULT missing"
 
 group "Summary"
 printf "  PASS=%d  FAIL=%d  SKIP=%d  INFO=%d\n" "$PASS" "$FAIL" "$SKIP" "$INFO"
 echo
-echo "  Not testable here (needs AGE-172 — the darwin tunnel):"
-echo "    AGE-220 IP SANs · AGE-221 CA bundle in a live session · AGE-222 ALPN"
-echo "    AGE-226 Expect: 100-continue · AGE-231 cwd (nsenter, Linux-only)"
-echo "    ...and every scenario in scenarios.sh groups A/B/C."
+echo "  The strict smoke covers allowed HTTPS, named host/path denies, the"
+echo "  port-80 raw protocol path, no-proxy bypass resistance, and evidence."
 [ "$FAIL" -gt 0 ] && exit 1
 exit 0

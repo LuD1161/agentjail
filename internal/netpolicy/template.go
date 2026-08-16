@@ -34,8 +34,9 @@ type MatchSpec struct {
 	Verb         []string `yaml:"verb,omitempty"`
 	ResourceType []string `yaml:"resource_type,omitempty"`
 	ResourceName []string `yaml:"resource_name,omitempty"` // supports glob patterns
-	Namespace    []string `yaml:"namespace,omitempty"`      // supports glob patterns
-	Host         []string `yaml:"host,omitempty"`           // supports glob patterns
+	Namespace    []string `yaml:"namespace,omitempty"`     // supports glob patterns
+	Host         []string `yaml:"host,omitempty"`          // supports glob patterns
+	Port         []Port   `yaml:"port,omitempty"`
 	Method       []string `yaml:"method,omitempty"`
 	Path         []string `yaml:"path,omitempty"` // supports glob and regex (prefixed with "re:")
 }
@@ -49,9 +50,9 @@ type ScanSpec struct {
 
 // ScanRule is a single content-scanning rule within a ScanSpec.
 type ScanRule struct {
-	Type     string   `yaml:"type"`               // "regex", "contains", "not_contains"
+	Type     string   `yaml:"type"` // "regex", "contains", "not_contains"
 	Patterns []string `yaml:"patterns"`
-	Name     string   `yaml:"name,omitempty"`      // label for the finding, e.g. "SSN", "Credit Card"
+	Name     string   `yaml:"name,omitempty"` // label for the finding, e.g. "SSN", "Credit Card"
 
 	// compiledPatterns holds pre-compiled regexps for type "regex".
 	// Populated at template load time via compilePatterns().

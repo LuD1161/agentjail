@@ -330,6 +330,27 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 		}
 		gs.reply(conn, grantctl.Response{OK: true})
 
+	case grantctl.ReqSessionLaunchRegister:
+		peerPID, peerErr := extractPeerPID(conn)
+		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil ||
+			!gs.activeSessions.registerLaunch(peerPID, req.LaunchRoot, req.LaunchPath) {
+			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch metadata"})
+			return
+		}
+		_ = gs.emitter.Emit(context.Background(), audit.Event{
+			EventType: audit.HostProxySessionRegistered, Actor: "daemon",
+			Detail: map[string]string{"root": req.LaunchRoot},
+		})
+		gs.reply(conn, grantctl.Response{OK: true})
+
+	case grantctl.ReqSessionLaunchUnregister:
+		peerPID, peerErr := extractPeerPID(conn)
+		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil || !gs.activeSessions.unregisterLaunch(peerPID) {
+			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch revocation"})
+			return
+		}
+		gs.reply(conn, grantctl.Response{OK: true})
+
 	default:
 		gs.reply(conn, grantctl.Response{OK: false, Error: fmt.Sprintf("unsupported grant control request %q", req.Type)})
 	}

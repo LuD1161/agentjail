@@ -61,8 +61,9 @@ map stays advice-only. Two entries:
 | **Protection** (enforcement gap, fail-open history, dropped decisions) | **never** | These attest what already happened. There is no state to repair — a "repair" could only edit the record. Pinned by a test. |
 
 **D3 — The restart goes through the supervisor, never around it.** `--fix` calls
-`selfupdate.RestartDaemon` (launchd `kickstart -kp` / `systemctl --user
-restart`). Doctor never spawns a daemon itself: launchd/systemd owns the
+`selfupdate.RestartDaemon` (launchd `bootout` + `bootstrap` / `systemctl --user
+restart`). Re-registering the launchd job also refreshes its lightweight code
+requirement after an executable replacement. Doctor never spawns a daemon itself: launchd/systemd owns the
 process, and a hand-spawned daemon would be unsupervised, invisible to the
 supervisor, and gone at the next restart. Doctor also never unlinks a socket
 something is holding — that judgement lives in `bindAgentSocket`.

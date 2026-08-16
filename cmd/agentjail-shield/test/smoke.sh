@@ -61,10 +61,13 @@ echo ""
 # Go caches because later macOS fixtures build the netproxy after this point.
 export GOCACHE="${GOCACHE:-$(go env GOCACHE)}"
 export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
-# Landlock always grants /tmp and the launch CWD read-write. Put the fake home
-# in the workspace so an outer agent sandbox can create it, then launch every
-# shield fixture from /tmp so the workspace grant cannot swallow ~/.ssh.
-SMOKE_HOME="$(mktemp -d "${REPO_ROOT}/.agentjail-shield-smoke.XXXXXX")"
+OS="$(uname -s)"
+if [ "${OS}" = "Darwin" ]; then
+    # Keep the fake home outside /tmp's broad allow and below sun_path's limit.
+    SMOKE_HOME="$(mktemp -d /Users/Shared/ajsmoke.XXXXXX)"
+else
+    SMOKE_HOME="$(mktemp -d "${REPO_ROOT}/.agentjail-shield-smoke.XXXXXX")"
+fi
 export HOME="${SMOKE_HOME}"
 mkdir -p "${HOME}/.ssh"
 cd /tmp
@@ -73,7 +76,6 @@ cd /tmp
 # Step 2: Platform check
 # ---------------------------------------------------------------------------
 
-OS="$(uname -s)"
 if [ "${OS}" = "Darwin" ]; then
     if ! [ -x /usr/bin/sandbox-exec ]; then
         echo -e "${YELLOW}SKIP${NC} sandbox-exec not present — skipping macOS enforcement tests"

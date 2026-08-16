@@ -255,6 +255,10 @@ type CommandConfig struct {
 // host rotates its IPs between sessions, the new IPs will not be in the
 // allow set until the next shield launch.  This is a documented Tier 1.5
 // trade-off; netproxy (hostname-based, per-request) does not share it.
+// DefaultTunnelIPv6 keeps IPv6-first destinations on the enforced tunnel.
+// See ADR 0138-dual-stack-default.
+const DefaultTunnelIPv6 = true
+
 type NetworkConfig struct {
 	// AllowedHosts is the list of hostnames whose resolved IPs are permitted
 	// for outbound TCP connections.  The resolver runs at shield startup; DNS
@@ -275,11 +279,11 @@ type NetworkConfig struct {
 	// See ADR 0109-baseurl-capture-gateway (AGE-259).
 	CaptureGateway *bool `yaml:"capture_gateway"`
 
-	// TunnelIPv6 enables the flag-gated IPv6 datapath for the macOS tunnel.
-	// Tri-state: absent = off (the default), false = standing opt-out, true =
+	// TunnelIPv6 overrides the default IPv6 datapath for the macOS tunnel.
+	// Tri-state: absent = on (the default), false = standing opt-out, true =
 	// explicit opt-in. --tunnel-ipv6 / --no-tunnel-ipv6 override it per launch;
 	// the AGENTJAIL_TUNNEL_IPV6 env var is a transitional override, one release.
-	// See ADR 0110-network-flag-consolidation (AGE-262).
+	// See ADR 0110-network-flag-consolidation and ADR 0138-dual-stack-default.
 	TunnelIPv6 *bool `yaml:"tunnel_ipv6"`
 }
 

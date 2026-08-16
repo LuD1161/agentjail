@@ -129,12 +129,19 @@ const (
 	GatewayStartFailed    = "gateway.start_failed"
 	// Local UI lifecycle initiated by the shield. Detail contains only the
 	// shared loopback address and a fixed failure class, never filesystem paths.
-	LocalUIStarted        = "local_ui.started"
-	LocalUIStartFailed    = "local_ui.start_failed"
-	CodexApprovalMinted   = "codex_approval.minted"
-	CodexPromptObserved   = "codex_approval.prompt_observed"
-	CodexApprovalRedeemed = "codex_approval.redeemed"
-	CodexApprovalRejected = "codex_approval.rejected"
+	LocalUIStarted                 = "local_ui.started"
+	LocalUIStartFailed             = "local_ui.start_failed"
+	CodexApprovalMinted            = "codex_approval.minted"
+	CodexPromptObserved            = "codex_approval.prompt_observed"
+	CodexApprovalRedeemed          = "codex_approval.redeemed"
+	CodexApprovalRejected          = "codex_approval.rejected"
+	HostProxySessionRegistered     = "host_proxy.session_registered"
+	HostProxySessionRegisterFailed = "host_proxy.session_register_failed"
+	HostProxyRequested             = "host_proxy.requested"
+	HostProxyDenied                = "host_proxy.denied"
+	HostProxyAuthorizationRedeemed = "host_proxy.authorization_redeemed"
+	HostProxyStarted               = "host_proxy.started"
+	HostProxyCompleted             = "host_proxy.completed"
 )
 
 // Event is one audit log entry.

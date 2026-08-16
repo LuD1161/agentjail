@@ -137,8 +137,8 @@ func maybeBootstrapSSH(options runOptions, home string, shieldArgs []string) (bo
 	return true, 0
 }
 
-// OpenSSH appends its socket suffix literally, so normalize the session-agent
-// temp root before handoff. See ADR 0126-session-ssh-bootstrap.
+// OpenSSH appends its socket suffix literally, so canonicalize the session-agent
+// temp root before handoff. See ADR 0139-canonical-ssh-temp.
 func sessionSSHAgentEnv(environ []string) []string {
 	env := append([]string(nil), environ...)
 	for i, entry := range env {
@@ -146,7 +146,11 @@ func sessionSSHAgentEnv(environ []string) []string {
 		if !ok || value == "" {
 			continue
 		}
-		env[i] = "TMPDIR=" + filepath.Clean(value)
+		cleaned := filepath.Clean(value)
+		if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+			cleaned = resolved
+		}
+		env[i] = "TMPDIR=" + cleaned
 	}
 	return env
 }

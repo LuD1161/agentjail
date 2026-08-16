@@ -176,7 +176,11 @@ lima_guest_pull() {
 
 # ---- Tart driver (macOS) ---------------------------------------------------
 
-TART_GOLDEN="${TART_GOLDEN:-golden-macos}"
+TART_GOLDEN="${TART_GOLDEN:-golden-macos-mitm}"
+# All macOS testbeds use the approved golden; the extension stays inert until
+# a tunnel gate starts it and enforces strict checks.
+# See ADR 0136-tunnel-golden-image.
+TART_TUNNEL_GOLDEN="${TART_TUNNEL_GOLDEN:-golden-macos-mitm}"
 TART_SSH_USER="${TART_SSH_USER:-admin}"   # cirruslabs base images: admin/admin
 TART_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
 

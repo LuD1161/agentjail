@@ -149,6 +149,16 @@ func TestRedactToolInputRedactsPositionalValues(t *testing.T) {
 	}
 }
 
+func TestRedactTextRedactsCredentialedCommandSummary(t *testing.T) {
+	const input = "AWS_ACCESS_KEY_ID=AKIAZ9Y8X7W6V5U4T3S2 AWS_SECRET_ACCESS_KEY=agentjail-repro-secret-20260815 AWS_SESSION_TOKEN=agentjail-repro-token-20260815 aws sts get-caller-identity"
+	got := RedactText(input)
+	for _, secret := range []string{"AKIAZ9Y8X7W6V5U4T3S2", "agentjail-repro-secret-20260815", "agentjail-repro-token-20260815"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("RedactText retained credential value")
+		}
+	}
+}
+
 // The value pass must reach scalars nested in maps and slices.
 func TestRedactToolInputNestedAndSliced(t *testing.T) {
 	in := map[string]interface{}{

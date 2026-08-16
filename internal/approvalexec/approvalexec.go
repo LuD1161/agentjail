@@ -26,6 +26,7 @@ type Operation string
 const (
 	GitPushOperation      Operation = "git-push"
 	ShellCommandOperation Operation = "shell-command"
+	HostProxyOperation    Operation = "host-proxy"
 
 	StatePending         State = "pending"
 	StatePromptObserved  State = "prompt_observed"
@@ -107,7 +108,7 @@ type BrokerInvocation struct {
 
 func validOperation(operation Operation) bool {
 	switch operation {
-	case GitPushOperation, ShellCommandOperation:
+	case GitPushOperation, ShellCommandOperation, HostProxyOperation:
 		return true
 	default:
 		return false

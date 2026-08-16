@@ -823,7 +823,7 @@ func checkNetworkKnobSources() []doctorCheck {
 	return []doctorCheck{
 		describe("tunnel_mitm (effective)", cfg.Network.TunnelMITM, true, ""),
 		describe("capture_gateway (effective)", cfg.Network.CaptureGateway, true, ""),
-		describe("tunnel_ipv6 (effective)", cfg.Network.TunnelIPv6, false, tunnelIPv6EnvVar),
+		describe("tunnel_ipv6 (effective)", cfg.Network.TunnelIPv6, config.DefaultTunnelIPv6, tunnelIPv6EnvVar),
 	}
 }
 

@@ -214,7 +214,17 @@ fi
 # ---- Verify -------------------------------------------------------------------
 
 log "verification:"
-status_output="$("$HOME/.agentjail/bin/agentjail" status)"
+status_output=""
+# launchd bootstrap is asynchronous; readiness remains bounded and mandatory.
+# See ADR 0053-vm-testbed-engine.
+for _ in $(seq 1 20); do
+    status_output="$("$HOME/.agentjail/bin/agentjail" status)"
+    if printf '%s\n' "$status_output" | grep -q 'daemon.*running' \
+        && ! printf '%s\n' "$status_output" | grep -q 'daemon.*not running'; then
+        break
+    fi
+    sleep 1
+done
 printf '%s\n' "$status_output"
 
 # The shipped installer must leave the machine usable immediately. Running a
@@ -235,4 +245,27 @@ case "$TESTBED_AGENT" in
             || { log "verification failed: the clean install did not wire Claude Code"; exit 1; }
         ;;
 esac
+
+# A control ping does not prove the policy hot path can answer. Require one
+# real, bounded hook evaluation before declaring the installed box ready.
+hook_ready=0
+for i in $(seq 1 20); do
+    if hook_output="$(printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"README.md"},"session_id":"testbed-provision-readiness-'"$i"'","cwd":"'"$HOME"'/work/demo"}' \
+        | "$HOME/.agentjail/bin/agentjail-hook" 2>&1 >/dev/null)"; then
+        hook_rc=0
+    else
+        hook_rc=$?
+    fi
+    if [ "$hook_rc" -eq 0 ] \
+        && ! printf '%s\n' "$hook_output" | grep -qiE 'daemon unreachable|daemon not running'; then
+        hook_ready=1
+        break
+    fi
+    sleep 0.5
+done
+if [ "$hook_ready" -ne 1 ]; then
+    log "verification failed: daemon ping passed but a real policy evaluation did not"
+    exit 1
+fi
+log "real policy evaluation passed"
 log "done. This box now looks like a fresh dev machine with agentjail + $TESTBED_AGENT."

@@ -418,7 +418,7 @@ func TestSendAndReceive_CodexColdApprovalResponse(t *testing.T) {
 			serverDone <- scanner.Err()
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		serverDone <- json.NewEncoder(server).Encode(daemonResponse{
 			Action:              "ask",
 			Reason:              "requires human review",
@@ -506,6 +506,57 @@ func TestRoundTripDeadline(t *testing.T) {
 				t.Errorf("roundTripDeadline()=%s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodexApprovalCapable(t *testing.T) {
+	tests := []struct {
+		name string
+		req  daemonRequest
+		want bool
+	}{
+		{"shell approval", daemonRequest{Agent: "codex", Capabilities: []string{wire.CapabilityCodexShellApprovalV1}}, true},
+		{"legacy codex", daemonRequest{Agent: "codex"}, false},
+		{"untrusted agent claim", daemonRequest{Agent: "claude", Capabilities: []string{wire.CapabilityCodexShellApprovalV1}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codexApprovalCapable(tt.req); got != tt.want {
+				t.Fatalf("codexApprovalCapable()=%t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexApprovalTimeoutFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := filepath.Join(trustedHome(t), "delayed-daemon.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		if scanner.Scan() {
+			time.Sleep(codexApprovalRoundTripDeadline + 100*time.Millisecond)
+		}
+	}()
+
+	stdin := makeStdinJSON("Bash", map[string]interface{}{"command": "git push origin HEAD:topic"}, "session-codex-timeout")
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin,
+		[]string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+	if code != 2 {
+		t.Fatalf("timeout exit=%d, want 2; stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !bytes.Contains(stderr, []byte("codex_approval/daemon_unavailable")) {
+		t.Fatalf("timeout did not report fail-closed rule: %q", stderr)
 	}
 }
 
@@ -606,6 +657,16 @@ func TestCodexApprovalOperationUsesExplicitValueOrLegacyGitFallback(t *testing.T
 	}
 	if _, ok := codexApprovalBrokerCommand("package; publish", challenge); ok {
 		t.Fatal("broker command accepted shell syntax in operation")
+	}
+}
+
+func TestCodexHostProxyApprovalStatesBoundary(t *testing.T) {
+	display := "agentjail proxy -- rdt --help"
+	got := codexApprovalSystemMessage(string(approvalexec.HostProxyOperation), display)
+	for _, want := range []string{display, "outside the AgentJail shield", "normal host filesystem", "network", "credentials"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("systemMessage %q does not contain %q", got, want)
+		}
 	}
 }
 
@@ -752,15 +813,7 @@ func TestCodexPreToolUseDefaultGitPushFailsClosed(t *testing.T) {
 	}
 }
 
-// TestCodexHook_FailOpenNoStdout verifies that daemon-unreachable fail-open
-// remains an exit-0 allow for Codex without unsupported stdout decisions.
-//
-// Codex documents systemMessage as supported for PreToolUse, so the fail-open
-// response now carries it — that notice is the only thing the user sees, since
-// Codex reads stderr solely as the exit-2 blocking reason (ADR 0073). The
-// invariant this test protects is unchanged: no unsupported *decision* fields
-// (permissionDecision / Claude's hookSpecificOutput), so default-allow stands.
-func TestCodexHook_FailOpenNoStdout(t *testing.T) {
+func TestCodexHook_DaemonUnavailableFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildHook(t, dir)
 
@@ -779,24 +832,15 @@ func TestCodexHook_FailOpenNoStdout(t *testing.T) {
 	stdout, stderr, code := runHookWithArgs(t, bin, stdin,
 		[]string{"AGENTJAIL_SOCKET=" + nonexistentSock}, []string{"--agent=codex"})
 
-	if code != 0 {
-		t.Errorf("expected exit 0 (fail-open), got %d; stdout=%q stderr=%q", code, stdout, stderr)
+	if code != 2 {
+		t.Errorf("expected exit 2 (fail-closed), got %d; stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	var codexOut map[string]any
-	if err := json.Unmarshal(stdout, &codexOut); err != nil {
-		t.Fatalf("Codex fail-open stdout is not JSON: %q (%v)", stdout, err)
-	}
-	if sm, ok := codexOut["systemMessage"].(string); !ok || sm == "" {
-		t.Errorf("Codex fail-open must warn the user via systemMessage; got %q", stdout)
-	}
-	for _, forbidden := range []string{"hookSpecificOutput", "permissionDecision", "permissionDecisionReason"} {
-		if _, ok := codexOut[forbidden]; ok {
-			t.Errorf("Codex fail-open leaked unsupported decision field %q: %q", forbidden, stdout)
-		}
+	if len(stdout) != 0 {
+		t.Errorf("fail-closed response wrote stdout: %q", stdout)
 	}
 	stderrStr := string(stderr)
-	if !strings.Contains(stderrStr, "daemon not running - policy enforcement disabled") {
-		t.Errorf("stderr missing fail-open friendly message; got %q", stderrStr)
+	if !strings.Contains(stderrStr, "codex_approval/daemon_unavailable") {
+		t.Errorf("stderr missing fail-closed rule; got %q", stderrStr)
 	}
 	if !strings.Contains(stderrStr, "dial "+nonexistentSock) {
 		t.Errorf("stderr missing dial-daemon detail; got %q", stderrStr)
