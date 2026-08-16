@@ -405,6 +405,48 @@ listed on the task board.
 
 ## Execution entry template
 
+## 2026-08-15 — Plan 024 accepted
+
+- Agent: `plan024_compose` (Terra)
+- Commit: `f702630f4afb625042f05ddf52a14cf0ea91a936`
+- Changed paths matched the composition claim plus the explicitly authorized
+  replacement of the scaffold test that referenced the deleted placeholder.
+  DCO, scoped cleanliness, empty-index, and diff checks passed.
+- Lifecycle review: one composition owns the client, store, notification
+  coordinator/delegate, and login adapter. Delegate/category setup precedes the
+  sole polling start; shutdown and termination are one-shot; notification and
+  login mutations require explicit user actions.
+- Route review: the persistent menu label dispatches cold and repeated
+  generation-stamped Review routes. Each route refreshes before opening the
+  singleton supplemental window, only that window consumes focus, and missing
+  requests remain non-actionable. Review itself never mutates authority.
+- Concurrency review: notification synchronization is serialized and
+  coalesced, so a newer authoritative snapshot is processed after an older
+  blocked update. Approve refusal and deny-race failures remain visible and are
+  never retried automatically.
+- Final frozen-worktree harness: PASS with macOS 13 arm64/x86_64 production
+  typechecks, 76 Core XCTest cases, and 17 App XCTest cases. Orchestrator focused
+  Go review/grant tests, full two-package race gate, forbidden-API/privacy scans,
+  and independent adversarial review passed.
+- Board verdict: Plan 024 DONE. Plan 025 may claim local packaging.
+- Remote action: none
+
+## 2026-08-15 — Plan 025 local packaging claimed
+
+- Agent: `plan025_package` (Terra)
+- Starting HEAD: `f702630f4afb625042f05ddf52a14cf0ea91a936`
+- Scoped baseline: clean across the approval entitlement, two dedicated build
+  and DMG scripts, narrow Make targets, packaging tests/docs, and handoff 025.
+- Required boundary: local ad-hoc signing only, hardened-runtime flag,
+  timestamp disabled, and an exactly empty entitlement dictionary. Build each
+  architecture separately with the local Xcode toolchain, create the universal
+  executable with `lipo`, and verify binary/plist/signature identity both before
+  and after mounting the DMG.
+- Excluded: tunnel targets/scripts and their privileged entitlements,
+  Developer ID identities, notarization, credentials, network calls, and any
+  publication or remote action.
+- Remote action: none
+
 The orchestrator appends one entry after reviewing each task:
 
 ```text
