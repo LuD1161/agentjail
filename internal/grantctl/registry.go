@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // PendingGrantTTL bounds how long an undecided grant request sits in the
@@ -216,6 +219,114 @@ func (r *Registry) ListPending() []GrantInfo {
 		out = append(out, pg.info())
 	}
 	return out
+}
+
+// ReviewSnapshot returns the deterministic v1 projection of unclaimed,
+// unexpired grants at now. The supplied time is used for both expiry and the
+// response timestamp. See ADR 0133-macos-menu-review.
+func (r *Registry) ReviewSnapshot(now time.Time) ReviewSnapshotV1 {
+	type projectedReview struct {
+		created time.Time
+		info    ReviewInfo
+	}
+
+	r.mu.RLock()
+	projected := make([]projectedReview, 0, len(r.grants))
+	for _, pg := range r.grants {
+		if pg.claimed || !pg.Expires.After(now) {
+			continue
+		}
+		projected = append(projected, projectedReview{
+			created: pg.Created,
+			info:    pg.reviewInfo(),
+		})
+	}
+	r.mu.RUnlock()
+
+	sort.Slice(projected, func(i, j int) bool {
+		if !projected[i].created.Equal(projected[j].created) {
+			return projected[i].created.After(projected[j].created)
+		}
+		return projected[i].info.ReviewID < projected[j].info.ReviewID
+	})
+
+	total := len(projected)
+	if len(projected) > MaxReviewSnapshotItems {
+		projected = projected[:MaxReviewSnapshotItems]
+	}
+	reviews := make([]ReviewInfo, len(projected))
+	for i := range projected {
+		reviews[i] = projected[i].info
+	}
+
+	return ReviewSnapshotV1{
+		ProtocolVersion:   ReviewProtocolVersion,
+		GeneratedAtUnixMs: UnixMilliseconds(now.UnixMilli()),
+		TotalPending:      total,
+		Truncated:         total > len(reviews),
+		Reviews:           reviews,
+	}
+}
+
+// reviewInfo projects one pending grant without using the self-reported CWD.
+func (pg *pendingGrant) reviewInfo() ReviewInfo {
+	host, hostOK := completeReviewAuthority(pg.Host, MaxReviewHostBytes)
+	projectPath := ""
+	projectOK := false
+	if pg.BoundCWD != "" {
+		projectPath, projectOK = completeReviewAuthority(pg.BoundCWD, MaxReviewProjectPathBytes)
+	}
+
+	state := ReviewContextStateVerified
+	canApprove := true
+	switch {
+	case !hostOK || (pg.BoundCWD != "" && !projectOK):
+		state = ReviewContextStateUnrepresentable
+		canApprove = false
+	case pg.BoundCWD == "":
+		state = ReviewContextStateUnbound
+		canApprove = false
+	}
+
+	reason, reasonTruncated := truncateReviewReason(pg.Reason)
+	return ReviewInfo{
+		ReviewID:        ReviewID(pg.GrantID),
+		Kind:            ReviewKindProjectHost,
+		Host:            host,
+		ProjectPath:     projectPath,
+		Reason:          reason,
+		ReasonTruncated: reasonTruncated,
+		ContextState:    state,
+		CreatedAtUnixMs: UnixMilliseconds(pg.Created.UnixMilli()),
+		ExpiresAtUnixMs: UnixMilliseconds(pg.Expires.UnixMilli()),
+		ApprovalScope:   ReviewScopeFutureProjectSessions,
+		CanApprove:      canApprove,
+		CanDeny:         true,
+	}
+}
+
+func completeReviewAuthority(value string, limit int) (string, bool) {
+	if value == "" || len(value) > limit || !utf8.ValidString(value) {
+		return "", false
+	}
+	return value, true
+}
+
+func truncateReviewReason(value string) (string, bool) {
+	truncated := false
+	if !utf8.ValidString(value) {
+		value = strings.ToValidUTF8(value, "\uFFFD")
+		truncated = true
+	}
+	if len(value) <= MaxReviewReasonBytes {
+		return value, truncated
+	}
+
+	cut := MaxReviewReasonBytes
+	for cut > 0 && !utf8.ValidString(value[:cut]) {
+		cut--
+	}
+	return value[:cut], true
 }
 
 // SetBoundCWD records the daemon-observed working directory for grantID,

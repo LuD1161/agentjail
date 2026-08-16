@@ -52,6 +52,9 @@ const (
 	// ReqGrantDeny discards a pending grant request by GrantID without
 	// applying it. Control-socket only; CtlToken required.
 	ReqGrantDeny RequestType = "grant_deny"
+	// ReqReviewSnapshot returns the bounded v1 projection used by the macOS
+	// approval companion. Control-socket only; CtlToken required.
+	ReqReviewSnapshot RequestType = "review_snapshot"
 	// ReqDaemonReload asks the daemon to reload policy.yaml and recompile the
 	// Rego bundle in place -- what SIGHUP does, but with a response so the
 	// caller learns whether the rules actually compiled.
@@ -85,24 +88,28 @@ type Request struct {
 	// CtlToken authenticates the caller as a process outside the sandbox. Every
 	// verb served on daemon-ctl.sock requires it (ADR 0069). ReqGrantRequest is
 	// exempt: it is the agent's own verb and is served on daemon.sock.
-	CtlToken      string            `json:"ctl_token,omitempty"`
-	SessionID     string            `json:"session_id,omitempty"`
-	CWD           string            `json:"cwd,omitempty"`
-	Host          string            `json:"host,omitempty"`
-	TTLMs         int64             `json:"ttl_ms,omitempty"`
-	Reason        string            `json:"reason,omitempty"`
-	GrantID       string            `json:"grant_id,omitempty"`
-	UpdateStatus  UpdateAuditStatus `json:"update_status,omitempty"`
-	UpdateVersion string            `json:"update_version,omitempty"`
-	UpdateOS      string            `json:"update_os,omitempty"`
+	CtlToken string `json:"ctl_token,omitempty"`
+	// ProtocolVersion is required for versioned review requests. Zero is not
+	// an alias for v1. See ADR 0133-macos-menu-review.
+	ProtocolVersion ProtocolVersion   `json:"protocol_version,omitempty"`
+	SessionID       string            `json:"session_id,omitempty"`
+	CWD             string            `json:"cwd,omitempty"`
+	Host            string            `json:"host,omitempty"`
+	TTLMs           int64             `json:"ttl_ms,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
+	GrantID         string            `json:"grant_id,omitempty"`
+	UpdateStatus    UpdateAuditStatus `json:"update_status,omitempty"`
+	UpdateVersion   string            `json:"update_version,omitempty"`
+	UpdateOS        string            `json:"update_os,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).
 type Response struct {
-	OK      bool        `json:"ok"`
-	Error   string      `json:"error,omitempty"`
-	GrantID string      `json:"grant_id,omitempty"`
-	Grants  []GrantInfo `json:"grants,omitempty"`
+	OK             bool              `json:"ok"`
+	Error          string            `json:"error,omitempty"`
+	GrantID        string            `json:"grant_id,omitempty"`
+	Grants         []GrantInfo       `json:"grants,omitempty"`
+	ReviewSnapshot *ReviewSnapshotV1 `json:"review_snapshot,omitempty"`
 }
 
 // GrantInfo describes one pending grant request, suitable for display to a
@@ -120,6 +127,69 @@ type GrantInfo struct {
 	// Reason is the agent-supplied justification, display-only and bounded by
 	// MaxReasonLen.
 	Reason string `json:"reason,omitempty"`
+}
+
+// ProtocolVersion identifies a versioned control-plane projection.
+type ProtocolVersion uint32
+
+// ReviewProtocolVersion is the only menu-review protocol version supported by
+// this package.
+const ReviewProtocolVersion ProtocolVersion = 1
+
+// ReviewKind identifies the authority being reviewed.
+type ReviewKind string
+
+const (
+	ReviewKindProjectHost ReviewKind = "project_host"
+)
+
+// ReviewScope describes when an approved review takes effect.
+type ReviewScope string
+
+const (
+	ReviewScopeFutureProjectSessions ReviewScope = "future_project_sessions"
+)
+
+// ReviewContextState describes whether the daemon can represent verified
+// authority context for an approval.
+type ReviewContextState string
+
+const (
+	ReviewContextStateVerified        ReviewContextState = "verified"
+	ReviewContextStateUnbound         ReviewContextState = "unbound"
+	ReviewContextStateUnrepresentable ReviewContextState = "unrepresentable"
+)
+
+// ReviewID is the stable, non-secret handle for a pending review.
+type ReviewID string
+
+// UnixMilliseconds is a lossless Unix timestamp in milliseconds.
+type UnixMilliseconds int64
+
+// ReviewInfo is the bounded projection of a pending project-host grant.
+// Authority fields are complete or absent; all strings remain untrusted.
+type ReviewInfo struct {
+	ReviewID        ReviewID           `json:"review_id"`
+	Kind            ReviewKind         `json:"kind"`
+	Host            string             `json:"host,omitempty"`
+	ProjectPath     string             `json:"project_path,omitempty"`
+	Reason          string             `json:"reason"`
+	ReasonTruncated bool               `json:"reason_truncated"`
+	ContextState    ReviewContextState `json:"context_state"`
+	CreatedAtUnixMs UnixMilliseconds   `json:"created_at_unix_ms"`
+	ExpiresAtUnixMs UnixMilliseconds   `json:"expires_at_unix_ms"`
+	ApprovalScope   ReviewScope        `json:"approval_scope"`
+	CanApprove      bool               `json:"can_approve"`
+	CanDeny         bool               `json:"can_deny"`
+}
+
+// ReviewSnapshotV1 is one coherent, server-timestamped view of pending reviews.
+type ReviewSnapshotV1 struct {
+	ProtocolVersion   ProtocolVersion  `json:"protocol_version"`
+	GeneratedAtUnixMs UnixMilliseconds `json:"generated_at_unix_ms"`
+	TotalPending      int              `json:"total_pending"`
+	Truncated         bool             `json:"truncated"`
+	Reviews           []ReviewInfo     `json:"reviews"`
 }
 
 // ClaimedGrant is the snapshot type returned when a grant is approved by the
@@ -157,6 +227,16 @@ func (cg ClaimedGrant) MarshalJSON() ([]byte, error) {
 // response) so neither peer can be forced to buffer unbounded data. Grant
 // payloads are small (a single host or a list of pending requests).
 const MaxControlMsgBytes = 64 * 1024
+
+// Review projection limits keep three worst-case JSON-escaped reviews below
+// MaxControlMsgBytes. Authority fields exceeding their limit are omitted and
+// made deny-only. See ADR 0133-macos-menu-review.
+const (
+	MaxReviewHostBytes        = 255
+	MaxReviewProjectPathBytes = 2048
+	MaxReviewReasonBytes      = 256
+	MaxReviewSnapshotItems    = 3
+)
 
 // MaxReasonLen bounds the agent-supplied --reason string in a grant request.
 const MaxReasonLen = 256

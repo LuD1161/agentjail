@@ -81,6 +81,96 @@ func GrantList(sockPath, ctlToken string, timeout time.Duration) ([]GrantInfo, e
 	return resp.Grants, nil
 }
 
+// ReviewSnapshot returns the bounded v1 menu-review projection. The request
+// always carries an explicit version; missing and unsupported response
+// versions are protocol errors rather than empty queues.
+func ReviewSnapshot(sockPath, ctlToken string, timeout time.Duration) (ReviewSnapshotV1, error) {
+	resp, err := roundTrip(sockPath, Request{
+		Type:            ReqReviewSnapshot,
+		CtlToken:        ctlToken,
+		ProtocolVersion: ReviewProtocolVersion,
+	}, timeout)
+	if err != nil {
+		return ReviewSnapshotV1{}, err
+	}
+	if !resp.OK {
+		return ReviewSnapshotV1{}, fmt.Errorf("review snapshot refused: %s", resp.Error)
+	}
+	if resp.ReviewSnapshot == nil || resp.ReviewSnapshot.ProtocolVersion == 0 {
+		return ReviewSnapshotV1{}, fmt.Errorf("review snapshot response missing protocol_version")
+	}
+	if resp.ReviewSnapshot.ProtocolVersion != ReviewProtocolVersion {
+		return ReviewSnapshotV1{}, fmt.Errorf("unsupported review protocol version %d", resp.ReviewSnapshot.ProtocolVersion)
+	}
+	if err := validateReviewSnapshotV1(*resp.ReviewSnapshot); err != nil {
+		return ReviewSnapshotV1{}, fmt.Errorf("invalid review snapshot: %w", err)
+	}
+	return *resp.ReviewSnapshot, nil
+}
+
+func validateReviewSnapshotV1(snapshot ReviewSnapshotV1) error {
+	if snapshot.Reviews == nil {
+		return fmt.Errorf("reviews is required")
+	}
+	if len(snapshot.Reviews) > MaxReviewSnapshotItems {
+		return fmt.Errorf("reviews exceeds item limit")
+	}
+	if snapshot.TotalPending < len(snapshot.Reviews) {
+		return fmt.Errorf("total_pending is smaller than reviews")
+	}
+	if snapshot.Truncated != (snapshot.TotalPending > len(snapshot.Reviews)) {
+		return fmt.Errorf("truncated does not match total_pending")
+	}
+	for i, review := range snapshot.Reviews {
+		if err := validateReviewInfoV1(review); err != nil {
+			return fmt.Errorf("review %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func validateReviewInfoV1(review ReviewInfo) error {
+	if review.ReviewID == "" {
+		return fmt.Errorf("review_id is required")
+	}
+	if review.Kind != ReviewKindProjectHost {
+		return fmt.Errorf("unsupported kind %q", review.Kind)
+	}
+	if review.ApprovalScope != ReviewScopeFutureProjectSessions {
+		return fmt.Errorf("unsupported approval_scope %q", review.ApprovalScope)
+	}
+	if len(review.Host) > MaxReviewHostBytes {
+		return fmt.Errorf("host exceeds byte limit")
+	}
+	if len(review.ProjectPath) > MaxReviewProjectPathBytes {
+		return fmt.Errorf("project_path exceeds byte limit")
+	}
+	if len(review.Reason) > MaxReviewReasonBytes {
+		return fmt.Errorf("reason exceeds byte limit")
+	}
+
+	switch review.ContextState {
+	case ReviewContextStateVerified:
+		if review.Host == "" || review.ProjectPath == "" || !review.CanApprove || !review.CanDeny {
+			return fmt.Errorf("verified context is not actionable")
+		}
+	case ReviewContextStateUnbound:
+		if review.Host == "" || review.ProjectPath != "" || review.CanApprove || !review.CanDeny {
+			return fmt.Errorf("unbound context has invalid authority")
+		}
+	case ReviewContextStateUnrepresentable:
+		if review.Host != "" && review.ProjectPath != "" {
+			return fmt.Errorf("unrepresentable context contains complete authority")
+		}
+		if review.CanApprove || !review.CanDeny {
+			return fmt.Errorf("unrepresentable context is actionable")
+		}
+	default:
+		return fmt.Errorf("unsupported context_state %q", review.ContextState)
+	}
+	return nil
+}
+
 // GrantApprove claims the pending grant request identified by grantID and
 // applies it to its owning session's allowlist. The daemon resolves
 // SessionID/CWD from its own in-memory grant map by GrantID.
