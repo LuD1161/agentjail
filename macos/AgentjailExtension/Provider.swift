@@ -610,8 +610,12 @@ private func startSessionReaper() {
     let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     t.schedule(deadline: .now() + 5, repeating: 5)
     t.setEventHandler {
-        for pid in sessionPids() where kill(pid, 0) != 0 {
-            sessionUnregister(pid)
+        for pid in sessionPids() {
+            // EPERM proves the PID exists; only ESRCH permits reaping it.
+            // See GOTCHAS.md #69.
+            if kill(pid, 0) != 0 && errno == ESRCH {
+                sessionUnregister(pid)
+            }
         }
     }
     t.resume()

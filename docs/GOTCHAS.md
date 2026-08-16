@@ -919,6 +919,17 @@ approval prompt.
   daemon control ping is not proof that the policy response reached the hook.
   See ADR 0118-codex-approval-broker.
 
+## 69. `kill(pid, 0)` failure does not mean the process is dead
+
+The approved Darwin extension was active and allowed HTTPS worked, but every
+named tunnel policy returned the public upstream response and `network.db`
+recorded nothing. Its session reaper removed a live shield registration when
+`kill(pid, 0)` returned `EPERM`; only `ESRCH` means the process is gone.
+
+- **Rule:** classify probe errors by their documented semantics. A liveness
+  reaper may remove a PID only on `ESRCH`, and a security boundary must validate
+  the registration acknowledgement before claiming that traffic is routed.
+
 ---
 
 ## Testing gotchas

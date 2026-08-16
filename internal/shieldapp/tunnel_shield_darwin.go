@@ -475,9 +475,6 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		return
 	}
 
-	logger.Info("NETransparentProxyProvider tunnel active", "port", port)
-	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "")
-
 	// --- 6. SEATBELT + SPAWN CHILD (no syscall.Exec - see doc comment).
 	home, homeErr := os.UserHomeDir()
 	if homeErr != nil {
@@ -553,11 +550,20 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	//     the shield's parent (terminal/shell), which is NOT registered ->
 	//     not tunneled. No loop.
 	if regErr := tunnelSessionIPC(fmt.Sprintf("register %d\n", os.Getpid())); regErr != nil {
-		logger.Warn("failed to register shield PID with extension", "pid", os.Getpid(), "err", regErr)
+		cleanupGateway()
+		_, _ = exec.Command(appPath, "stop").CombinedOutput()
+		revokeSecretGrants(activeGrants, ctlToken)
+		credentialSession.cleanup(ctlToken)
+		unregisterHostProxyLaunch(registeredHostProxy, ctlToken)
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "register_ipc_failed")
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, "")
+		fail("registering shield session with extension: %v", regErr)
+		return
 	} else {
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "")
 	}
+	logger.Info("NETransparentProxyProvider tunnel active", "port", port)
+	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "")
 
 	// The child is spawned (not exec'd - see doc comment), so it shares this
 	// process's terminal/process group and receives SIGINT/SIGTERM directly.
@@ -734,11 +740,14 @@ func emitTunnelExtensionEvent(ctx context.Context, emitter audit.Emitter, eventT
 // macos/AgentjailTunnel/main.swift and the wire protocol documented in
 // macos/AgentjailExtension/Provider.swift (serviceSessionClient): "register
 // <pid>\n" / "unregister <pid>\n" -> "ok\n". The ack is read but not
-// strictly validated here (best-effort, matching the Swift client) - a
-// connect/write failure is the fail-closed signal; a malformed ack from an
-// otherwise-reachable extension is not worth aborting the whole launch over.
+// accepted only when it is exactly "ok\n"; a reachable but incompatible
+// extension cannot prove that the session was registered.
 func tunnelSessionIPC(msg string) error {
-	conn, err := net.DialTimeout("unix", tunnelSessionSockPath, 2*time.Second)
+	return tunnelSessionIPCAt(tunnelSessionSockPath, msg)
+}
+
+func tunnelSessionIPCAt(socketPath, msg string) error {
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
 	if err != nil {
 		return err
 	}
@@ -748,6 +757,12 @@ func tunnelSessionIPC(msg string) error {
 		return err
 	}
 	buf := make([]byte, 8)
-	_, _ = conn.Read(buf) // best-effort ack, see doc comment
+	n, err := conn.Read(buf)
+	if err != nil {
+		return fmt.Errorf("read session registration ack: %w", err)
+	}
+	if string(buf[:n]) != "ok\n" {
+		return fmt.Errorf("invalid session registration ack")
+	}
 	return nil
 }

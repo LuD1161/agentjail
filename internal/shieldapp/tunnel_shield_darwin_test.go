@@ -99,6 +99,43 @@ func TestWaitForSessionSocketSucceedsWhenListenerAppearsLate(t *testing.T) {
 	}
 }
 
+func TestTunnelSessionIPCRequiresExactAck(t *testing.T) {
+	tests := []struct {
+		name    string
+		ack     string
+		wantErr bool
+	}{
+		{name: "registered", ack: "ok\n"},
+		{name: "rejected", ack: "err\n", wantErr: true},
+		{name: "incompatible", ack: "okay\n", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(shortSocketDir(t), "session.sock")
+			ln, err := net.Listen("unix", path)
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			defer ln.Close()
+			go func() {
+				conn, acceptErr := ln.Accept()
+				if acceptErr != nil {
+					return
+				}
+				defer conn.Close()
+				buf := make([]byte, 64)
+				_, _ = conn.Read(buf)
+				_, _ = conn.Write([]byte(tt.ack))
+			}()
+
+			err = tunnelSessionIPCAt(path, "register 123\n")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("tunnelSessionIPCAt() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // (b) Arming the signal drain must intercept SIGINT/SIGTERM so the process
 // (and therefore the test) survives - Go's default action would otherwise
 // terminate it, which is exactly the cleanup-skipping bug this guards

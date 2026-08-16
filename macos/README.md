@@ -214,7 +214,11 @@ Apple can keep the activation pending until the user grants or denies it.
 
 `agentjail-shield --tunnel` owns these calls in normal use. It creates a fresh
 in-memory MITM CA per session, applies process-local trust, and removes the
-session material during cleanup.
+session material during cleanup. The shield accepts the tunnel as active only
+after the extension acknowledges its process registration; a missing or invalid
+acknowledgement falls back without launching the agent under the broad tunnel
+profile. Darwin tunnel sessions are serialized because the Network Extension
+manager and WireGuard provider state are machine-global, not per workspace.
 
 ## Tart tunnel golden
 
