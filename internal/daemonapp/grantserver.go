@@ -29,10 +29,8 @@ package daemonapp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -239,8 +237,8 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 		return
 	}
 
-	var req grantctl.Request
-	if err := json.NewDecoder(io.LimitReader(conn, grantctl.MaxControlMsgBytes)).Decode(&req); err != nil {
+	req, err := grantctl.ReadRequestFrame(conn)
+	if err != nil {
 		gs.reply(conn, grantctl.Response{OK: false, Error: "malformed grant control request"})
 		return
 	}
@@ -511,7 +509,7 @@ func (gs *grantServer) startReaper(ctx context.Context, interval time.Duration) 
 }
 
 func (gs *grantServer) reply(conn net.Conn, resp grantctl.Response) {
-	if err := json.NewEncoder(conn).Encode(resp); err != nil {
+	if err := grantctl.WriteResponseFrame(conn, resp); err != nil {
 		slog.Warn("grant control reply write failed", "err", err)
 	}
 }

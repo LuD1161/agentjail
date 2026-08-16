@@ -917,6 +917,16 @@ window.
   authorization record. A reaper controls retention, not permission. See ADR
   0133-macos-menu-review.
 
+## 69. A decoder limit is not a frame limit
+
+`LimitReader` bounded how many bytes the JSON decoder could request, but an
+early valid object still decoded before trailing or over-limit bytes were read.
+Single-object tests stayed green while the socket accepted an unbounded frame.
+
+- **Rule:** read exactly one bounded delimited value, reject in-frame trailing
+  data, and size-check the complete response before writing any byte. See ADR
+  0133-macos-menu-review.
+
 ---
 
 ## Testing gotchas

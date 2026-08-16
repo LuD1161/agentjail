@@ -1,9 +1,7 @@
 package grantctl
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"time"
 )
@@ -35,11 +33,11 @@ func roundTripSlow(sockPath string, req Request, dialTimeout, replyTimeout time.
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(replyTimeout))
 
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
+	if err := WriteRequestFrame(conn, req); err != nil {
 		return Response{}, fmt.Errorf("send control request: %w", err)
 	}
-	var resp Response
-	if err := json.NewDecoder(io.LimitReader(conn, MaxControlMsgBytes)).Decode(&resp); err != nil {
+	resp, err := ReadResponseFrame(conn)
+	if err != nil {
 		return Response{}, fmt.Errorf("read control response: %w", err)
 	}
 	return resp, nil
