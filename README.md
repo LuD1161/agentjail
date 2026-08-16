@@ -249,8 +249,8 @@ shell, stdin, or TTY, with a 30-second timeout and 1 MiB combined output limit. 
 uses the daemon service environment—not the interactive login-shell environment—and
 does not forward caller environment variables. Host configuration and keychain
 access may work; environment-only credentials and interactive programs are not
-supported. See [ADR 0132-host-proxy-mvp](./docs/adr/0132-host-proxy-mvp.md) and
-[ADR 0134-macos-host-proxy](./docs/adr/0134-macos-host-proxy.md).
+supported. See [ADR 0134-host-proxy-mvp](./docs/adr/0134-host-proxy-mvp.md) and
+[ADR 0135-macos-host-proxy](./docs/adr/0135-macos-host-proxy.md).
 
 `SessionStart` and `Stop` also display a live shield-and-daemon attestation.
 Each `apply_patch` target is normalized to the same file-policy contract as an
@@ -740,6 +740,14 @@ transparent forwarder and policy can act on what the agent does on the network:
 agentjail run --tunnel -- claude
 ```
 
+Release checks and other callers that must prove this exact path use
+`--require-tunnel`. It implies `--tunnel` and refuses to launch the agent when
+tunnel setup fails, instead of silently testing a fallback network mode:
+
+```sh
+agentjail run --require-tunnel -- codex
+```
+
 **No sudo, no daemon, no install-time setup.** On Linux the tunnel runs in
 unprivileged user + network + mount namespaces the shield creates and owns
 ([ADR 0079](./docs/adr/0079-agent-netns-veth-vs-userns-tunfd.md)). Nothing is
@@ -1001,6 +1009,12 @@ before tagging. The Codex gate checks host RAM and disk before boot, requires a
 file-based auth cache, and fails rather than skipping when authentication is
 unavailable. Its VM is stopped and deleted on every exit path by default; see
 [`test/testbed/README.md`](./test/testbed/README.md).
+
+For an authorized independent review, the gate also has an explicit
+`AGENTJAIL_TESTBED_RAW_EVIDENCE_DIR` mode that binds its clean-install baseline,
+installer inputs, source tree, structured results, databases, and raw agent
+artifacts in a temporary owner-only manifest. Those unsanitized files are never
+release assets and must not be committed.
 
 ## License
 

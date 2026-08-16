@@ -42,6 +42,7 @@ func runHostProxy(cmd *cobra.Command, args []string) int {
 	proof := hostproxy.Proof(os.Getenv(hostproxy.ProofEnvironmentName))
 	executable := os.Getenv(hostproxy.TargetEnvironmentName)
 	if proof == "" || executable == "" {
+		reportMissingHostProxyApproval(args)
 		fmt.Fprintln(cmd.ErrOrStderr(), "agentjail proxy: no native one-time approval is available")
 		return 1
 	}
@@ -93,4 +94,31 @@ func runHostProxy(cmd *cobra.Command, args []string) int {
 		return 1
 	}
 	return response.Result.ExitCode
+}
+
+// Missing proof is still sent to the daemon so the fail-closed denial reaches
+// the unified audit store. See ADR 0118-codex-approval-broker.
+func reportMissingHostProxyApproval(args []string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	conn, err := net.DialTimeout("unix", wire.DefaultSocketPath(), 500*time.Millisecond)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	request := hostproxy.WireRequest{
+		Type: hostproxy.RequestType,
+		Request: hostproxy.Request{
+			Target: hostproxy.Target{Argv: append([]string(nil), args...)},
+			CWD:    cwd,
+		},
+	}
+	if json.NewEncoder(conn).Encode(request) != nil {
+		return
+	}
+	var response hostproxy.WireResponse
+	_ = json.NewDecoder(io.LimitReader(conn, hostproxy.MaxResponseBytes)).Decode(&response)
 }

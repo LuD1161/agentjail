@@ -8,7 +8,9 @@ package shieldapp
 // and that source already lives in internal/keyring.
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,7 +28,30 @@ var openBodyKeys = func() (mitm.KeyWrapper, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if err := probeBodyKeys(kr); err != nil {
+		return nil, "", err
+	}
 	return kr, kr.Backend(), nil
+}
+
+func probeBodyKeys(keys mitm.KeyWrapper) error {
+	dek := make([]byte, 32)
+	if _, err := rand.Read(dek); err != nil {
+		return fmt.Errorf("generate body-key probe: %w", err)
+	}
+	aad := []byte("agentjail-body-key-probe")
+	id, wrapped, err := keys.Wrap(dek, aad)
+	if err != nil {
+		return fmt.Errorf("wrap body-key probe: %w", err)
+	}
+	opened, err := keys.Unwrap(id, wrapped, aad)
+	if err != nil {
+		return fmt.Errorf("unwrap body-key probe: %w", err)
+	}
+	if !bytes.Equal(opened, dek) {
+		return errors.New("body-key probe returned a different key")
+	}
+	return nil
 }
 
 // keyState is why the session has no KEK. A LOCKED keychain and an ABSENT one
@@ -112,6 +137,9 @@ func (r bodyRecording) notice() string {
 // See ADR 0092-persist-request-bodies (D1, D5).
 func newBodyRecording(ctx context.Context, sessionID string, logger *slog.Logger, emitter audit.Emitter) bodyRecording {
 	keys, backend, keyErr := openBodyKeys()
+	if keyErr != nil {
+		keys = nil
+	}
 
 	store, err := mitm.NewBodyStore(mitm.DefaultBodyDir(), sessionID, keys)
 	if err != nil {

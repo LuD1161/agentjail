@@ -277,6 +277,9 @@ func matchSpec(spec *MatchSpec, op *Operation) bool {
 	if !matchGlobList(spec.Host, op.Host) {
 		return false
 	}
+	if !matchPortList(spec.Port, op.Port) {
+		return false
+	}
 	if !matchStringList(spec.Method, op.Method) {
 		return false
 	}
@@ -284,6 +287,18 @@ func matchSpec(spec *MatchSpec, op *Operation) bool {
 		return false
 	}
 	return true
+}
+
+func matchPortList(patterns []Port, value Port) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		if pattern == value {
+			return true
+		}
+	}
+	return false
 }
 
 // matchStringList checks if value is in the patterns list (case-insensitive).

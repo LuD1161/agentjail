@@ -35,6 +35,9 @@ func TestRunHelpDocumentsSSHForwarding(t *testing.T) {
 	if !strings.Contains(runCmd.Long, "--git-ssh") || !strings.Contains(claudeCmd.Long, "--git-ssh") {
 		t.Fatal("Git-over-SSH flag missing from run or compatibility help")
 	}
+	if !strings.Contains(runCmd.Long, "--require-tunnel") {
+		t.Fatal("required-tunnel contract missing from run help")
+	}
 }
 
 func TestParseRunOptionsGitSSHOverrides(t *testing.T) {
@@ -211,6 +214,25 @@ func TestSessionSSHAgentEnvCleansTempDirWithoutMutatingCaller(t *testing.T) {
 		if got := sessionSSHAgentEnv(input); !reflect.DeepEqual(got, input) {
 			t.Errorf("sessionSSHAgentEnv(%v) = %v", input, got)
 		}
+	}
+}
+
+func TestSessionSSHAgentEnvCanonicalizesSymlinkedTempDir(t *testing.T) {
+	realDir := t.TempDir()
+	linkParent := t.TempDir()
+	linkDir := filepath.Join(linkParent, "session-temp")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+	canonicalDir, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := sessionSSHAgentEnv([]string{"TMPDIR=" + linkDir + string(filepath.Separator)})
+	want := []string{"TMPDIR=" + canonicalDir}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sessionSSHAgentEnv = %v, want %v", got, want)
 	}
 }
 

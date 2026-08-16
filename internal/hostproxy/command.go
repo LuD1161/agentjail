@@ -12,7 +12,7 @@ var ErrCommandShape = errors.New("host proxy requires one direct agentjail proxy
 
 // ParseCommand accepts only one direct shell command. Expansion and shell
 // operators are refused so the approved string has one exact argv meaning.
-// See ADR 0132-host-proxy-mvp.
+// See ADR 0134-host-proxy-mvp.
 func ParseCommand(command string) ([]string, error) {
 	words, err := strictWords(command)
 	if err != nil || len(words) < 4 || filepath.Base(words[0]) != "agentjail" || words[1] != "proxy" || words[2] != "--" {

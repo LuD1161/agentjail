@@ -263,6 +263,22 @@ func TestRecognizeGeneric(t *testing.T) {
 	assertEqual(t, "resource_type", "v1", op.ResourceType)
 }
 
+func TestRecognizeRawHTTPUsesHostHeaderAndPort(t *testing.T) {
+	op := RecognizeTCP("104.20.23.154", 80, []byte("GET /cdn-cgi/trace HTTP/1.1\r\nHost: www.cloudflare.com:80\r\n\r\n"))
+	if op == nil {
+		t.Fatal("raw HTTP request was not recognized")
+	}
+	if op.Host != "www.cloudflare.com" {
+		t.Errorf("Host = %q, want www.cloudflare.com", op.Host)
+	}
+	if op.Port != Port(80) {
+		t.Errorf("Port = %d, want 80", op.Port)
+	}
+	if op.Method != http.MethodGet || op.Path != "/cdn-cgi/trace" {
+		t.Errorf("operation = %#v", op)
+	}
+}
+
 func TestRecognizeGenericWithName(t *testing.T) {
 	req := makeRequest("GET", "https://api.example.com/users/123", "", nil)
 	op := RecognizeHTTP("api.example.com", req, nil)

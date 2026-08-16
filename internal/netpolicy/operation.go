@@ -10,6 +10,7 @@ type Operation struct {
 	ResourceName string            `json:"resource_name"` // "web-frontend-abc123", "users", "#general"
 	Namespace    string            `json:"namespace"`     // "production", "default", "mydb"
 	Host         string            `json:"host"`          // "k8s-api:6443", "prod-db:5432"
+	Port         Port              `json:"port"`          // validated destination transport port
 	Method       string            `json:"method"`        // HTTP method: "GET", "POST", "DELETE"
 	Path         string            `json:"path"`          // "/api/v1/namespaces/production/pods/web-123"
 	RawQuery     string            `json:"raw_query"`     // SQL text, Redis command, full URL query string

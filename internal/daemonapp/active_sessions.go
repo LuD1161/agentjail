@@ -143,7 +143,7 @@ func (t *activeTracker) update(sessionID string, pid int, cwd string) {
 	defer t.mu.Unlock()
 	if existing := t.sessions[sessionID]; existing != nil && existing.Root != "" {
 		// Authenticated launch bindings are refreshed only by bindVerified.
-		// See ADR 0132-host-proxy-mvp.
+		// See ADR 0134-host-proxy-mvp.
 		return
 	}
 	t.sessions[sessionID] = &sessionState{PID: pid, CWD: cwd}

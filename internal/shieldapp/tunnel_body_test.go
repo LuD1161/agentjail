@@ -189,6 +189,23 @@ func TestBodiesEncryptedWhenKeyringAvailable(t *testing.T) {
 	}
 }
 
+func TestBodyKeyProbeRejectsDeferredWrapperFailure(t *testing.T) {
+	keys := &failingKeyWrapper{err: errors.Join(keyring.ErrKeychainLocked, errors.New("interaction not allowed"))}
+	if err := probeBodyKeys(keys); !errors.Is(err, keyring.ErrKeychainLocked) {
+		t.Fatalf("probeBodyKeys error = %v, want ErrKeychainLocked", err)
+	}
+}
+
+type failingKeyWrapper struct{ err error }
+
+func (f *failingKeyWrapper) Wrap([]byte, []byte) (string, []byte, error) {
+	return "", nil, f.err
+}
+
+func (f *failingKeyWrapper) Unwrap(string, []byte, []byte) ([]byte, error) {
+	return nil, f.err
+}
+
 // ErrNoKeychain must not stop recording: bodies are captured in the clear, and
 // the degradation is loud on stderr AND durable in the audit log.
 // See ADR 0092-persist-request-bodies (D5).
@@ -356,9 +373,13 @@ func TestUnencryptedAuditEventLeaksNothing(t *testing.T) {
 	// A wrapper that exists but errors: the detail must still be fixed strings.
 	stubBodyKeys(t, keys, "test-keychain", errors.New("dbus: connection refused"))
 	emitter := &captureEmitter{}
+	var rec bodyRecording
 	captureStderr(t, func() {
-		newBodyRecording(context.Background(), "99998888777766aa", testLogger(io.Discard), emitter)
+		rec = newBodyRecording(context.Background(), "99998888777766aa", testLogger(io.Discard), emitter)
 	})
+	if rec.store == nil || rec.encrypted {
+		t.Fatal("a deferred keyring failure must fall back to an unencrypted body store")
+	}
 
 	ev, ok := emitter.find(audit.TunnelBodiesUnencrypted)
 	if !ok {

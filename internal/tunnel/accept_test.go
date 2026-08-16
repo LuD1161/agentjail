@@ -299,8 +299,7 @@ func TestAccept_ProtocolDetection(t *testing.T) {
 			host:      "example.com",
 			port:      80,
 			data:      []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"),
-			wantProto: "http", // gateway fallback for port 80
-			wantNil:   true,   // RecognizeTCP returns nil for HTTP (no port 80 case)
+			wantProto: "http",
 		},
 		{
 			name:      "SSH version string",

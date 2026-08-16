@@ -1,6 +1,6 @@
 # ADR 0110: network flag consolidation and canonical precedence
 
-Status: Accepted
+Status: Accepted; tunnel IPv6 default superseded by ADR 0138-dual-stack-default
 
 ## Context
 
@@ -34,7 +34,7 @@ Canonical knob list:
 |---|---|---|---|---|
 | TLS interception (tunnel) | `--mitm` / `--no-mitm` | `tunnel_mitm` (tri-state) | none | on |
 | Capture gateway | `--no-provider-gateway` | `capture_gateway` (tri-state) | none | on |
-| Tunnel IPv6 (AGE-262) | `--tunnel-ipv6` / `--no-tunnel-ipv6` | `tunnel_ipv6` (tri-state) | `AGENTJAIL_TUNNEL_IPV6=1` (transitional) | off |
+| Tunnel IPv6 (AGE-262) | `--tunnel-ipv6` / `--no-tunnel-ipv6` | `tunnel_ipv6` (tri-state) | `AGENTJAIL_TUNNEL_IPV6=1` (transitional) | on (ADR 0138-dual-stack-default) |
 
 Changes:
 
@@ -83,6 +83,8 @@ Changes:
   agent), so its "source" column tops out at env/config/default; this is
   called out explicitly in its own output rather than silently overstating
   what doctor can see.
+- ADR 0138-dual-stack-default later enabled the existing IPv6 datapath by
+  default without changing this ADR's precedence.
 - No change to the IPv6 datapath itself, the MITM datapath, or the capture
   gateway's fail-closed contract (ADR 0109) — this ADR is scoped to how the
   on/off decisions are sourced and documented, not to what they do once

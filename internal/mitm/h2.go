@@ -41,7 +41,7 @@ func (h *MITMHandler) serveH2(clientTLS *tls.Conn, host string, target HostTarge
 	}
 	defer transport.CloseIdleConnections()
 
-	rh := &h2RecordingHandler{h: h, host: host, dialAddr: dialAddr, transport: transport}
+	rh := &h2RecordingHandler{h: h, host: host, port: parsePort(port), dialAddr: dialAddr, transport: transport}
 	srv := &http2.Server{}
 	srv.ServeConn(clientTLS, &http2.ServeConnOpts{Handler: rh, Context: context.Background()})
 }
@@ -98,6 +98,7 @@ func stripHopByHop(h http.Header) {
 type h2RecordingHandler struct {
 	h         *MITMHandler
 	host      string
+	port      netpolicy.Port
 	dialAddr  string
 	transport *http.Transport
 }
@@ -182,7 +183,7 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Run the same policy engine the h1 loop runs, so a deny fires identically
 	// regardless of which protocol carried the request.
 	if h.Matcher != nil {
-		op := netpolicy.RecognizeHTTP(rh.host, r, bodyBuf)
+		op := netpolicy.RecognizeHTTPAt(rh.host, rh.port, r, bodyBuf)
 		reqLog.Service = op.Service
 		reqLog.Verb = op.Verb
 		reqLog.ResourceType = op.ResourceType

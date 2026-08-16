@@ -1,4 +1,4 @@
-# ADR 0133: Normalize the CLI command surface
+# ADR 0132: Normalize the CLI command surface
 
 **Status:** Accepted
 

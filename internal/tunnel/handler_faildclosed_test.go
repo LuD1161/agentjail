@@ -9,11 +9,15 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/dnsvip"
+	"github.com/LuD1161/agentjail/internal/mitm"
+	"github.com/LuD1161/agentjail/internal/netpolicy"
 )
 
 // scriptedConn is a net.Conn whose read stream and destination address are
@@ -23,6 +27,7 @@ type scriptedConn struct {
 	readPos  int
 	local    *net.TCPAddr
 	remote   *net.TCPAddr
+	maxRead  int
 
 	mu     sync.Mutex
 	closed bool
@@ -31,6 +36,9 @@ type scriptedConn struct {
 func (c *scriptedConn) Read(b []byte) (int, error) {
 	if c.readPos >= len(c.readData) {
 		return 0, io.EOF
+	}
+	if c.maxRead > 0 && len(b) > c.maxRead {
+		b = b[:c.maxRead]
 	}
 	n := copy(b, c.readData[c.readPos:])
 	c.readPos += n
@@ -120,5 +128,85 @@ func TestHandleConn_UnrecognizedOn443Allowed(t *testing.T) {
 
 	if rec.seen("unknown protocol on managed port; denying (fail-closed)") {
 		t.Error("unrecognized TLS on port 443 was denied — availability constraint violated (S-D1)")
+	}
+}
+
+func TestHandleConn_SplitHTTPHeaderUsesNamedPolicyAndRecordsDecision(t *testing.T) {
+	dir := t.TempDir()
+	template := []byte(`
+id: deny-http-control
+info:
+  name: Block cleartext HTTP control
+match:
+  protocol: [http]
+  host: [www.cloudflare.com]
+  port: [80]
+action: deny
+reason: cleartext HTTP denied
+`)
+	if err := os.WriteFile(filepath.Join(dir, "http.yaml"), template, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	matcher, err := netpolicy.NewMatcher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := make(chan *mitm.RequestLog, 1)
+	g := &Gateway{
+		logger:   slog.New(&recordingHandler{}),
+		registry: dnsvip.NewRegistry(),
+		matcher:  matcher,
+	}
+	g.SetMITM(mitm.NewMITMHandler(nil, nil, slog.Default(), func(log *mitm.RequestLog) {
+		recorded <- log
+	}))
+	conn := &scriptedConn{
+		readData: []byte("GET /cdn-cgi/trace HTTP/1.1\r\nHost: www.cloudflare.com:80\r\n\r\n"),
+		maxRead:  7,
+		local:    &net.TCPAddr{IP: net.IPv4(104, 20, 23, 154), Port: 80},
+		remote:   &net.TCPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 40000},
+	}
+	g.handleConn(conn)
+
+	select {
+	case log := <-recorded:
+		if log.Host != "www.cloudflare.com" || log.PolicyTemplate != "deny-http-control" || log.StatusCode != 403 {
+			t.Fatalf("recorded decision = %#v", log)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("raw HTTP denial was not recorded")
+	}
+}
+
+func TestHandleConn_IncompleteHTTPHeaderDeniedWithPolicy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "allow.yaml"), []byte(`
+id: allow-http
+info:
+  name: Allow HTTP
+match:
+  protocol: [http]
+action: allow
+reason: allowed
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	matcher, err := netpolicy.NewMatcher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &recordingHandler{}
+	g := &Gateway{logger: slog.New(rec), registry: dnsvip.NewRegistry(), matcher: matcher}
+	conn := &scriptedConn{
+		readData: []byte("GET / HTTP/1.1\r\nHost: example.com\r\n"),
+		local:    &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 80},
+		remote:   &net.TCPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 40000},
+	}
+	g.handleConn(conn)
+	if !rec.seen("incomplete HTTP header; denying (fail-closed)") {
+		t.Fatal("incomplete HTTP header was not denied")
+	}
+	if rec.seen("connection allowed, relaying") {
+		t.Fatal("incomplete HTTP header was relayed")
 	}
 }

@@ -709,7 +709,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		// string for Bash, the file_path for file tools, MCP server name for
 		// MCP calls. Truncated to keep the log line bounded. This is what the
 		// `agentjail logs -v` formatter shows on the same row as the verdict.
-		summary := policyeval.SummarizeToolInput(req.ToolName, req.ToolInput)
+		summary := store.RedactText(policyeval.SummarizeToolInput(req.ToolName, req.ToolInput))
 
 		// Full redacted input for the log line, same redactor + 4096 cap the
 		// store persists (ADR 0019). The UI's live SSE feed is parsed from

@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 // daemonLabel is the launchd service label for the agentjail daemon.
 const daemonLabel = "com.agentjail.daemon"
+
+var launchctlRun = func(args ...string) ([]byte, error) {
+	return exec.Command("launchctl", args...).CombinedOutput()
+}
 
 // launchctlTarget returns the launchd "gui/<uid>/<label>" target for the
 // current user's session.
@@ -18,22 +23,28 @@ func launchctlTarget() string {
 	return fmt.Sprintf("gui/%d/%s", os.Getuid(), daemonLabel)
 }
 
-// LaunchctlLoad (re)starts the daemon via launchd. It first tries
-// `launchctl kickstart -kp`, which kills any running instance and restarts
-// it using the on-disk plist even if the service isn't bootstrapped yet.
-// If that fails (e.g. on older launchd or if the service isn't bootstrapped
-// at all), it falls back to the deprecated unload+load sequence.
+func launchctlTargetForPlist(plistPath string) string {
+	label := strings.TrimSuffix(filepath.Base(plistPath), filepath.Ext(plistPath))
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+}
+
+// LaunchctlLoad re-registers the job so launchd refreshes its code requirement
+// after an executable replacement. See ADR 0088-deployed-supervisor-verified.
 func LaunchctlLoad(plistPath string) error {
-	out, err := exec.Command("launchctl", "kickstart", "-kp", launchctlTarget()).CombinedOutput()
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	target := launchctlTargetForPlist(plistPath)
+	bootoutOut, bootoutErr := launchctlRun("bootout", target)
+	out, err := launchctlRun("bootstrap", domain, plistPath)
 	if err == nil {
 		return nil
 	}
-	kickstartErr := fmt.Errorf("launchctl kickstart: %w: %s", err, strings.TrimSpace(string(out)))
+	bootstrapErr := fmt.Errorf("launchctl bootstrap after bootout (%v: %s): %w: %s",
+		bootoutErr, strings.TrimSpace(string(bootoutOut)), err, strings.TrimSpace(string(out)))
 
-	_ = exec.Command("launchctl", "unload", plistPath).Run()
-	out, err = exec.Command("launchctl", "load", plistPath).CombinedOutput()
+	_, _ = launchctlRun("unload", plistPath)
+	out, err = launchctlRun("load", plistPath)
 	if err != nil {
-		return fmt.Errorf("%v; launchctl load fallback: %w: %s", kickstartErr, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%v; launchctl load fallback: %w: %s", bootstrapErr, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -45,13 +56,13 @@ func LaunchctlUnload(plistPath string) error {
 		return nil
 	}
 
-	out, err := exec.Command("launchctl", "bootout", launchctlTarget()).CombinedOutput()
+	out, err := launchctlRun("bootout", launchctlTargetForPlist(plistPath))
 	if err == nil {
 		return nil
 	}
 	bootoutErr := fmt.Errorf("launchctl bootout: %w: %s", err, strings.TrimSpace(string(out)))
 
-	out, err = exec.Command("launchctl", "unload", plistPath).CombinedOutput()
+	out, err = launchctlRun("unload", plistPath)
 	if err != nil {
 		return fmt.Errorf("%v; launchctl unload fallback: %w: %s", bootoutErr, err, strings.TrimSpace(string(out)))
 	}

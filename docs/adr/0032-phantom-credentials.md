@@ -1,7 +1,7 @@
 # ADR 0032 — Phantom credentials and protocol-aware proxy
 
 - **Status:** Proposed
-- **Public CLI:** Deferred by ADR 0133-cli-command-surface until the production
+- **Public CLI:** Deferred by ADR 0132-cli-command-surface until the production
   phantom registry is wired
 - **Date:** 2026-06-29
 - **Deciders:** agentjail-core

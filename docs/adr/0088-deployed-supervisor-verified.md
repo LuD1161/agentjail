@@ -99,8 +99,11 @@ fails with advice and carries no `repairID`.
 **D5 — The rewrite is followed by a supervisor reload, and it is load-bearing.**
 Without it systemd keeps the stale unit in memory and the daemon still strands
 on the next `exit(0)`. Named per-OS difference (ADR 0034): launchd has no
-reload-in-place, so `launchctlLoad`'s unload+load restarts the daemon, where
-systemd's `daemon-reload` does not. In `update` on darwin the reload is skipped
+reload-in-place, so `launchctlLoad` re-registers the job with `bootout` plus
+`bootstrap`, where systemd's `daemon-reload` does not. Re-registration also
+refreshes launchd's lightweight code requirement after the executable changes;
+`kickstart` can return success and then reject the replacement with EX_CONFIG.
+In `update` on darwin the reload is skipped
 deliberately — step 6 already unloaded the plist and step 9's load reads the
 rewrite; loading it twice would fail and trigger the rollback path.
 

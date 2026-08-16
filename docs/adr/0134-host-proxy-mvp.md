@@ -1,4 +1,4 @@
-# ADR 0132 — Host proxy MVP
+# ADR 0134 — Host proxy MVP
 
 - **Status:** Accepted
 - **Date:** 2026-08-12

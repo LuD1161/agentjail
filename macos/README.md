@@ -115,11 +115,23 @@ swiftc \
     macos/AgentjailTunnel/main.swift
 ```
 
+The shield passes a per-launch generation with `start <wg-conf> <generation>`.
+The extension reports that generation ready only after its WireGuard handshake
+and accepts PID registration only for the same ready generation. This is an
+enforcement contract: a reachable session socket alone does not prove the new
+provider configuration is active.
+
 ## Step 4 — Assemble the app bundle
 
 The canonical build and assembly path is `make macos-app` (or
 `NOTARIZE=1 make macos-app` for distribution). The commands below describe its
 bundle layout; keep `scripts/build-macos-app.sh` authoritative.
+
+Read [`docs/runbooks/macos-tunnel-release.md`](../docs/runbooks/macos-tunnel-release.md)
+before replacing an installed extension. It records the complete signing,
+notarization, upgrade, approval, and golden-image procedure, including the
+App Store Connect API-key recovery path for notary-service authentication
+failures.
 
 The system extension must be embedded inside the host app at:
 
@@ -219,6 +231,11 @@ after the extension acknowledges its process registration; a missing or invalid
 acknowledgement falls back without launching the agent under the broad tunnel
 profile. Darwin tunnel sessions are serialized because the Network Extension
 manager and WireGuard provider state are machine-global, not per workspace.
+Darwin provisions IPv4 and IPv6 tunnel addresses by default. This is required
+for IPv6-first destinations: Network Extension may receive an already-resolved
+IPv6 endpoint even when the same hostname also has an A record. Set
+`network.tunnel_ipv6: false` or pass `--no-tunnel-ipv6` only as an explicit
+IPv4-only diagnostic opt-out.
 
 ## Tart tunnel golden
 
@@ -228,18 +245,19 @@ That image contains the approved extension and the exact containing app at
 guest cannot perform Apple's GUI approval, while a Tart disk clone preserves the
 guest's approved system-extension state.
 
-The image baked on 2026-08-13 is explicitly test-only: app version 0.0.2 build 2,
+The image rebuilt and clone-validated on 2026-08-15 contains app version 0.0.6 build 6,
 Team `Q98Z3744J2`, app CDHash
-`a85f751c07e5e99a8a8164fd1ac8d9e4fff8d05e`, and extension CDHash
-`9b067cad054dd49bf68a910aca64c14f70462fa7`. Both embedded Developer ID
+`c2dc61054cd2dfb8f06a3b6f399c805d0ca5e683`, and extension CDHash
+`b54dbeece72d5b83cfd6f4364f1b4d4998a25351`. The app is Developer ID signed,
+notarized, stapled, and accepted by Gatekeeper. Both embedded Developer ID
 profiles use `ProvisionsAllDevices=true`, so Tart device registration is not
 required. Rebuild the image for any identity, version, profile, entitlement, or
 fingerprint change and when the final production artifact is available.
 
-This golden proves only the internal tunnel/MITM path. It is not evidence of a
-downloaded release's Gatekeeper acceptance, notarization, stapled ticket,
-clean-customer install, or distribution readiness. See
-`test/testbed/README.md` and ADR 0135-tunnel-golden-image for the validation
+The baked artifact's signature, notarization, stapled ticket, and Gatekeeper
+acceptance are verified. The disk-clone workflow is not evidence of a clean
+downloaded-customer install or distribution readiness. See
+`test/testbed/README.md` and ADR 0136-tunnel-golden-image for the validation
 contract; strict smoke must execute a scenario and must never report all-SKIP as
 success.
 
@@ -264,5 +282,12 @@ success.
   Extensions approval. A headless session cannot substitute for it.
 - **Tunnel start timeout**: inspect the AgentJail session socket and extension log;
   the CLI waits up to 30 seconds for the provider before failing visibly.
+- **TLS fails before any request row**: check the fixed unified-log transport
+  event for the attempted destination family. Strict verification must run with
+  the default dual-stack posture and require a post-watermark `network_requests`
+  row; a green lifecycle event alone does not prove that a flow reached MITM.
+- **Release/test launch**: use `agentjail run --require-tunnel -- <agent>` and
+  verify the post-watermark SQLite lifecycle. The ordinary `--tunnel` mode may
+  fall back; terminal text is not proof that the extension carried the flow.
 - **Strict smoke skips everything**: this is a failed verification. Clone
   `golden-macos-mitm`, confirm `[activated enabled]`, and rerun with `--strict`.

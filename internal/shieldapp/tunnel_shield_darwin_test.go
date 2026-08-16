@@ -11,10 +11,13 @@ package shieldapp
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -96,6 +99,165 @@ func TestWaitForSessionSocketSucceedsWhenListenerAppearsLate(t *testing.T) {
 
 	if err := waitForSessionSocket(path, 2*time.Second, 20*time.Millisecond); err != nil {
 		t.Fatalf("waitForSessionSocket did not succeed once the listener appeared: %v", err)
+	}
+}
+
+func TestWaitForSessionSocketClosedSucceedsAfterListenerStops(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "closing.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		_ = ln.Close()
+	}()
+
+	if err := waitForSessionSocketClosed(path, 2*time.Second, 20*time.Millisecond); err != nil {
+		t.Fatalf("waitForSessionSocketClosed did not observe listener shutdown: %v", err)
+	}
+}
+
+func TestWaitForSessionSocketClosedTimesOutWhileListenerAccepts(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "active.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	if err := waitForSessionSocketClosed(path, 150*time.Millisecond, 20*time.Millisecond); err == nil {
+		t.Fatal("waitForSessionSocketClosed returned nil for an active listener")
+	}
+}
+
+func TestWaitForSessionSocketClosedAcceptsAbsentSocket(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "absent.sock")
+	if err := waitForSessionSocketClosed(path, time.Second, 20*time.Millisecond); err != nil {
+		t.Fatalf("absent socket should already be closed: %v", err)
+	}
+}
+
+func TestStartTunnelAppReconcilesOneDisconnectingGeneration(t *testing.T) {
+	starts := 0
+	waits := 0
+	resets := 0
+	err := startTunnelAppWithReconciliation(
+		func() error { starts++; return nil },
+		func() error {
+			waits++
+			if waits == 1 {
+				return os.ErrDeadlineExceeded
+			}
+			return nil
+		},
+		func() error { resets++; return nil },
+		2,
+	)
+	if err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+	if starts != 2 || waits != 2 || resets != 1 {
+		t.Fatalf("starts=%d waits=%d resets=%d, want 2/2/1", starts, waits, resets)
+	}
+}
+
+func TestStartTunnelAppStopsAfterBoundedAttempts(t *testing.T) {
+	starts := 0
+	err := startTunnelAppWithReconciliation(
+		func() error { starts++; return nil },
+		func() error { return os.ErrDeadlineExceeded },
+		func() error { return nil },
+		2,
+	)
+	if err == nil {
+		t.Fatal("unavailable provider returned nil")
+	}
+	if starts != 2 {
+		t.Fatalf("starts=%d, want 2", starts)
+	}
+}
+
+func TestStartTunnelAppFailsWhenProviderResetFails(t *testing.T) {
+	starts := 0
+	err := startTunnelAppWithReconciliation(
+		func() error { starts++; return nil },
+		func() error { return os.ErrDeadlineExceeded },
+		func() error { return errors.New("provider still active") },
+		2,
+	)
+	if err == nil || !strings.Contains(err.Error(), "reset provider before attempt 2") {
+		t.Fatalf("reset failure = %v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("starts=%d, want 1", starts)
+	}
+}
+
+func TestWaitForTunnelGenerationRequiresExactReadyGeneration(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "generation.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	var requests atomic.Int32
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			buf := make([]byte, 64)
+			_, _ = conn.Read(buf)
+			if requests.Add(1) < 3 {
+				_, _ = conn.Write([]byte("stale\n"))
+			} else {
+				_, _ = conn.Write([]byte("ready\n"))
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	if err := waitForTunnelGeneration(path, "generation-a", time.Second, 20*time.Millisecond); err != nil {
+		t.Fatalf("generation never became ready: %v", err)
+	}
+	if requests.Load() < 3 {
+		t.Fatalf("requests=%d, want at least 3", requests.Load())
+	}
+}
+
+func TestWaitForTunnelGenerationRejectsLegacyAck(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "legacy.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			buf := make([]byte, 64)
+			_, _ = conn.Read(buf)
+			_, _ = conn.Write([]byte("err\n"))
+			_ = conn.Close()
+		}
+	}()
+
+	if err := waitForTunnelGeneration(path, "generation-a", 100*time.Millisecond, 20*time.Millisecond); err == nil {
+		t.Fatal("legacy extension ack was accepted as generation readiness")
 	}
 }
 
@@ -185,7 +347,7 @@ func TestStartTunnelDarwinFailsOpenWhenAppMissing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		startTunnelDarwin(context.Background(), nil, "/bin/echo", nil, "", true, false, sandbox.SSHAuthSock{}, nil, emitter, fallback)
+		startTunnelDarwin(context.Background(), nil, "/bin/echo", nil, "", false, true, false, sandbox.SSHAuthSock{}, nil, emitter, fallback)
 	}()
 
 	select {

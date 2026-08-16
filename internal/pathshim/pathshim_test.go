@@ -53,8 +53,9 @@ func TestRenderedTargetsAreValidShell(t *testing.T) {
 			for _, want := range []string{
 				"command -v " + target.Command,
 				"Running " + target.Command + " UNSHIELDED",
-				`exec "$LAUNCHER" run --tunnel -- ` + target.Command + ` "$@"`,
-				`exec "$SHIELD" --tunnel -- "$REAL_`,
+				`AGENTJAIL_REQUIRE_TUNNEL`,
+				`exec "$LAUNCHER" run "$_tunnel_flag" -- ` + target.Command + ` "$@"`,
+				`exec "$SHIELD" "$_tunnel_flag" -- "$REAL_`,
 			} {
 				if !strings.Contains(content, want) {
 					t.Errorf("shim missing %q", want)
@@ -62,6 +63,11 @@ func TestRenderedTargetsAreValidShell(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRenderedShimCanRequireTunnel(t *testing.T) {
+	t.Setenv("AGENTJAIL_REQUIRE_TUNNEL", "1")
+	runRenderedCodexShim(t, []string{"exec", "test"})
 }
 
 func TestCodexBypassFlagKeepsOnlyRuleApprovalsInteractive(t *testing.T) {
@@ -124,7 +130,7 @@ func runRenderedCodexShim(t *testing.T, args []string) []string {
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(root, "agentjail")
-	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'launcher\\n' > \"$CAPTURE_ROUTE\"\n[ \"$1\" = run ] || exit 64\n[ \"$2\" = --tunnel ] || exit 64\n[ \"$3\" = -- ] || exit 64\n[ \"$4\" = codex ] || exit 64\nshift 4\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'launcher:%s\\n' \"$2\" > \"$CAPTURE_ROUTE\"\n[ \"$1\" = run ] || exit 64\n{ [ \"$2\" = --tunnel ] || [ \"$2\" = --require-tunnel ]; } || exit 64\n[ \"$3\" = -- ] || exit 64\n[ \"$4\" = codex ] || exit 64\nshift 4\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	realCodex := filepath.Join(realDir, "codex")
@@ -151,8 +157,12 @@ func runRenderedCodexShim(t *testing.T, args []string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(rawRoute)) != "launcher" {
-		t.Fatalf("shim route = %q, want canonical launcher", rawRoute)
+	wantRoute := "launcher:--tunnel"
+	if os.Getenv("AGENTJAIL_REQUIRE_TUNNEL") == "1" {
+		wantRoute = "launcher:--require-tunnel"
+	}
+	if strings.TrimSpace(string(rawRoute)) != wantRoute {
+		t.Fatalf("shim route = %q, want %q", rawRoute, wantRoute)
 	}
 	raw, err := os.ReadFile(capture)
 	if err != nil {

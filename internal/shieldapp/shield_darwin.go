@@ -794,7 +794,7 @@ func isControlSocketPath(p, home string) bool {
 //
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, requireTunnel bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	if !profilePrint {
 		ensureLocalUI(context.Background(), emitter)
 	}
@@ -816,7 +816,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			os.Exit(0)
 		}
 		ctx := context.Background()
-		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), mitmMode, ipv6Mode, sshAuthSock, credentialTools, emitter, func() {
+		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), requireTunnel, mitmMode, ipv6Mode, sshAuthSock, credentialTools, emitter, func() {
 			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, credentialTools, policyPath, startTime, emitter)
 		})
 		// startTunnelDarwin either os.Exit's on success/fatal-error, or (on a

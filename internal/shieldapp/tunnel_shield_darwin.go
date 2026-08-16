@@ -114,13 +114,9 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 // exits - there is no daemon-side PID watcher standing in for it the way
 // agentjail-tunneld does for the Linux path.
 //
-// Order of operations. This is fail-OPEN for the tunnel as a whole (any
-// setup failure below "GATEWAY" invokes fallback, which runs the ordinary
-// sbpl+netproxy launch - matching the Linux transparent tunnel's documented
-// fail-open contract in tunnel_shield_linux.go) and separately fail-open for
-// MITM specifically (a CA/store failure disables interception but keeps the
-// tunnel, relaying TLS opaquely, matching ADR 0077's transparent-only
-// fallback):
+// Tunnel setup falls back by default; requireTunnel makes the same failures
+// terminate the launch. MITM setup remains independently fail-open to opaque
+// relay. See ADR 0136-tunnel-golden-image.
 //
 //  1. SYSEXT   - resolve + `install` the AgentjailTunnel.app (idempotent).
 //  2. GATEWAY  - generate WireGuard keys, start an in-process tunnel.Gateway
@@ -145,35 +141,39 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 //     the gateway, `<app> stop`, revoke secret grants; propagate the child's
 //     exit code.
 //
-// This function never returns to its caller on success or on a fatal setup
-// error: it terminates the process via os.Exit with the wrapped agent's exit
-// code, or via the fallback closure's own os.Exit/syscall.Exec. It DOES
-// return (without exiting) when a fail-open setup step fails BEFORE the agent
-// is spawned, having already invoked fallback - fallback itself never
-// returns, so this is dead code reachable only if that contract is violated;
-// the explicit return keeps that violation a compile error away from a
-// fallthrough double-launch rather than a silent one.
-func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, emitter audit.Emitter, fallback func()) {
+// The function exits through the child result, required-tunnel failure, or
+// fallback; it never launches the child twice.
+func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, requireTunnel bool, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, emitter audit.Emitter, fallback func()) {
 	logger := slog.Default()
 	sessionID := generateSessionID()
+	appPath := resolveTunnelAppPath()
+	mitmActive := false
 	logger.Info("tunnel session started", "session_id", sessionID)
 
-	fail := func(format string, args ...any) {
-		logger.Warn("tunnel unavailable, falling back to non-tunnel shield launch", "reason", fmt.Sprintf(format, args...))
+	fail := func(failureReason, format string, args ...any) {
+		reason := fmt.Sprintf(format, args...)
+		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, failureReason)
+		if requireTunnel {
+			logger.Error("required tunnel unavailable; refusing to launch", "failure_reason", failureReason, "reason", reason)
+			fmt.Fprintf(os.Stderr, "agentjail-shield: required tunnel unavailable (%s): %s\n", failureReason, reason)
+			os.Exit(1)
+		}
+		logger.Warn("tunnel unavailable, falling back to non-tunnel shield launch", "failure_reason", failureReason, "reason", reason)
 		fallback()
 	}
 
 	// --- 1. SYSEXT: ensure the AgentjailTunnel host app + system extension
 	// are active. `install` is idempotent - safe to call on every launch.
-	appPath := resolveTunnelAppPath()
 	if _, statErr := os.Stat(appPath); statErr != nil {
-		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, false, "app_not_found")
-		fail("AgentjailTunnel app not found at %s (set AGENTJAIL_TUNNEL_APP, or build/install it - see macos/README.md): %v", appPath, statErr)
+		fail("app_not_found", "AgentjailTunnel app not found at %s (set AGENTJAIL_TUNNEL_APP, or build/install it - see macos/README.md): %v", appPath, statErr)
 		return
 	}
 	if out, err := exec.Command(appPath, "install").CombinedOutput(); err != nil {
-		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, false, "install_failed")
-		fail("%s install failed: %v: %s", appPath, err, string(out))
+		fail("install_failed", "%s install failed: %v: %s", appPath, err, string(out))
+		return
+	}
+	if err := stopTunnelAppAndWait(appPath, tunnelSessionSockPath, 30*time.Second, 300*time.Millisecond); err != nil {
+		fail("prior_provider_still_active", "prior tunnel provider did not stop cleanly: %v", err)
 		return
 	}
 
@@ -181,12 +181,12 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// bring up the gateway and DNS-VIP server bound to its netstack.
 	serverPriv, serverPub, err := tunnel.GenerateKeyPair()
 	if err != nil {
-		fail("generating server keypair: %v", err)
+		fail("server_key_generation_failed", "generating server keypair: %v", err)
 		return
 	}
 	agentPriv, agentPub, err := tunnel.GenerateKeyPair()
 	if err != nil {
-		fail("generating agent keypair: %v", err)
+		fail("agent_key_generation_failed", "generating agent keypair: %v", err)
 		return
 	}
 
@@ -217,7 +217,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		ipv6Provisioned = true
 	}
 	if err != nil {
-		fail("creating tunnel gateway: %v", err)
+		fail("gateway_create_failed", "creating tunnel gateway: %v", err)
 		return
 	}
 
@@ -241,7 +241,6 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// mitmActive is the posture ACHIEVED, not the one requested (ADR 0077 D6);
 	// it feeds the tunnel.extension_started audit detail so a fail-open MITM
 	// step never gets reported as "mitm: true". See AGE-149 T1.5.
-	var mitmActive bool
 	// providerGatewayCloseFn / sharedStoreCleanup are assigned once the
 	// capture gateway is known to be wanted (below); declared here, ahead of
 	// cleanupGateway, so the closure captures them by reference. See A0.
@@ -282,7 +281,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	port := gateway.ListenPort()
 	if port == 0 {
 		cleanupGateway()
-		fail("could not determine gateway UDP listen port")
+		fail("gateway_port_unavailable", "could not determine gateway UDP listen port")
 		return
 	}
 
@@ -299,7 +298,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		if storeErr != nil {
 			cleanupGateway()
 			emitGatewayStartFailed(ctx, emitter, sessionID, gwProv, "store")
-			fail("capture gateway store open failed for %s: %v", gwProv.Name, storeErr)
+			fail("capture_store_open_failed", "capture gateway store open failed for %s: %v", gwProv.Name, storeErr)
 			return
 		}
 		sharedStore = st
@@ -391,7 +390,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		envVars, closeFn, started, gerr := startProviderGateway(ctx, cfg, agentPath, sharedStore, sharedRec.store, sessionID, claudeRef, logger, emitter)
 		if gerr != nil {
 			cleanupGateway()
-			fail("%v", gerr)
+			fail("provider_gateway_start_failed", "%v", gerr)
 			return
 		}
 		watchClaudeSession(ctx, sharedStore, sessionID, claudeRef)
@@ -429,7 +428,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	confFile, err := os.CreateTemp("", "agentjail-wg-*.conf")
 	if err != nil {
 		cleanupGateway()
-		fail("creating wg-conf temp file: %v", err)
+		fail("wg_conf_create_failed", "creating wg-conf temp file: %v", err)
 		return
 	}
 	confPath := confFile.Name()
@@ -437,41 +436,43 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		confFile.Close()
 		os.Remove(confPath)
 		cleanupGateway()
-		fail("chmod wg-conf temp file: %v", chmodErr)
+		fail("wg_conf_chmod_failed", "chmod wg-conf temp file: %v", chmodErr)
 		return
 	}
 	if _, writeErr := confFile.WriteString(conf); writeErr != nil {
 		confFile.Close()
 		os.Remove(confPath)
 		cleanupGateway()
-		fail("writing wg-conf temp file: %v", writeErr)
+		fail("wg_conf_write_failed", "writing wg-conf temp file: %v", writeErr)
 		return
 	}
 	confFile.Close()
 
-	startOut, startErr := exec.Command(appPath, "start", confPath).CombinedOutput()
-	os.Remove(confPath) // secret material; remove regardless of start outcome
+	appStartFailed := false
+	startApp := func() error {
+		startOut, startErr := exec.Command(appPath, "start", confPath, sessionID).CombinedOutput()
+		if startErr != nil {
+			appStartFailed = true
+			return fmt.Errorf("%s start failed: %v: %s", appPath, startErr, string(startOut))
+		}
+		return nil
+	}
+	waitReady := func() error {
+		return waitForTunnelGeneration(tunnelSessionSockPath, sessionID, 30*time.Second, 300*time.Millisecond)
+	}
+	resetApp := func() error {
+		return stopTunnelAppAndWait(appPath, tunnelSessionSockPath, 30*time.Second, 300*time.Millisecond)
+	}
+	startErr := startTunnelAppWithReconciliation(startApp, waitReady, resetApp, 2)
+	os.Remove(confPath) // secret material; remove after every start attempt
 	if startErr != nil {
 		cleanupGateway()
-		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "app_start_failed")
-		fail("%s start failed: %v: %s", appPath, startErr, string(startOut))
-		return
-	}
-
-	// --- WAIT FOR PROVIDER: `<app> start` returns before the OS actually
-	// launches the provider (which binds tunnelSessionSockPath in startProxy).
-	// Poll until the session socket accepts connections, or time out - a
-	// stuck/stale socket must degrade to a bounded error, never a hang.
-	// 30s, not 15s: when a provider from a prior session is still resident, the
-	// NE stack reloads it (stop -> wait .disconnected -> start) to pick up this
-	// run's fresh WG keys+port, and the session socket is unbound for the whole
-	// reload window (~10s) plus `app start` latency. 15s raced that and fell
-	// back spuriously. See ADR 0106-tunnel-socket-wait.
-	if sockErr := waitForSessionSocket(tunnelSessionSockPath, 30*time.Second, 300*time.Millisecond); sockErr != nil {
-		cleanupGateway()
 		_, _ = exec.Command(appPath, "stop").CombinedOutput()
-		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStarted, sessionID, appPath, mitmActive, "session_socket_timeout")
-		fail("sysext session socket %s not ready in 30s: %v", tunnelSessionSockPath, sockErr)
+		failureReason := "session_socket_timeout"
+		if appStartFailed {
+			failureReason = "app_start_failed"
+		}
+		fail(failureReason, "sysext session socket %s did not become ready: %v", tunnelSessionSockPath, startErr)
 		return
 	}
 
@@ -549,7 +550,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	//   - shield's own flows (gateway's net.Dial): ancestorMatches starts at
 	//     the shield's parent (terminal/shell), which is NOT registered ->
 	//     not tunneled. No loop.
-	if regErr := tunnelSessionIPC(fmt.Sprintf("register %d\n", os.Getpid())); regErr != nil {
+	if regErr := tunnelSessionIPC(fmt.Sprintf("register %d %s\n", os.Getpid(), sessionID)); regErr != nil {
 		cleanupGateway()
 		_, _ = exec.Command(appPath, "stop").CombinedOutput()
 		revokeSecretGrants(activeGrants, ctlToken)
@@ -557,7 +558,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		unregisterHostProxyLaunch(registeredHostProxy, ctlToken)
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "register_ipc_failed")
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, "")
-		fail("registering shield session with extension: %v", regErr)
+		fail("register_ipc_failed", "registering shield session with extension: %v", regErr)
 		return
 	} else {
 		emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionRegistered, sessionID, appPath, mitmActive, "")
@@ -581,11 +582,15 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	// syscall.Exec'd. Best-effort: none of these should mask the agent's own
 	// exit code.
 	stopSignalDrain()
-	_ = tunnelSessionIPC(fmt.Sprintf("unregister %d\n", os.Getpid()))
+	_ = tunnelSessionIPC(fmt.Sprintf("unregister %d %s\n", os.Getpid(), sessionID))
 	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelSessionUnregistered, sessionID, appPath, mitmActive, "")
 	cleanupGateway()
-	_, _ = exec.Command(appPath, "stop").CombinedOutput()
-	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, "")
+	stopReason := ""
+	if err := stopTunnelAppAndWait(appPath, tunnelSessionSockPath, 30*time.Second, 300*time.Millisecond); err != nil {
+		stopReason = "session_socket_still_active"
+		logger.Warn("tunnel provider did not stop cleanly", "err", err)
+	}
+	emitTunnelExtensionEvent(ctx, emitter, audit.TunnelExtensionStopped, sessionID, appPath, mitmActive, stopReason)
 	revokeSecretGrants(activeGrants, ctlToken)
 	credentialSession.cleanup(ctlToken)
 	unregisterHostProxyLaunch(registeredHostProxy, ctlToken)
@@ -631,6 +636,75 @@ func waitForSessionSocket(path string, timeout, interval time.Duration) error {
 		lastErr = dialErr
 		if time.Now().After(deadline) {
 			return lastErr
+		}
+		time.Sleep(interval)
+	}
+}
+
+func waitForTunnelGeneration(path, generation string, timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		reply, err := tunnelSessionRequestAt(path, "status "+generation+"\n")
+		if err == nil && reply == "ready\n" {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("provider generation status %q", reply)
+		}
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		time.Sleep(interval)
+	}
+}
+
+func startTunnelAppWithReconciliation(start, waitReady, reset func() error, attempts int) error {
+	if attempts < 1 {
+		return fmt.Errorf("tunnel start attempts must be positive")
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			if err := reset(); err != nil {
+				return fmt.Errorf("reset provider before attempt %d: %w", attempt, err)
+			}
+		}
+		if err := start(); err != nil {
+			return err
+		}
+		if err := waitReady(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("provider unavailable after %d start attempts: %w", attempts, lastErr)
+}
+
+func stopTunnelAppAndWait(appPath, socketPath string, timeout, interval time.Duration) error {
+	stopOut, stopErr := exec.Command(appPath, "stop").CombinedOutput()
+	if err := waitForSessionSocketClosed(socketPath, timeout, interval); err != nil {
+		if stopErr != nil {
+			return fmt.Errorf("stop command: %v: %s; provider socket: %w", stopErr, string(stopOut), err)
+		}
+		return err
+	}
+	return nil
+}
+
+func waitForSessionSocketClosed(path string, timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.DialTimeout("unix", path, 200*time.Millisecond)
+		if err != nil {
+			return nil
+		}
+		_ = conn.Close()
+		if time.Now().After(deadline) {
+			return fmt.Errorf("session socket %s still accepts connections after %s", path, timeout)
 		}
 		time.Sleep(interval)
 	}
@@ -736,33 +810,37 @@ func emitTunnelExtensionEvent(ctx context.Context, emitter audit.Emitter, eventT
 
 // tunnelSessionIPC dials the extension's session socket at
 // tunnelSessionSockPath and writes msg (newline-terminated), then reads its
-// small ack. Mirrors the Swift sessionIPC helper in
-// macos/AgentjailTunnel/main.swift and the wire protocol documented in
-// macos/AgentjailExtension/Provider.swift (serviceSessionClient): "register
-// <pid>\n" / "unregister <pid>\n" -> "ok\n". The ack is read but not
-// accepted only when it is exactly "ok\n"; a reachable but incompatible
-// extension cannot prove that the session was registered.
+// small ack. Registration carries the provider generation and succeeds only
+// after that generation's WireGuard handshake is ready.
 func tunnelSessionIPC(msg string) error {
 	return tunnelSessionIPCAt(tunnelSessionSockPath, msg)
 }
 
 func tunnelSessionIPCAt(socketPath, msg string) error {
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	reply, err := tunnelSessionRequestAt(socketPath, msg)
 	if err != nil {
 		return err
+	}
+	if reply != "ok\n" {
+		return fmt.Errorf("invalid session registration ack")
+	}
+	return nil
+}
+
+func tunnelSessionRequestAt(socketPath, msg string) (string, error) {
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	if err != nil {
+		return "", err
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Write([]byte(msg)); err != nil {
-		return err
+		return "", err
 	}
-	buf := make([]byte, 8)
+	buf := make([]byte, 32)
 	n, err := conn.Read(buf)
 	if err != nil {
-		return fmt.Errorf("read session registration ack: %w", err)
+		return "", fmt.Errorf("read session IPC reply: %w", err)
 	}
-	if string(buf[:n]) != "ok\n" {
-		return fmt.Errorf("invalid session registration ack")
-	}
-	return nil
+	return string(buf[:n]), nil
 }

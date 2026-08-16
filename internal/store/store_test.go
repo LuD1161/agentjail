@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -188,6 +189,45 @@ func TestRecordAndListDecision(t *testing.T) {
 	}
 	if !strings.Contains(d.ToolInputRedacted, "[redacted]") {
 		t.Errorf("expected [redacted] in stored tool_input: %s", d.ToolInputRedacted)
+	}
+}
+
+func TestRecordDecisionRedactsSummaryAtStoreBoundary(t *testing.T) {
+	s, path := newTestStore(t)
+	const marker = "AKIAZ9Y8X7W6V5U4T3S2"
+	command := "AWS_ACCESS_KEY_ID=" + marker + " aws sts get-caller-identity"
+	if err := s.RecordDecision(context.Background(), DecisionRecord{
+		Ts:        time.Now(),
+		SessionID: "summary-redaction",
+		Agent:     "codex",
+		ToolName:  "Bash",
+		Summary:   command,
+		Action:    "allow",
+		ToolInput: map[string]interface{}{"command": command},
+	}); err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+	rows, err := s.ListDecisions(context.Background(), Filter{SessionID: "summary-redaction", Limit: 1})
+	if err != nil {
+		t.Fatalf("ListDecisions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d decisions, want 1", len(rows))
+	}
+	if strings.Contains(rows[0].Summary, marker) {
+		t.Error("stored summary retained credential value")
+	}
+	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("read %s: %v", filepath.Base(candidate), err)
+		}
+		if strings.Contains(string(data), marker) {
+			t.Errorf("%s retained credential value", filepath.Base(candidate))
+		}
 	}
 }
 
@@ -450,6 +490,52 @@ func TestWALModeEnabled(t *testing.T) {
 	}
 	if strings.ToLower(mode) != "wal" {
 		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+}
+
+func TestSecureDeleteEnabled(t *testing.T) {
+	s, _ := newTestStore(t)
+	sqlite, ok := s.(*sqliteStore)
+	if !ok {
+		t.Fatalf("store type = %T, want *sqliteStore", s)
+	}
+	var enabled int
+	if err := sqlite.db.QueryRow(`PRAGMA secure_delete`).Scan(&enabled); err != nil {
+		t.Fatalf("query secure_delete: %v", err)
+	}
+	if enabled != 1 {
+		t.Errorf("secure_delete = %d, want 1", enabled)
+	}
+}
+
+func TestSecureDeleteErasesDeletedCellBytes(t *testing.T) {
+	s, path := newTestStore(t)
+	sqlite, ok := s.(*sqliteStore)
+	if !ok {
+		t.Fatalf("store type = %T, want *sqliteStore", s)
+	}
+	const marker = "agentjail-secure-delete-marker-20260815"
+	if _, err := sqlite.db.Exec(`INSERT INTO decisions (ts, session_id, tool_name, summary, action) VALUES (?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano), "secure-delete", "Bash", marker, "allow"); err != nil {
+		t.Fatalf("insert deletion fixture: %v", err)
+	}
+	if _, err := sqlite.db.Exec(`DELETE FROM decisions WHERE session_id = ?`, "secure-delete"); err != nil {
+		t.Fatalf("delete fixture: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("read %s: %v", filepath.Base(candidate), err)
+		}
+		if bytes.Contains(data, []byte(marker)) {
+			t.Errorf("%s retained deleted cell bytes", filepath.Base(candidate))
+		}
 	}
 }
 

@@ -93,7 +93,8 @@ func Run(args []string) int {
 	// See ADR 0046.
 	netproxyEnable := fs.Bool("netproxy", false, "enable agentjail-netproxy per-host egress enforcement (opt-in; default off until the transparent tunnel lands)")
 	noNetproxy := fs.Bool("no-netproxy", false, "explicitly disable agentjail-netproxy (now the default); retained for back-compat")
-	tunnelMode := fs.Bool("tunnel", false, "route agent traffic through the unprivileged-userns transparent gVisor forwarder for interception (Linux only; no privileged daemon). Decrypts HTTPS by default so policy templates apply; --no-mitm relays TLS opaquely instead")
+	tunnelMode := fs.Bool("tunnel", false, "route agent traffic through the platform transparent tunnel for interception; decrypts HTTPS by default so policy templates apply")
+	requireTunnel := fs.Bool("require-tunnel", false, "require the transparent tunnel to start; refuse to launch instead of falling back to another network mode")
 	// Separate switch from --tunnel, on by default, overridable both ways.
 	// ADR 0077 (D1, D2).
 	mitmMode := fs.Bool("mitm", false, "force TLS interception on for this launch, overriding a network.tunnel_mitm: false opt-out (interception is already the default)")
@@ -101,11 +102,11 @@ func Run(args []string) int {
 	// Opt out of the base-URL capture gateway (on by default for a detected
 	// provider agent under --tunnel). See ADR 0109-baseurl-capture-gateway.
 	noProviderGateway := fs.Bool("no-provider-gateway", false, "do not route a detected provider agent (e.g. Claude Code) through the local capture gateway; the agent talks to its provider directly and its LLM API bodies are not captured (ADR 0109)")
-	// IPv6 datapath for the macOS tunnel (AGE-262), off by default. Mirrors
+	// IPv6 datapath for the macOS tunnel (AGE-262), on by default. Mirrors
 	// --mitm/--no-mitm: a per-launch override over network.tunnel_ipv6 and the
-	// transitional AGENTJAIL_TUNNEL_IPV6 env var. See ADR 0110.
-	tunnelIPv6Flag := fs.Bool("tunnel-ipv6", false, "enable the IPv6 datapath for the macOS tunnel (AGE-262), overriding a network.tunnel_ipv6/env opt-out")
-	noTunnelIPv6 := fs.Bool("no-tunnel-ipv6", false, "explicitly disable the IPv6 tunnel datapath (default), overriding network.tunnel_ipv6/env opt-in")
+	// transitional AGENTJAIL_TUNNEL_IPV6 env var. See ADR 0138-dual-stack-default.
+	tunnelIPv6Flag := fs.Bool("tunnel-ipv6", false, "enable the default IPv6 datapath for the macOS tunnel (AGE-262), overriding a network.tunnel_ipv6 opt-out")
+	noTunnelIPv6 := fs.Bool("no-tunnel-ipv6", false, "explicitly disable the IPv6 tunnel datapath, overriding network.tunnel_ipv6/env opt-in")
 	gitSSH := fs.Bool("git-ssh", false, "enable Git over SSH for this launch by delegating all loaded SSH-agent identities")
 	noGitSSH := fs.Bool("no-git-ssh", false, "disable automatic Git-over-SSH capability for this launch")
 	var credentialFlags credentialSelections
@@ -114,18 +115,19 @@ func Run(args []string) int {
 	auditStrict := fs.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	verbose := fs.Bool("verbose", false, "also mirror structured shield logs to stderr")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--no-mitm] [--git-ssh|--no-git-ssh] [--credential=TOOL=NAME] [--audit-json=PATH] [--audit-strict] [--verbose] -- <agent-cmd> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--require-tunnel] [--no-mitm] [--tunnel-ipv6|--no-tunnel-ipv6] [--git-ssh|--no-git-ssh] [--credential=TOOL=NAME] [--audit-json=PATH] [--audit-strict] [--verbose] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml (default: ~/.agentjail/policy.yaml)")
 		fmt.Fprintln(os.Stderr, "  --profile-print     print the generated sandbox profile to stderr and exit 0")
 		fmt.Fprintln(os.Stderr, "  --netproxy          enable per-host egress enforcement via agentjail-netproxy (opt-in; default off)")
 		fmt.Fprintln(os.Stderr, "  --no-netproxy       (default) port-based network filtering only, no per-host enforcement")
-		fmt.Fprintln(os.Stderr, "  --tunnel            (Linux) route the agent's traffic through the transparent tunnel so HTTP(S) policy applies. Decrypts HTTPS by default — see --no-mitm")
+		fmt.Fprintln(os.Stderr, "  --tunnel            route agent traffic through the platform transparent tunnel so HTTP(S) policy applies; see --no-mitm")
+		fmt.Fprintln(os.Stderr, "  --require-tunnel    imply --tunnel and refuse to launch if the tunnel cannot start")
 		fmt.Fprintln(os.Stderr, "  --mitm              force TLS interception on, overriding a network.tunnel_mitm: false opt-out (already the default)")
 		fmt.Fprintln(os.Stderr, "  --no-mitm           transparent-only: relay the agent's TLS opaquely. HTTP(S) policy templates cannot match (ADR 0077)")
 		fmt.Fprintln(os.Stderr, "  --no-provider-gateway  do not route a detected provider agent through the local capture gateway (ADR 0109)")
-		fmt.Fprintln(os.Stderr, "  --tunnel-ipv6       enable the IPv6 datapath for the macOS tunnel (AGE-262)")
-		fmt.Fprintln(os.Stderr, "  --no-tunnel-ipv6    (default) disable the IPv6 tunnel datapath")
+		fmt.Fprintln(os.Stderr, "  --tunnel-ipv6       force-enable the default IPv6 datapath, overriding a config opt-out (AGE-262)")
+		fmt.Fprintln(os.Stderr, "  --no-tunnel-ipv6    disable the default IPv6 tunnel datapath")
 		fmt.Fprintln(os.Stderr, "  --git-ssh          enable Git over SSH for this launch; delegates all loaded SSH-agent identities")
 		fmt.Fprintln(os.Stderr, "  --no-git-ssh       disable policy-default Git over SSH for this launch")
 		fmt.Fprintln(os.Stderr, "  --credential=TOOL=NAME  expose a selected broker credential to aws, kubectl, or gh; repeatable")
@@ -138,6 +140,9 @@ func Run(args []string) int {
 	}
 	if err := fs.Parse(args); err != nil {
 		return 64 // EX_USAGE
+	}
+	if *requireTunnel {
+		*tunnelMode = true
 	}
 	// The transparent tunnel is the supported network path; netproxy is
 	// deprecated and survives only as this explicit, non-default mode.
@@ -407,7 +412,7 @@ func Run(args []string) int {
 			Actor:     "shield",
 		})
 	}
-	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode,
+	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode, *requireTunnel,
 		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM),
 		resolveTunnelIPv6(*tunnelIPv6Flag, *noTunnelIPv6, os.Getenv(tunnelIPv6EnvVar) == "1", cfg.Network.TunnelIPv6),
 		sshAuthSock, credentialTools, *policyPath, startTime, emitter)
@@ -489,10 +494,10 @@ func markShieldUnrecorded(stateDir string, reason error) {
 const tunnelIPv6EnvVar = "AGENTJAIL_TUNNEL_IPV6"
 
 // resolveTunnelIPv6 decides whether this launch enables the macOS tunnel's
-// IPv6 datapath (AGE-262). Off by default. Precedence, highest first:
+// IPv6 datapath (AGE-262). On by default. Precedence, highest first:
 // --no-tunnel-ipv6 > --tunnel-ipv6 > AGENTJAIL_TUNNEL_IPV6 env (transitional,
-// see tunnelIPv6EnvVar) > network.tunnel_ipv6 (config) > default (off).
-// ADR 0110-network-flag-consolidation.
+// see tunnelIPv6EnvVar) > network.tunnel_ipv6 (config) > default (on).
+// See ADR 0110-network-flag-consolidation and ADR 0138-dual-stack-default.
 func resolveTunnelIPv6(ipv6Flag, noIPv6Flag bool, envSet bool, cfgTunnelIPv6 *bool) bool {
 	switch {
 	case noIPv6Flag:
@@ -504,7 +509,7 @@ func resolveTunnelIPv6(ipv6Flag, noIPv6Flag bool, envSet bool, cfgTunnelIPv6 *bo
 	case cfgTunnelIPv6 != nil:
 		return *cfgTunnelIPv6
 	default:
-		return false
+		return config.DefaultTunnelIPv6
 	}
 }
 

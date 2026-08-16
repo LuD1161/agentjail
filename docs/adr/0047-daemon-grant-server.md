@@ -3,7 +3,7 @@
 Status: Accepted
 
 The shipped daemon-only CLI was narrowed to persist-only project requests by
-ADR 0133-cli-command-surface. The `--live`, `--persist`, and request-TTL modes
+ADR 0132-cli-command-surface. The `--live`, `--persist`, and request-TTL modes
 described below remain design history rather than public commands.
 
 ## Context

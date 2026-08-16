@@ -70,6 +70,24 @@ type serverJSON struct {
 	Headers map[string]string `json:"headers"`
 }
 
+func (srv serverJSON) config(name string) MCPServerConfig {
+	cfg := MCPServerConfig{
+		Name:    name,
+		Type:    srv.Type,
+		Command: srv.Command,
+		Args:    srv.Args,
+		Env:     srv.Env,
+		URL:     srv.URL,
+		Headers: srv.Headers,
+	}
+	if cfg.Type == "" && cfg.Command != "" {
+		cfg.Type = "stdio"
+	} else if cfg.Type == "" && cfg.URL != "" {
+		cfg.Type = "http"
+	}
+	return cfg
+}
+
 func claudeGlobalServers(home string) []MCPServerEntry {
 	path := filepath.Join(home, ".claude.json")
 	entries := parseJSONMCPServers(path, "claude")
@@ -129,23 +147,10 @@ func parseJSONMCPServers(path, source string) []MCPServerEntry {
 
 	entries := make([]MCPServerEntry, 0, len(top.MCPServers))
 	for name, srv := range top.MCPServers {
-		cfg := MCPServerConfig{
-			Name:    name,
-			Type:    srv.Type,
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
-			URL:     srv.URL,
-			Headers: srv.Headers,
-		}
-		// Default type to stdio if a command is present.
-		if cfg.Type == "" && cfg.Command != "" {
-			cfg.Type = "stdio"
-		}
 		entries = append(entries, MCPServerEntry{
 			Name:   name,
 			Source: source,
-			Config: cfg,
+			Config: srv.config(name),
 		})
 	}
 	return entries
@@ -229,22 +234,10 @@ func parsePluginMCPFile(path, pluginName string) []MCPServerEntry {
 		entries := make([]MCPServerEntry, 0, len(servers))
 		for key, srv := range servers {
 			entryName := "plugin_" + pluginName + "_" + key
-			cfg := MCPServerConfig{
-				Name:    entryName,
-				Type:    srv.Type,
-				Command: srv.Command,
-				Args:    srv.Args,
-				Env:     srv.Env,
-				URL:     srv.URL,
-				Headers: srv.Headers,
-			}
-			if cfg.Type == "" && cfg.Command != "" {
-				cfg.Type = "stdio"
-			}
 			entries = append(entries, MCPServerEntry{
 				Name:   entryName,
 				Source: "plugin",
-				Config: cfg,
+				Config: srv.config(entryName),
 			})
 		}
 		return entries
@@ -273,22 +266,10 @@ func parsePluginMCPFile(path, pluginName string) []MCPServerEntry {
 			continue
 		}
 		entryName := "plugin_" + pluginName + "_" + key
-		cfg := MCPServerConfig{
-			Name:    entryName,
-			Type:    srv.Type,
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
-			URL:     srv.URL,
-			Headers: srv.Headers,
-		}
-		if cfg.Type == "" && cfg.Command != "" {
-			cfg.Type = "stdio"
-		}
 		entries = append(entries, MCPServerEntry{
 			Name:   entryName,
 			Source: "plugin",
-			Config: cfg,
+			Config: srv.config(entryName),
 		})
 	}
 	return entries

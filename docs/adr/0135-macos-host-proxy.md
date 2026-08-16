@@ -1,13 +1,13 @@
-# ADR 0134 — macOS host proxy
+# ADR 0135 — macOS host proxy
 
 - **Status:** Accepted
 - **Date:** 2026-08-13
 - **Deciders:** agentjail-core
-- **Related:** [ADR 0132-host-proxy-mvp](0132-host-proxy-mvp.md), [ADR 0034-platform-backend-shared-contract](0034-platform-backend-shared-contract.md)
+- **Related:** [ADR 0134-host-proxy-mvp](0134-host-proxy-mvp.md), [ADR 0034-platform-backend-shared-contract](0034-platform-backend-shared-contract.md)
 
 ## Context
 
-ADR 0132-host-proxy-mvp deliberately failed closed outside Linux until another
+ADR 0134-host-proxy-mvp deliberately failed closed outside Linux until another
 platform implemented and tested the same process-group and authenticated-session
 boundary. That made the shared `agentjail proxy` CLI and policy vocabulary visible
 on macOS while every approved execution still ended as `unsupported_platform`.
@@ -26,7 +26,7 @@ Codex CLI 0.147.0 was installed locally. The official OpenAI
 `PermissionRequest` runs only when Codex is about to ask for approval, and a
 `prefix_rule` with `decision = "prompt"` prompts for each matching invocation.
 This preserves the native-approval ordering assumed by ADR
-0132-host-proxy-mvp.
+0134-host-proxy-mvp.
 
 ## Decision
 
@@ -64,4 +64,4 @@ and completed execution without the fixture value.
   execution.
 - The host proxy remains an accidental-footgun guardrail rather than a containment
   boundary for an approved executable, exactly as scoped in ADR
-  0132-host-proxy-mvp.
+  0134-host-proxy-mvp.

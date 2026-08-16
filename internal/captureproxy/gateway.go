@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -187,7 +188,17 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request) {
 
 	// Same recognizer pipeline internal/mitm uses, so policy templates
 	// evaluate identically regardless of capture path.
-	op := netpolicy.RecognizeHTTP(g.target.Host, r, bodyBuf)
+	port := netpolicy.Port(443)
+	if g.target.Port() != "" {
+		if value, err := strconv.Atoi(g.target.Port()); err == nil {
+			if parsed, portErr := netpolicy.NewPort(value); portErr == nil {
+				port = parsed
+			}
+		}
+	} else if g.target.Scheme == "http" {
+		port = netpolicy.Port(80)
+	}
+	op := netpolicy.RecognizeHTTPAt(g.target.Hostname(), port, r, bodyBuf)
 	reqLog.Service = op.Service
 	reqLog.Verb = op.Verb
 	reqLog.ResourceType = op.ResourceType

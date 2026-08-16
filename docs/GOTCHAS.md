@@ -878,7 +878,7 @@ Complete output did not make the underlying contract coherent.
 - **Rule:** audit help against observable behavior and one canonical command
   hierarchy. Compatibility syntax belongs in hidden aliases, and an option with
   no effect on the resulting authority must not remain public. See ADR
-  0133-cli-command-surface.
+  0132-cli-command-surface.
 
 ## 66. A generated capability can violate its own validator
 
@@ -904,7 +904,7 @@ interception, policy, or evidence path at all.
   scenarios separately, require the exact `[activated enabled]` extension state,
   and fail when nothing exercised the intended path. Use the approved
   `golden-macos-mitm` contract and strict mode. See ADR
-  0135-tunnel-golden-image.
+  0136-tunnel-golden-image.
 
 ## 68. An audited approval can outlive its hook deadline
 
@@ -929,6 +929,216 @@ recorded nothing. Its session reaper removed a live shield registration when
 - **Rule:** classify probe errors by their documented semantics. A liveness
   reaper may remove a PID only on `ESRCH`, and a security boundary must validate
   the registration acknowledgement before claiming that traffic is routed.
+
+## 70. Terminal output is not durable policy evidence
+
+The strict Darwin matrix received the expected 403 responses and SQLite held
+the exact deny-template rows, but the test still failed because it searched
+captured stderr for `template=<id>`. Structured shield logs are not mirrored to
+stderr by default, so terminal verbosity accidentally became the assertion
+contract instead of the durable record.
+
+- **Rule:** watermark the authoritative store before a scenario and bind each
+  assertion to exact post-watermark structured rows. Treat stdout and stderr as
+  diagnostics only. If a security path has no durable record, add persistence
+  or keep the release assertion failed; never substitute a log grep.
+
+## 71. Root AWS credentials cannot assume a role directly
+
+The source profile could create IAM roles and policies, but `AssumeRole` still
+failed when its caller was the account root. More privilege did not make the
+STS session a valid role principal, and retrying the same root call could never
+exercise the broker.
+
+- **Rule:** live credential fixtures must model the real issuance boundary. Use
+  a disposable, exactly trusted bootstrap principal to assume a short-lived,
+  least-privilege role; delete the bootstrap key before the agent runs, and
+  never copy the source profile into the guest. See ADR
+  0131-agent-credential-discovery and `docs/runbooks/aws-sts-testbed.md`.
+
+## 72. Agent prose is not credential-path evidence
+
+A coding agent could write the expected bucket names and denial claims without
+ever executing the intended AWS binary. A valid-looking proof file therefore
+did not bind its claims to the issued STS values or the broker lifecycle.
+
+- **Rule:** observe the exact executable boundary, bind each invocation to
+  non-secret credential fingerprints, and require the ordered SQLite session
+  events. Treat the agent-authored proof as corroboration only. See ADR
+  0131-agent-credential-discovery and `docs/runbooks/aws-sts-testbed.md`.
+
+## 73. Correlation IDs are not resource names
+
+The AWS provisioner embedded an ISO-like run ID containing uppercase `T` and
+`Z` directly in S3 bucket names. IAM accepted the same ID shape, but S3 rejected
+it before the live test started. The original cleanup flag was also set only
+after bucket hardening, which could have orphaned a successfully-created bucket
+when a later control failed.
+
+- **Rule:** derive provider-valid names from a canonical correlation ID, and
+  transfer every created resource to cleanup ownership immediately after its
+  create call. Validate names locally before the first external mutation. See
+  `docs/runbooks/aws-sts-testbed.md`.
+
+## 74. Preflight every post-handoff output path
+
+The live AWS provisioner successfully created and imported a temporary role,
+but the VM runner had never created its gitignored report parent. It accepted
+the handoff, failed at the first evidence write, and cleaned everything without
+executing a scenario.
+
+- **Rule:** validate helper files and create-probe every local output root before
+  starting an external credential or infrastructure handoff. Cleanup success is
+  necessary, but it cannot turn an unexecuted scenario into a pass. See
+  `docs/runbooks/aws-sts-testbed.md`.
+
+## 75. A PATH observer can contradict executable pinning
+
+The live Codex task completed and the broker lifecycle was durable, but a test
+expected an agent-writable PATH wrapper to observe AWS. AgentJail correctly
+resolved and pinned the trusted AWS executable before launch, then put its own
+session symlink first, so the wrapper was never invoked.
+
+- **Rule:** do not weaken executable resolution to make a test observer work.
+  Put bounded validation inside the issued session, verify AgentJail's symlink
+  and resolved executable hash, and store only fingerprints and structured
+  outcomes. See `docs/runbooks/aws-sts-testbed.md`.
+
+## 76. Destination IP is not an HTTP policy host
+
+The Darwin strict smoke requested `http://www.cloudflare.com` and received the
+upstream's normal 301 even though a hostname rule claimed to deny port 80. The
+transparent provider passed only the destination IP to the gateway, and the raw
+TCP fallback evaluated that IP instead of parsing the HTTP `Host` field. HTTPS
+looked correct because TLS SNI restored the name on a different path.
+
+- **Rule:** recover application-layer identity before applying L7 policy, model
+  the transport port separately, and fail closed when a bounded parse cannot
+  establish the fields an active policy needs. Assert the exact post-watermark
+  SQLite decision; a status code or terminal line is not proof.
+
+## 77. A stopped provider may still accept sessions
+
+`AgentjailTunnel stop` requested `stopVPNTunnel()` and exited immediately. A
+rapid second test could connect to the old session socket and receive `ok`, then
+lose its PID registration when Network Extension finished replacing that
+provider. A socket-only readiness check also accepted a provider whose new
+WireGuard generation had not completed its handshake.
+
+- **Rule:** treat platform lifecycle commands as asynchronous unless their API
+  proves otherwise. Wait for both the control endpoint and manager state to
+  finish disconnecting, then bind readiness and PID registration to the exact
+  provider generation. A readiness retry must stop the failed provider before
+  starting again; repeating `start` against the same not-ready generation is
+  not reconciliation.
+
+## 78. Requested tunnel is not achieved tunnel
+
+A live Codex scenario invoked the PATH shim's `--tunnel` launch, but the Network
+Extension did not become ready. The shield correctly used its ordinary fallback,
+then spent nearly a minute resolving fallback allowlist hosts before the harness
+timed out waiting for Codex. A command line and the absence of a warning in a
+captured pane could not prove which network path ran.
+
+- **Rule:** release assertions use `--require-tunnel`, watermark `audit_log`, and
+  require a successful `tunnel.session_registered` with no structured launch
+  failure. Keep fallback as the normal user posture, but never let it satisfy a
+  test that claims tunnel coverage. See ADR 0136-tunnel-golden-image.
+
+## 79. `kickstart` success can precede EX_CONFIG
+
+A macOS reinstall replaced the daemon binary and `launchctl kickstart -kp`
+returned zero, so the installer announced success. launchd then marked the job
+`needs LWCR update` and repeatedly exited it with `EX_CONFIG` before AgentJail
+could write a crash record. A status-only provision check caught the dead daemon
+only after the install had already claimed completion.
+
+- **Rule:** after replacing a managed executable, re-register the launchd job
+  with `bootout` plus `bootstrap` so its lightweight code requirement refreshes,
+  derive the exact service label from that job's plist, then prove the daemon's
+  real policy hot path. A generic helper with a hard-coded daemon label can
+  unregister the daemon while installing a different service. A supervisor
+  command's zero exit is not activation evidence. See ADR
+  0088-deployed-supervisor-verified.
+
+## 80. Virtual wall clock stalls
+
+The native Codex approval bridge minted a valid one-use challenge, but a Tart
+guest briefly stopped advancing wall time while its monotonic clock continued.
+The 25 ms process-birth boundary deadline expired, so `PermissionRequest`
+correctly failed closed before Codex could render the approval prompt. Ordinary
+host unit tests never encountered the virtualization pause.
+
+- **Rule:** process-freshness boundaries may wait through a bounded one-second
+  virtual-clock stall, but must still fail closed if the comparable process
+  birth clock does not advance. Diagnose broker failures from structured audit
+  state; terminal prompt text is not the source of truth.
+
+## 81. Clean rows can hide credential residue
+
+A credential test deleted its fixtures and every logical SQLite query was
+clean, yet a byte scan still found the values in database free pages. Decision
+summaries were also able to bypass the value-level redactor even though the
+structured tool input was redacted. The functional suite remained green because
+it queried rows and effects, not the retained storage bytes.
+
+- **Rule:** redact every serialization path again at the store boundary, enable
+  SQLite secure deletion, and scan the database, WAL, and shared-memory files
+  after credential removal. Require a secret-bearing positive control so an
+  empty or broken scanner cannot report success. See ADR
+  0137-credential-residue.
+
+## 82. Credential discovery is not shell injection
+
+A live AWS harness asked Codex to request static broker material and then pass
+the returned values into a fixed shell helper. Depending on the model turn, it
+either copied values into a logged command or invoked the helper without an
+environment. Earlier green runs depended on agent-authored glue rather than the
+broker contract.
+
+- **Rule:** test agent discovery and exact credential request from ordered audit
+  events. Test credential execution separately through AgentJail's pinned direct
+  session path. Until JIT/phantom delivery replaces ADR
+  0131-agent-credential-discovery bootstrap material, do not make a coding agent
+  reconstruct a secret-bearing shell environment merely to satisfy the harness.
+
+## 83. A discovered keychain can still be unusable
+
+The headless macOS gate found `/usr/bin/security`, so body recording announced
+encrypted capture. Keychain operations later exited with "User interaction is
+not allowed", every body write failed, and the metadata-only tunnel assertions
+still passed.
+
+- **Rule:** probe the full authenticated wrap/unwrap path before announcing the
+  recording posture. Classify a noninteractive macOS keychain as locked, switch
+  to the explicit audited plaintext fallback from ADR
+  0092-persist-request-bodies, and require persisted body paths in the release
+  gate.
+
+## 84. IPv4-first DNS hid a broken default
+
+The Tart tunnel suite passed because its resolver returned IPv4 first. On an
+IPv6-first Mac, Network Extension supplied an already-resolved IPv6 literal to
+the same IPv4-only default tunnel. Lifecycle audits were green, but every flow
+closed before the gateway, so no `network_requests` row existed.
+
+- **Rule:** test both address families and require a request-row delta, not
+  merely extension lifecycle success. A transparent tunnel must enable every
+  address family it claims by default or fail the release gate explicitly. See
+  ADR 0138-dual-stack-default.
+
+## 85. Clean text can retain a symlink
+
+The session-only OpenSSH bootstrap removed a trailing slash from macOS's
+`TMPDIR`, and its unit test passed, but lexical cleaning left the system
+`/var` symlink intact. OpenSSH derived `SSH_AUTH_SOCK` beneath that spelling,
+so the shield correctly rejected the live agent even after the user loaded a
+key.
+
+- **Rule:** canonicalize the temp root before the trusted producer creates a
+  capability path; do not weaken the consumer's no-symlink validator. Test with
+  a real symlink, not a path-shaped string. See ADR
+  0139-canonical-ssh-temp.
 
 ---
 

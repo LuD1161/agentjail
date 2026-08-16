@@ -18,6 +18,10 @@ import (
 // ever observable as a prefix.
 const commTruncateLen = 15
 
+// Virtualized wall clocks can pause while the monotonic deadline advances.
+// See docs/GOTCHAS.md#80-virtual-wall-clock-stalls.
+const startBoundaryAdvanceTimeout = time.Second
+
 // CommMatches reports whether the kernel-reported comm of a process refers to
 // the binary named want.
 //
@@ -75,7 +79,7 @@ func NextStartBoundary() (StartMarker, error) {
 	if err != nil {
 		return 0, err
 	}
-	deadline := time.Now().Add(25 * time.Millisecond)
+	deadline := time.Now().Add(startBoundaryAdvanceTimeout)
 	for time.Now().Before(deadline) {
 		current, err := currentStartMarker()
 		if err != nil {
