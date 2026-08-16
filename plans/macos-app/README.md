@@ -22,9 +22,9 @@ executors own only their assigned source paths and unique handoff file.
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | DONE — a2003977 |
 | 021 | Build the approval state store | P0 | M | 020 | DONE — 5c97c076 |
 | 018 | Serve authenticated review snapshots | P0 | S | 029, 030 | DONE — bc02eede |
-| 022 | Build the menu-bar review UI | P1 | M | 019, 021, 033 | CLAIMED — plan017_protocol; acceptance waits on 021 |
-| 023 | Add privacy-bounded notifications | P1 | M | 020, 021 | CLAIMED — plan019_prep; acceptance waits on 021 |
-| 024 | Compose the production app and settings | P0 | M | 016, 018, 022, 023 | TODO |
+| 022 | Build the menu-bar review UI | P1 | M | 019, 021, 033 | DONE — b005de81 |
+| 023 | Add privacy-bounded notifications | P1 | M | 020, 021 | DONE — ce361898 |
+| 024 | Compose the production app and settings | P0 | M | 016, 018, 022, 023 | CLAIMED — plan024_compose |
 | 025 | Build, sign, and package locally | P1 | M | 024 | TODO |
 | 026 | Prove cross-language and real-Mac behavior | P0 | L | 018, 024, 025 | TODO |
 | 027 | Publish local docs and install guidance | P2 | S | 026 + dirty-path clearance | BLOCKED — README has pre-existing edits |

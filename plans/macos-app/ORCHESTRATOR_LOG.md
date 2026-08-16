@@ -380,6 +380,29 @@ listed on the task board.
   one shared Swift harness at a time.
 - Remote action: none
 
+## 2026-08-15 — Plans 022 and 023 accepted; Plan 024 claimed
+
+- Plan 022 commit: `b005de81cddc554c363681523194d3c04df62c0f`
+- Plan 023 commit: `ce361898acc05c580c4186026b8819756ccbccfe`
+- Both commits match their exclusive ownership sets, carry DCO sign-offs, and
+  leave their scoped paths clean. Nothing was pushed.
+- UI review: the pure presentation layer preserves the daemon's canonical
+  order, never substitutes sanitized authority, makes stale/expired/unverified
+  rows non-approvable, uses exact future-session/current-session-unchanged copy,
+  and handles same-generation unavailable-to-focused transitions. The panel
+  acknowledges a route only after target focus or terminal feedback consumes it.
+- Notification review: permission remains explicit opt-in; payloads are generic;
+  request identifiers use an app prefix plus SHA-256 digest; Review is
+  non-mutating; Deny refetches authority and is one-shot. Its bounded response
+  registry saturates fail-closed rather than evicting IDs and enabling retries.
+- Frozen-worktree direct harness: PASS with 76 core and 6 app XCTest cases,
+  macOS 13 production compilation, and arm64/x86_64 typechecks. Copy/privacy,
+  private-scene boundary, cached-diff, and scoped-cleanliness checks passed.
+- Board verdicts: Plans 022 and 023 DONE.
+- Plan 024 agent: `plan024_compose` (Terra); acknowledged at `ce361898` with
+  exclusive app entry/Composition/Settings/Lifecycle/app-test/subtree-doc scope.
+- Remote action: none
+
 ## Execution entry template
 
 The orchestrator appends one entry after reviewing each task:
