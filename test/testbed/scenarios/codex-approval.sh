@@ -7,15 +7,19 @@ command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
 AJ="$HOME/.agentjail/bin/agentjail"
-CODEX_REAL="$HOME/.agentjail/bin/codex"
+CODEX_REAL="$(command -v codex)"
+CODEX_SHIM="$HOME/.agentjail/bin/codex"
+POLICY="$HOME/.agentjail/policy.yaml"
 PROJECT="$HOME/work/codex-approval"
 REMOTE="$PROJECT/.remote.git"
 SESSION="codex-approval-$RANDOM"
+PANE_LOG="/tmp/codex-approval-pane.log"
 CODEX_VERSION="codex-cli ${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}"
 PROMPT_MARKER="agentjail approval-exec --operation shell-command"
 DISPLAY_MARKER="🔐 AgentJail approval required for:"
 EXPECTED_CONTEXT=""
 CUSTOM_RULE_INSTALLED=0
+GIT_SSH_DISABLED=0
 
 scn_init "codex-approval" "native approval for Bash asks and one bounded host-proxy execution"
 
@@ -24,8 +28,13 @@ cleanup() {
     if [ "$CUSTOM_RULE_INSTALLED" -eq 1 ]; then
         "$AJ" policy remove codex_approval_probe >/dev/null 2>&1 || true
     fi
+    if [ "$GIT_SSH_DISABLED" -eq 1 ]; then
+        sed -i.agentjail-test 's/git_ssh: false/git_ssh: true/' "$POLICY" 2>/dev/null || true
+        rm -f "$POLICY.agentjail-test"
+    fi
     rm -f /tmp/codex-auth.json "$HOME/.codex/auth.json"
     rm -f /tmp/codex-hostproxy-direct.log /tmp/codex-hostproxy-bypass.log
+    rm -f "$PANE_LOG"
     [ -z "${HOST_PROXY_SENTINEL:-}" ] || rm -f "$HOST_PROXY_SENTINEL"
 }
 trap cleanup EXIT INT TERM
@@ -49,6 +58,18 @@ if [ ! -x "$CODEX_REAL" ] || ! printf '%s\n' "$CODEX_VERSION_OUTPUT" | grep -Fq 
     finish_and_exit
 fi
 scn_ok "installed Codex version is $CODEX_VERSION"
+
+if grep -q '^[[:space:]]*git_ssh: false$' "$POLICY"; then
+    :
+elif grep -q '^[[:space:]]*git_ssh: true$' "$POLICY" \
+    && sed -i.agentjail-test 's/git_ssh: true/git_ssh: false/' "$POLICY"; then
+    rm -f "$POLICY.agentjail-test"
+    GIT_SSH_DISABLED=1
+else
+    scn_fail "scenario isolates native approval from Git-SSH delegation"
+    grep -n 'git_ssh' "$POLICY" 2>/dev/null | sed 's/^/    /'
+    finish_and_exit
+fi
 
 rm -rf "$PROJECT"
 mkdir -p "$PROJECT"
@@ -116,10 +137,19 @@ wait_for_approval_prompt() {
 
 print_sanitized_pane() {
     echo "  Codex pane (challenge redacted):"
+    tmux list-panes -t "$SESSION" -F '    dead=#{pane_dead} status=#{pane_dead_status} command=#{pane_current_command}' 2>/dev/null || true
     tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null \
         | sed -E 's/[A-Za-z0-9_-]{43}/<challenge>/g' \
+        | sed -E "s|$HOME|<guest-home>|g; s|$USER@[^ ]*|agent@guest|g; s|(Booting MCP server:).*|\1 <redacted>|" \
         | tail -40 \
         | sed 's/^/    /'
+    if [ -s "$PANE_LOG" ]; then
+        echo "  Codex terminal stream (challenge redacted):"
+        sed -E 's/[A-Za-z0-9_-]{43}/<challenge>/g' "$PANE_LOG" \
+            | sed -E "s|$HOME|<guest-home>|g; s|$USER@[^ ]*|agent@guest|g; s|(Booting MCP server:).*|\1 <redacted>|" \
+            | tail -40 \
+            | sed 's/^/    /'
+    fi
 }
 
 start_interactive_push() {
@@ -132,8 +162,11 @@ start_interactive_command() {
     local command="$1"
     tmux kill-session -t "$SESSION" 2>/dev/null || true
     tmux new-session -d -s "$SESSION" -x 180 -y 48
+    tmux set-option -t "$SESSION" remain-on-exit on
+    rm -f "$PANE_LOG"
+    tmux pipe-pane -t "$SESSION:0.0" -o "tee '$PANE_LOG' >/dev/null"
     tmux send-keys -t "$SESSION:0.0" \
-        "cd '$PROJECT' && '$CODEX_REAL' --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: $command'" Enter
+        "cd '$PROJECT' && '$CODEX_SHIM' --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: $command'" Enter
 }
 
 transport_failed_before_tool() {
@@ -226,7 +259,7 @@ NEVER_BRANCH="agentjail-approval-never"
 NEVER_LOG="/tmp/codex-approval-never.log"
 (
     cd "$PROJECT" || exit 1
-    exec "$CODEX_REAL" -a never \
+    exec "$CODEX_SHIM" -a never \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
         exec --ephemeral \
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$NEVER_BRANCH"
@@ -266,7 +299,7 @@ IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
 (
     cd "$PROJECT" || exit 1
-    exec "$CODEX_REAL" \
+    exec "$CODEX_SHIM" \
         --dangerously-bypass-hook-trust -s workspace-write -C "$PROJECT" \
         exec --ephemeral --ignore-rules \
         "Run exactly this command once and then stop: git -C \"$PROJECT\" push origin HEAD:refs/heads/$IGNORE_BRANCH"
@@ -326,7 +359,7 @@ DISPLAY_MARKER="🔐 AgentJail host access approval required:"
 HOST_PROXY_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 
 DIRECT_LOG="/tmp/codex-hostproxy-direct.log"
-timeout 120 "$CODEX_REAL" --dangerously-bypass-approvals-and-sandbox \
+timeout 120 "$CODEX_SHIM" --dangerously-bypass-approvals-and-sandbox \
     --dangerously-bypass-hook-trust -C "$PROJECT" exec --ephemeral \
     "Run exactly this command once and then stop: $HOST_PROXY_HELPER $HOST_PROXY_DIRECT direct" \
     >"$DIRECT_LOG" 2>&1 || true
@@ -381,7 +414,7 @@ else
 fi
 
 BYPASS_LOG="/tmp/codex-hostproxy-bypass.log"
-timeout 120 "$CODEX_REAL" --dangerously-bypass-approvals-and-sandbox \
+timeout 120 "$CODEX_SHIM" --dangerously-bypass-approvals-and-sandbox \
     --dangerously-bypass-hook-trust -C "$PROJECT" exec --ephemeral \
     "Run exactly this command once and then stop: agentjail proxy -- /bin/sh -c 'printf bypass > $HOST_PROXY_BYPASS'" \
     >"$BYPASS_LOG" 2>&1 || true
