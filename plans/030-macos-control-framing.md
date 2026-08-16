@@ -35,8 +35,10 @@ while a `Max+1` bounded read detects missing delimiters and oversize input.
 - A reader buffers at most `MaxControlMsgBytes+1`, requires the delimiter,
   rejects invalid UTF-8, then decodes exactly one JSON value and permits only
   space, tab, or CR afterward before the delimiter.
-- A second newline frame is never dispatched/consumed; the endpoint replies to
-  the first and closes the connection.
+- A second newline frame is never decoded or dispatched; the endpoint replies
+  to the first and closes the connection. Normal bounded chunked I/O may read
+  ahead after the first delimiter into the same fixed buffer, but those bytes
+  are discarded and never become a second operation.
 - Writers marshal and size-check the complete frame before writing any bytes.
 - An over-limit response is replaced by one small typed `ok=false` error; no
   partial oversized JSON is sent.
@@ -84,7 +86,10 @@ are additive wire contracts. Ignore unknown object fields while typed dispatch
 rejects unknown request types and versioned handlers reject unsupported versions.
 
 Do not use `io.ReadAll` without a `Max+1` limiter. Do not allocate based on a
-caller-supplied length.
+caller-supplied length. Do not perform one underlying `Read` per byte: the
+control socket must parse before token authentication, so a 64-KiB hostile
+frame must not amplify into roughly 64,000 unauthenticated syscalls. Use fixed
+bounded chunks and decode only the prefix ending at the first delimiter.
 
 **Verify:** table tests cover empty, newline-only, exact maximum, max+1, no
 newline, raw LF inside pretty-printed JSON, valid object plus SP/HTAB/CR, junk,
@@ -136,7 +141,8 @@ commit owned files under the lock.
 - [ ] Request/response frames have one newline-delimited, 64-KiB-including-delimiter rule.
 - [ ] Unknown fields remain additive-compatible while unknown type/version is rejected.
 - [ ] Oversize, missing delimiter, malformed, and trailing-in-frame data fail before dispatch.
-- [ ] A second frame is never dispatched or interpreted as a second response.
+- [ ] A second frame is never decoded, dispatched, or interpreted as a second response.
+- [ ] Reading is chunked and bounded; no per-byte underlying read loop exists before authentication.
 - [ ] Writers size-check before emitting bytes; oversized responses are one bounded refusal.
 - [ ] Token authentication remains before every dispatch case and hot path is untouched.
 - [ ] Existing verbs, race, vet, and CGO-disabled builds pass.

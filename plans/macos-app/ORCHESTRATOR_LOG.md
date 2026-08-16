@@ -177,6 +177,21 @@ listed on the task board.
 - Board verdict: DONE; Plan 022 may consume this helper after Plan 021.
 - Remote action: none
 
+## 2026-08-15 — Plan 030 read-ahead contract clarified
+
+- An adversarial review correctly noted that `bufio.Reader` can read beyond
+  the first delimiter into frame two. The first proposed correction performed
+  one underlying read per byte.
+- That correction is rejected: `daemon-ctl.sock` parsing precedes token
+  authentication, so a hostile 64-KiB frame could force roughly 64,000 syscalls
+  per connection and create a same-UID denial-of-service amplifier.
+- Locked rule: use fixed bounded chunks and at most the frame budget plus one
+  byte of storage; decode/dispatch only the first delimited prefix, discard any
+  bounded read-ahead, reply once, and close. Frame two is never an operation.
+- Plan 030 now explicitly tests semantic single-frame handling and forbids a
+  per-byte underlying read loop.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)
