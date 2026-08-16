@@ -80,6 +80,20 @@ listed on the task board.
   review.
 - Remote action: none
 
+## 2026-08-15 — Supplemental Plan 031 claimed
+
+- Agent: `plan016_prep` (Terra)
+- Starting HEAD: `c72a4c44`
+- Reason: full daemon package gates are blocked by two pre-existing SIGHUP
+  subprocess tests inheriting home-derived log/database paths. Their product
+  assertions never execute on this host.
+- Ownership: only `internal/daemonapp/main_test.go`, restricted to those two
+  tests, and `plans/macos-app/handoffs/031.md`.
+- Acceptance: explicit per-test temporary log/database paths; focused normal
+  and race runs, vet, diff check, signed local commit.
+- Production behavior change: none
+- Remote action: none
+
 ## Execution entry template
 
 The orchestrator appends one entry after reviewing each task:

@@ -14,6 +14,7 @@ executors own only their assigned source paths and unique handoff file.
 | 016 | Verify macOS grant project binding | P0 | M | 015 | CLAIMED — plan016_prep |
 | 017 | Add the versioned review wire contract | P0 | S | 015 | CLAIMED — plan017_protocol |
 | 019 | Scaffold the standalone Swift package | P0 | S | 015 | CLAIMED — plan019_prep |
+| 031 | Isolate daemon subprocess test state | P0 | XS | — | CLAIMED — plan016_prep |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | TODO |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | TODO |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | TODO |
@@ -79,6 +80,7 @@ serialized by the lock in `COORDINATION.md`.
 | 028 | separately assigned daemon/app observer paths after MVP |
 | 029 | registry expiry/claim files, smallest daemon call-site edit, one GOTCHAS entry |
 | 030 | grant control framing/client files, serialized daemon decoder/reply edit, one GOTCHAS entry |
+| 031 | two SIGHUP subprocess tests in `internal/daemonapp/main_test.go` only |
 
 Every task additionally owns only `plans/macos-app/handoffs/NNN.md`.
 
