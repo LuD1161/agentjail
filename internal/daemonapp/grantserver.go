@@ -67,6 +67,7 @@ type grantServer struct {
 	lock     *os.File
 	sockPath string
 	registry *grantctl.Registry
+	reviews  reviewSnapshotProjector
 	emitter  audit.Emitter
 	// durableAudit is true only when emitter is backed by a real, writable
 	// store (never audit.NopEmitter). grant_approve is refused (fail closed)
@@ -151,6 +152,7 @@ func newGrantServer(sockPath, ctlToken string, registry *grantctl.Registry, emit
 		lock:           lock,
 		sockPath:       sockPath,
 		registry:       registry,
+		reviews:        registry,
 		emitter:        emitter,
 		durableAudit:   durableAudit,
 		activeSessions: activeSessions,
@@ -255,6 +257,8 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	switch req.Type {
 	case grantctl.ReqGrantList:
 		gs.reply(conn, grantctl.Response{OK: true, Grants: gs.registry.ListPending(now)})
+	case grantctl.ReqReviewSnapshot:
+		gs.reply(conn, reviewSnapshotResponse(gs.reviews, req.ProtocolVersion, now))
 
 	case grantctl.ReqGrantApprove:
 		if req.GrantID == "" {
