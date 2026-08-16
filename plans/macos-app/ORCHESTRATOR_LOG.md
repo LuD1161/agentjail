@@ -109,6 +109,26 @@ listed on the task board.
 - Board verdict: DONE
 - Remote action: none
 
+## 2026-08-15 — Plan 029 accepted; Plan 030 claimed
+
+- Plan 029 agent: `plan017_protocol` (Terra)
+- Commit: `980057e16146290a8cdfc2832a53cf583bc748ff`
+- Changed paths matched ownership: yes, including only the previously approved
+  mechanical time-aware migration in `review_test.go`; DCO/diff checks passed.
+- Security review: `Expires <= now` is one lock-held predicate across claim,
+  deny, reads, duplicate renewal, caps, and cleanup. Claim has no find/claim
+  race, and an expired decision returns no authority closure, writes no policy
+  overlay, and emits no policy-change audit event.
+- Orchestrator reruns: focused registry and daemon expiry/grant tests, full
+  two-package race, vet, and CGO-disabled CLI/daemon builds: PASS.
+- Board verdict: Plan 029 DONE.
+- Plan 030 agent: `plan017_protocol` (Terra); starting HEAD `980057e1`.
+- Plan 030 ownership: typed grant-control frame helpers/tests, client framing,
+  serialized daemon decoder/reply and focused tests, one GOTCHAS entry, and
+  handoff 030. Review dispatch, registry semantics, Swift, and proxy framing
+  remain out of scope.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)
