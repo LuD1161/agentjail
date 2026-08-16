@@ -67,6 +67,24 @@ The app targets macOS 13 and later, uses SwiftUI `MenuBarExtra` with `.window`
 style, sets `LSUIElement=true`, and provides a Settings scene. Login startup is
 an explicit opt-in through `SMAppService.mainApp`; it is never silently enabled.
 
+`MenuBarExtra` remains the canonical manual review surface. Its public API does
+not expose panel presentation state, so notification **Review** is allowed to
+open one supplemental singleton SwiftUI `Window` through `OpenWindowAction`.
+That window renders the same panel against the same store and ID-only actions;
+it creates no second poller or authority. A generation-stamped route is observed
+from the persistent menu-bar label, refreshes before focus, and treats a missing
+or stale ID as non-actionable. Private `NSStatusItem`, window enumeration, and
+dynamic-selector fallbacks are forbidden.
+
+The app uses the `MenuBarExtra` insertion binding and terminates normally after
+the user removes the extra, so an `LSUIElement` login app cannot keep polling
+invisibly. A later explicit/login launch inserts it again without changing login
+registration or daemon state. The Settings scene remains canonical; because
+the public `openSettings` action starts at macOS 14 in the verified SDK, macOS
+13 opens the same settings view in a separate public singleton SwiftUI window.
+This refinement was verified on 2026-08-15 with Xcode 26.6, Swift 6.3.3, and
+the macOS 26.5 SDK using strict macOS 13 type-check probes.
+
 V1 is directly distributed, uses hardened runtime, and must be Developer ID
 signed and notarized before a public build. It has no App Sandbox in v1. A
 sandboxed or Mac App Store version requires a future ADR and an XPC/IPC redesign;
@@ -133,6 +151,10 @@ Notification permission is contextual opt-in from Settings. Content is generic:
 project path, session ID, token, raw reason, command, or review ID. The only
 actions are Review and Deny; Review explicitly foregrounds the app, and
 foreground presentation is handled explicitly.
+
+Review opens/focuses the public supplemental singleton review window rather
+than attempting to programmatically present the MenuBarExtra panel. It refreshes
+the snapshot before focusing and never performs a mutation.
 
 There is no notification Approve action. Deny is destructive and requires device
 authentication. Before denial, the app refetches the review and treats a stale,

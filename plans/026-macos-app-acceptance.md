@@ -47,7 +47,7 @@ MVP usable.
 | State | empty, pending, expiry/race, disconnect with stale disabled rows, recovery, daemon restart, duplicate snapshot |
 | Mutations | approve success, deny success, unknown ID, atomically refused expired ID, reply loss with no automatic replay |
 | Darwin binding | current process and child CWD, nonexistent PID, exited PID, permission/error path, CGO off, arm64 + amd64 compile |
-| Notifications | explicit permission, generic content, Review route, Deny revalidation, no Approve action, dedupe/expiry |
+| Notifications | explicit permission, generic content, cold/closed Review window route, Deny revalidation, no Approve action, dedupe/expiry |
 | Packaging | universal binary, plist, exact entitlements, strict signature, DMG mount/read/verify |
 | Real daemon | request appears, app reviews it, approve writes future overlay, current session unchanged, new session changed |
 
@@ -116,6 +116,13 @@ action.
 Perform keyboard-only navigation and accessibility-label checks in automated
 tests where available; record manual-only checks separately.
 
+With MenuBarExtra content unmounted, prove a background and cold-launch Review
+opens the one `approval-review` singleton, obtains a fresh snapshot, and focuses
+the exact ID. Repeating the same ID brings that window forward without creating
+a duplicate; a missing/expired ID remains disabled with bounded feedback.
+Closing the supplemental window must leave the canonical menu/store lifecycle
+intact, and merely opening/focusing it must never call Approve or Deny.
+
 ### Step 4: Prove the real future-session flow
 
 On a physical Mac, create a task-specific project with `rtk mktemp -d` beneath
@@ -169,12 +176,18 @@ Record OS/hardware/app versions and pass/fail evidence for:
 - first launch with notifications undecided, denied, and enabled;
 - banner/list delivery through `willPresent` while foregrounded, plus Review
   and authentication-required Deny while foregrounded/backgrounded;
+- Review routing while the menu panel is closed and on cold launch, singleton
+  reuse for repeated IDs, and stale-ID non-actionability;
 - Focus suppressing delivery without losing the durable menu item;
 - login-item disabled by default, opt-in enable, relaunch, disable;
 - VoiceOver reading project, untrusted reason, effect, status, and buttons;
 - Voice Control, Switch Control, full keyboard access, increased contrast,
   reduced motion, and Accessibility Inspector;
 - long Unicode/bidi/control input rendering without spoofing or layout escape.
+- macOS 13 availability compilation for the public singleton Settings fallback,
+  plus the current-OS canonical Settings route;
+- MenuBarExtra removal stops the store and process cleanly, preserves daemon
+  authority/login registration, and leaves no invisible `LSUIElement` process.
 
 Accessibility failures are product failures, not notes to defer silently.
 
@@ -228,6 +241,9 @@ waived or misassigned.
 - [ ] Darwin CWD binding passes live and CGO-disabled architecture gates.
 - [ ] Real approval changes only a new matching project session; Deny/expiry do not.
 - [ ] Notification, login-item, privacy, and accessibility manual gates pass.
+- [ ] Closed/cold Review uses one public focused singleton and never a private
+      status-item/window shortcut or second authority path.
+- [ ] Settings and menu-removal behavior pass at the macOS 13 floor.
 - [ ] Built app is universal, strictly signed, minimally entitled, and locally mountable.
 - [ ] Full repository gates pass with redacted, local-only evidence.
 - [ ] Every product failure is assigned REWORK; reserved-user-path failures are

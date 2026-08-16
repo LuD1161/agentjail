@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release testbed-harness-test chaos tunnel-lib macos-app
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release testbed-harness-test chaos tunnel-lib macos-app macos-approval-app macos-approval-dmg
 
 BIN ?= bin/agentjail
 
@@ -155,6 +155,12 @@ macos-app:  ## build + ad-hoc sign build/AgentjailTunnel.app (set NOTARIZE=1 for
 
 macos-dmg: macos-app  ## package build/AgentjailTunnel.app into build/AgentjailTunnel.dmg
 	./scripts/package-macos-dmg.sh
+
+macos-approval-app:  ## build + locally ad-hoc-sign AgentjailApproval.app
+	./scripts/build-macos-approval-app.sh
+
+macos-approval-dmg:  ## package the local AgentjailApproval.app into a DMG
+	./scripts/package-macos-approval-dmg.sh
 
 # dist-tarball builds the two real binaries for a target platform and packs
 # them in the flat layout install.sh expects (binaries at tarball top level).

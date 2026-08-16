@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class ScaffoldTests: XCTestCase {
-    func testPlaceholderViewIsAvailable() {
-        _ = PlaceholderView()
+    func testProductionAppEntryIsAvailable() {
+        _ = AgentjailApprovalApp()
     }
 }

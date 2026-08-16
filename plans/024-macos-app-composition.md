@@ -92,13 +92,25 @@ Use `@NSApplicationDelegateAdaptor` (or the accepted ADR's equivalent) to
 assign `UNUserNotificationCenter.current().delegate` and register categories
 before application launch completes. Route callbacks to plan 023's handler and
 always complete them. Route `willPresent` through plan 023's explicit
-banner/list/sound policy. Foreground Review selects/focuses the matching row.
+banner/list/sound policy. Foreground Review publishes a generation-stamped ID,
+activates the app, and opens/focuses the matching row in the one supplemental
+singleton `Window("AgentJail Review", id: "approval-review")`. The window must
+reuse `ApprovalPanelView`, the sole store, and ID-only callbacks. It refreshes
+before focus and never mutates merely because the window opened. Missing or
+expired IDs show bounded non-actionable feedback.
+
+Bridge the route through `OpenWindowAction` in the persistent MenuBarExtra
+label, not its conditionally mounted content. Repeated routes for the same ID
+must be distinguished by generation and acknowledged only after consumption.
+Do not use `NSStatusItem`, application-window enumeration, selector strings, or
+private/undocumented presentation APIs.
 
 Do not request notification authorization here.
 
 **Verify:** lifecycle test/order spy records delegate/category setup before
 store polling, a foreground notification receives the exact accepted options
-once, and source has no first-launch authorization call.
+once, closed-content/cold and repeated-ID routes reuse and foreground one
+singleton window, and source has no first-launch authorization call.
 
 ### Step 3: Replace the placeholder scene
 
@@ -106,6 +118,12 @@ Wire `MenuBarExtra` label to connection/pending state and the `.window` content
 to `ApprovalPanelView`. Start polling once, stop/cancel on termination, refresh
 on app activation and menu opening, and route explicit row buttons to store
 ID-only methods.
+
+Use the public `isInserted` overload because this app also declares Settings
+and supplemental Window scenes. If the extra is removed, stop the store and
+terminate normally; do not leave an invisible `LSUIElement` process. A later
+explicit or login launch inserts the item again. Removal must not register or
+unregister login startup and must not alter daemon state.
 
 Approve must remain disabled unless the latest server snapshot says
 `can_approve=true`; composition must not override it based on local OS/version.
@@ -124,11 +142,20 @@ Create a Settings scene with:
   `SMAppService.mainApp`;
 - precise future-session explanation and local-only/privacy statement.
 
+On macOS 14+, the explicit Settings callback may use the public
+`openSettings`/`SettingsLink` path. Those APIs are unavailable at the macOS 13
+deployment floor, so macOS 13 must open the same `ApprovalSettingsView` in a
+separate public singleton SwiftUI window. Keep the Settings scene declared for
+the system menu. Dynamic `showSettingsWindow:`/`showPreferencesWindow:`
+selectors are forbidden.
+
 Do not auto-register the login item. Surface `.requiresApproval`, enabled,
 not-found, and error statuses truthfully.
 
 **Verify:** fresh/default settings issue zero notification and login
-registration calls; explicit user toggles issue exactly one matching call.
+registration calls; explicit user toggles issue exactly one matching call;
+strict macOS 13 type-checking exercises the singleton fallback and the running
+OS exercises the canonical Settings path where available.
 
 ### Step 5: Handle foreground/background and errors
 
@@ -155,6 +182,10 @@ and commit under the lock.
 - [ ] Notification delegate/categories are ready before launch; permission is not auto-requested.
 - [ ] Foreground notifications are explicitly presented through `willPresent`.
 - [ ] Menu label/panel reflect all states and ID-only actions.
+- [ ] Notification Review reuses one public singleton review window, refreshes,
+      and focuses by generation-stamped ID without a mutation or second poller.
+- [ ] macOS 13 can open Settings without unavailable APIs or selector fallbacks.
+- [ ] Removing the menu extra stops the store and leaves no invisible process.
 - [ ] Approve requires latest `can_approve`; no fallback authority exists.
 - [ ] Notifications and login-at-startup are explicit user choices.
 - [ ] Disconnect/version mismatch are distinct and cached rows disabled.
@@ -172,6 +203,8 @@ and commit under the lock.
 - Runtime bundle identity differs from `com.blinkerlm.agentjail.approval` or
   executable product `AgentjailApproval`.
 - App Sandbox or notification Approve becomes a requirement.
+- Review focus requires private status-item/window introspection or a second
+  authority/store.
 
 ## Maintenance notes
 

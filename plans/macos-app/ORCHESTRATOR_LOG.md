@@ -265,6 +265,37 @@ listed on the task board.
   notifications, and the state store only.
 - Remote action: none
 
+## 2026-08-15 — Public review-window and macOS 13 Settings clarification
+
+- Trigger: Plan 024 local SDK verification found that `MenuBarExtra` exposes an
+  insertion binding but no public panel-presentation action. It also proved
+  `openSettings`/`SettingsLink` unavailable at the macOS 13 deployment floor.
+- Toolchain/source check: Xcode 26.6, Swift 6.3.3, macOS SDK 26.5, strict Swift
+  6 type-check at `arm64-apple-macosx13.0`, and current Apple Window,
+  OpenWindowAction, Settings, MenuBarExtra, notification, and SMAppService docs.
+- Decision: the menu panel stays canonical. Notification Review may open one
+  supplemental public singleton review Window, sharing the sole store/panel and
+  using a generation-stamped ID route from the persistent menu label. macOS 13
+  uses a public singleton settings Window; macOS 14+ may use openSettings.
+- Removal contract: use the MenuBarExtra insertion binding and terminate cleanly
+  on removal so no invisible LSUIElement poller remains. No private status-item,
+  window-enumeration, selector, second-store, or second-authority fallback.
+- Updated: ADR 0133, DESIGN, plans 024 and 026. `make adr-check` and diff check
+  PASS. Product code unchanged.
+- Remote action: none
+
+## 2026-08-15 — Plans 022 and 023 parallel implementation released
+
+- Plan 021's public State enum/snapshot/action API is stable; remaining work is
+  a test-file compiler-performance split and final acceptance/commit.
+- Plans 022 and 023 own disjoint UI/Presentation and Notifications trees. They
+  may implement in parallel against the stable API but cannot be accepted or
+  committed as DONE until Plan 021 is reviewed.
+- Plan 022 also owns the pure generation-stamped focus presentation seam for
+  the supplemental review window. Plan 023 publishes the non-mutating route;
+  Plan 024 alone opens scenes and composes the shared store.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)
@@ -328,7 +359,140 @@ listed on the task board.
   paths, the narrow daemon call site/tests, one GOTCHAS entry, and handoff 029.
 - Remote action: none
 
+## 2026-08-15 — Plan 021 accepted
+
+- Plan 021 commit: `5c97c076594058d3e6c4427d50c79db130d8ae2b`
+- Changed paths matched the State-only ownership list; DCO, scoped cleanliness,
+  and the core privacy/import scan passed.
+- State review: authoritative and stale states are distinct, stale/expired or
+  unverified rows cannot approve, mutations are ID-only and single-flight,
+  ambiguous outcomes never retry automatically, and later refreshes cannot
+  overwrite newer authority.
+- Lifecycle review: one cancellable poll loop uses deterministic two-second
+  polling and capped reconnect backoff; stable authorization/protocol failures
+  stop without hot-looping; activation/manual refresh resumes safely; stop
+  invalidates late success and error results and releases the store.
+- The shared Swift test module was decomposed into focused State suites and
+  explicitly typed continuation fakes after the compiler exposed oversized
+  primary-file behavior. The final frozen-worktree harness passed 76 core and
+  6 app XCTest cases plus macOS 13 arm64/x86_64 production typechecks.
+- Board verdict: Plan 021 DONE. Plans 022 and 023 may enter final verification,
+  one shared Swift harness at a time.
+- Remote action: none
+
+## 2026-08-15 — Plans 022 and 023 accepted; Plan 024 claimed
+
+- Plan 022 commit: `b005de81cddc554c363681523194d3c04df62c0f`
+- Plan 023 commit: `ce361898acc05c580c4186026b8819756ccbccfe`
+- Both commits match their exclusive ownership sets, carry DCO sign-offs, and
+  leave their scoped paths clean. Nothing was pushed.
+- UI review: the pure presentation layer preserves the daemon's canonical
+  order, never substitutes sanitized authority, makes stale/expired/unverified
+  rows non-approvable, uses exact future-session/current-session-unchanged copy,
+  and handles same-generation unavailable-to-focused transitions. The panel
+  acknowledges a route only after target focus or terminal feedback consumes it.
+- Notification review: permission remains explicit opt-in; payloads are generic;
+  request identifiers use an app prefix plus SHA-256 digest; Review is
+  non-mutating; Deny refetches authority and is one-shot. Its bounded response
+  registry saturates fail-closed rather than evicting IDs and enabling retries.
+- Frozen-worktree direct harness: PASS with 76 core and 6 app XCTest cases,
+  macOS 13 production compilation, and arm64/x86_64 typechecks. Copy/privacy,
+  private-scene boundary, cached-diff, and scoped-cleanliness checks passed.
+- Board verdicts: Plans 022 and 023 DONE.
+- Plan 024 agent: `plan024_compose` (Terra); acknowledged at `ce361898` with
+  exclusive app entry/Composition/Settings/Lifecycle/app-test/subtree-doc scope.
+- Remote action: none
+
 ## Execution entry template
+
+## 2026-08-15 — Plan 024 accepted
+
+- Agent: `plan024_compose` (Terra)
+- Commit: `f702630f4afb625042f05ddf52a14cf0ea91a936`
+- Changed paths matched the composition claim plus the explicitly authorized
+  replacement of the scaffold test that referenced the deleted placeholder.
+  DCO, scoped cleanliness, empty-index, and diff checks passed.
+- Lifecycle review: one composition owns the client, store, notification
+  coordinator/delegate, and login adapter. Delegate/category setup precedes the
+  sole polling start; shutdown and termination are one-shot; notification and
+  login mutations require explicit user actions.
+- Route review: the persistent menu label dispatches cold and repeated
+  generation-stamped Review routes. Each route refreshes before opening the
+  singleton supplemental window, only that window consumes focus, and missing
+  requests remain non-actionable. Review itself never mutates authority.
+- Concurrency review: notification synchronization is serialized and
+  coalesced, so a newer authoritative snapshot is processed after an older
+  blocked update. Approve refusal and deny-race failures remain visible and are
+  never retried automatically.
+- Final frozen-worktree harness: PASS with macOS 13 arm64/x86_64 production
+  typechecks, 76 Core XCTest cases, and 17 App XCTest cases. Orchestrator focused
+  Go review/grant tests, full two-package race gate, forbidden-API/privacy scans,
+  and independent adversarial review passed.
+- Board verdict: Plan 024 DONE. Plan 025 may claim local packaging.
+- Remote action: none
+
+## 2026-08-15 — Plan 025 local packaging claimed
+
+- Agent: `plan025_package` (Terra)
+- Starting HEAD: `f702630f4afb625042f05ddf52a14cf0ea91a936`
+- Scoped baseline: clean across the approval entitlement, two dedicated build
+  and DMG scripts, narrow Make targets, packaging tests/docs, and handoff 025.
+- Required boundary: local ad-hoc signing only, hardened-runtime flag,
+  timestamp disabled, and an exactly empty entitlement dictionary. Build each
+  architecture separately with the local Xcode toolchain, create the universal
+  executable with `lipo`, and verify binary/plist/signature identity both before
+  and after mounting the DMG.
+- Excluded: tunnel targets/scripts and their privileged entitlements,
+  Developer ID identities, notarization, credentials, network calls, and any
+  publication or remote action.
+- Remote action: none
+
+## 2026-08-15 — Plan 025 accepted
+
+- Agent: `plan025_package` (Terra)
+- Commit: `5f8b735504a9f7b9a08d43d9ef4b09864d234011`
+- Changed paths matched the seven-path packaging claim; DCO, scoped
+  cleanliness, executable modes, empty index, ShellCheck, and diff checks
+  passed.
+- Build review: the nested host reproduced SwiftPM's known protected
+  output-map failure. The accepted direct Xcode compiler path pins the exact
+  reviewed package manifest, compiles deterministic complete Core/App sources
+  with strict Swift 6 for arm64 and x86_64, links Core statically, rejects task
+  dynamic libraries, and assembles only `AgentjailApproval` with `lipo`.
+- Signing review: the source and embedded entitlement dictionaries normalize
+  to exactly `{}`. Signing uses only ad-hoc identity `-`, hardened runtime, and
+  `--timestamp=none`; verification requires `Signature=adhoc`, rejects any
+  timestamp record, and strictly validates the executable and bundle.
+- Destructive-path review: raw traversal and symlink roots fail before
+  creation/overwrite; cleanup accepts only canonical task roots. The dedicated
+  path never invokes tunnel, Developer ID, notarization, credential, network,
+  installer, or publication behavior.
+- Physical-Mac packaging gate: two independent universal builds had identical
+  sorted Contents path/type manifests and normalized plists. The DMG created,
+  verified, mounted read-only, exposed the exact `/Applications` symlink,
+  reverified the mounted app, and detached. Retained local checksum:
+  `e19621cc94dd245aca04373aca1cdbced45fdbcfc7f10e3043dcbab9faa47b78`.
+- Gatekeeper correctly rejected the local ad-hoc artifact; no distribution
+  acceptance claim was made.
+- Board verdict: Plan 025 DONE. Plan 026 may claim end-to-end acceptance.
+- Remote action: none
+
+## 2026-08-15 — Plan 026 acceptance claimed
+
+- Agent: `plan026_acceptance` (Terra)
+- Starting HEAD: `5f8b735504a9f7b9a08d43d9ef4b09864d234011`
+- Exclusive scope: durable acceptance tooling below
+  `test/macos-approval/acceptance/` and handoff 026 only. The staged index and
+  claimed paths were clean; the whole-tree baseline matched the reserved user
+  paths in the coordination record.
+- Required ordering: run deterministic contract/socket/security/package gates
+  first. Before launching an app copy, prove no existing process, installation,
+  or login registration shares the production bundle ID. Never disturb an
+  existing copy or mutate notification/login/global-policy state implicitly.
+- Evidence boundary: validated task roots and local redacted/hash-only records;
+  no token, username, home path, MCP name, terminal cast, public artifact, or
+  remote action.
+- Remote action: none
 
 The orchestrator appends one entry after reviewing each task:
 

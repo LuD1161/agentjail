@@ -1,9 +1,12 @@
 # Plan 023: Add privacy-bounded local notifications
 
-> **Executor instructions:** Start after plans 020 and 021 are reviewed DONE.
-> Read the accepted ADR, Apple notification sources in the design, and the
-> coordination protocol. Own only Notifications files. Notification approval
-> is forbidden; actions are Review and Deny.
+> **Executor instructions:** Normal acceptance requires plans 020 and 021
+> reviewed DONE. Parallel implementation may begin after plan 021's public state
+> API is stable and the orchestrator explicitly releases it; plan 023 cannot be
+> reviewed DONE until plan 021 is accepted. Read the accepted ADR, Apple
+> notification sources in the design, and the coordination protocol. Own only
+> Notifications files. Notification approval is forbidden; actions are Review
+> and Deny.
 >
 > **Drift check:** run the coordination protocol's scoped diff/status checks
 > for the exact new Notifications/test paths and handoff. Committed
@@ -121,8 +124,10 @@ logs, and the same ID maps to the same digest identifier.
 
 ### Step 4: Revalidate actions
 
-- Review foregrounds/opens the matching row via an injected callback; it makes
-  no control mutation.
+- Review publishes a generation-stamped ID route through an injected callback;
+  it makes no control mutation. Plan 024 activates the app and uses the
+  persistent menu-label bridge to open the public singleton review window.
+  Repeated callbacks for the same ID must remain distinct events.
 - Deny first fetches a fresh snapshot, verifies the ID remains pending and
   `canDeny`, then sends exactly one deny. Stale/already-decided/unavailable is
   surfaced through app state and completes without retry.
@@ -131,8 +136,9 @@ logs, and the same ID maps to the same digest identifier.
 Always complete the system callback, even on errors. Do not retry an ambiguous
 deny automatically.
 
-**Verify:** tests cover stale ID, daemon unavailable, duplicate callback,
-unknown action, successful one-shot denial, and completion on every branch.
+**Verify:** tests cover stale ID, daemon unavailable, repeated same-ID Review
+generations, duplicate Deny callback, unknown action, successful one-shot
+denial, and completion on every branch.
 
 ### Step 5: Verify and commit
 
@@ -147,6 +153,7 @@ Run tests/build/privacy scan, write the handoff, and commit under the lock.
 - [ ] Content is generic and user info contains review ID only.
 - [ ] Request identifiers contain only the app prefix and review-ID digest.
 - [ ] Review is non-mutating; Deny refetches and is one-shot; Approve absent.
+- [ ] Same-ID Review callbacks publish distinct generation-stamped routes.
 - [ ] Dedupe state is bounded/non-authoritative and stale notifications prune.
 - [ ] Permission denial leaves core workflow unaffected.
 - [ ] Tests/build pass in a signed local commit.

@@ -20,13 +20,13 @@ executors own only their assigned source paths and unique handoff file.
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | DONE — 980057e1 |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | DONE — afec1180 + ab3dc633 |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | DONE — a2003977 |
-| 021 | Build the approval state store | P0 | M | 020 | CLAIMED — plan016_prep; acceptance waits on 020 |
+| 021 | Build the approval state store | P0 | M | 020 | DONE — 5c97c076 |
 | 018 | Serve authenticated review snapshots | P0 | S | 029, 030 | DONE — bc02eede |
-| 022 | Build the menu-bar review UI | P1 | M | 019, 021, 033 | TODO |
-| 023 | Add privacy-bounded notifications | P1 | M | 020, 021 | TODO |
-| 024 | Compose the production app and settings | P0 | M | 016, 018, 022, 023 | TODO |
-| 025 | Build, sign, and package locally | P1 | M | 024 | TODO |
-| 026 | Prove cross-language and real-Mac behavior | P0 | L | 018, 024, 025 | TODO |
+| 022 | Build the menu-bar review UI | P1 | M | 019, 021, 033 | DONE — b005de81 |
+| 023 | Add privacy-bounded notifications | P1 | M | 020, 021 | DONE — ce361898 |
+| 024 | Compose the production app and settings | P0 | M | 016, 018, 022, 023 | DONE — f702630f |
+| 025 | Build, sign, and package locally | P1 | M | 024 | DONE — 5f8b7355 |
+| 026 | Prove cross-language and real-Mac behavior | P0 | L | 018, 024, 025 | CLAIMED — plan026_acceptance |
 | 027 | Publish local docs and install guidance | P2 | S | 026 + dirty-path clearance | BLOCKED — README has pre-existing edits |
 | 028 | Add a read-only canonical-ask observer | P3 | M | 024 | DEFERRED — not required for MVP |
 

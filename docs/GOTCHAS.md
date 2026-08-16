@@ -1184,6 +1184,18 @@ daemon never became healthy. Its polling pipeline used `grep -q` under
   consume the complete stream and redirect the matcher's output instead of
   using an early-exit matcher.
 
+## 70. A successful detach is not proof of an unmounted image
+
+The approval DMG packager treated an exit-zero `hdiutil detach` as proof that
+the mount was gone. A delayed detach or a failed mount query could therefore
+clear its attachment state and recursively remove the staging root across a
+live mount. The happy-path package test stayed green because it never made the
+detach and the observed mount state disagree.
+
+- **Rule:** cleanup may remove a staging root only after an independent
+  tri-state mount check proves it absent. Active and indeterminate both retain
+  the exact validated root and fail closed.
+
 ---
 
 ## Testing gotchas

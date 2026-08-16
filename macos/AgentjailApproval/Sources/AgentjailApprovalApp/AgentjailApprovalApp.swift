@@ -2,10 +2,48 @@ import SwiftUI
 
 @main
 struct AgentjailApprovalApp: App {
+    @NSApplicationDelegateAdaptor(ApprovalApplicationDelegate.self) private var applicationDelegate
+    @State private var isMenuBarExtraInserted = true
+
     var body: some Scene {
-        MenuBarExtra("AgentJail", systemImage: "shield") {
-            PlaceholderView()
+        MenuBarExtra(isInserted: menuBarExtraInsertion) {
+            ApprovalPanelHostView(
+                composition: applicationDelegate.composition,
+                refreshOnAppear: true,
+                receivesReviewFocus: false
+            )
+        } label: {
+            ApprovalMenuBarLabelHost(
+                composition: applicationDelegate.composition,
+                isInserted: $isMenuBarExtraInserted
+            )
         }
         .menuBarExtraStyle(.window)
+
+        Window("AgentJail Review", id: ApprovalAppSceneID.review) {
+            ApprovalPanelHostView(
+                composition: applicationDelegate.composition,
+                refreshOnAppear: false,
+                receivesReviewFocus: true
+            )
+        }
+
+        Settings {
+            ApprovalSettingsView(composition: applicationDelegate.composition)
+        }
+
+        Window("AgentJail Approval Settings", id: ApprovalAppSceneID.settings) {
+            ApprovalSettingsView(composition: applicationDelegate.composition)
+        }
+    }
+
+    private var menuBarExtraInsertion: Binding<Bool> {
+        Binding(
+            get: { isMenuBarExtraInserted },
+            set: { inserted in
+                isMenuBarExtraInserted = inserted
+                applicationDelegate.composition.menuBarExtraInsertionChanged(inserted)
+            }
+        )
     }
 }

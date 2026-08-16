@@ -1,8 +1,11 @@
 # Plan 022: Build the menu-bar review UI
 
-> **Executor instructions:** Start after plans 019, 021, and 033 are reviewed DONE.
-> Read the product design and state API. Build views against injected/fake state;
-> do not edit the app entry or connect the daemon.
+> **Executor instructions:** Normal acceptance requires plans 019, 021, and 033
+> reviewed DONE. Parallel implementation may begin after plan 021's public state
+> API is stable and the orchestrator explicitly releases it; plan 022 cannot be
+> reviewed DONE until plan 021 is accepted. Read the product design and state
+> API. Build views against injected/fake state; do not edit the app entry or
+> connect the daemon.
 >
 > **Drift check:** run the coordination protocol's scoped diff/status checks
 > for the exact new UI/Presentation/test paths and handoff. Committed
@@ -119,6 +122,12 @@ cards, footer Settings/Quit callbacks, and system spacing/colors/SF Symbols.
 Create a menu-label view for ready/pending/connecting/disconnected that exposes
 an accessibility label/value including exact pending count.
 
+Accept an optional generation-stamped focus request so plan 024 can reuse this
+same panel in its notification-only singleton window. Focus only a currently
+authoritative matching ID after refresh; a missing/expired ID stays disabled
+with bounded feedback. The panel never opens a scene or mutates merely because
+focus was requested.
+
 All controls need explicit accessibility labels/hints where the visible copy is
 not enough, useful focus order, and keyboard reachability. Do not add a single
 keystroke shortcut that can approve while the panel is closed.
@@ -138,6 +147,8 @@ and commit under the lock.
 - [ ] Approval copy says future sessions and current session unchanged.
 - [ ] Stale/unbound/in-flight rows cannot approve.
 - [ ] Status is not color-only; controls have accessibility labels/hints.
+- [ ] Repeated focus generations select a fresh matching ID without creating
+      authority or a second panel implementation.
 - [ ] No daemon, notification, dashboard, or tunnel wiring is added.
 - [ ] Tests/build pass in a signed local commit.
 
