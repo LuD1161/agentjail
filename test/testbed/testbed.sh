@@ -439,7 +439,7 @@ do_test() {
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
     [ -f "$script" ] || die "scenario not found: $script"
     log "running scenario '$scenario' in '$name'"
-    guest_exec "$name" "mkdir -p /tmp/testbed/scenarios"
+    guest_exec "$name" "mkdir -p /tmp/testbed/scenarios /tmp/testbed/results"
     guest_push "$name" "$TESTBED_DIR/reportlib.sh" "/tmp/testbed/reportlib.sh"
     # Unconditional, not just for chaos-*: a conditional push is one more place
     # for the shipping contract to drift out from under the guard. See AGE-236.
@@ -457,8 +457,8 @@ do_test() {
         fi
         ACTIVE_AUTH_TESTBED="$name"
     fi
-    local rc=0
-    guest_exec "$name" "$(chaos_env) AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
+    local rc=0 result_path="/tmp/testbed/results/${scenario}.result.json"
+    guest_exec "$name" "$(chaos_env) SCN_JSON=$(printf '%q' "$result_path") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
     if [ -n "$codex_auth" ]; then
         cleanup_injected_auth
     fi

@@ -35,6 +35,10 @@ test/testbed/testbed.sh ls
 test/testbed/testbed.sh destroy <name>
 ```
 
+Each `test` invocation leaves a structured, value-free result at
+`/tmp/testbed/results/<scenario>.result.json` inside the guest. Raw terminal
+recordings are never required for release evidence.
+
 `AGENTJAIL_TESTBED_NAME` selects the persistent VM name. It defaults to
 `release-gate-<agent>`; set it to a worktree-specific name when another agent
 may be using a testbed concurrently.
