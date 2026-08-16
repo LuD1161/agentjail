@@ -211,6 +211,22 @@ listed on the task board.
   authenticated review dispatch/tests, and handoff 018.
 - Remote action: none
 
+## 2026-08-15 — Plan 021 parallel implementation claimed
+
+- Agent: `plan016_prep` (Terra)
+- Stable prerequisite: Plan 020 commit `afec1180` fixed the public
+  `ReviewControlling`, `ReviewSnapshotV1`, `ReviewID`, timestamp, and typed
+  error surface. Its narrow cancellation-safety follow-up changes only
+  transport execution, not this API.
+- Concurrency decision: Plan 021 owns only State sources/tests and may implement
+  against that stable interface now. It cannot receive DONE until Plan 020's
+  active-request cancellation and fd-ownership follow-up is reviewed.
+- Required boundary: authoritative ready snapshots are distinct from stale
+  cache; `refreshNow` is awaitable for notification revalidation; local expiry
+  is inclusive; one poll loop uses deterministic 2/4/8/16/30 backoff; same-ID
+  decisions are single-flight and mutation failures never auto-retry.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

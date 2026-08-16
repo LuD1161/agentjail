@@ -1,8 +1,11 @@
 # Plan 021: Build the approval state store
 
-> **Executor instructions:** Start after plan 020 is reviewed DONE. Read its
-> public types/tests and the product design. Own only `State/`; do not edit the
-> transport, UI, app entry, or notifications.
+> **Executor instructions:** Normal acceptance requires plan 020 reviewed DONE.
+> Parallel implementation may begin after its public `ReviewControlling` and
+> model API has landed and the orchestrator confirms that API is stable; plan
+> 021 cannot be reviewed DONE until plan 020's cancellation-safe transport is
+> accepted. Read its public types/tests and the product design. Own only
+> `State/`; do not edit transport, UI, app entry, or notifications.
 >
 > **Drift check:** run the coordination protocol's scoped diff/status checks
 > for the exact new State/test paths and handoff. Committed Models/Transport
