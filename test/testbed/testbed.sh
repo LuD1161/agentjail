@@ -445,6 +445,10 @@ do_test() {
     # for the shipping contract to drift out from under the guard. See AGE-236.
     guest_push "$name" "$TESTBED_DIR/scenarios/chaos-lib.sh" "/tmp/testbed/scenarios/chaos-lib.sh"
     guest_push "$name" "$script" "/tmp/testbed/scenarios/${scenario}.sh"
+    if [ "$scenario" = "tunnel-agent" ]; then
+        guest_exec "$name" "mkdir -p /tmp/testbed/tunnel-e2e"
+        guest_push "$name" "$REPO_ROOT/test/tunnel-e2e/smoke_darwin.sh" "/tmp/testbed/tunnel-e2e/smoke_darwin.sh"
+    fi
     if [ -n "$codex_auth" ]; then
         log "injecting disposable Codex auth immediately before the scenario"
         if ! guest_push "$name" "$codex_auth" /tmp/codex-auth.json; then
@@ -498,6 +502,10 @@ do_record() {
         local mode; mode=$(grep -oE '# *testbed-mode: *[a-z]+' "$script" | grep -oE '[a-z]+$' | tail -1 || true); mode="${mode:-single}"
         log "recording '$s' (mode=$mode)"
         guest_push "$name" "$script" "/tmp/testbed/scenarios/${s}.sh"
+        if [ "$s" = "tunnel-agent" ]; then
+            guest_exec "$name" "mkdir -p /tmp/testbed/tunnel-e2e"
+            guest_push "$name" "$REPO_ROOT/test/tunnel-e2e/smoke_darwin.sh" "/tmp/testbed/tunnel-e2e/smoke_darwin.sh"
+        fi
         local cenv; cenv="$(chaos_env)"
         local env="$cenv SCN_JSON=/tmp/testbed/${s}.result.json SCN_CAST=/tmp/testbed/${s}.cast TERM=xterm-256color"
         if [ "$mode" = "tmux" ]; then
@@ -506,6 +514,10 @@ do_record() {
             guest_exec "$name" "$env asciinema rec --overwrite -q -c 'env $env bash /tmp/testbed/scenarios/${s}.sh' /tmp/testbed/${s}.cast" || log "  (scenario reported failures)"
         fi
         guest_pull "$name" "/tmp/testbed/${s}.result.json" "$out/${s}.result.json" 2>/dev/null || log "  (no result json)"
+        if [ "$s" = "tunnel-agent" ]; then
+            guest_pull "$name" "/tmp/testbed/${s}.strict.result.json" "$out/${s}.strict.result.json" 2>/dev/null \
+                || log "  (no strict tunnel result json; expected only on Darwin)"
+        fi
         guest_pull "$name" "/tmp/testbed/${s}.cast" "$out/${s}.cast" 2>/dev/null || log "  (no cast)"
     done
 

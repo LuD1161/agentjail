@@ -12,9 +12,17 @@ hides (ADR 0034-platform-backend-shared-contract).
 bash test/tunnel-e2e/scenarios.sh          # everything
 bash test/tunnel-e2e/scenarios.sh --quick  # skip the real-agent scenarios
 bash test/tunnel-e2e/baseline-agent-task.sh  # a real agent doing a real task
+TUNNEL_SMOKE_RESULT=/tmp/tunnel-smoke.json \
+  bash test/tunnel-e2e/smoke_darwin.sh --strict  # approved macOS golden only
 ```
 
 Exit 0 when no scenario FAILs.
+
+The Darwin strict smoke requires `golden-macos-mitm` and the exact activated
+extension contract. It reuses the matrix's named host and path denials, then
+adds a port-80 protocol denial and an explicit proxy-variable/`--noproxy`
+bypass attempt. Its optional JSON result distinguishes PASS, FAIL, and SKIP and
+records how many tunnel scenarios actually executed.
 
 ## The two are not interchangeable
 

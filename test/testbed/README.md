@@ -437,7 +437,9 @@ It resets the configured gate testbed to the clean golden (or creates it),
 provisions the current worktree through the real installer, then runs
 `e2e-smoke`, the authenticated Codex `codex-approval` and `credentialed-cli`
 workflows, and the authenticated Codex `tunnel-agent` scenario. On Tart, that
-tunnel assertion selects `golden-macos-mitm`. It **exits non-zero on insufficient
+tunnel assertion selects `golden-macos-mitm`; before starting Codex it runs the
+strict Darwin host/path/port/protocol/bypass matrix and preserves its separate
+structured result. It **exits non-zero on insufficient
 host resources, missing
 authentication, scenario failure, or install failure** and deletes the gate VM
 afterward by default. Run it on Linux for the Linux build and on macOS for the

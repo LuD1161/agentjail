@@ -51,6 +51,22 @@ if [ "$(uname -s)" = "Darwin" ]; then
         scn_finish
         exit
     fi
+    STRICT_SMOKE="/tmp/testbed/tunnel-e2e/smoke_darwin.sh"
+    STRICT_RESULT="${SCN_JSON:-/tmp/testbed/results/tunnel-agent.result.json}"
+    STRICT_RESULT="${STRICT_RESULT%.result.json}.strict.result.json"
+    if [ ! -f "$STRICT_SMOKE" ]; then
+        scn_fail "strict Darwin tunnel matrix is available"
+        scn_finish
+        exit
+    fi
+    if PATH="$HOME/.agentjail/bin:$PATH" TUNNEL_SMOKE_RESULT="$STRICT_RESULT" \
+        bash "$STRICT_SMOKE" --strict; then
+        scn_ok "strict Darwin host/path/port/protocol/bypass matrix passes"
+    else
+        scn_fail "strict Darwin host/path/port/protocol/bypass matrix passes"
+        scn_finish
+        exit
+    fi
 fi
 if [ ! -f /tmp/codex-auth.json ]; then
     scn_fail "disposable Codex auth was explicitly provided"
@@ -110,10 +126,12 @@ grep -qi "<svg" "$WORK/pelican.html" 2>/dev/null && scn_ok "artifact contains in
 #    or that failed to MITM TLS, captures zero OpenAI/Codex model rows.
 NEW_TOTAL="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE;" 2>/dev/null || echo 0)"
 API_REQS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%') and (path like '%responses%' or path like '%codex%');" 2>/dev/null || echo 0)"
+API_REQ_BYTES="$(sqlite3 "$DB" "select coalesce(sum(request_size),0) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%');" 2>/dev/null || echo 0)"
 API_RESP="$(sqlite3 "$DB" "select coalesce(sum(response_size),0) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%');" 2>/dev/null || echo 0)"
-echo "  captured: $NEW_TOTAL new rows, $API_REQS model turns, ${API_RESP}B decrypted response"
+echo "  captured: $NEW_TOTAL new rows, $API_REQS model turns, ${API_REQ_BYTES}B decrypted request, ${API_RESP}B decrypted response"
 [ "$NEW_TOTAL" -gt 0 ] && scn_ok "tunnel captured new requests" || scn_fail "tunnel captured new requests"
 [ "$API_REQS" -gt 0 ] && scn_ok "tunnel decrypted Codex model traffic" || scn_fail "tunnel decrypted Codex model traffic"
+[ "$API_REQ_BYTES" -gt 0 ] && scn_ok "tunnel saw decrypted request bytes" || scn_fail "tunnel saw decrypted request bytes"
 [ "$API_RESP" -gt 0 ] && scn_ok "tunnel saw decrypted response bytes" || scn_fail "tunnel saw decrypted response bytes"
 
 # 3. Credential hygiene — the capture is only publishable if nothing secret
