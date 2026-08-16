@@ -214,7 +214,17 @@ fi
 # ---- Verify -------------------------------------------------------------------
 
 log "verification:"
-status_output="$("$HOME/.agentjail/bin/agentjail" status)"
+status_output=""
+# launchd bootstrap is asynchronous; readiness remains bounded and mandatory.
+# See ADR 0053-vm-testbed-engine.
+for _ in $(seq 1 20); do
+    status_output="$("$HOME/.agentjail/bin/agentjail" status)"
+    if printf '%s\n' "$status_output" | grep -q 'daemon.*running' \
+        && ! printf '%s\n' "$status_output" | grep -q 'daemon.*not running'; then
+        break
+    fi
+    sleep 1
+done
 printf '%s\n' "$status_output"
 
 # The shipped installer must leave the machine usable immediately. Running a
