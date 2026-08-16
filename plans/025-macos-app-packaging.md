@@ -103,6 +103,16 @@ source and actual signature dictionaries are both exactly empty.
 
 ### Step 2: Build a deterministic universal app bundle
 
+The known nested-sandbox SwiftPM output-map failure may use the accepted
+plan-032 direct Xcode-toolchain compiler path. That path is valid only when it
+pins and verifies the exact reviewed `Package.swift` hash, retains the canonical
+product/target identities, rejects dependency/plugin/resource/settings drift,
+discovers deterministic complete Core/App source lists, links Core statically,
+uses Swift 6 strict concurrency with warnings as errors, and proves each thin
+output has no Core or task-path dynamic-library dependency. Any manifest change
+must fail closed until this mapping is reviewed and updated; this is not a
+general silent fallback from an arbitrary SwiftPM failure.
+
 The build script must:
 
 1. resolve repository root relative to the script;

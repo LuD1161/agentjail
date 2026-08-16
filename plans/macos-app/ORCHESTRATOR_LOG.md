@@ -447,6 +447,53 @@ listed on the task board.
   publication or remote action.
 - Remote action: none
 
+## 2026-08-15 — Plan 025 accepted
+
+- Agent: `plan025_package` (Terra)
+- Commit: `5f8b735504a9f7b9a08d43d9ef4b09864d234011`
+- Changed paths matched the seven-path packaging claim; DCO, scoped
+  cleanliness, executable modes, empty index, ShellCheck, and diff checks
+  passed.
+- Build review: the nested host reproduced SwiftPM's known protected
+  output-map failure. The accepted direct Xcode compiler path pins the exact
+  reviewed package manifest, compiles deterministic complete Core/App sources
+  with strict Swift 6 for arm64 and x86_64, links Core statically, rejects task
+  dynamic libraries, and assembles only `AgentjailApproval` with `lipo`.
+- Signing review: the source and embedded entitlement dictionaries normalize
+  to exactly `{}`. Signing uses only ad-hoc identity `-`, hardened runtime, and
+  `--timestamp=none`; verification requires `Signature=adhoc`, rejects any
+  timestamp record, and strictly validates the executable and bundle.
+- Destructive-path review: raw traversal and symlink roots fail before
+  creation/overwrite; cleanup accepts only canonical task roots. The dedicated
+  path never invokes tunnel, Developer ID, notarization, credential, network,
+  installer, or publication behavior.
+- Physical-Mac packaging gate: two independent universal builds had identical
+  sorted Contents path/type manifests and normalized plists. The DMG created,
+  verified, mounted read-only, exposed the exact `/Applications` symlink,
+  reverified the mounted app, and detached. Retained local checksum:
+  `e19621cc94dd245aca04373aca1cdbced45fdbcfc7f10e3043dcbab9faa47b78`.
+- Gatekeeper correctly rejected the local ad-hoc artifact; no distribution
+  acceptance claim was made.
+- Board verdict: Plan 025 DONE. Plan 026 may claim end-to-end acceptance.
+- Remote action: none
+
+## 2026-08-15 — Plan 026 acceptance claimed
+
+- Agent: `plan026_acceptance` (Terra)
+- Starting HEAD: `5f8b735504a9f7b9a08d43d9ef4b09864d234011`
+- Exclusive scope: durable acceptance tooling below
+  `test/macos-approval/acceptance/` and handoff 026 only. The staged index and
+  claimed paths were clean; the whole-tree baseline matched the reserved user
+  paths in the coordination record.
+- Required ordering: run deterministic contract/socket/security/package gates
+  first. Before launching an app copy, prove no existing process, installation,
+  or login registration shares the production bundle ID. Never disturb an
+  existing copy or mutate notification/login/global-policy state implicitly.
+- Evidence boundary: validated task roots and local redacted/hash-only records;
+  no token, username, home path, MCP name, terminal cast, public artifact, or
+  remote action.
+- Remote action: none
+
 The orchestrator appends one entry after reviewing each task:
 
 ```text
