@@ -16,12 +16,13 @@ executors own only their assigned source paths and unique handoff file.
 | 019 | Scaffold the standalone Swift package | P0 | S | 015 | DONE — 8e327f1a |
 | 031 | Isolate daemon subprocess test state | P0 | XS | — | DONE — f3eed6e2 |
 | 032 | Add sandbox-safe Swift test harness | P0 | S | 019 | DONE — de698f31 |
+| 033 | Sanitize untrusted display text | P0 | S | 019, 032 | CLAIMED — plan016_prep |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | DONE — 980057e1 |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | TODO |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | CLAIMED — plan017_protocol |
 | 021 | Build the approval state store | P0 | M | 020 | TODO |
 | 018 | Serve authenticated review snapshots | P0 | S | 029, 030 | TODO |
-| 022 | Build the menu-bar review UI | P1 | M | 019, 021 | TODO |
+| 022 | Build the menu-bar review UI | P1 | M | 019, 021, 033 | TODO |
 | 023 | Add privacy-bounded notifications | P1 | M | 020, 021 | TODO |
 | 024 | Compose the production app and settings | P0 | M | 016, 018, 022, 023 | TODO |
 | 025 | Build, sign, and package locally | P1 | M | 024 | TODO |
@@ -83,6 +84,7 @@ serialized by the lock in `COORDINATION.md`.
 | 030 | grant control framing/client files, serialized daemon decoder/reply edit, one GOTCHAS entry |
 | 031 | two SIGHUP subprocess tests in `internal/daemonapp/main_test.go` only |
 | 032 | `scripts/test-macos-approval.sh` only |
+| 033 | exact pure `DisplaySanitizer.swift` and its matching XCTest only |
 
 Every task additionally owns only `plans/macos-app/handoffs/NNN.md`.
 

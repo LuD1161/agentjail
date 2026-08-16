@@ -129,6 +129,21 @@ listed on the task board.
   remain out of scope.
 - Remote action: none
 
+## 2026-08-15 — Supplemental Plan 033 claimed
+
+- Agent: `plan016_prep` (Terra)
+- Starting HEAD: the committed Plan 030 dispatch baseline plus independent
+  shared-HEAD movement.
+- Reason: untrusted display sanitization and exhaustive Unicode tests are pure
+  and do not depend on Plan 021 state or SwiftUI, so they can safely leave the
+  Plan 022 critical path without sharing files.
+- Ownership: exactly `DisplaySanitizer.swift`, its matching XCTest, and handoff
+  033. Plan 022 now excludes those two files and consumes the reviewed helper.
+- Acceptance: all C0/C1 and bidi scalars, ANSI/multiline/whitespace handling,
+  grapheme-safe ellipsis, exact empty-reason fallback, dual-architecture
+  type-check, Darwin XCTest discovery, and no dependency/authority/action code.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)

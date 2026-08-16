@@ -1,6 +1,6 @@
 # Shared-worktree Terra coordination protocol
 
-This protocol is mandatory for plans 015–030. The user explicitly requested a
+This protocol is mandatory for plans 015–033. The user explicitly requested a
 common worktree and local-only development. Git's index and HEAD are shared, so
 source ownership and commit serialization are separate requirements.
 
@@ -48,8 +48,7 @@ assets/social/twitter-header-v4 copy.svg
 Do not format, rename, stage, restore, or otherwise “clean up” these paths.
 
 The planning set is orchestrator-owned and read-only to executors:
-`plans/README.md`, `plans/015-macos-approval-architecture.md` through
-`plans/030-macos-control-framing.md`, and
+`plans/README.md`, every macOS approval plan from 015 through 033, and
 `plans/macos-app/{README,DESIGN,COORDINATION,ORCHESTRATOR_LOG}.md`.
 
 ## Claim protocol

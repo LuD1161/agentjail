@@ -1,6 +1,6 @@
 # Plan 022: Build the menu-bar review UI
 
-> **Executor instructions:** Start after plans 019 and 021 are reviewed DONE.
+> **Executor instructions:** Start after plans 019, 021, and 033 are reviewed DONE.
 > Read the product design and state API. Build views against injected/fake state;
 > do not edit the app entry or connect the daemon.
 >
@@ -13,7 +13,7 @@
 - **Priority:** P1
 - **Effort:** M
 - **Risk:** LOW
-- **Depends on:** plans 019 and 021
+- **Depends on:** plans 019, 021, and 033
 - **Category:** app / UX
 - **Planned at:** commit `d2afaf2c`, 2026-08-15
 
@@ -50,7 +50,9 @@ Control, and Accessibility Inspector testing on Mac.
 
 - `macos/AgentjailApproval/Sources/AgentjailApprovalApp/UI/**`
 - `macos/AgentjailApproval/Sources/AgentjailApprovalCore/Presentation/**`
+  except plan 033's `DisplaySanitizer.swift`
 - `macos/AgentjailApproval/Tests/AgentjailApprovalCoreTests/Presentation/**`
+  except plan 033's `DisplaySanitizerTests.swift`
 - `plans/macos-app/handoffs/022.md`
 
 **Out of scope:** app entry/Composition/Settings/Lifecycle, transport/state
@@ -64,25 +66,14 @@ owned paths and the commit lock. Do not push.
 
 ## Steps
 
-### Step 1: Sanitize untrusted display text
+### Step 1: Consume the reviewed display sanitizer
 
-Add a pure presentation helper that:
-
-- replaces CR/LF/tab and C0/C1 controls with spaces;
-- removes ESC and all bidi formatting/mark controls: U+061C, U+200E–U+200F,
-  U+202A–U+202E, and U+2066–U+2069;
-- normalizes repeated whitespace;
-- bounds display strings over extended grapheme clusters with a visible
-  ellipsis, never splitting a user-visible character;
-- never returns an empty misleading reason (use “No reason provided”).
-
-Label the reason “Agent-provided reason”. Keep the full verified project path
-available through accessible help/expansion without putting it in a
-notification.
-
-**Verify:** exact scalar-table tests cover C0/C1, ESC, all ranges above, ANSI,
-multiline/tab, very long Unicode, combining characters, empty input, and normal
-text. A regression test proves no forbidden scalar survives.
+Plan 033 owns the pure sanitizer and its scalar/grapheme tests. Use that helper
+for agent-provided reason text. Label the result “Agent-provided reason”. Keep
+the full verified project path available through accessible help/expansion
+without putting it in a notification. Never apply display sanitization to an
+authority field and then leave it actionable; altered authority fails into the
+typed context-unavailable/deny-only presentation.
 
 ### Step 2: Build status and empty/error views
 
