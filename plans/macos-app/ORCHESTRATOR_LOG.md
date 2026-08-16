@@ -359,6 +359,27 @@ listed on the task board.
   paths, the narrow daemon call site/tests, one GOTCHAS entry, and handoff 029.
 - Remote action: none
 
+## 2026-08-15 — Plan 021 accepted
+
+- Plan 021 commit: `5c97c076594058d3e6c4427d50c79db130d8ae2b`
+- Changed paths matched the State-only ownership list; DCO, scoped cleanliness,
+  and the core privacy/import scan passed.
+- State review: authoritative and stale states are distinct, stale/expired or
+  unverified rows cannot approve, mutations are ID-only and single-flight,
+  ambiguous outcomes never retry automatically, and later refreshes cannot
+  overwrite newer authority.
+- Lifecycle review: one cancellable poll loop uses deterministic two-second
+  polling and capped reconnect backoff; stable authorization/protocol failures
+  stop without hot-looping; activation/manual refresh resumes safely; stop
+  invalidates late success and error results and releases the store.
+- The shared Swift test module was decomposed into focused State suites and
+  explicitly typed continuation fakes after the compiler exposed oversized
+  primary-file behavior. The final frozen-worktree harness passed 76 core and
+  6 app XCTest cases plus macOS 13 arm64/x86_64 production typechecks.
+- Board verdict: Plan 021 DONE. Plans 022 and 023 may enter final verification,
+  one shared Swift harness at a time.
+- Remote action: none
+
 ## Execution entry template
 
 The orchestrator appends one entry after reviewing each task:
