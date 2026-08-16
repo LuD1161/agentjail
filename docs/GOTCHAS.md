@@ -878,7 +878,7 @@ Complete output did not make the underlying contract coherent.
 - **Rule:** audit help against observable behavior and one canonical command
   hierarchy. Compatibility syntax belongs in hidden aliases, and an option with
   no effect on the resulting authority must not remain public. See ADR
-  0132-cli-command-surface.
+  0133-cli-command-surface.
 
 ## 66. A generated capability can violate its own validator
 

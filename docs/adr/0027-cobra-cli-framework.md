@@ -76,12 +76,12 @@ by ADR 0007-windows-support-deferred. Restore it when Windows becomes a shipped
 and tested platform.
 
 The later command hierarchy and compatibility policy are defined by ADR
-0132-cli-command-surface.
+0133-cli-command-surface.
 
 ### What does NOT change
 
 - The initial migration preserves command names and behavior; later cleanup is
-  governed by ADR 0132-cli-command-surface
+  governed by ADR 0133-cli-command-surface
 - Policy evaluation, store, hook, daemon -- untouched
 - No new runtime behavior (cobra is CLI scaffolding only)
 
