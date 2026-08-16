@@ -7,6 +7,7 @@ command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
 AJ="$HOME/.agentjail/bin/agentjail"
+HOOK="$HOME/.agentjail/bin/agentjail-hook"
 CODEX_REAL="$(command -v codex)"
 CODEX_SHIM="$HOME/.agentjail/bin/codex"
 POLICY="$HOME/.agentjail/policy.yaml"
@@ -110,6 +111,23 @@ rm -f "$CUSTOM_RULE"
 
 branch_exists() {
     git --git-dir="$REMOTE" show-ref --verify --quiet "refs/heads/$1"
+}
+
+require_daemon() {
+    local phase="$1" output rc
+    output="$(printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"README.md"},"session_id":"codex-approval-liveness","cwd":"'"$PROJECT"'"}' \
+        | "$HOOK" 2>&1 >/dev/null)"
+    rc=$?
+    if [ "$rc" -eq 0 ] && ! printf '%s\n' "$output" | grep -qiE 'daemon unreachable|daemon not running'; then
+        scn_ok "policy daemon remains available $phase"
+        return 0
+    fi
+    scn_fail "policy daemon remains available $phase"
+    printf '%s\n' "$output" \
+        | sed -E "s|$HOME|<guest-home>|g; s|$USER|agent|g" \
+        | tail -10 \
+        | sed 's/^/    /'
+    finish_and_exit
 }
 
 wait_for_approval_prompt() {
@@ -239,6 +257,7 @@ else
     print_sanitized_pane
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
+require_daemon "after approved native prompts"
 
 DECLINE_BRANCH="agentjail-approval-decline"
 if start_interactive_push "$DECLINE_BRANCH"; then
@@ -254,6 +273,7 @@ if branch_exists "$DECLINE_BRANCH"; then
 else
     scn_ok "declined prompt leaves the remote unchanged"
 fi
+require_daemon "after a declined native prompt"
 
 NEVER_BRANCH="agentjail-approval-never"
 NEVER_LOG="/tmp/codex-approval-never.log"
@@ -294,6 +314,7 @@ else
     scn_ok "approval_policy=never leaves the remote unchanged"
 fi
 rm -f "$NEVER_LOG"
+require_daemon "after approval_policy=never"
 
 IGNORE_BRANCH="agentjail-approval-ignore-rules"
 IGNORE_LOG="/tmp/codex-approval-ignore.log"
@@ -334,6 +355,7 @@ else
     scn_ok "--ignore-rules cannot redeem the unobserved challenge"
 fi
 rm -f "$IGNORE_LOG"
+require_daemon "after --ignore-rules"
 
 HOST_PROXY_DIR="$HOME/hostproxy-fixture"
 HOST_PROXY_HELPER="$HOST_PROXY_DIR/benign-host-cli"
@@ -368,6 +390,7 @@ if grep -Fq "$HOST_PROXY_HELPER" "$DIRECT_LOG" && [ ! -e "$HOST_PROXY_DIRECT" ];
 else
     scn_fail "real Codex direct execution cannot read the host-only fixture"
 fi
+require_daemon "after a direct-access denial"
 
 env -u AGENTJAIL_HOST_PROXY_PROOF -u AGENTJAIL_HOST_PROXY_EXECUTABLE \
     "$AJ" proxy -- "$HOST_PROXY_HELPER" "$HOST_PROXY_DIRECT" no-proof >/dev/null 2>&1 || true
