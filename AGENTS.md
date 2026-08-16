@@ -24,6 +24,12 @@ Three deployment tiers, in build order:
 7. **[`docs/adr/0004-credential-broker-tier1.md`](./docs/adr/0004-credential-broker-tier1.md)** — credential broker design (Tier 1.5 OSS path).
 8. **[`docs/adr/`](./docs/adr/)** — all ADRs. Each captures one decision with Context / Decision / Consequences.
 
+Before building, signing, notarizing, installing, or replacing the macOS
+Network Extension, read **[`docs/runbooks/macos-tunnel-release.md`](./docs/runbooks/macos-tunnel-release.md)**.
+It is the operational source of truth for versioning, provisioning profiles,
+inside-out signing, `xcrun notarytool`, stapling, guest approval, and the Tart
+golden-image lifecycle.
+
 ## Current external integrations
 
 Agent hook schemas, CLI flags, SDKs, MCP protocols, and hosted service behavior

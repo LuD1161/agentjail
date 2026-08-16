@@ -93,6 +93,29 @@ scn_finish() {
     [ "$_SCN_FAILS" -eq 0 ]
 }
 
+# scn_release_result_valid RESULT_JSON — strict release assertion contract.
+scn_release_result_valid() {
+    jq -e '.result == "pass" and .counts.pass > 0 and .counts.fail == 0 and .counts.skip == 0' "$1" >/dev/null
+}
+
+scn_auth_scan() {
+    local project_root="${1:-$HOME/work}" output="/tmp/testbed/results/${_SCN_NAME}.auth-scan.json"
+    if [ ! -r "$HOME/.codex/auth.json" ] || [ ! -x /tmp/testbed/scan-secret-artifacts.py ]; then
+        scn_fail "disposable Codex authentication is available for raw-artifact scanning"
+        return
+    fi
+    if /usr/bin/python3 /tmp/testbed/scan-secret-artifacts.py \
+        --secret-file "$HOME/.codex/auth.json" \
+        --output "$output" \
+        --exclude "$HOME/.codex/auth.json" \
+        --exclude /tmp/codex-auth.json \
+        "$HOME/.agentjail" "$HOME/.codex" "$project_root" /tmp/testbed; then
+        scn_ok "actual disposable Codex authentication is absent from retained artifacts"
+    else
+        scn_fail "actual disposable Codex authentication is absent from retained artifacts"
+    fi
+}
+
 # scn_record_tmux SESSION DRIVE_FN — record a two-terminal flow.
 # Lays out a 2-pane tmux window (pane 0 = agent, pane 1 = operator), runs
 # DRIVE_FN in the background (it should `tmux send-keys` to $SESSION:0.0 and

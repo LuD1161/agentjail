@@ -17,7 +17,7 @@ test; it defaults to `codex` and also accepts `claude-code`.
 | Side | Host | Driver | Status |
 |---|---|---|---|
 | **Linux** | a Linux host | Lima/QEMU, `LIMA_HOME=$HOME/.local/share/lima` | ✅ **DONE — set up and validated end-to-end on the Linux host. Do not redo.** |
-| **macOS** | your Apple-Silicon Mac | Tart | ✅ **DONE - `golden-macos` is the general base; `golden-macos-mitm` is the approved tunnel base.** |
+| **macOS** | your Apple-Silicon Mac | Tart | ✅ **DONE — `golden-macos-mitm` is the sole approved macOS golden.** |
 
 ## Quick reference (both OSes)
 
@@ -33,20 +33,57 @@ test/testbed/testbed.sh snapshot <name> <tag>         # checkpoint
 test/testbed/testbed.sh reset <name> [tag]            # revert to golden
 test/testbed/testbed.sh ls
 test/testbed/testbed.sh destroy <name>
+
+# Live AWS STS + real Codex (macOS; pauses for one external profile command)
+bash test/testbed/run-aws-sts-live.sh
 ```
 
 Each `test` invocation leaves a structured, value-free result at
 `/tmp/testbed/results/<scenario>.result.json` inside the guest. Raw terminal
 recordings are never required for release evidence.
 
+### High-fidelity release evidence
+
+An independent review can retain the unsanitized artifacts from one clean gate
+without relying on terminal output. Choose a new absolute directory outside the
+repository (or under the gitignored `test/testbed/reports/` directory):
+
+```sh
+AGENTJAIL_TESTBED_RAW_EVIDENCE_DIR=/tmp/agentjail-gate-evidence \
+  AGENTJAIL_TESTBED_AGENT=codex make e2e-release
+```
+
+The directory must be absent or empty. The gate records the guest baseline
+before installation, copies the exact distribution tarball and installer inputs,
+retains raw scenario artifacts until collection, and pulls the SQLite stores,
+Codex session records, project proofs, and `/tmp/testbed` results before the VM
+is stopped. `run-manifest.json` binds those files to the exact committed and
+uncommitted source tree; `SHA256SUMS` binds the manifest itself. Model accounting
+distinguishes broad endpoint rows from exact completed `POST
+/backend-api/codex/responses` calls.
+
+This mode deliberately contains unsanitized transcripts, paths, database
+content, and credential material returned to the coding agent by the static
+bootstrap broker. That transcript exposure is the explicit limitation in ADR
+0131-agent-credential-discovery; JIT/phantom delivery is a separate architectural
+phase. Keep the directory owner-only, give it only to the authorized reviewer,
+never add it to Git, and delete it after the review. The gate inventories every
+long string path in the disposable Codex auth schema and byte-scans every
+credential-bearing value—with a positive control—before removing the auth
+cache. Stable identity metadata is inventoried but is not mislabeled as a
+secret; it may legitimately appear in Codex's own logs. Logical database
+queries are not a substitute for the byte-level
+database/WAL/SHM scans required by ADR 0137-credential-residue.
+
 `AGENTJAIL_TESTBED_NAME` selects the persistent VM name. It defaults to
 `release-gate-<agent>`; set it to a worktree-specific name when another agent
 may be using a testbed concurrently.
 
-On Tart, a gate containing `tunnel-agent` automatically clones
-`TART_TUNNEL_GOLDEN` (default `golden-macos-mitm`). Generic creates and gates
-that do not assert the tunnel continue to use `TART_GOLDEN` (default
-`golden-macos`). For a manual tunnel testbed, select the contract explicitly:
+On Tart, generic creates and gates clone `TART_GOLDEN`, while a gate containing
+`tunnel-agent` selects `TART_TUNNEL_GOLDEN`. Both default to the sole approved
+`golden-macos-mitm` image. The installed extension does not redirect traffic
+until AgentJail starts a tunnel session; tunnel gates additionally enforce the
+strict activation and execution contract. To override the source explicitly:
 
 ```sh
 TART_GOLDEN=golden-macos-mitm test/testbed/testbed.sh create mac-tunnel
@@ -161,6 +198,26 @@ Codex configuration, sessions, plugins, and MCP definitions never cross the
 boundary. Treat the cache like a password and never record or publish the guest
 while it is present. See ADR 0130-codex-live-gate.
 
+### Live AWS STS credentials
+
+The offline `credentialed-cli` scenario proves discovery and credentialed CLI
+semantics against local verifiers. The live AWS workflow separately proves a
+one-hour least-privilege STS role against real STS and S3 through a direct
+brokered command, then proves an identified Codex session discovers and requests
+that exact credential without copying it into a shell command:
+
+```sh
+bash test/testbed/run-aws-sts-live.sh
+```
+
+The runner prepares one disposable Tart clone, then prints one command for the
+operator to run in a normal host terminal with `AWS_PROFILE`. Source-profile
+material never enters the VM. The external provisioner streams only the assumed
+role into the guest broker, waits for the scenarios, and removes the exact AWS
+resources afterward. Required checks fail on any SKIP, missing SQLite lifecycle
+event, failed direct AWS invocation, credential leak, or incomplete cleanup. See
+[`docs/runbooks/aws-sts-testbed.md`](../../docs/runbooks/aws-sts-testbed.md).
+
 ---
 
 ## Linux side (Linux host) — DONE, for reference only
@@ -206,8 +263,9 @@ stays healthy precisely when enforcement is off.
 |---|---|---|
 | `chaos-daemon-outage` | daemon stopped mid-session; stale socket file | hook still renders a decision and never hangs; fail-open is **visible** on stdout `systemMessage` (ADR 0073 — Claude Code discards hook stderr on exit 0) on both the claude and codex paths; sentinel written; `doctor` reports the fail-open window; the divergence signature reproduces; daemon + sentinel restored |
 | `agent-conformance` | native hook JSON for Claude, Codex, and Cursor | common project allow and sensitive-path / destructive-command denies produce the correct adapter-specific result without requiring provider login |
-| `codex-approval` | real Codex 0.147 TUI, a guest-local bare Git remote, and a user-authored custom Bash `ask` | built-in and previously unknown custom rules open the same `shell-command` prompt; approve executes once; decline, `never`, and `--ignore-rules` leave no effect; guest auth is removed on exit |
-| `credentialed-cli` | two AWS accounts, one Kubernetes context, local SigV4/bearer verifiers, and real Codex with disposable auth | Codex lists non-secret choices, requests exact IDs with reasons, configures pinned `aws`/`kubectl`, completes authenticated reads, never selects the decoy account, and leaves reasoned value-free audit events |
+| `codex-approval` | real Codex 0.147 TUI through explicit non-tunnel `agentjail run`, a guest-local bare Git remote, and a user-authored custom Bash `ask` | built-in and previously unknown custom rules open the same `shell-command` prompt; approve executes once; decline, `never`, and `--ignore-rules` leave no effect; guest auth is removed on exit |
+| `credentialed-cli` | two AWS accounts, one Kubernetes context, local SigV4/bearer verifiers, and real Codex with disposable auth | Codex lists non-secret choices, requests exact IDs with reasons, uses trusted `aws`/`kubectl` executable fingerprints, completes authenticated reads, never selects the decoy account, and leaves reasoned value-free audit events |
+| `tunnel-agent` | real Codex through the installed PATH shim with `AGENTJAIL_REQUIRE_TUNNEL=1` | strict policy/bypass matrix executes; SQLite proves the extension registered the session and decrypted non-empty model requests/responses; no fallback or all-SKIP result can pass |
 | `chaos-supervisor-restart` | `SIGTERM` (clean exit) then `SIGKILL` (crash) to the daemon PID | supervisor respawns on **both** paths; `Restart=always` / `KeepAlive=true` pinned per OS (ADR 0070 — the updater's clean `exit(0)` went un-restarted under `Restart=on-failure`); enforcement proven real again, not just `is-active` green |
 | `chaos-hook-tamper` | hook entry stripped / settings file deleted, daemon up **and** down | hookwatch re-injects with the daemon up (ADR 0026); does **not** with the daemon down — the watchdog is a goroutine inside the daemon, blind during the outage it should mitigate; a full file delete is a pinned gap (hookwatch only repairs an existing file) |
 
@@ -277,17 +335,17 @@ gate must still pass on the exact commit being released.
 brew install cirruslabs/cli/tart
 ```
 
-### 2. Bake the golden macOS image (~20–25 GB, one-time)
+### 2. Bake the approved golden macOS image (~20–25 GB, one-time)
 
 Use the **vanilla** image (no Xcode — we only need node + CLT-level tools);
 prune the pull cache afterwards to stay near the 20 GB budget:
 
 ```sh
-tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:latest golden-macos
-tart set golden-macos --cpu 4 --memory 4096
-tart run --no-graphics golden-macos &
+tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:latest golden-macos-mitm
+tart set golden-macos-mitm --cpu 4 --memory 4096
+tart run golden-macos-mitm
 # wait for IP, then (default creds admin/admin):
-IP=$(tart ip golden-macos)
+IP=$(tart ip golden-macos-mitm)
 ssh admin@$IP   # password: admin
 # Inside the VM:
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -297,7 +355,7 @@ ssh admin@$IP   # password: admin
 #   mkdir -p ~/.ssh && chmod 700 ~/.ssh
 #   echo "<your-pubkey-here>" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 # Then exit and freeze the golden:
-tart stop golden-macos
+tart stop golden-macos-mitm
 rm -rf ~/.tart/cache        # reclaim the OCI pull cache (several GB)
 ```
 
@@ -310,16 +368,15 @@ Golden stays stopped forever; testbeds are instant APFS clones of it.
 OS updates: re-bake the golden, never update inside a testbed (huge deltas).
 Apple EULA allows max **2 running** macOS guests — clones at rest are fine.
 
-### 2a. Maintain the approved tunnel golden
+### 2a. Install and maintain the approved extension
 
-macOS tunnel testing must not start from a fresh vanilla guest. Apple can leave a
-system-extension activation pending until a user approves it, and a headless Tart
-guest has no GUI in which to make that decision. Clone the vanilla base once, copy
-the exact containing app without rebuilding or re-signing it, install it at the
-stable path, and approve it in the guest:
+macOS testing uses one golden image. Apple can leave a system-extension activation
+pending until a user approves it, and a headless Tart guest has no GUI in which to
+make that decision. Copy the exact containing app into the GUI-booted golden
+without rebuilding or re-signing it, install it at the stable path, and approve it
+in the guest:
 
 ```sh
-tart clone golden-macos golden-macos-mitm
 tart run golden-macos-mitm
 # Copy while preserving the bundle, signatures, permissions, and xattrs to:
 #   /Applications/AgentjailTunnel.app
@@ -331,15 +388,18 @@ Network Extensions**. Do not automate or bypass this. Keep the containing app at
 `/Applications/AgentjailTunnel.app`: Apple packages and manages the system
 extension through that app, and deleting it can remove the extension.
 
-The current test-only image was baked and headlessly revalidated on 2026-08-13:
+The current image was rebuilt and headlessly clone-validated on 2026-08-15:
 
 | Field | Baked value |
 |---|---|
-| App | `com.blinkerlm.agentjail.app`, version `0.0.2` build `2` |
-| App CDHash | `a85f751c07e5e99a8a8164fd1ac8d9e4fff8d05e` |
-| Extension | `com.blinkerlm.agentjail.app.extension`, version `0.0.2` build `2` |
-| Extension CDHash | `9b067cad054dd49bf68a910aca64c14f70462fa7` |
+| App | `com.blinkerlm.agentjail.app`, version `0.0.6` build `6` |
+| App CDHash | `c2dc61054cd2dfb8f06a3b6f399c805d0ca5e683` |
+| App executable SHA-256 | `f8c8593571660acb46045756c5520dac12b7d786db979f661239e5a3b7007f4c` |
+| Extension | `com.blinkerlm.agentjail.app.extension`, version `0.0.6` build `6` |
+| Extension CDHash | `b54dbeece72d5b83cfd6f4364f1b4d4998a25351` |
+| Extension executable SHA-256 | `d57160d10a9b9063930eef73e40305a97757c7adeb6bc948ae83b538c8e9267a` |
 | Signing team | `Q98Z3744J2` |
+| Distribution checks | Developer ID signed, notarized, stapled, and accepted by `codesign`, `stapler`, and `spctl` |
 | Signed network entitlement | `app-proxy-provider-systemextension` |
 | App profile | `AgentjailTunnel App DevID`, UUID `f7a87d79-f2dd-487a-864d-f7d841f527bf` |
 | Extension profile | `AgentjailTunnel Ext DevID`, UUID `abd956e2-1eaf-4381-8430-abd16f7c2a1e` |
@@ -352,7 +412,11 @@ system-extension registration database, so approval survives cloning even though
 new headless guest could not create that state itself.
 
 After approval, stop the golden cleanly; the stopped VM is the saved image. Verify
-through a temporary headless clone, not by mutating the golden:
+through a temporary headless clone, not by mutating the golden. The 2026-08-13
+headless validation preserved `[activated enabled]`. Two consecutive runs in
+the rebaked VM and one fresh-clone run each executed three required scenario
+groups with 10 assertions passed and no failures. The optional Claude scenario
+skipped because the minimal clone did not have Claude installed.
 
 ```sh
 systemextensionsctl list
@@ -366,15 +430,14 @@ the extension is missing or inactive, or if no tunnel scenario executes. An
 all-SKIP result is never successful tunnel verification.
 
 Rebuild `golden-macos-mitm` when the app or extension version, CDHash, Team ID,
-bundle ID, profiles, or entitlements change; when a macOS update invalidates the
-activation; or when the final production Developer ID/notarized artifact is ready.
-The current image is internal and test-only: it does not prove downloaded-release
-Gatekeeper acceptance, notarization, stapling, clean-customer installation, or
-production distribution readiness.
+bundle ID, profiles, or entitlements change, or when a macOS update invalidates
+the activation. The baked artifact passed notarization, stapling, and Gatekeeper
+checks, but the internal disk-clone workflow is not a clean downloaded-customer
+installation test and does not alone prove production distribution readiness.
 
-Never bake a MITM CA into either golden. AgentJail generates a fresh in-memory CA
+Never bake a MITM CA into the golden. AgentJail generates a fresh in-memory CA
 for every tunnel session, applies trust only to that process, and removes the
-session material during cleanup. See ADR 0135-tunnel-golden-image.
+session material during cleanup. See ADR 0136-tunnel-golden-image.
 
 ### 3. Validate the selected agent on the current commit
 
@@ -444,6 +507,16 @@ host resources, missing
 authentication, scenario failure, or install failure** and deletes the gate VM
 afterward by default. Run it on Linux for the Linux build and on macOS for the
 macOS build.
+
+The tunnel-claiming real-agent scenario launches through the PATH shim with
+`AGENTJAIL_REQUIRE_TUNNEL=1`, which selects the public `--require-tunnel`
+launch flag without changing normal shim behavior. Its source of truth is the
+post-watermark `audit_log` lifecycle (`tunnel.session_registered` and any
+`tunnel.extension_started` failure reason), not terminal output. A tunnel setup
+failure therefore stops the scenario before a model wait or fallback DNS work.
+`codex-approval` is deliberately non-tunnel: command approval and host-proxy
+semantics do not need the global Network Extension and must not inherit that
+unrelated lifecycle dependency.
 
 CI note: this is deliberately a **local** gate, not a GitHub Actions job —
 Linux needs KVM and macOS needs a self-hosted Tart host, and the release is cut

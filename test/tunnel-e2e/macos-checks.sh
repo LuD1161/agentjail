@@ -3,7 +3,7 @@
 #
 # The Network Extension tunnel is wired on Darwin. Its release assertion needs
 # the approved golden-macos-mitm guest and the strict smoke contract; a fresh
-# unapproved guest is not equivalent. See ADR 0135-tunnel-golden-image.
+# unapproved guest is not equivalent. See ADR 0136-tunnel-golden-image.
 #
 # Usage:  bash test/tunnel-e2e/macos-checks.sh
 #

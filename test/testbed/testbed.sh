@@ -12,7 +12,7 @@
 #   AGENTJAIL_TESTBED_AGENT=codex testbed.sh provision <name> [--worktree <path>]
 #                                         build tarball -> install.sh ->
 #                                         selected agent + agentjail, ready to use
-#   testbed.sh test <name> [scenario] [--codex-auth <path>]
+#   testbed.sh test <name> [scenario] [--codex-auth <path>] [--require-no-skip]
 #                                         run a scenario (default: e2e-smoke) in-guest
 #   testbed.sh record <name> [scenario..] record scenarios (asciinema) -> reports/<ts>/
 #                                         with report.html + summary.json (all if none named)
@@ -24,8 +24,8 @@
 #   testbed.sh destroy <name>             delete the VM
 #
 # Drivers: Lima/QEMU on Linux (a Linux host), Tart on macOS (the Mac).
-# Tart tunnel gates use TART_TUNNEL_GOLDEN=golden-macos-mitm; unrelated gates
-# use TART_GOLDEN=golden-macos. See ADR 0135-tunnel-golden-image.
+# All Tart gates clone golden-macos-mitm. Tunnel gates additionally enforce the
+# strict activated-and-executed contract. See ADR 0136-tunnel-golden-image.
 # Agent selection: AGENTJAIL_TESTBED_AGENT=codex|claude-code (default: codex).
 # Claude credential seeding: put a token from `claude setup-token` into
 #   ~/.agentjail-testbed/token   (chmod 600)
@@ -43,6 +43,7 @@ esac
 ACTIVE_AUTH_TESTBED=""
 ACTIVE_GATE_TESTBED=""
 ACTIVE_PARTIAL_CREATE=""
+ACTIVE_RAW_EVIDENCE_DIR=""
 CLEANUP_FILES=()
 
 register_cleanup_file() { CLEANUP_FILES+=("$1"); }
@@ -215,6 +216,84 @@ do_create() {
 
 # ---- provision --------------------------------------------------------------
 
+init_raw_evidence() {
+    local requested="${AGENTJAIL_TESTBED_RAW_EVIDENCE_DIR:-}"
+    [ -n "$requested" ] || return 0
+    case "$requested" in /*) ;; *) die "AGENTJAIL_TESTBED_RAW_EVIDENCE_DIR must be an absolute path" ;; esac
+    if [ -e "$requested" ] && [ -n "$(find "$requested" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+        die "raw evidence directory must be absent or empty: $requested"
+    fi
+    mkdir -p "$requested/install"
+    chmod 0700 "$requested" "$requested/install"
+    ACTIVE_RAW_EVIDENCE_DIR="$(cd "$requested" && pwd)"
+    AGENTJAIL_TESTBED_RETAIN_RAW=1
+    export AGENTJAIL_TESTBED_RETAIN_RAW
+    log "UNSANITIZED evidence retention enabled at $ACTIVE_RAW_EVIDENCE_DIR"
+}
+
+capture_guest_metadata() {
+    local name="$1" output="$2"
+    guest_exec "$name" '
+        set +e
+        printf "captured_at_utc=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf "uname="; uname -a
+        command -v sw_vers >/dev/null 2>&1 && sw_vers
+        [ -r /etc/os-release ] && cat /etc/os-release
+        printf "agentjail_path=%s\n" "$(command -v agentjail 2>/dev/null || true)"
+        for path in "$HOME/.agentjail/bin/agentjail" "$HOME/.agentjail/bin/agentjail-hook" "$HOME/.agentjail/bin/agentjail-shield"; do
+            if [ -f "$path" ]; then shasum -a 256 "$path"; else printf "absent=%s\n" "$path"; fi
+        done
+        [ -x "$HOME/.agentjail/bin/agentjail" ] && "$HOME/.agentjail/bin/agentjail" status
+        if [ -e "$HOME/.agentjail" ]; then
+            printf "agentjail_state_root=present\n"
+            find "$HOME/.agentjail" -xdev -mindepth 1 -print 2>/dev/null | LC_ALL=C sort
+        else
+            printf "agentjail_state_root=absent\n"
+        fi
+        if [ "$(uname -s)" = Darwin ]; then
+            systemextensionsctl list
+            codesign -dv --verbose=4 /Applications/AgentjailTunnel.app 2>&1
+            codesign -d --entitlements :- /Applications/AgentjailTunnel.app 2>/dev/null
+        fi
+    ' >"$output"
+    chmod 0600 "$output"
+}
+
+collect_raw_gate_evidence() {
+    local name="$1" worktree="$2"; shift 2
+    local scenarios=("$@") archive="$ACTIVE_RAW_EVIDENCE_DIR/guest-raw.tar.gz"
+    [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ] || return 0
+    capture_guest_metadata "$name" "$ACTIVE_RAW_EVIDENCE_DIR/postinstall.txt"
+    guest_exec "$name" '
+        set -e
+        archive=/tmp/agentjail-gate-raw-evidence.tar.gz
+        list=/tmp/agentjail-gate-raw-evidence.list
+        : >"$list"
+        for path in \
+            "$HOME/.agentjail/agentjail.db" "$HOME/.agentjail/agentjail.db-wal" "$HOME/.agentjail/agentjail.db-shm" \
+            "$HOME/.agentjail/network.db" "$HOME/.agentjail/network.db-wal" "$HOME/.agentjail/network.db-shm" \
+            "$HOME/.agentjail/logs" "$HOME/.agentjail/daemon.log" "$HOME/.agentjail/secrets.log" \
+            "$HOME/.agentjail/bodies" \
+            "$HOME/.codex/sessions" \
+            "$HOME/work/demo" "$HOME/work/codex-approval" "$HOME/work/pelican" \
+            /tmp/testbed /tmp/agentjail-provision.log; do
+            [ ! -e "$path" ] || printf "%s\0" "${path#/}" >>"$list"
+        done
+        cd /
+        tar -czf "$archive" --null -T "$list"
+        chmod 0600 "$archive"
+        rm -f "$list"
+    '
+    guest_pull "$name" /tmp/agentjail-gate-raw-evidence.tar.gz "$archive"
+    chmod 0600 "$archive"
+    cp "$TESTBED_DIR/independent-review-prompt.md" "$ACTIVE_RAW_EVIDENCE_DIR/independent-review-prompt.md"
+    chmod 0600 "$ACTIVE_RAW_EVIDENCE_DIR/independent-review-prompt.md"
+    local manifest=(python3 "$TESTBED_DIR/evidence-manifest.py" --evidence-dir "$ACTIVE_RAW_EVIDENCE_DIR" --worktree "$worktree" --driver "$DRIVER" --guest "$(inst "$name")") s
+    for s in "${scenarios[@]}"; do manifest+=(--scenario "$s"); done
+    "${manifest[@]}"
+    log "raw evidence captured and bound by $ACTIVE_RAW_EVIDENCE_DIR/run-manifest.json"
+}
+
 do_provision() {
     local name="${1:?usage: testbed.sh provision <name> [--worktree <path>]}"; shift
     local worktree="$REPO_ROOT"
@@ -246,10 +325,25 @@ do_provision() {
     tarball=$(ls -t "$worktree"/dist/agentjail-*-"$goos"-"$goarch".tar.gz | head -1)
     [ -n "$tarball" ] || die "dist-tarball produced no tarball"
 
+    if [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ]; then
+        install -m 0600 "$tarball" "$ACTIVE_RAW_EVIDENCE_DIR/install/$(basename "$tarball")"
+        install -m 0600 "$worktree/install.sh" "$ACTIVE_RAW_EVIDENCE_DIR/install/install.sh"
+        install -m 0600 "$TESTBED_DIR/guest-provision.sh" "$ACTIVE_RAW_EVIDENCE_DIR/install/guest-provision.sh"
+        printf '%s\n' 'AGENTJAIL_ASSUME_YES=1 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh' \
+            >"$ACTIVE_RAW_EVIDENCE_DIR/install/installer-command.txt"
+        chmod 0600 "$ACTIVE_RAW_EVIDENCE_DIR/install/installer-command.txt"
+    fi
+
     log "pushing tarball + install.sh + guest-provision.sh"
     guest_push "$name" "$tarball" /tmp/agentjail-local.tar.gz
     guest_push "$name" "$worktree/install.sh" /tmp/agentjail-install.sh
     guest_push "$name" "$TESTBED_DIR/guest-provision.sh" /tmp/guest-provision.sh
+
+    if [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ]; then
+        guest_exec "$name" "shasum -a 256 /tmp/agentjail-local.tar.gz /tmp/agentjail-install.sh /tmp/guest-provision.sh" \
+            >"$ACTIVE_RAW_EVIDENCE_DIR/install/guest-input-sha256.txt"
+        chmod 0600 "$ACTIVE_RAW_EVIDENCE_DIR/install/guest-input-sha256.txt"
+    fi
 
     if [ "$TESTBED_AGENT" = "claude-code" ]; then
         local token_file="$HOME/.agentjail-testbed/token"
@@ -289,7 +383,14 @@ do_provision() {
     fi
 
     log "running guest-provision.sh inside the guest"
-    guest_exec "$name" "AGENTJAIL_TESTBED_AGENT=$(printf '%q' "$TESTBED_AGENT") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/guest-provision.sh"
+    if [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ]; then
+        guest_exec "$name" "set -o pipefail; AGENTJAIL_TESTBED_AGENT=$(printf '%q' "$TESTBED_AGENT") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/guest-provision.sh 2>&1 | tee /tmp/agentjail-provision.log"
+        guest_pull "$name" /tmp/agentjail-provision.log "$ACTIVE_RAW_EVIDENCE_DIR/install/guest-provision.log"
+        chmod 0600 "$ACTIVE_RAW_EVIDENCE_DIR/install/guest-provision.log"
+        capture_guest_metadata "$name" "$ACTIVE_RAW_EVIDENCE_DIR/postprovision.txt"
+    else
+        guest_exec "$name" "AGENTJAIL_TESTBED_AGENT=$(printf '%q' "$TESTBED_AGENT") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/guest-provision.sh"
+    fi
     log "provisioned for $TESTBED_AGENT. Try: $0 ssh $name   then: agentjail status"
 }
 
@@ -370,6 +471,7 @@ do_gate() {
         "$codex_bin" login status >/dev/null 2>&1 || die "host Codex CLI is not authenticated"
     fi
 
+    init_raw_evidence
     log "RELEASE GATE starting (driver=$DRIVER, worktree=$worktree)"
     # Single-VM invariant (Tart): macOS caps concurrently running VMs (~2), so
     # the gate runs exactly one testbed VM. Stop any OTHER running testbed VMs up
@@ -396,29 +498,42 @@ do_gate() {
     else
         do_create "$name"
     fi
+    if [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ]; then
+        capture_guest_metadata "$name" "$ACTIVE_RAW_EVIDENCE_DIR/preinstall.txt"
+    fi
+    guest_exec "$name" 'test ! -e "$HOME/.agentjail"' \
+        || die "RELEASE GATE ✗ FAIL — golden contains pre-existing ~/.agentjail state"
     if [ "$needs_codex" -eq 1 ]; then
         AGENTJAIL_TESTBED_CODEX_VERSION="$codex_version"
         do_provision "$name" --worktree "$worktree"
     else
         do_provision "$name" --worktree "$worktree"
     fi
+    local gate_rc=0 failed_scenario=""
     for s in "${scenarios[@]}"; do
         log "RELEASE GATE: running scenario '$s' on a clean box"
         case "$s" in
             tunnel-agent|codex-approval|credentialed-cli)
-                do_test "$name" "$s" --codex-auth "$codex_auth" \
-                    || die "RELEASE GATE ✗ FAIL ($s) — do NOT release"
+                if ! do_test "$name" "$s" --codex-auth "$codex_auth" --require-no-skip; then
+                    gate_rc=1; failed_scenario="$s"; break
+                fi
                 ;;
-            *) do_test "$name" "$s" || die "RELEASE GATE ✗ FAIL ($s) — do NOT release" ;;
+            *)
+                if ! do_test "$name" "$s" --require-no-skip; then
+                    gate_rc=1; failed_scenario="$s"; break
+                fi
+                ;;
         esac
     done
+    collect_raw_gate_evidence "$name" "$worktree" "${scenarios[@]}"
+    [ "$gate_rc" -eq 0 ] || die "RELEASE GATE ✗ FAIL ($failed_scenario) — do NOT release"
     log "RELEASE GATE ✓ PASS — safe to tag"
     return 0
 }
 
 do_test() {
     local name="${1:?usage: testbed.sh test <name> [scenario] [--codex-auth <path>]}"; shift
-    local scenario="e2e-smoke" codex_auth=""
+    local scenario="e2e-smoke" codex_auth="" require_no_skip=0
     if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
         scenario="$1"
         shift
@@ -430,11 +545,15 @@ do_test() {
                 [ -f "$codex_auth" ] || die "Codex auth file not found: $codex_auth"
                 shift 2
                 ;;
+            --require-no-skip)
+                require_no_skip=1
+                shift
+                ;;
             *) die "unknown test flag: $1" ;;
         esac
     done
-    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ] && [ "$scenario" != "tunnel-agent" ] && [ "$scenario" != "credentialed-cli" ]; then
-        die "--codex-auth is accepted only by the codex-approval, credentialed-cli, and tunnel-agent scenarios"
+    if [ -n "$codex_auth" ] && [ "$scenario" != "codex-approval" ] && [ "$scenario" != "tunnel-agent" ] && [ "$scenario" != "credentialed-cli" ] && [ "$scenario" != "aws-sts-live" ]; then
+        die "--codex-auth is accepted only by the codex-approval, credentialed-cli, tunnel-agent, and aws-sts-live scenarios"
     fi
     local script="$TESTBED_DIR/scenarios/${scenario}.sh"
     [ -f "$script" ] || die "scenario not found: $script"
@@ -449,8 +568,14 @@ do_test() {
         guest_exec "$name" "mkdir -p /tmp/testbed/tunnel-e2e"
         guest_push "$name" "$REPO_ROOT/test/tunnel-e2e/smoke_darwin.sh" "/tmp/testbed/tunnel-e2e/smoke_darwin.sh"
     fi
+    if [ "$scenario" = "aws-sts-live" ]; then
+        guest_push "$name" "$TESTBED_DIR/aws-sts-stream-filter.py" "/tmp/testbed/aws-sts-stream-filter.py"
+        guest_exec "$name" "chmod 0700 /tmp/testbed/aws-sts-stream-filter.py"
+    fi
     if [ -n "$codex_auth" ]; then
         log "injecting disposable Codex auth immediately before the scenario"
+        guest_push "$name" "$TESTBED_DIR/scan-secret-artifacts.py" /tmp/testbed/scan-secret-artifacts.py
+        guest_exec "$name" "chmod 0700 /tmp/testbed/scan-secret-artifacts.py"
         if ! guest_push "$name" "$codex_auth" /tmp/codex-auth.json; then
             guest_exec "$name" "rm -f /tmp/codex-auth.json" || true
             return 1
@@ -462,9 +587,15 @@ do_test() {
         ACTIVE_AUTH_TESTBED="$name"
     fi
     local rc=0 result_path="/tmp/testbed/results/${scenario}.result.json"
-    guest_exec "$name" "$(chaos_env) SCN_JSON=$(printf '%q' "$result_path") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
+    guest_exec "$name" "$(chaos_env) SCN_JSON=$(printf '%q' "$result_path") AGENTJAIL_TESTBED_RETAIN_RAW=$(printf '%q' "${AGENTJAIL_TESTBED_RETAIN_RAW:-0}") AGENTJAIL_TESTBED_CODEX_VERSION=$(printf '%q' "${AGENTJAIL_TESTBED_CODEX_VERSION:-0.147.0}") bash /tmp/testbed/scenarios/${scenario}.sh" || rc=$?
     if [ -n "$codex_auth" ]; then
         cleanup_injected_auth
+    fi
+    if [ "$rc" -eq 0 ] && [ "$require_no_skip" -eq 1 ]; then
+        if ! guest_exec "$name" "source /tmp/testbed/reportlib.sh; scn_release_result_valid $(printf '%q' "$result_path")"; then
+            log "scenario '$scenario' did not satisfy the release no-SKIP result contract"
+            rc=1
+        fi
     fi
     return "$rc"
 }

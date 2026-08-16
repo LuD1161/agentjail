@@ -11,6 +11,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 HOOK="$HOME/.agentjail/bin/agentjail-hook"
 SHIELD="$HOME/.agentjail/bin/agentjail-shield"
 PROJECT="$HOME/work/demo"
+SECRETS="$HOME/.agentjail/bin/agentjail-secrets"
+DEMO_SECRET="testbed/demo"
+
+cleanup_demo_secret() {
+    [ ! -x "$SECRETS" ] || "$SECRETS" delete "$DEMO_SECRET" >/dev/null 2>&1 || true
+}
+trap cleanup_demo_secret EXIT INT TERM
 
 scn_init "e2e-smoke" "clean-box install + hook & shield policy enforcement"
 
@@ -64,7 +71,6 @@ grep -q PWNED "$HOME/.ssh/id_rsa" && scn_fail "shield blocks ~/.ssh write" || sc
 [ -f "$PROJECT/shield-ok.txt" ] && scn_ok "shield allows project write" || scn_fail "shield allows project write"
 
 # Secrets broker — on-demand auto-start (ADR 0058, DEFECT-2).
-SECRETS="$HOME/.agentjail/bin/agentjail-secrets"
 SECRETS_SOCK="$HOME/.agentjail/secrets.sock"
 if [ "$(uname -s)" = "Darwin" ]; then
     SECRETS_SVC_FILE="$HOME/Library/LaunchAgents/com.agentjail.secrets.plist"
@@ -80,7 +86,7 @@ fi
 
 # c. setting a secret must succeed WITHOUT a manual `agentjail-secrets serve` —
 # this is the auto-start path (rpcClient -> EnsureSecretsBroker on connect-refused).
-"$SECRETS" set testbed/demo hello-from-e2e-smoke >/tmp/secrets-set.log 2>&1
+"$SECRETS" set "$DEMO_SECRET" hello-from-e2e-smoke >/tmp/secrets-set.log 2>&1
 set_rc=$?
 [ "$set_rc" -eq 0 ] && scn_ok "secrets broker: set auto-starts broker" || scn_fail "secrets broker: set auto-starts broker"
 
@@ -89,6 +95,14 @@ set_rc=$?
 
 # e. round-trip: the secret name comes back from list (never the value).
 list_out=$("$SECRETS" list 2>/tmp/secrets-list.log)
-if grep -qx "testbed/demo" <<<"$list_out"; then scn_ok "secrets broker: list round-trips secret name"; else scn_fail "secrets broker: list round-trips secret name"; fi
+if grep -qx "$DEMO_SECRET" <<<"$list_out"; then scn_ok "secrets broker: list round-trips secret name"; else scn_fail "secrets broker: list round-trips secret name"; fi
+
+# f. cleanup is part of the contract: no fixture may remain in the guest keychain.
+if "$SECRETS" delete "$DEMO_SECRET" >/tmp/secrets-delete.log 2>&1 \
+    && ! "$SECRETS" list 2>/tmp/secrets-list-after-delete.log | grep -qx "$DEMO_SECRET"; then
+    scn_ok "secrets broker: fixture removed after round-trip"
+else
+    scn_fail "secrets broker: fixture removed after round-trip"
+fi
 
 scn_finish

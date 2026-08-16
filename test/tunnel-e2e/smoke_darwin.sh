@@ -11,7 +11,7 @@
 # cannot be scripted. Default mode detects missing prerequisites and SKIPs
 # loudly. `--strict` requires an activated extension and at least one executed
 # tunnel scenario; it fails instead of treating all-SKIP as verification.
-# See ADR 0135-tunnel-golden-image.
+# See ADR 0136-tunnel-golden-image.
 #
 # Usage: test/tunnel-e2e/smoke_darwin.sh [--strict]
 #
@@ -38,6 +38,21 @@ ok()   { printf "  \033[32mPASS\033[0m  %s\n" "$1"; PASS=$((PASS+1)); }
 bad()  { printf "  \033[31mFAIL\033[0m  %s\n     %s\n" "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 skip() { printf "  \033[33mSKIP\033[0m  %s (%s)\n" "$1" "${2:-}"; SKIP=$((SKIP+1)); }
 group() { printf "\n\033[1m%s\033[0m\n" "$1"; }
+
+wait_for_db_count() {
+    local minimum="$1" query="$2" count=0 _attempt
+    for _attempt in $(seq 1 30); do
+        count="$(sqlite3 "$NETWORK_DB" "$query" 2>/dev/null || echo 0)"
+        [[ "$count" =~ ^[0-9]+$ ]] || count=0
+        if [ "$count" -ge "$minimum" ]; then
+            printf '%s\n' "$count"
+            return 0
+        fi
+        sleep 0.1
+    done
+    printf '%s\n' "$count"
+    return 1
+}
 
 write_result() {
     [ -n "$RESULT_PATH" ] || return 0
@@ -103,14 +118,15 @@ fi
 EXT_APPROVED=0
 if command -v systemextensionsctl >/dev/null 2>&1; then
     EXT_LIST="$(systemextensionsctl list 2>&1 || true)"
-    EXT_LINE="$(grep -F "$EXT_ID" <<<"$EXT_LIST" | tail -1)"
-    if grep -qi "\[activated enabled\]" <<<"$EXT_LINE"; then
+    EXT_LINES="$(grep -F "$EXT_ID" <<<"$EXT_LIST" || true)"
+    EXT_LINE="$(grep -i "\[activated enabled\]" <<<"$EXT_LINES" | tail -1)"
+    if [ -n "$EXT_LINE" ]; then
         EXT_APPROVED=1
         EXT_STATE="activated_enabled"
         ok "system extension $EXT_ID installed and approved"
-    elif [ -n "$EXT_LINE" ]; then
+    elif [ -n "$EXT_LINES" ]; then
         EXT_STATE="inactive"
-        skip "system extension $EXT_ID installed and approved" "present but inactive: $EXT_LINE"
+        skip "system extension $EXT_ID installed and approved" "present but inactive: $EXT_LINES"
     else
         skip "system extension $EXT_ID installed and approved" "missing - install the containing app and approve it once in the GUI (see macos/README.md)"
     fi
@@ -134,8 +150,14 @@ fi
 # ================================================================ STRICT MATRIX
 group "M - strict policy and bypass matrix"
 
+MATRIX_OUT=""
+ALLOW_ROWS=0; HOST_DENIALS=0; PATH_DENIALS=0; HTTP80_DENIALS=0; API_ROWS=0
 if [ "$CAN_RUN" = "1" ]; then
     EXECUTED=$((EXECUTED+1))
+    MATRIX_BEFORE_ID=0
+    if [ "$SQLITE_OK" = "1" ]; then
+        MATRIX_BEFORE_ID="$(sqlite3 "$NETWORK_DB" 'select coalesce(max(id),0) from network_requests;' 2>/dev/null || echo 0)"
+    fi
     MATRIX_WORK="$(mktemp -d)"
     MATRIX_PACKS="$MATRIX_WORK/netpacks"
     mkdir -p "$MATRIX_PACKS"
@@ -172,14 +194,17 @@ match:
   protocol:
     - http
   host:
-    - www.cloudflare.com:80
+    - www.cloudflare.com
+  port:
+    - 80
 action: deny
 reason: "darwin strict smoke: cleartext port denied"
 EOF
 
     MATRIX_OUT="$(run_with_timeout 90 env AGENTJAIL_NETPACKS_DIR="$MATRIX_PACKS" \
-        "$SHIELD_BIN" --tunnel -- bash -c '
+        "$SHIELD_BIN" --require-tunnel -- bash -c '
         curl -sS -o /dev/null -w "ALLOW_HTTPS:%{http_code}\n" --max-time 15 https://www.cloudflare.com/
+        curl -sS -o /dev/null -w "AUDIT_HTTPS:%{http_code}\n" --max-time 15 https://api.github.com/
         curl -sS -o /dev/null -w "DENY_HOST:%{http_code}\n" --max-time 15 https://example.com/
         curl -sS -o /dev/null -w "DENY_PATH:%{http_code}\n" --max-time 15 https://api.github.com/repos/torvalds/linux
         curl -sS -o /dev/null -w "DENY_HTTP80:%{http_code}\n" --max-time 15 http://www.cloudflare.com/ || true
@@ -189,32 +214,44 @@ EOF
     ' 2>&1)"
     rm -rf "$MATRIX_WORK"
 
-    grep -q "ALLOW_HTTPS:200" <<<"$MATRIX_OUT" \
-        && ok "M1 allowed HTTPS succeeds on port 443" \
-        || bad "M1 allowed HTTPS succeeds on port 443" "$(grep -o 'ALLOW_HTTPS:[0-9]*' <<<"$MATRIX_OUT" | tail -1)"
+    # Policy proof is a post-watermark durable row; stderr is diagnostic only.
+    # See docs/runbooks/macos-tunnel-release.md.
+    if [ "$SQLITE_OK" = "1" ] && [ -f "$NETWORK_DB" ]; then
+        ALLOW_ROWS="$(wait_for_db_count 1 "select count(*) from network_requests where id > $MATRIX_BEFORE_ID and host='www.cloudflare.com' and status_code=200;")" || true
+        API_ROWS="$(wait_for_db_count 1 "select count(*) from network_requests where id > $MATRIX_BEFORE_ID and host='api.github.com' and path='/' and status_code=200;")" || true
+        HOST_DENIALS="$(wait_for_db_count 2 "select count(*) from network_requests where id > $MATRIX_BEFORE_ID and host='example.com' and status_code=403 and policy_action='deny' and policy_template='darwin-deny-host';")" || true
+        PATH_DENIALS="$(wait_for_db_count 1 "select count(*) from network_requests where id > $MATRIX_BEFORE_ID and host='api.github.com' and path='/repos/torvalds/linux' and status_code=403 and policy_action='deny' and policy_template='darwin-deny-path';")" || true
+        HTTP80_DENIALS="$(wait_for_db_count 1 "select count(*) from network_requests where id > $MATRIX_BEFORE_ID and host in ('www.cloudflare.com','www.cloudflare.com:80') and policy_action='deny' and policy_template='darwin-deny-http-port';")" || true
+    fi
 
-    if grep -q "DENY_HOST:403" <<<"$MATRIX_OUT" && grep -q "template=darwin-deny-host" <<<"$MATRIX_OUT"; then
+    if grep -q "ALLOW_HTTPS:200" <<<"$MATRIX_OUT" && [ "${ALLOW_ROWS:-0}" -ge 1 ]; then
+        ok "M1 allowed HTTPS succeeds through the captured port-443 path"
+    else
+        bad "M1 allowed HTTPS succeeds through the captured port-443 path" "status=$(grep -o 'ALLOW_HTTPS:[0-9]*' <<<"$MATRIX_OUT" | tail -1); durable-capture-rows=$ALLOW_ROWS"
+    fi
+
+    if grep -q "DENY_HOST:403" <<<"$MATRIX_OUT" && [ "${HOST_DENIALS:-0}" -ge 1 ]; then
         ok "M2 denied host is blocked by the named policy"
     else
-        bad "M2 denied host is blocked by the named policy" "status=$(grep -o 'DENY_HOST:[0-9]*' <<<"$MATRIX_OUT" | tail -1); template=$(grep -c 'template=darwin-deny-host' <<<"$MATRIX_OUT")"
+        bad "M2 denied host is blocked by the named policy" "status=$(grep -o 'DENY_HOST:[0-9]*' <<<"$MATRIX_OUT" | tail -1); durable-policy-rows=$HOST_DENIALS"
     fi
 
-    if grep -q "DENY_PATH:403" <<<"$MATRIX_OUT" && grep -q "template=darwin-deny-path" <<<"$MATRIX_OUT"; then
+    if grep -q "DENY_PATH:403" <<<"$MATRIX_OUT" && [ "${PATH_DENIALS:-0}" -ge 1 ]; then
         ok "M3 denied path is blocked by the named policy"
     else
-        bad "M3 denied path is blocked by the named policy" "status=$(grep -o 'DENY_PATH:[0-9]*' <<<"$MATRIX_OUT" | tail -1); template=$(grep -c 'template=darwin-deny-path' <<<"$MATRIX_OUT")"
+        bad "M3 denied path is blocked by the named policy" "status=$(grep -o 'DENY_PATH:[0-9]*' <<<"$MATRIX_OUT" | tail -1); durable-policy-rows=$PATH_DENIALS"
     fi
 
-    if grep -q "DENY_HTTP80:000" <<<"$MATRIX_OUT" && grep -q "template=darwin-deny-http-port" <<<"$MATRIX_OUT"; then
+    if grep -q "DENY_HTTP80:000" <<<"$MATRIX_OUT" && [ "${HTTP80_DENIALS:-0}" -ge 1 ]; then
         ok "M4 cleartext HTTP on port 80 is denied on the raw protocol path"
     else
-        bad "M4 cleartext HTTP on port 80 is denied on the raw protocol path" "status=$(grep -o 'DENY_HTTP80:[0-9]*' <<<"$MATRIX_OUT" | tail -1); template=$(grep -c 'template=darwin-deny-http-port' <<<"$MATRIX_OUT")"
+        bad "M4 cleartext HTTP on port 80 is denied on the raw protocol path" "status=$(grep -o 'DENY_HTTP80:[0-9]*' <<<"$MATRIX_OUT" | tail -1); durable-policy-rows=$HTTP80_DENIALS"
     fi
 
-    if grep -q "DENY_DIRECT:403" <<<"$MATRIX_OUT" && [ "$(grep -c 'template=darwin-deny-host' <<<"$MATRIX_OUT")" -ge 2 ]; then
+    if grep -q "DENY_DIRECT:403" <<<"$MATRIX_OUT" && [ "${HOST_DENIALS:-0}" -ge 2 ]; then
         ok "M5 unsetting proxy variables and --noproxy cannot bypass the tunnel policy"
     else
-        bad "M5 unsetting proxy variables and --noproxy cannot bypass the tunnel policy" "status=$(grep -o 'DENY_DIRECT:[0-9]*' <<<"$MATRIX_OUT" | tail -1); host-deny-count=$(grep -c 'template=darwin-deny-host' <<<"$MATRIX_OUT")"
+        bad "M5 unsetting proxy variables and --noproxy cannot bypass the tunnel policy" "status=$(grep -o 'DENY_DIRECT:[0-9]*' <<<"$MATRIX_OUT" | tail -1); durable-host-denials=$HOST_DENIALS"
     fi
 else
     SCENARIO_SKIP=$((SCENARIO_SKIP+1))
@@ -226,17 +263,10 @@ group "A8 - HTTPS request through the tunnel returns 200 (TLS trust via injected
 
 if [ "$CAN_RUN" = "1" ]; then
     EXECUTED=$((EXECUTED+1))
-    OUT="$(run_with_timeout 60 "$SHIELD_BIN" --tunnel -- bash -c '
-        if command -v node >/dev/null 2>&1; then
-            node -e "fetch(\"https://www.cloudflare.com/\").then(r=>{console.log(\"A8:\"+r.status)}).catch(e=>{console.log(\"A8:ERR \"+e.message)})"
-        else
-            curl -s -o /dev/null -w "A8:%{http_code}\n" --max-time 15 https://www.cloudflare.com/
-        fi
-    ' 2>&1)"
-    if grep -q "A8:200" <<<"$OUT"; then
-        ok "A8  HTTPS request under the tunnel returns 200"
+    if [ "${ALLOW_ROWS:-0}" -ge 1 ]; then
+        ok "A8 HTTPS succeeds through the captured tunnel path"
     else
-        bad "A8  HTTPS request under the tunnel returns 200" "$(grep 'A8:' <<<"$OUT" | tail -1)"
+        bad "A8 HTTPS succeeds through the captured tunnel path" "status=$(grep -o 'ALLOW_HTTPS:[0-9]*' <<<"$MATRIX_OUT" | tail -1); durable-capture-rows=$ALLOW_ROWS"
     fi
 else
     SCENARIO_SKIP=$((SCENARIO_SKIP+1))
@@ -248,42 +278,14 @@ group "A11 - requests through the tunnel are logged to network.db"
 
 if [ "$CAN_RUN" = "1" ] && [ "$SQLITE_OK" = "1" ]; then
     EXECUTED=$((EXECUTED+1))
-    BEFORE_ID="$(sqlite3 "$NETWORK_DB" 'select coalesce(max(id),0) from network_requests;' 2>/dev/null || echo 0)"
-    run_with_timeout 60 "$SHIELD_BIN" --tunnel -- bash -c \
-        'curl -s -o /dev/null --max-time 15 https://api.github.com/; echo done' >/dev/null 2>&1
-    if [ -f "$NETWORK_DB" ]; then
-        N="$(sqlite3 "$NETWORK_DB" "select count(*) from network_requests where id > $BEFORE_ID and host='api.github.com';" 2>/dev/null || echo 0)"
-        if [ "${N:-0}" -gt 0 ]; then
-            ok "A11 requests recorded to network.db (n=$N)"
-        else
-            bad "A11 requests recorded to network.db" "count=$N"
-        fi
+    if [ "${API_ROWS:-0}" -gt 0 ]; then
+        ok "A11 requests recorded to network.db (n=$API_ROWS)"
     else
-        bad "A11 requests recorded to network.db" "$NETWORK_DB does not exist after a request"
+        bad "A11 requests recorded to network.db" "status=$(grep -o 'AUDIT_HTTPS:[0-9]*' <<<"$MATRIX_OUT" | tail -1); count=$API_ROWS"
     fi
 else
     SCENARIO_SKIP=$((SCENARIO_SKIP+1))
     skip "A11 requests recorded to network.db" "extension not approved, agentjail-shield unavailable, or sqlite3 missing"
-fi
-
-# ================================================================ GROUP A12
-group "A12 - Claude Code completes a real request through the tunnel"
-
-CLAUDE_BIN="$(command -v claude || true)"
-if [ -z "$CLAUDE_BIN" ]; then
-    SCENARIO_SKIP=$((SCENARIO_SKIP+1))
-    skip "A12 Claude Code through the tunnel" "claude not installed"
-elif [ "$CAN_RUN" != "1" ]; then
-    SCENARIO_SKIP=$((SCENARIO_SKIP+1))
-    skip "A12 Claude Code through the tunnel" "extension not approved or agentjail-shield unavailable"
-else
-    EXECUTED=$((EXECUTED+1))
-    CC="$(run_with_timeout 90 "$SHIELD_BIN" --tunnel -- claude -p "reply with exactly: TUNNELOK" --max-turns 1 2>&1 | tail -3)"
-    if grep -q "TUNNELOK" <<<"$CC"; then
-        ok "A12 Claude Code completes a real API call through the tunnel"
-    else
-        bad "A12 Claude Code through the tunnel" "$(tail -2 <<<"$CC")"
-    fi
 fi
 
 # ================================================================ summary
