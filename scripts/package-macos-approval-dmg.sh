@@ -4,7 +4,8 @@ set -euo pipefail
 
 readonly product_name="AgentjailApproval"
 readonly task_prefix="/private/tmp/agentjail-macos-approval-"
-readonly hdiutil_binary="/usr/bin/hdiutil"
+readonly hdiutil_binary="${APPROVAL_HDIUTIL_BINARY:-/usr/bin/hdiutil}"
+readonly mount_binary="${APPROVAL_MOUNT_BINARY:-/sbin/mount}"
 readonly ditto_binary="/usr/bin/ditto"
 readonly shasum_binary="/usr/bin/shasum"
 readonly readlink_binary="/usr/bin/readlink"
@@ -72,6 +73,7 @@ validate_dmg_path "$dmg_path"
 
 [[ -x "$build_script" ]] || fail "build script is not executable: $build_script"
 [[ -x "$hdiutil_binary" ]] || fail "missing required executable: $hdiutil_binary"
+[[ -x "$mount_binary" ]] || fail "missing required executable: $mount_binary"
 [[ -x "$ditto_binary" ]] || fail "missing required executable: $ditto_binary"
 [[ -x "$shasum_binary" ]] || fail "missing required executable: $shasum_binary"
 [[ -x "$readlink_binary" ]] || fail "missing required executable: $readlink_binary"
@@ -90,11 +92,43 @@ mount_point="$stage_root/mount"
 attached=0
 completed=0
 
+mount_state() {
+  local mount_output
+
+  if ! mount_output="$("$mount_binary" 2>/dev/null)"; then
+    return 2
+  fi
+  if [[ "$mount_output" == *"on $mount_point "* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+detach_and_confirm() {
+  local state
+
+  if ! "$hdiutil_binary" detach "$mount_point"; then
+    return 1
+  fi
+  state=0
+  mount_state || state=$?
+  case "$state" in
+    0) return 2 ;;
+    1) attached=0 ;;
+    *) return 3 ;;
+  esac
+}
+
 cleanup() {
   local status=$?
+  local detach_status
   if [[ $attached -eq 1 ]]; then
-    if ! "$hdiutil_binary" detach "$mount_point"; then
-      printf 'package-macos-approval-dmg: could not detach %s; preserving %s\n' "$mount_point" "$stage_root" >&2
+    set +e
+    detach_and_confirm
+    detach_status=$?
+    set -e
+    if [[ $detach_status -ne 0 ]]; then
+      printf 'package-macos-approval-dmg: could not confirm %s is detached; preserving %s\n' "$mount_point" "$stage_root" >&2
       exit 1
     fi
   fi
@@ -127,15 +161,15 @@ checksum="$("$shasum_binary" -a 256 "$dmg_path" | "$awk_binary" '{print $1}')"
 "$mkdir_binary" "$mount_point"
 attached=1
 if ! "$hdiutil_binary" attach -readonly -nobrowse -mountpoint "$mount_point" "$dmg_path" >/dev/null; then
-  attached=0
   fail "could not attach $dmg_path"
 fi
 [[ -d "$mount_point/$product_name.app" ]] || fail "mounted DMG does not contain $product_name.app"
 [[ -L "$mount_point/Applications" ]] || fail "mounted DMG does not contain an Applications symlink"
 [[ "$("$readlink_binary" "$mount_point/Applications")" == "/Applications" ]] || fail "Applications link does not target /Applications"
 "$build_script" --verify-only "$mount_point/$product_name.app"
-"$hdiutil_binary" detach "$mount_point"
-attached=0
+if ! detach_and_confirm; then
+  fail "could not confirm $mount_point is detached"
+fi
 
 completed=1
 printf 'package-macos-approval-dmg: dmg=%s\n' "$dmg_path"

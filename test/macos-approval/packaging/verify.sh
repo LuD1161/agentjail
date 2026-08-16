@@ -10,6 +10,7 @@ repo_root="$(cd -- "$script_dir/../../.." && pwd -P)"
 build_script="$repo_root/scripts/build-macos-approval-app.sh"
 package_script="$repo_root/scripts/package-macos-approval-dmg.sh"
 entitlements="$repo_root/macos/AgentjailApproval/Resources/AgentjailApproval.entitlements"
+detach_cleanup_test="$script_dir/detach_cleanup_test.sh"
 
 fail() {
   printf 'macos approval packaging: %s\n' "$*" >&2
@@ -58,6 +59,8 @@ trap cleanup EXIT
 
 [[ -x "$build_script" ]] || fail "missing executable build script: $build_script"
 [[ -x "$package_script" ]] || fail "missing executable package script: $package_script"
+[[ -x "$detach_cleanup_test" ]] || fail "missing executable detach cleanup test: $detach_cleanup_test"
+"$detach_cleanup_test"
 /usr/bin/plutil -lint "$entitlements" >/dev/null
 [[ "$(normalized_plist "$entitlements")" == "{}" ]] || fail "source entitlements are not exactly empty"
 cp "$repo_root/macos/AgentjailApproval/Package.swift" "$first_root/Package.swift"
