@@ -284,6 +284,18 @@ listed on the task board.
   PASS. Product code unchanged.
 - Remote action: none
 
+## 2026-08-15 — Plans 022 and 023 parallel implementation released
+
+- Plan 021's public State enum/snapshot/action API is stable; remaining work is
+  a test-file compiler-performance split and final acceptance/commit.
+- Plans 022 and 023 own disjoint UI/Presentation and Notifications trees. They
+  may implement in parallel against the stable API but cannot be accepted or
+  committed as DONE until Plan 021 is reviewed.
+- Plan 022 also owns the pure generation-stamped focus presentation seam for
+  the supplemental review window. Plan 023 publishes the non-mutating route;
+  Plan 024 alone opens scenes and composes the shared store.
+- Remote action: none
+
 ## 2026-08-15 — Supplemental Plan 031 claimed
 
 - Agent: `plan016_prep` (Terra)
