@@ -679,6 +679,8 @@ func TestDaemon_SIGHUP_MCPDecisionChanges(t *testing.T) {
 
 	dir := t.TempDir()
 	daemonBin := filepath.Join(dir, "agentjail-daemon")
+	logPath := filepath.Join(dir, "daemon.log")
+	dbPath := filepath.Join(dir, "agentjail.db")
 	if out, err := exec.Command("go", "build", "-o", daemonBin,
 		"github.com/LuD1161/agentjail/cmd/agentjail-daemon").CombinedOutput(); err != nil {
 		t.Fatalf("build daemon: %v\n%s", err, out)
@@ -698,6 +700,8 @@ func TestDaemon_SIGHUP_MCPDecisionChanges(t *testing.T) {
 		"--socket", sockPath,
 		"--policy", policyPath,
 		"--rules", rulesDir,
+		"--log", logPath,
+		"--db", dbPath,
 	)
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -766,6 +770,8 @@ func TestDaemon_SIGHUP_MCPDecisionChanges(t *testing.T) {
 func TestDaemon_SIGHUP_FailureKeepsOldPolicy(t *testing.T) {
 	dir := t.TempDir()
 	daemonBin := filepath.Join(dir, "agentjail-daemon")
+	logPath := filepath.Join(dir, "daemon.log")
+	dbPath := filepath.Join(dir, "agentjail.db")
 	if out, err := exec.Command("go", "build", "-o", daemonBin,
 		"github.com/LuD1161/agentjail/cmd/agentjail-daemon").CombinedOutput(); err != nil {
 		t.Fatalf("build daemon: %v\n%s", err, out)
@@ -779,7 +785,13 @@ func TestDaemon_SIGHUP_FailureKeepsOldPolicy(t *testing.T) {
 		t.Fatalf("write initial policy: %v", err)
 	}
 
-	cmd := exec.Command(daemonBin, "--socket", sockPath, "--policy", policyPath)
+	cmd := exec.Command(
+		daemonBin,
+		"--socket", sockPath,
+		"--policy", policyPath,
+		"--log", logPath,
+		"--db", dbPath,
+	)
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
