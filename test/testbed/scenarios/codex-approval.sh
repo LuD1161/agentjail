@@ -54,7 +54,7 @@ chmod 700 "$HOME/.codex"
 install -m 0600 /tmp/codex-auth.json "$HOME/.codex/auth.json"
 rm -f /tmp/codex-auth.json
 CODEX_VERSION_OUTPUT="$("$CODEX_REAL" --version 2>/dev/null || true)"
-if [ ! -x "$CODEX_REAL" ] || ! printf '%s\n' "$CODEX_VERSION_OUTPUT" | grep -Fq "$CODEX_VERSION"; then
+if [ ! -x "$CODEX_REAL" ] || ! grep -Fq "$CODEX_VERSION" <<<"$CODEX_VERSION_OUTPUT"; then
     scn_fail "installed Codex version is $CODEX_VERSION"
     finish_and_exit
 fi
@@ -119,10 +119,10 @@ require_daemon() {
     # Require control ping and hook round trip. See ADR 0118-codex-approval-broker.
     for i in $(seq 1 10); do
         output="$("$AJ" doctor 2>&1 || true)"
-        printf '%s\n' "$output" | grep -q 'Socket.*daemon answered ping' && break
+        grep -q 'Socket.*daemon answered ping' <<<"$output" && break
         sleep 0.25
     done
-    if ! printf '%s\n' "$output" | grep -q 'Socket.*daemon answered ping'; then
+    if ! grep -q 'Socket.*daemon answered ping' <<<"$output"; then
         scn_fail "policy daemon answers its control ping $phase"
         printf '%s\n' "$output" | tail -10 | sed 's/^/    /'
         finish_and_exit
@@ -131,7 +131,7 @@ require_daemon() {
         output="$(printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"README.md"},"session_id":"codex-approval-liveness","cwd":"'"$PROJECT"'"}' \
             | "$HOOK" 2>&1 >/dev/null)"
         rc=$?
-        if [ "$rc" -eq 0 ] && ! printf '%s\n' "$output" | grep -qiE 'daemon unreachable|daemon not running'; then
+        if [ "$rc" -eq 0 ] && ! grep -qiE 'daemon unreachable|daemon not running' <<<"$output"; then
             scn_ok "policy daemon remains available $phase"
             return 0
         fi
@@ -167,15 +167,15 @@ wait_for_approval_prompt() {
             output="$output
 $(tail -80 "$PANE_LOG")"
         fi
-        if printf '%s' "$output" | grep -q "Press enter to continue"; then
+        if grep -q "Press enter to continue" <<<"$output"; then
             echo "  INFO  acknowledging Codex first-run continuation screen"
             tmux send-keys -t "$SESSION:0.0" Enter
             sleep 2
             continue
         fi
-        if printf '%s' "$output" | grep -Fq "$PROMPT_MARKER" \
-            && printf '%s' "$output" | grep -Fq "$DISPLAY_MARKER" \
-            && printf '%s' "$output" | grep -Fq "$EXPECTED_CONTEXT"; then
+        if grep -Fq "$PROMPT_MARKER" <<<"$output" \
+            && grep -Fq "$DISPLAY_MARKER" <<<"$output" \
+            && grep -Fq "$EXPECTED_CONTEXT" <<<"$output"; then
             return 0
         fi
         if [ "$(tmux display-message -p -t "$SESSION:0.0" '#{pane_dead}' 2>/dev/null || true)" = "1" ]; then
