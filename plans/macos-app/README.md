@@ -15,7 +15,7 @@ executors own only their assigned source paths and unique handoff file.
 | 017 | Add the versioned review wire contract | P0 | S | 015 | DONE — f3f10053 |
 | 019 | Scaffold the standalone Swift package | P0 | S | 015 | DONE — 8e327f1a |
 | 031 | Isolate daemon subprocess test state | P0 | XS | — | DONE — f3eed6e2 |
-| 032 | Add sandbox-safe Swift test harness | P0 | S | 019 | CLAIMED — plan019_prep |
+| 032 | Add sandbox-safe Swift test harness | P0 | S | 019 | DONE — de698f31 |
 | 029 | Enforce atomic pending-grant expiry | P0 | S | 016, 017 | CLAIMED — plan017_protocol |
 | 020 | Build the Swift Unix-socket client | P0 | M | 017, 019, 030 | TODO |
 | 030 | Enforce strict bounded control frames | P0 | M | 017, 029 | TODO |
