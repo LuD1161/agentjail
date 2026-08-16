@@ -130,12 +130,16 @@ esac
 
 echo "==> waiting for daemon health"
 daemon_ready=false
-for _ in $(seq 1 15); do
-	if "$BIN/agentjail" status --no-color 2>&1 | grep -Eq 'daemon[[:space:]]+(✓|\[x\])[[:space:]]+running'; then
+for attempt in $(seq 0 15); do
+	# Consume the full producer output under pipefail; grep -q can cause SIGPIPE.
+	# See docs/GOTCHAS.md #89.
+	if "$BIN/agentjail" status --no-color 2>&1 | grep -E 'daemon[[:space:]]+(✓|\[x\])[[:space:]]+running' >/dev/null; then
 		daemon_ready=true
 		break
 	fi
-	sleep 1
+	if [ "$attempt" -lt 15 ]; then
+		sleep 1
+	fi
 done
 if [ "$daemon_ready" != true ]; then
 	echo "    daemon did not become healthy within 15 seconds" >&2

@@ -1173,6 +1173,17 @@ key.
   a real symlink, not a path-shaped string. See ADR
   0139-canonical-ssh-temp.
 
+## 89. Quiet grep can invert health
+
+The development deploy printed a healthy daemon after declaring that the same
+daemon never became healthy. Its polling pipeline used `grep -q` under
+`pipefail`; an early match closed the pipe, the status producer received
+`SIGPIPE`, and the successful match became a non-zero pipeline status.
+
+- **Rule:** when a producer has output after the match and `pipefail` is active,
+  consume the complete stream and redirect the matcher's output instead of
+  using an early-exit matcher.
+
 ---
 
 ## Testing gotchas
