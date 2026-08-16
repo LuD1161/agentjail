@@ -2,12 +2,14 @@
 # credentialed-cli.sh — installed-path gate for static broker credentials
 # delivered to real AWS CLI, kubectl, and GitHub CLI processes.
 set -u
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 
 AJ="$HOME/.agentjail/bin/agentjail"
 PROJECT="$HOME/work/demo"
-PASS=0; FAIL=0
-ok()  { echo "PASS  $1"; PASS=$((PASS+1)); }
-bad() { echo "FAIL  $1"; FAIL=$((FAIL+1)); }
+ok()  { scn_ok "$1"; }
+bad() { scn_fail "$1"; }
+
+scn_init "credentialed-cli" "real CLIs and Codex use exact broker credentials without leaking values"
 
 command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
 command -v timeout  >/dev/null 2>&1 || timeout(){ shift; "$@"; }
@@ -31,16 +33,17 @@ cleanup() {
         /tmp/agentjail-aws-config-list /tmp/agentjail-aws-identity.json \
         /tmp/agentjail-kube-version.json /tmp/agentjail-credential-stub.js \
         /tmp/agentjail-agent-kubeconfig \
+        /tmp/agentjail-missing-credential.log \
         /tmp/agentjail-credential-stub.stderr \
         /tmp/agentjail-credential-stub.crt /tmp/agentjail-credential-stub.key \
         /tmp/agentjail-credential-stub-openssl.cnf
     rm -f "$HOME/.aws/credentials" "$HOME/.kube/config" "$HOME/.config/gh/hosts.yml" \
         "$HOME/.codex/auth.json" /tmp/codex-auth.json "$PROJECT/credential-agent-proof.json" \
-        "$PROJECT/.credential-agent.log"
+        "$PROJECT/.credential-agent.log" "$PROJECT/missing-credential-effect"
 }
 trap cleanup EXIT
 
-cd "$PROJECT" || { bad "no project dir ($PROJECT)"; exit 1; }
+cd "$PROJECT" || { bad "project directory is available"; scn_finish; exit 1; }
 
 for tool in aws kubectl gh; do
     command -v "$tool" >/dev/null 2>&1 && ok "$tool installed at $(command -v "$tool")" || bad "$tool is not installed"
@@ -172,6 +175,7 @@ if [ ! -s /tmp/agentjail-credential-stub/port ] \
     || [ ! -s /tmp/agentjail-credential-stub/pid ]; then
     bad "local credential protocol stub failed to start"
     sed 's/^/STUB  /' /tmp/agentjail-credential-stub.stderr
+    scn_finish
     exit 1
 fi
 STUB_PID=$(cat /tmp/agentjail-credential-stub/pid)
@@ -283,6 +287,23 @@ GH_TOKEN=ghp_testbed_not_real \
     "$AJ" credential set github/testbed --tool gh --from-current-env >/dev/null \
     && ok "GitHub token imported through user-facing CLI" \
     || bad "GitHub token import failed"
+
+# An unavailable eager selection must fail before its child can run. This is
+# the selected-credential fail-closed contract from ADR 0129-credentialed-cli-bootstrap.
+MISSING_EFFECT="$PROJECT/missing-credential-effect"
+MISSING_LOG="/tmp/agentjail-missing-credential.log"
+rm -f "$MISSING_EFFECT" "$MISSING_LOG"
+if "$AJ" run --no-git-ssh --credential=aws=aws/not-present -- \
+    /bin/sh -c "printf launched > '$MISSING_EFFECT'" >"$MISSING_LOG" 2>&1; then
+    bad "unavailable selected credential refuses session launch"
+elif [ -e "$MISSING_EFFECT" ]; then
+    bad "unavailable selected credential creates no child effect"
+elif grep -qiE 'credential .*not-present.*(rejected|not found|not available)' "$MISSING_LOG"; then
+    ok "unavailable selected credential fails closed before child execution"
+else
+    bad "unavailable selected credential reports a clear refusal"
+fi
+rm -f "$MISSING_EFFECT" "$MISSING_LOG"
 
 CREDENTIAL_LIST=$("$AJ" credential list 2>&1)
 if printf '%s\n' "$CREDENTIAL_LIST" | grep -q 'aws/testbed' \
@@ -430,7 +451,8 @@ else
         ok "Codex used pinned AWS and kubectl binaries for the requested targets"
     else
         bad "Codex proof identifies the requested account, context, and pinned CLIs"
-        sed 's/^/PROOF  /' "$PROJECT/credential-agent-proof.json" 2>/dev/null || true
+        sed -E 's/(AKIA|ghp_|testbed-secret|testbed-session|kube-test-token|decoy-secret)[^[:space:]",]*/[REDACTED]/g' \
+            "$PROJECT/credential-agent-proof.json" 2>/dev/null | sed 's/^/PROOF  /' || true
     fi
     grep -qx AWS_SIGV4_OK /tmp/agentjail-credential-stub/log 2>/dev/null \
         && ok "Codex AWS CLI request carried the selected account signature" \
@@ -453,6 +475,15 @@ else
     [ ! -e /tmp/agentjail-agent-kubeconfig ] \
         && ok "Codex removed its temporary kubeconfig" \
         || bad "Codex removed its temporary kubeconfig"
+
+    if [ ! -f "$PROJECT/.credential-agent.log" ] || [ ! -f "$PROJECT/credential-agent-proof.json" ]; then
+        bad "real Codex log and non-secret proof are available for leakage scanning"
+    elif grep -a -E 'AKIATESTBED000000001|testbed-secret-not-real|testbed-session-not-real|AKIADECOY0000000001|decoy-secret-not-real|kube-test-token-not-real|ghp_testbed_not_real|AMBIENT_(AWS|GH)' \
+        "$PROJECT/.credential-agent.log" "$PROJECT/credential-agent-proof.json" >/dev/null 2>&1; then
+        bad "real Codex log and non-secret proof contain no fixture credential values"
+    else
+        ok "real Codex log and non-secret proof contain no fixture credential values"
+    fi
 fi
 
 if find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'agentjail-credentials-*' -print -quit | grep -q .; then
@@ -477,5 +508,4 @@ else
     ok "credential remove deletes all selected broker entries"
 fi
 
-echo "=== RESULT: $PASS pass, $FAIL fail ==="
-[ "$FAIL" = 0 ]
+scn_finish

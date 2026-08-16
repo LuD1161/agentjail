@@ -6,6 +6,7 @@
 #   source "$(dirname "$0")/../reportlib.sh"
 #   scn_init "name" "one-line human intent"
 #   scn_check "label" "<expected>" "<actual>"     # repeat; PASS iff expected==actual
+#   scn_skip "label" "reason"                      # explicit unexecuted assertion
 #   scn_finish                                     # writes $SCN_JSON, exits nonzero on any fail
 #
 # The recorder (testbed.sh record) sets these env vars before running a scenario:
@@ -21,46 +22,74 @@ set -uo pipefail
 : "${SCN_CAST:=/tmp/scenario.cast}"
 export TERM="${TERM:-xterm-256color}"
 
-_SCN_NAME=""; _SCN_INTENT=""; _SCN_FAILS=0; _SCN_CHECKS_JSON=""; _SCN_T0=0
+_SCN_NAME=""; _SCN_INTENT=""; _SCN_PASSES=0; _SCN_FAILS=0; _SCN_SKIPS=0
+_SCN_CHECKS_JSON=""; _SCN_T0=0
 
 _now() { date +%s.%N; }
 
 scn_init() {
-    _SCN_NAME="$1"; _SCN_INTENT="${2:-}"; _SCN_FAILS=0; _SCN_CHECKS_JSON=""
+    _SCN_NAME="$1"; _SCN_INTENT="${2:-}"
+    _SCN_PASSES=0; _SCN_FAILS=0; _SCN_SKIPS=0; _SCN_CHECKS_JSON=""
     _SCN_T0=$(_now)
     echo "### scenario: $_SCN_NAME — $_SCN_INTENT"
 }
 
 # scn_check LABEL EXPECTED ACTUAL — record one assertion.
 scn_check() {
-    local label="$1" expect="$2" actual="$3" pass=false
-    [ "$expect" = "$actual" ] && pass=true || _SCN_FAILS=$((_SCN_FAILS+1))
+    local label="$1" expect="$2" actual="$3" pass=false status=fail
+    if [ "$expect" = "$actual" ]; then
+        pass=true; status=pass; _SCN_PASSES=$((_SCN_PASSES+1))
+    else
+        _SCN_FAILS=$((_SCN_FAILS+1))
+    fi
     if $pass; then echo "  PASS  $label"; else echo "  FAIL  $label (want '$expect', got '$actual')"; fi
     local obj
-    obj=$(jq -nc --arg l "$label" --arg e "$expect" --arg a "$actual" --argjson p "$pass" \
-        '{label:$l, expected:$e, actual:$a, pass:$p}')
+    obj=$(jq -nc --arg l "$label" --arg e "$expect" --arg a "$actual" \
+        --arg s "$status" --argjson p "$pass" \
+        '{label:$l, expected:$e, actual:$a, status:$s, pass:$p}')
     _SCN_CHECKS_JSON="${_SCN_CHECKS_JSON:+$_SCN_CHECKS_JSON,}$obj"
 }
 
-# scn_ok LABEL / scn_fail LABEL — boolean checks without expected/actual.
+# scn_ok LABEL / scn_fail LABEL / scn_skip LABEL REASON — status checks.
 scn_ok()   { scn_check "$1" ok ok; }
 scn_fail() { scn_check "$1" ok fail; }
+scn_skip() {
+    local label="$1" reason="${2:-not executed}" obj
+    _SCN_SKIPS=$((_SCN_SKIPS+1))
+    echo "  SKIP  $label ($reason)"
+    obj=$(jq -nc --arg l "$label" --arg r "$reason" \
+        '{label:$l, expected:"executed", actual:"skipped", status:"skip", pass:false, reason:$r}')
+    _SCN_CHECKS_JSON="${_SCN_CHECKS_JSON:+$_SCN_CHECKS_JSON,}$obj"
+}
 
 scn_finish() {
-    local dur result os_name
+    local dur result os_name recording_json=null
     dur=$(awk -v a="$_SCN_T0" -v b="$(_now)" 'BEGIN{printf "%.2f", b-a}')
-    [ "$_SCN_FAILS" -eq 0 ] && result=pass || result=fail
+    if [ "$_SCN_FAILS" -gt 0 ]; then
+        result=fail
+    elif [ "$_SCN_PASSES" -gt 0 ]; then
+        result=pass
+    else
+        result=skip
+    fi
     local ver; ver=$("$HOME/.agentjail/bin/agentjail" status 2>/dev/null | grep -oE 'dev-[a-f0-9]+|v[0-9]+\.[0-9]+\.[0-9]+' | head -1); ver="${ver:-unknown}"
     os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    if [ -f "$SCN_CAST" ]; then
+        recording_json=$(jq -nc --arg name "$(basename "$SCN_CAST")" '$name')
+    fi
     jq -nc \
         --arg name "$_SCN_NAME" --arg intent "$_SCN_INTENT" --arg os "$os_name" \
         --arg ver "$ver" --arg result "$result" --argjson dur "$dur" \
         --argjson checks "[${_SCN_CHECKS_JSON:-}]" \
-        --arg cast "$(basename "$SCN_CAST")" \
+        --argjson passed "$_SCN_PASSES" --argjson failed "$_SCN_FAILS" \
+        --argjson skipped "$_SCN_SKIPS" \
+        --argjson recording "$recording_json" \
         '{scenario:$name, intent:$intent, os:$os, agentjail_version:$ver,
-          result:$result, duration_s:$dur, checks:$checks, recording:$cast}' \
+          result:$result, duration_s:$dur,
+          counts:{pass:$passed, fail:$failed, skip:$skipped},
+          checks:$checks, recording:$recording}' \
         > "$SCN_JSON"
-    echo "### RESULT: $_SCN_NAME = $result ($((${_SCN_FAILS}==0 ? $(echo "$_SCN_CHECKS_JSON" | grep -o pass | wc -l) : 0)) checks, $_SCN_FAILS fail, ${dur}s)"
+    echo "### RESULT: $_SCN_NAME = $result ($_SCN_PASSES pass, $_SCN_FAILS fail, $_SCN_SKIPS skip, ${dur}s)"
     [ "$_SCN_FAILS" -eq 0 ]
 }
 
