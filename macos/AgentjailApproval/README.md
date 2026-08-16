@@ -33,6 +33,44 @@ Run the package tests:
 swift test --package-path macos/AgentjailApproval
 ```
 
-SwiftPM creates an executable, not a distributable `.app` bundle. Plan 025
-will assemble and sign the app bundle; install instructions are intentionally
-deferred until Plan 027.
+## Local packaging
+
+SwiftPM creates an executable, not an application bundle. The approval-only
+packaging path builds separate macOS 13 arm64 and x86_64 release products,
+combines them into `AgentjailApproval.app`, and checks the exact bundle
+identity, empty entitlement dictionary, hardened-runtime signature, and local
+disk image contents.
+
+```sh
+make macos-approval-app
+make macos-approval-dmg
+```
+
+The default local artifacts are
+`build/macos-approval/AgentjailApproval.app` and
+`build/macos-approval/AgentjailApproval.dmg`. The scripts prefer an explicit
+`DEVELOPER_DIR`, then `/Applications/Xcode.app/Contents/Developer`, and finally
+the active Command Line Tools developer directory. They compile the manifest's
+fixed Core and executable source sets with `swiftc`: this avoids treating a
+restricted host's SwiftPM manifest sandbox as a packaging dependency while
+still rejecting package dependencies, plugins, resources, unsafe flags, target
+drift, and dynamic Core linkage. The accepted manifest is pinned to SHA-256
+`388d7e67eae25baa948ad517133c425e934be8c16ceb7f627ee5a793651af801`;
+changing it stops packaging until this direct compiler boundary is deliberately
+reviewed. For a disposable artifact directory, set
+`APPROVAL_ARTIFACT_ROOT` to a path under
+`/private/tmp/agentjail-macos-approval-*`.
+
+The package is ad-hoc signed locally with the hardened-runtime flag and no
+entitlements. It does not install the app, use a Developer ID, contact a
+timestamp or notarization service, or make a Gatekeeper distribution claim.
+`spctl --assess` is expected to reject this local ad-hoc build; Developer ID
+signing and notarization remain deferred.
+
+Run the physical-Mac packaging check with:
+
+```sh
+./test/macos-approval/packaging/verify.sh
+```
+
+Install instructions remain deferred until Plan 027.
