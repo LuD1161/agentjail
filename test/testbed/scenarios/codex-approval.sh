@@ -224,11 +224,12 @@ start_interactive_command() {
 }
 
 transport_failed_before_tool() {
-    {
+    local output
+    output="$({
         tmux capture-pane -p -t "$SESSION:0.0" -S - 2>/dev/null || true
         [ ! -s "$PANE_LOG" ] || tail -80 "$PANE_LOG"
-    } \
-        | grep -qiE 'reconnecting|stream disconnected|websocket protocol error|handshake not finished'
+    })"
+    grep -qiE 'reconnecting|stream disconnected|websocket protocol error|handshake not finished' <<<"$output"
 }
 
 print_sanitized_log() {
@@ -336,6 +337,7 @@ if start_interactive_push "$DECLINE_BRANCH"; then
     sleep 5
 else
     scn_fail "decline path reaches the same native prompt"
+    print_sanitized_pane
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 if branch_exists "$DECLINE_BRANCH"; then
