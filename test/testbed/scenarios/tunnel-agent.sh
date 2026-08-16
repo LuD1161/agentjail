@@ -14,6 +14,8 @@
 # testbed-mode: single
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
+command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
+command -v timeout >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
 SHIELD="$HOME/.agentjail/bin/agentjail-shield"
 AJ="$HOME/.agentjail/bin/agentjail"
@@ -31,6 +33,25 @@ scn_init "tunnel-agent" "real Codex session through --tunnel; tunnel decrypts it
 [ -x "$SHIELD" ] && scn_ok "agentjail-shield installed" || { scn_fail "agentjail-shield installed"; scn_finish; exit; }
 command -v codex >/dev/null 2>&1 && scn_ok "Codex CLI installed" || { scn_fail "Codex CLI installed"; scn_finish; exit; }
 command -v sqlite3 >/dev/null 2>&1 || { scn_fail "sqlite3 installed"; scn_finish; exit; }
+if [ "$(uname -s)" = "Darwin" ]; then
+    EXT_ID="com.blinkerlm.agentjail.app.extension"
+    EXT_LINE="$(systemextensionsctl list 2>&1 | grep -F "$EXT_ID" | tail -1)"
+    if grep -qi '\[activated enabled\]' <<<"$EXT_LINE"; then
+        scn_ok "macOS tunnel extension is present and activated"
+    else
+        echo "  extension state: ${EXT_LINE:-missing}"
+        scn_fail "macOS tunnel extension is present and activated"
+        scn_finish
+        exit
+    fi
+    if [ -x /Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel ]; then
+        scn_ok "containing tunnel app remains installed in /Applications"
+    else
+        scn_fail "containing tunnel app remains installed in /Applications"
+        scn_finish
+        exit
+    fi
+fi
 if [ ! -f /tmp/codex-auth.json ]; then
     scn_fail "disposable Codex auth was explicitly provided"
     scn_finish
@@ -70,11 +91,13 @@ if grep -qiE 'falling back to|tunnel (unavailable|not available)' "$RUN_LOG"; th
   scn_fail "transparent tunnel came up (no netproxy fallback)"
   echo "  --- fallback reason + userns diagnostics ---"
   grep -iE 'tunnel unavailable|could not create|could not attach|tun-helper' "$RUN_LOG" | sed 's/^/    reason: /'
-  echo "    apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"
-  echo "    unshare -Urn: $(unshare -Urn true 2>&1 && echo OK || echo BLOCKED)"
-  echo "    /dev/net/tun: $(ls -l /dev/net/tun 2>&1)"
-  echo "    newuidmap: $(command -v newuidmap || echo MISSING)  newgidmap: $(command -v newgidmap || echo MISSING)"
-  echo "    /etc/subuid: $(grep "^$USER:" /etc/subuid 2>/dev/null || echo 'no entry')"
+  if [ "$(uname -s)" = "Linux" ]; then
+    echo "    apparmor_restrict_unprivileged_userns=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"
+    echo "    unshare -Urn: $(unshare -Urn true 2>&1 && echo OK || echo BLOCKED)"
+    echo "    /dev/net/tun: $(ls -l /dev/net/tun 2>&1)"
+    echo "    newuidmap: $(command -v newuidmap || echo MISSING)  newgidmap: $(command -v newgidmap || echo MISSING)"
+    echo "    /etc/subuid: $(grep "^$USER:" /etc/subuid 2>/dev/null || echo 'no entry')"
+  fi
 else
   scn_ok "transparent tunnel came up (no netproxy fallback)"
 fi

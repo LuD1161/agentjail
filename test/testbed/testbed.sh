@@ -24,6 +24,8 @@
 #   testbed.sh destroy <name>             delete the VM
 #
 # Drivers: Lima/QEMU on Linux (a Linux host), Tart on macOS (the Mac).
+# Tart tunnel gates use TART_TUNNEL_GOLDEN=golden-macos-mitm; unrelated gates
+# use TART_GOLDEN=golden-macos. See ADR 0135-tunnel-golden-image.
 # Agent selection: AGENTJAIL_TESTBED_AGENT=codex|claude-code (default: codex).
 # Claude credential seeding: put a token from `claude setup-token` into
 #   ~/.agentjail-testbed/token   (chmod 600)
@@ -332,17 +334,22 @@ do_gate() {
 
     if [ "$scenario_override" -eq 0 ]; then
         case "$TESTBED_AGENT" in
-            codex) scenarios=("e2e-smoke" "credentialed-cli" "tunnel-agent") ;;
+            codex) scenarios=("e2e-smoke" "codex-approval" "credentialed-cli" "tunnel-agent") ;;
             claude-code) scenarios=("e2e-smoke") ;;
         esac
     fi
 
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
     local codex_auth="${CODEX_AUTH_FILE:-$codex_home/auth.json}"
-    local codex_bin="" codex_version="" needs_codex=0 s candidate
+    local codex_bin="" codex_version="" needs_codex=0 needs_tunnel_golden=0 s candidate
     for s in "${scenarios[@]}"; do
         case "$s" in tunnel-agent|codex-approval|credentialed-cli) needs_codex=1 ;; esac
+        case "$s" in tunnel-agent) needs_tunnel_golden=1 ;; esac
     done
+    if [ "$DRIVER" = tart ] && [ "$needs_tunnel_golden" -eq 1 ]; then
+        TART_GOLDEN="$TART_TUNNEL_GOLDEN"
+        log "macOS tunnel release assertion requires Tart golden '$TART_GOLDEN'"
+    fi
     if [ "$needs_codex" -eq 1 ]; then
         while IFS= read -r candidate; do
             case "$candidate" in

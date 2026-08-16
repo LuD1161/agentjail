@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# codex-approval.sh — live Codex native-approval compatibility matrix.
+# codex-approval.sh — live Codex native approval and host-proxy matrix.
 # Runs only in a disposable testbed provisioned with --codex-auth.
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
+command -v gtimeout >/dev/null 2>&1 && timeout(){ command gtimeout "$@"; }
+command -v timeout >/dev/null 2>&1 || timeout(){ shift; "$@"; }
 
 AJ="$HOME/.agentjail/bin/agentjail"
 CODEX_REAL="$HOME/.agentjail/bin/codex"
@@ -15,7 +17,7 @@ DISPLAY_MARKER="🔐 AgentJail approval required for:"
 EXPECTED_CONTEXT=""
 CUSTOM_RULE_INSTALLED=0
 
-scn_init "codex-approval" "native approval for built-in and user-authored Bash ask policies"
+scn_init "codex-approval" "native approval for Bash asks and one bounded host-proxy execution"
 
 cleanup() {
     tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -23,6 +25,8 @@ cleanup() {
         "$AJ" policy remove codex_approval_probe >/dev/null 2>&1 || true
     fi
     rm -f /tmp/codex-auth.json "$HOME/.codex/auth.json"
+    rm -f /tmp/codex-hostproxy-direct.log /tmp/codex-hostproxy-bypass.log
+    [ -z "${HOST_PROXY_SENTINEL:-}" ] || rm -f "$HOST_PROXY_SENTINEL"
 }
 trap cleanup EXIT INT TERM
 
@@ -302,14 +306,43 @@ HOST_PROXY_DIR="$HOME/hostproxy-fixture"
 HOST_PROXY_HELPER="$HOST_PROXY_DIR/benign-host-cli"
 HOST_PROXY_APPROVED="$PROJECT/hostproxy-approved.txt"
 HOST_PROXY_REJECTED="$PROJECT/hostproxy-rejected.txt"
+HOST_PROXY_DIRECT="$PROJECT/hostproxy-direct.txt"
+HOST_PROXY_BYPASS="$PROJECT/hostproxy-bypass.txt"
+HOST_PROXY_SENTINEL="$HOME/.ssh/agentjail-hostproxy-test"
+AUDIT_DB="$HOME/.agentjail/agentjail.db"
 mkdir -p "$HOST_PROXY_DIR"
+mkdir -p "$HOME/.ssh"
+chmod 0700 "$HOME/.ssh"
+printf 'host-only-input' >"$HOST_PROXY_SENTINEL"
+chmod 0600 "$HOST_PROXY_SENTINEL"
 cat >"$HOST_PROXY_HELPER" <<'SH'
 #!/bin/sh
+test "$(cat "$HOME/.ssh/agentjail-hostproxy-test")" = host-only-input || exit 73
 printf '%s' "$2" > "$1"
 SH
 chmod 0700 "$HOST_PROXY_HELPER"
 PROMPT_MARKER="agentjail approval-exec --operation host-proxy"
 DISPLAY_MARKER="🔐 AgentJail host access approval required:"
+HOST_PROXY_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
+
+DIRECT_LOG="/tmp/codex-hostproxy-direct.log"
+timeout 120 "$CODEX_REAL" --dangerously-bypass-approvals-and-sandbox \
+    --dangerously-bypass-hook-trust -C "$PROJECT" exec --ephemeral \
+    "Run exactly this command once and then stop: $HOST_PROXY_HELPER $HOST_PROXY_DIRECT direct" \
+    >"$DIRECT_LOG" 2>&1 || true
+if grep -Fq "$HOST_PROXY_HELPER" "$DIRECT_LOG" && [ ! -e "$HOST_PROXY_DIRECT" ]; then
+    scn_ok "real Codex direct execution cannot read the host-only fixture"
+else
+    scn_fail "real Codex direct execution cannot read the host-only fixture"
+fi
+
+env -u AGENTJAIL_HOST_PROXY_PROOF -u AGENTJAIL_HOST_PROXY_EXECUTABLE \
+    "$AJ" proxy -- "$HOST_PROXY_HELPER" "$HOST_PROXY_DIRECT" no-proof >/dev/null 2>&1 || true
+if [ ! -e "$HOST_PROXY_DIRECT" ]; then
+    scn_ok "direct proxy invocation without a native proof creates no effect"
+else
+    scn_fail "direct proxy invocation without a native proof creates no effect"
+fi
 
 EXPECTED_CONTEXT="hostproxy-approved"
 if start_and_wait_for_approval "agentjail proxy -- $HOST_PROXY_HELPER $HOST_PROXY_APPROVED hostproxy-approved"; then
@@ -325,9 +358,9 @@ for i in $(seq 1 30); do
     sleep 1
 done
 if [ "$(cat "$HOST_PROXY_APPROVED" 2>/dev/null || true)" = "hostproxy-approved" ]; then
-    scn_ok "approved host proxy proof executes the exact helper once"
+    scn_ok "approved host proxy proof executes the exact helper with host-only access"
 else
-    scn_fail "approved host proxy proof executes the exact helper once"
+    scn_fail "approved host proxy proof executes the exact helper with host-only access"
     print_sanitized_pane
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -345,6 +378,36 @@ if [ -e "$HOST_PROXY_REJECTED" ]; then
     scn_fail "rejected host proxy prompt creates no execution effect"
 else
     scn_ok "rejected host proxy prompt creates no execution effect"
+fi
+
+BYPASS_LOG="/tmp/codex-hostproxy-bypass.log"
+timeout 120 "$CODEX_REAL" --dangerously-bypass-approvals-and-sandbox \
+    --dangerously-bypass-hook-trust -C "$PROJECT" exec --ephemeral \
+    "Run exactly this command once and then stop: agentjail proxy -- /bin/sh -c 'printf bypass > $HOST_PROXY_BYPASS'" \
+    >"$BYPASS_LOG" 2>&1 || true
+if [ ! -e "$HOST_PROXY_BYPASS" ]; then
+    scn_ok "host proxy policy denies a shell bypass from real Codex"
+else
+    scn_fail "host proxy policy denies a shell bypass from real Codex"
+fi
+
+REQUESTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.requested';" 2>/dev/null || echo 0)"
+REDEEMED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.authorization_redeemed';" 2>/dev/null || echo 0)"
+STARTED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.started';" 2>/dev/null || echo 0)"
+COMPLETED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.completed';" 2>/dev/null || echo 0)"
+DENIED="$(sqlite3 "$AUDIT_DB" "select count(*) from audit_log where id > $HOST_PROXY_AUDIT_BEFORE and event_type='host_proxy.denied';" 2>/dev/null || echo 0)"
+if [ "$REQUESTED" -ge 2 ] && [ "$REDEEMED" -eq 1 ] && [ "$STARTED" -eq 1 ] && [ "$COMPLETED" -eq 1 ] && [ "$DENIED" -ge 1 ]; then
+    scn_ok "audit proves one approved proxy execution plus rejected and denied attempts"
+else
+    echo "  host proxy audit counts: requested=$REQUESTED redeemed=$REDEEMED started=$STARTED completed=$COMPLETED denied=$DENIED"
+    scn_fail "audit proves one approved proxy execution plus rejected and denied attempts"
+fi
+
+if sqlite3 "$AUDIT_DB" "select detail from audit_log where id > $HOST_PROXY_AUDIT_BEFORE;" 2>/dev/null \
+    | grep -Fq 'host-only-input'; then
+    scn_fail "host-only fixture value is absent from audit details"
+else
+    scn_ok "host-only fixture value is absent from audit details"
 fi
 
 scn_finish

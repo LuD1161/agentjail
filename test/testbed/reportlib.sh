@@ -47,12 +47,13 @@ scn_ok()   { scn_check "$1" ok ok; }
 scn_fail() { scn_check "$1" ok fail; }
 
 scn_finish() {
-    local dur result
+    local dur result os_name
     dur=$(awk -v a="$_SCN_T0" -v b="$(_now)" 'BEGIN{printf "%.2f", b-a}')
     [ "$_SCN_FAILS" -eq 0 ] && result=pass || result=fail
     local ver; ver=$("$HOME/.agentjail/bin/agentjail" status 2>/dev/null | grep -oE 'dev-[a-f0-9]+|v[0-9]+\.[0-9]+\.[0-9]+' | head -1); ver="${ver:-unknown}"
+    os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
     jq -nc \
-        --arg name "$_SCN_NAME" --arg intent "$_SCN_INTENT" --arg os linux \
+        --arg name "$_SCN_NAME" --arg intent "$_SCN_INTENT" --arg os "$os_name" \
         --arg ver "$ver" --arg result "$result" --argjson dur "$dur" \
         --argjson checks "[${_SCN_CHECKS_JSON:-}]" \
         --arg cast "$(basename "$SCN_CAST")" \

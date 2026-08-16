@@ -17,7 +17,7 @@ test; it defaults to `codex` and also accepts `claude-code`.
 | Side | Host | Driver | Status |
 |---|---|---|---|
 | **Linux** | a Linux host | Lima/QEMU, `LIMA_HOME=$HOME/.local/share/lima` | ✅ **DONE — set up and validated end-to-end on the Linux host. Do not redo.** |
-| **macOS** | your Apple-Silicon Mac | Tart | ✅ **DONE - `golden-macos` baked, provision + all three chaos scenarios green (AGE-236).** |
+| **macOS** | your Apple-Silicon Mac | Tart | ✅ **DONE - `golden-macos` is the general base; `golden-macos-mitm` is the approved tunnel base.** |
 
 ## Quick reference (both OSes)
 
@@ -38,6 +38,15 @@ test/testbed/testbed.sh destroy <name>
 `AGENTJAIL_TESTBED_NAME` selects the persistent VM name. It defaults to
 `release-gate-<agent>`; set it to a worktree-specific name when another agent
 may be using a testbed concurrently.
+
+On Tart, a gate containing `tunnel-agent` automatically clones
+`TART_TUNNEL_GOLDEN` (default `golden-macos-mitm`). Generic creates and gates
+that do not assert the tunnel continue to use `TART_GOLDEN` (default
+`golden-macos`). For a manual tunnel testbed, select the contract explicitly:
+
+```sh
+TART_GOLDEN=golden-macos-mitm test/testbed/testbed.sh create mac-tunnel
+```
 
 ### Host resource admission and cleanup
 
@@ -297,6 +306,72 @@ Golden stays stopped forever; testbeds are instant APFS clones of it.
 OS updates: re-bake the golden, never update inside a testbed (huge deltas).
 Apple EULA allows max **2 running** macOS guests — clones at rest are fine.
 
+### 2a. Maintain the approved tunnel golden
+
+macOS tunnel testing must not start from a fresh vanilla guest. Apple can leave a
+system-extension activation pending until a user approves it, and a headless Tart
+guest has no GUI in which to make that decision. Clone the vanilla base once, copy
+the exact containing app without rebuilding or re-signing it, install it at the
+stable path, and approve it in the guest:
+
+```sh
+tart clone golden-macos golden-macos-mitm
+tart run golden-macos-mitm
+# Copy while preserving the bundle, signatures, permissions, and xattrs to:
+#   /Applications/AgentjailTunnel.app
+/Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel install
+```
+
+Approve only through **System Settings → General → Login Items & Extensions →
+Network Extensions**. Do not automate or bypass this. Keep the containing app at
+`/Applications/AgentjailTunnel.app`: Apple packages and manages the system
+extension through that app, and deleting it can remove the extension.
+
+The current test-only image was baked and headlessly revalidated on 2026-08-13:
+
+| Field | Baked value |
+|---|---|
+| App | `com.blinkerlm.agentjail.app`, version `0.0.2` build `2` |
+| App CDHash | `a85f751c07e5e99a8a8164fd1ac8d9e4fff8d05e` |
+| Extension | `com.blinkerlm.agentjail.app.extension`, version `0.0.2` build `2` |
+| Extension CDHash | `9b067cad054dd49bf68a910aca64c14f70462fa7` |
+| Signing team | `Q98Z3744J2` |
+| Signed network entitlement | `app-proxy-provider-systemextension` |
+| App profile | `AgentjailTunnel App DevID`, UUID `f7a87d79-f2dd-487a-864d-f7d841f527bf` |
+| Extension profile | `AgentjailTunnel Ext DevID`, UUID `abd956e2-1eaf-4381-8430-abd16f7c2a1e` |
+| Provisioning scope | both profiles use `ProvisionsAllDevices=true` |
+
+`ProvisionsAllDevices=true` is why a Tart VM does not need device registration in
+the Apple Developer console. Approval is still required because signing authority
+and user consent are separate checks. Tart's disk clone preserves the guest's
+system-extension registration database, so approval survives cloning even though a
+new headless guest could not create that state itself.
+
+After approval, stop the golden cleanly; the stopped VM is the saved image. Verify
+through a temporary headless clone, not by mutating the golden:
+
+```sh
+systemextensionsctl list
+# Required exact state:
+# com.blinkerlm.agentjail.app.extension ... [activated enabled]
+test/tunnel-e2e/smoke_darwin.sh --strict
+```
+
+Strict smoke reports `TUNNEL_EXECUTED` and `TUNNEL_SKIPPED` separately. It fails if
+the extension is missing or inactive, or if no tunnel scenario executes. An
+all-SKIP result is never successful tunnel verification.
+
+Rebuild `golden-macos-mitm` when the app or extension version, CDHash, Team ID,
+bundle ID, profiles, or entitlements change; when a macOS update invalidates the
+activation; or when the final production Developer ID/notarized artifact is ready.
+The current image is internal and test-only: it does not prove downloaded-release
+Gatekeeper acceptance, notarization, stapling, clean-customer installation, or
+production distribution readiness.
+
+Never bake a MITM CA into either golden. AgentJail generates a fresh in-memory CA
+for every tunnel session, applies trust only to that process, and removes the
+session material during cleanup. See ADR 0135-tunnel-golden-image.
+
 ### 3. Validate the selected agent on the current commit
 
 ```sh
@@ -356,8 +431,10 @@ make e2e-release        # == testbed.sh gate --worktree .
 
 It resets the configured gate testbed to the clean golden (or creates it),
 provisions the current worktree through the real installer, then runs
-`e2e-smoke`, the authenticated Codex `credentialed-cli` workflow, and the
-authenticated Codex `tunnel-agent` scenario. It **exits non-zero on insufficient host resources, missing
+`e2e-smoke`, the authenticated Codex `codex-approval` and `credentialed-cli`
+workflows, and the authenticated Codex `tunnel-agent` scenario. On Tart, that
+tunnel assertion selects `golden-macos-mitm`. It **exits non-zero on insufficient
+host resources, missing
 authentication, scenario failure, or install failure** and deletes the gate VM
 afterward by default. Run it on Linux for the Linux build and on macOS for the
 macOS build.

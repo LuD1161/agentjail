@@ -893,6 +893,19 @@ scenarios explicitly disabled Git SSH and never entered this path.
   exec environment and force native platform path shapes in acceptance tests.
   See ADR 0126-session-ssh-bootstrap.
 
+## 67. A green tunnel smoke can mean every tunnel assertion skipped
+
+The Darwin smoke script returned zero when the Network Extension was missing,
+because each extension-dependent scenario reported SKIP. The output looked
+careful and the command was green, but it had exercised no tunnel, TLS
+interception, policy, or evidence path at all.
+
+- **Rule:** a required release assertion must count executed and skipped
+  scenarios separately, require the exact `[activated enabled]` extension state,
+  and fail when nothing exercised the intended path. Use the approved
+  `golden-macos-mitm` contract and strict mode. See ADR
+  0135-tunnel-golden-image.
+
 ---
 
 ## Testing gotchas

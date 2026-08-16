@@ -177,6 +177,9 @@ lima_guest_pull() {
 # ---- Tart driver (macOS) ---------------------------------------------------
 
 TART_GOLDEN="${TART_GOLDEN:-golden-macos}"
+# Tunnel release assertions require the one-time approved guest disk.
+# See ADR 0135-tunnel-golden-image.
+TART_TUNNEL_GOLDEN="${TART_TUNNEL_GOLDEN:-golden-macos-mitm}"
 TART_SSH_USER="${TART_SSH_USER:-admin}"   # cirruslabs base images: admin/admin
 TART_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
 
