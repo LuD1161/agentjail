@@ -906,6 +906,19 @@ interception, policy, or evidence path at all.
   `golden-macos-mitm` contract and strict mode. See ADR
   0135-tunnel-golden-image.
 
+## 68. An audited approval can outlive its hook deadline
+
+The daemon stayed healthy, minted the Codex approval challenge, and recorded
+the canonical `ask`, but its required audit write completed just after the
+hook's availability ceiling. The hook mislabeled the timeout as a daemon
+outage and failed open, so Codex executed the original command without the
+approval prompt.
+
+- **Rule:** security-path deadlines must include required durability work, and
+  an approval-capable request must deny when its response is unavailable. A
+  daemon control ping is not proof that the policy response reached the hook.
+  See ADR 0118-codex-approval-broker.
+
 ---
 
 ## Testing gotchas

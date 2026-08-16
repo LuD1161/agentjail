@@ -94,8 +94,11 @@ command and working directory only after those checks; the broker execs that
 exact command. Cancel, expiry, replay, a later tool-call epoch, a missing
 managed rule, `--ignore-rules`, `approval_policy=never`, a daemon restart, or
 any unverifiable process topology fails closed. The standard hook availability
-posture remains fail-open for ordinary policy evaluation, but a broker invocation
-cannot execute while its authorization service is unavailable.
+posture remains fail-open for ordinary policy evaluation. Approval-capable
+Codex `PreToolUse` requests are the exception: they deny when the daemon
+response is unavailable because the hook cannot yet distinguish a canonical
+allow from an approval-requiring ask. A broker invocation likewise cannot
+execute while its authorization service is unavailable.
 
 The broker command contains an opaque challenge rather than the original shell
 text. AgentJail uses Codex's supported `systemMessage` field to show the redacted

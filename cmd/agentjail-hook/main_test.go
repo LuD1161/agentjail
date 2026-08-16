@@ -418,7 +418,7 @@ func TestSendAndReceive_CodexColdApprovalResponse(t *testing.T) {
 			serverDone <- scanner.Err()
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		serverDone <- json.NewEncoder(server).Encode(daemonResponse{
 			Action:              "ask",
 			Reason:              "requires human review",
@@ -506,6 +506,57 @@ func TestRoundTripDeadline(t *testing.T) {
 				t.Errorf("roundTripDeadline()=%s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodexApprovalCapable(t *testing.T) {
+	tests := []struct {
+		name string
+		req  daemonRequest
+		want bool
+	}{
+		{"shell approval", daemonRequest{Agent: "codex", Capabilities: []string{wire.CapabilityCodexShellApprovalV1}}, true},
+		{"legacy codex", daemonRequest{Agent: "codex"}, false},
+		{"untrusted agent claim", daemonRequest{Agent: "claude", Capabilities: []string{wire.CapabilityCodexShellApprovalV1}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codexApprovalCapable(tt.req); got != tt.want {
+				t.Fatalf("codexApprovalCapable()=%t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexApprovalTimeoutFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	bin := buildHook(t, dir)
+	sockPath := filepath.Join(trustedHome(t), "delayed-daemon.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		if scanner.Scan() {
+			time.Sleep(codexApprovalRoundTripDeadline + 100*time.Millisecond)
+		}
+	}()
+
+	stdin := makeStdinJSON("Bash", map[string]interface{}{"command": "git push origin HEAD:topic"}, "session-codex-timeout")
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin,
+		[]string{"AGENTJAIL_SOCKET=" + sockPath}, []string{"--agent=codex"})
+	if code != 2 {
+		t.Fatalf("timeout exit=%d, want 2; stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !bytes.Contains(stderr, []byte("codex_approval/daemon_unavailable")) {
+		t.Fatalf("timeout did not report fail-closed rule: %q", stderr)
 	}
 }
 

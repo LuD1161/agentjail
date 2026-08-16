@@ -783,18 +783,32 @@ func dialDaemon(sockPath string) (net.Conn, error) {
 
 const (
 	defaultRoundTripDeadline       = 45 * time.Millisecond
-	codexApprovalRoundTripDeadline = 250 * time.Millisecond
+	codexApprovalRoundTripDeadline = 2 * time.Second
 )
 
-func roundTripDeadline(req daemonRequest) time.Duration {
+func codexApprovalCapable(req daemonRequest) bool {
 	if req.Agent == "codex" {
 		for _, capability := range req.Capabilities {
 			if capability == wire.CapabilityCodexApprovalBridgeV1 || capability == wire.CapabilityCodexShellApprovalV1 {
-				return codexApprovalRoundTripDeadline
+				return true
 			}
 		}
 	}
+	return false
+}
+
+func roundTripDeadline(req daemonRequest) time.Duration {
+	if codexApprovalCapable(req) {
+		return codexApprovalRoundTripDeadline
+	}
 	return defaultRoundTripDeadline
+}
+
+func failClosedCodexApproval(category, detail string) {
+	markFailOpenWarned()
+	fmt.Fprintln(os.Stderr, "agentjail: denied by policy (rule=codex_approval/daemon_unavailable): approval-capable Codex request could not be evaluated; refusing fail-open")
+	fmt.Fprintf(os.Stderr, "agentjail-hook: %s: %s\n", category, detail)
+	os.Exit(2)
 }
 
 // sendAndReceive sends req to conn and reads the daemon response.
@@ -948,6 +962,10 @@ func runClaude(agent string) {
 		cat := "read-response"
 		if isWriteErr(err) {
 			cat = "dial-daemon"
+		}
+		if input.HookEventName == "PreToolUse" && codexApprovalCapable(req) {
+			failClosedCodexApproval(cat, err.Error())
+			return
 		}
 		failOpenClaudeLike(agent, cat, err.Error(), input.ToolName, input.ToolInput, input.CWD)
 		return

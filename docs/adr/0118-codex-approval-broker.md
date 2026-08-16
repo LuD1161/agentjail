@@ -81,10 +81,12 @@ same-UID peer, active session, unchanged epoch, one-use state, expiry, and a
 fresh process chain descended from the recorded Codex process before returning
 the exact original command and working directory. Process-topology attestation
 is deliberately conservative: any missing or unverifiable relationship denies.
-Every redemption attempt burns the challenge. The daemon must fail closed for
-mint, arm, capability, or redemption failures, including daemon restarts and
-version skew; ordinary non-broker hook availability remains governed by the
-standard fail-open policy.
+Every redemption attempt burns the challenge. The daemon and hook must fail
+closed for mint, arm, capability, response timeout, or redemption failures,
+including daemon restarts and version skew. An approval-capable Codex
+`PreToolUse` cannot safely apply the ordinary hook fail-open policy: before
+receiving the response, the hook cannot know whether the canonical decision
+was `allow` or an approval-requiring `ask`.
 
 Challenge audit events use a non-reversible reference only. Neither the
 challenge nor original command may be placed in audit detail, structured logs,
@@ -143,12 +145,14 @@ not expose the original per-call shell/login selection in the hook contract, so
 the live compatibility matrix must cover shell syntax and initialization; an
 unverified dialect is a release blocker rather than a reason to guess.
 
-Bridge-capable Codex hook requests use a 250 ms daemon round-trip ceiling while
-the 50 ms end-to-end latency target remains unchanged. A cold request combines
-policy evaluation with process-ancestry work; treating a healthy response after
-45 ms as an outage fails open and lets Codex evaluate the original command
-instead of the opaque broker rewrite. Legacy clients and Codex hooks without
-the bridge capability retain the 45 ms ceiling.
+Bridge-capable Codex hook requests use a 2 second daemon round-trip ceiling
+while the 50 ms end-to-end latency target remains unchanged. A cold request
+combines policy evaluation, process-ancestry work, and the required approval
+audit write. Codex CLI `0.147.0` was live-tested on 2026-08-13: an audit write
+completed after the old 250 ms ceiling, so the hook timed out and Codex ran the
+original command. The longer ceiling absorbs bounded cold-path work; a timeout
+still denies instead of exposing the original command to Codex. Legacy clients
+and Codex hooks without the bridge capability retain the 45 ms ceiling.
 
 ## Acceptance Criteria
 
