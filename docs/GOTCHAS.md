@@ -1184,6 +1184,18 @@ daemon never became healthy. Its polling pipeline used `grep -q` under
   consume the complete stream and redirect the matcher's output instead of
   using an early-exit matcher.
 
+## 90. Matching Darwin profiles must share a renderer
+
+The ordinary macOS shield profile carried the validated per-user `$TMPDIR`
+carve-out from ADR 0054 and its probes were green. The tunneled launch rendered
+a separate Darwin profile and omitted that carve-out, so Codex image paste and
+other temporary staging failed only in tunneled sessions.
+
+- **Rule:** modes enforcing the same filesystem contract must use a shared
+  renderer, making parity true by construction; tests must exercise each launch
+  mode at the behavior boundary. See ADR 0034-platform-backend-shared-contract
+  and ADR 0054-macos-shield-tempdir-afunix-parity.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

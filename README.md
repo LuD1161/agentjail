@@ -795,6 +795,10 @@ gateway and `internal/mitm` interceptor. HTTP(S) decryption, h2, and the policy
 templates work identically; the one endpoint MITM cannot reach on macOS (Claude
 Code's Bun inference client) is handled by the capture gateway below.
 
+Tunneled macOS sessions also preserve the validated per-user `$TMPDIR` staging
+path, so pasting an image or other temporary attachment into an agent works
+without granting broad writes to `/var`.
+
 ### Capture gateway for LLM providers
 
 On **macOS today** (Linux parity is planned), some agents refuse a MITM
