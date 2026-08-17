@@ -1,33 +1,32 @@
 package shieldapp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentialguidance"
-	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 type credentialSelection struct {
-	Tool       credentialtools.Tool
-	Name       string
-	BinaryPath string
-	binaryInfo os.FileInfo
+	Name      string
+	Discovery bool
 }
 
 func (s credentialSelection) auditEntity() string {
 	if s.Name != "" {
 		return s.Name
 	}
-	return string(s.Tool)
+	return "inventory"
 }
 
 func (s credentialSelection) deliveryMode() string {
@@ -37,107 +36,59 @@ func (s credentialSelection) deliveryMode() string {
 	return "on_request"
 }
 
+func reportCredentialSelections(ctx context.Context, selections credentialSelections, emitter audit.Emitter) {
+	for _, selection := range selections {
+		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: credential %s ready (%s)\n", selection.auditEntity(), selection.deliveryMode())
+		slog.Info("credential ready", "credential_id", selection.Name, "delivery", selection.deliveryMode())
+		_ = emitter.Emit(ctx, audit.Event{
+			EventType: audit.CredentialReady,
+			Entity:    selection.auditEntity(),
+			Detail:    map[string]string{"delivery": selection.deliveryMode()},
+			Actor:     "shield",
+		})
+	}
+}
+
 type credentialSelections []credentialSelection
 
-func (s credentialSelections) hasTool(tool credentialtools.Tool) bool {
+func (s credentialSelections) hasName(name string) bool {
 	for _, selection := range s {
-		if selection.Tool == tool {
+		if selection.Name == name && !selection.Discovery {
 			return true
 		}
 	}
 	return false
 }
 
-func (s credentialSelections) toolNames() []string {
-	result := make([]string, 0, len(s))
+func (s credentialSelections) hasDiscovery() bool {
 	for _, selection := range s {
-		result = append(result, string(selection.Tool))
+		if selection.Discovery {
+			return true
+		}
 	}
-	return result
-}
-
-func (s credentialSelections) binaryPaths() []string {
-	paths := make([]string, 0, len(s))
-	for _, tool := range s {
-		paths = append(paths, tool.BinaryPath)
-	}
-	return paths
-}
-
-func (s credentialSelections) readyTools() string {
-	tools := make([]string, 0, len(s))
-	for _, selection := range s {
-		tools = append(tools, string(selection.Tool))
-	}
-	return strings.Join(tools, ",")
+	return false
 }
 
 func (s *credentialSelections) String() string {
 	values := make([]string, 0, len(*s))
 	for _, selection := range *s {
-		values = append(values, string(selection.Tool)+"="+selection.Name)
+		if !selection.Discovery {
+			values = append(values, selection.Name)
+		}
 	}
 	return strings.Join(values, ",")
 }
 
 func (s *credentialSelections) Set(value string) error {
-	toolValue, name, ok := strings.Cut(value, "=")
-	if !ok || strings.TrimSpace(name) == "" {
-		return errors.New("credential must be TOOL=NAME (for example aws=aws/default)")
+	name := strings.TrimSpace(value)
+	if name == "" {
+		return errors.New("credential ID is empty")
 	}
-	tool, err := credentialtools.ParseTool(toolValue)
-	if err != nil {
-		return err
+	if s.hasName(name) {
+		return fmt.Errorf("credential %q was selected more than once", name)
 	}
-	name = strings.TrimSpace(name)
-	for _, existing := range *s {
-		if existing.Tool == tool {
-			return fmt.Errorf("credentialed tool %q was selected more than once", tool)
-		}
-	}
-	*s = append(*s, credentialSelection{Tool: tool, Name: name})
+	*s = append(*s, credentialSelection{Name: name})
 	return nil
-}
-
-func resolveCredentialSelections(selections credentialSelections) (credentialSelections, error) {
-	registry := credentialtools.DefaultRegistry()
-	resolved := make(credentialSelections, 0, len(selections))
-	for _, selection := range selections {
-		adapter, err := registry.Resolve(selection.Tool)
-		if err != nil {
-			return nil, err
-		}
-		path, err := exec.LookPath(adapter.Binary())
-		if err != nil {
-			return nil, fmt.Errorf("credentialed tool %q requires %s in PATH: %w", selection.Tool, adapter.Binary(), err)
-		}
-		path, err = filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolve %s path: %w", adapter.Binary(), err)
-		}
-		path, err = filepath.EvalSymlinks(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolve %s symlinks: %w", adapter.Binary(), err)
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("stat credentialed tool %s: %w", adapter.Binary(), err)
-		}
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-			return nil, fmt.Errorf("credentialed tool %s resolves to unsafe executable %s", adapter.Binary(), path)
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("resolve working directory before credential injection: %w", err)
-		}
-		if root, unsafe := credentialExecutableUnsafeRoot(path, cwd, os.TempDir()); unsafe {
-			return nil, fmt.Errorf("credentialed tool %s resolves inside agent-writable path %s", adapter.Binary(), root)
-		}
-		selection.BinaryPath = path
-		selection.binaryInfo = info
-		resolved = append(resolved, selection)
-	}
-	return resolved, nil
 }
 
 func discoverCredentialSelections(ctlToken string) (credentialSelections, error) {
@@ -161,38 +112,16 @@ func discoverCredentialSelections(ctlToken string) (credentialSelections, error)
 	if !response.OK {
 		return nil, fmt.Errorf("discover broker credentials: %s", response.Error)
 	}
-	result := make(credentialSelections, 0, len(response.Credentials))
-	for _, descriptor := range response.Credentials {
-		if !result.hasTool(descriptor.Tool) {
-			result = append(result, credentialSelection{Tool: descriptor.Tool})
-		}
+	if len(response.Credentials) == 0 {
+		return nil, nil
 	}
-	return result, nil
-}
-
-func resolveAvailableCredentialSelections(selections credentialSelections) (credentialSelections, []credentialtools.Tool, error) {
-	resolved := make(credentialSelections, 0, len(selections))
-	var unavailable []credentialtools.Tool
-	for _, selection := range selections {
-		one, err := resolveCredentialSelections(credentialSelections{selection})
-		if errors.Is(err, exec.ErrNotFound) {
-			unavailable = append(unavailable, selection.Tool)
-			continue
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		resolved = append(resolved, one[0])
-	}
-	return resolved, unavailable, nil
+	return credentialSelections{{Discovery: true}}, nil
 }
 
 func mergeCredentialSelections(explicit, discovered credentialSelections) credentialSelections {
 	result := append(credentialSelections(nil), explicit...)
-	for _, selection := range discovered {
-		if !result.hasTool(selection.Tool) {
-			result = append(result, selection)
-		}
+	if discovered.hasDiscovery() && !result.hasDiscovery() {
+		result = append(result, credentialSelection{Discovery: true})
 	}
 	return result
 }
@@ -253,7 +182,7 @@ func canonicalPath(path string) (string, error) {
 
 type credentialSession struct {
 	dir          string
-	env          []credentialtools.EnvVar
+	env          []credentialaccess.EnvVar
 	grants       []activeGrant
 	sessionToken string
 	mcpCommand   string
@@ -264,7 +193,7 @@ func prepareCredentialSession(selections credentialSelections, ctlToken, agentPa
 		return &credentialSession{}, nil
 	}
 	if ctlToken == "" {
-		return nil, errors.New("credentialed tools require the AgentJail control token")
+		return nil, errors.New("credential sessions require the AgentJail control token")
 	}
 	socketPath := defaultSecretsSocketPath()
 	if !sandbox.SecretsBrokerRunning() {
@@ -289,75 +218,53 @@ func prepareCredentialSession(selections credentialSelections, ctlToken, agentPa
 		session.cleanup(ctlToken)
 		return nil, err
 	}
-
-	binDir := filepath.Join(dir, "bin")
-	if err := os.Mkdir(binDir, 0o700); err != nil {
-		return fail(fmt.Errorf("create credential tool bin directory: %w", err))
+	project, err := os.Getwd()
+	if err != nil {
+		return fail(fmt.Errorf("resolve credential session project: %w", err))
 	}
-	registry := credentialtools.DefaultRegistry()
+	sessionID := fmt.Sprintf("shield-%d", os.Getpid())
+	agent := filepath.Base(agentPath)
+
 	for _, selection := range selections {
-		adapter, _ := registry.Resolve(selection.Tool)
-		current, err := os.Stat(selection.BinaryPath)
-		if err != nil || !os.SameFile(selection.binaryInfo, current) || current.Size() != selection.binaryInfo.Size() || !current.ModTime().Equal(selection.binaryInfo.ModTime()) {
-			return fail(fmt.Errorf("credentialed tool %s changed after pre-launch resolution", adapter.Binary()))
-		}
-		if err := os.Symlink(selection.BinaryPath, filepath.Join(binDir, adapter.Binary())); err != nil {
-			return fail(fmt.Errorf("pin credentialed tool %s: %w", adapter.Binary(), err))
-		}
-		if selection.Name == "" {
+		if selection.Discovery {
 			continue
 		}
 
 		resp, err := secretsRPC(socketPath, &secretsRPCRequest{
-			Action: "tool_grant",
-			Token:  ctlToken,
-			Name:   selection.Name,
-			Tool:   string(selection.Tool),
+			Action: "credential_grant", Token: ctlToken, Name: selection.Name,
+			SessionID: sessionID, Project: project, Agent: agent,
 		})
 		if err != nil {
-			return fail(fmt.Errorf("credential %q for %s: %w", selection.Name, selection.Tool, err))
+			return fail(fmt.Errorf("credential %q: %w", selection.Name, err))
 		}
 		if !resp.OK {
-			return fail(fmt.Errorf("credential %q for %s was rejected: %s", selection.Name, selection.Tool, resp.Error))
+			return fail(fmt.Errorf("credential %q was rejected: %s", selection.Name, resp.Error))
 		}
 		if resp.Delivery == nil {
-			return fail(fmt.Errorf("credential %q for %s returned no delivery", selection.Name, selection.Tool))
+			return fail(fmt.Errorf("credential %q returned no delivery", selection.Name))
 		}
 		session.grants = append(session.grants, activeGrant{GrantID: resp.GrantID, Name: selection.Name})
 		session.env = append(session.env, resp.Delivery.Env...)
 		for _, directory := range resp.Delivery.Directories {
 			if err := session.writeDirectory(directory); err != nil {
-				return fail(fmt.Errorf("credential %q for %s: %w", selection.Name, selection.Tool, err))
+				return fail(fmt.Errorf("credential %q: %w", selection.Name, err))
 			}
 		}
 		for _, file := range resp.Delivery.Files {
 			if err := session.writeFile(file); err != nil {
-				return fail(fmt.Errorf("credential %q for %s: %w", selection.Name, selection.Tool, err))
+				return fail(fmt.Errorf("credential %q: %w", selection.Name, err))
 			}
 		}
 	}
 	if !supportsCredentialMCP(agentPath) {
-		path := binDir
-		if inherited := os.Getenv("PATH"); inherited != "" {
-			path += string(os.PathListSeparator) + inherited
-		}
-		session.env = append(session.env,
-			credentialtools.EnvVar{Name: "PATH", Value: path},
-			credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_TOOLS", Value: selections.readyTools()},
-		)
 		return session, nil
-	}
-	project, err := os.Getwd()
-	if err != nil {
-		return fail(fmt.Errorf("resolve credential session project: %w", err))
 	}
 	registered, err := secretsRPC(socketPath, &secretsRPCRequest{
 		Action:    "session_register",
 		Token:     ctlToken,
-		SessionID: fmt.Sprintf("shield-%d", os.Getpid()),
+		SessionID: sessionID,
 		Project:   project,
-		Agent:     filepath.Base(agentPath),
-		Tools:     selections.toolNames(),
+		Agent:     agent,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("register agent credential session: %w", err))
@@ -371,15 +278,9 @@ func prepareCredentialSession(selections credentialSelections, ctlToken, agentPa
 		return fail(err)
 	}
 	session.mcpCommand = mcpCommand
-	path := binDir
-	if inherited := os.Getenv("PATH"); inherited != "" {
-		path += string(os.PathListSeparator) + inherited
-	}
 	session.env = append(session.env,
-		credentialtools.EnvVar{Name: "PATH", Value: path},
-		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_TOOLS", Value: selections.readyTools()},
-		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_BROKER_SOCKET", Value: socketPath},
-		credentialtools.EnvVar{Name: "AGENTJAIL_CREDENTIAL_SESSION_TOKEN", Value: session.sessionToken},
+		credentialaccess.EnvVar{Name: "AGENTJAIL_CREDENTIAL_BROKER_SOCKET", Value: socketPath},
+		credentialaccess.EnvVar{Name: "AGENTJAIL_CREDENTIAL_SESSION_TOKEN", Value: session.sessionToken},
 	)
 	return session, nil
 }
@@ -485,14 +386,9 @@ func pruneAbandonedCredentialSessions(tempDir string, alive func(int) bool) erro
 	return nil
 }
 
-var envNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
-
-func (s *credentialSession) writeDirectory(directory credentialtools.SessionDirectory) error {
-	if !envNamePattern.MatchString(directory.EnvVar) {
-		return fmt.Errorf("adapter returned invalid environment name %q", directory.EnvVar)
-	}
-	if directory.Name == "" || filepath.Base(directory.Name) != directory.Name {
-		return fmt.Errorf("adapter returned invalid session directory name %q", directory.Name)
+func (s *credentialSession) writeDirectory(directory credentialaccess.SessionDirectory) error {
+	if err := credentialaccess.ValidateDelivery(credentialaccess.Delivery{Directories: []credentialaccess.SessionDirectory{directory}}); err != nil {
+		return err
 	}
 	path := filepath.Join(s.dir, directory.Name)
 	if err := os.Mkdir(path, 0o700); err != nil {
@@ -501,16 +397,13 @@ func (s *credentialSession) writeDirectory(directory credentialtools.SessionDire
 	if err := os.Chmod(path, 0o700); err != nil {
 		return fmt.Errorf("protect session directory %s: %w", directory.Name, err)
 	}
-	s.env = append(s.env, credentialtools.EnvVar{Name: directory.EnvVar, Value: path})
+	s.env = append(s.env, credentialaccess.EnvVar{Name: directory.EnvVar, Value: path})
 	return nil
 }
 
-func (s *credentialSession) writeFile(file credentialtools.SessionFile) error {
-	if !envNamePattern.MatchString(file.EnvVar) {
-		return fmt.Errorf("adapter returned invalid environment name %q", file.EnvVar)
-	}
-	if file.Name == "" || filepath.Base(file.Name) != file.Name {
-		return fmt.Errorf("adapter returned invalid session filename %q", file.Name)
+func (s *credentialSession) writeFile(file credentialaccess.SessionFile) error {
+	if err := credentialaccess.ValidateDelivery(credentialaccess.Delivery{Files: []credentialaccess.SessionFile{file}}); err != nil {
+		return err
 	}
 	path := filepath.Join(s.dir, file.Name)
 	if err := os.WriteFile(path, file.Content, 0o600); err != nil {
@@ -519,7 +412,7 @@ func (s *credentialSession) writeFile(file credentialtools.SessionFile) error {
 	if err := os.Chmod(path, 0o600); err != nil {
 		return fmt.Errorf("protect session file %s: %w", file.Name, err)
 	}
-	s.env = append(s.env, credentialtools.EnvVar{Name: file.EnvVar, Value: path})
+	s.env = append(s.env, credentialaccess.EnvVar{Name: file.EnvVar, Value: path})
 	return nil
 }
 

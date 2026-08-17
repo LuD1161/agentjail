@@ -9,24 +9,21 @@ import (
 
 	config "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/credentialaccess"
-	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 )
 
 type secretsRPCRequest struct {
 	Action string `json:"action"`
 	// Token authenticates this shield as a caller outside the sandbox (ADR 0067).
-	Token        string   `json:"token,omitempty"`
-	Name         string   `json:"name,omitempty"`
-	Scope        string   `json:"scope,omitempty"`
-	TTL          string   `json:"ttl,omitempty"`
-	GrantID      string   `json:"grant_id,omitempty"`
-	Tool         string   `json:"tool,omitempty"`
-	SessionToken string   `json:"session_token,omitempty"`
-	SessionID    string   `json:"session_id,omitempty"`
-	Project      string   `json:"project,omitempty"`
-	Agent        string   `json:"agent,omitempty"`
-	Tools        []string `json:"tools,omitempty"`
+	Token        string `json:"token,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	TTL          string `json:"ttl,omitempty"`
+	GrantID      string `json:"grant_id,omitempty"`
+	SessionToken string `json:"session_token,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Agent        string `json:"agent,omitempty"`
 }
 
 type secretsRPCResponse struct {
@@ -35,7 +32,7 @@ type secretsRPCResponse struct {
 	EnvVars      map[string]string             `json:"env_vars,omitempty"`
 	GrantID      string                        `json:"grant_id,omitempty"`
 	Expires      string                        `json:"expires,omitempty"`
-	Delivery     *credentialtools.Delivery     `json:"delivery,omitempty"`
+	Delivery     *credentialaccess.Delivery    `json:"delivery,omitempty"`
 	SessionToken string                        `json:"session_token,omitempty"`
 	Credentials  []credentialaccess.Descriptor `json:"credentials,omitempty"`
 }

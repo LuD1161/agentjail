@@ -143,7 +143,7 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 //
 // The function exits through the child result, required-tunnel failure, or
 // fallback; it never launches the child twice.
-func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, requireTunnel bool, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, emitter audit.Emitter, fallback func()) {
+func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, packsDir string, requireTunnel bool, mitmEnabled bool, ipv6Enabled bool, sshAuthSock sandbox.SSHAuthSock, credentials credentialSelections, emitter audit.Emitter, fallback func()) {
 	logger := slog.Default()
 	sessionID := generateSessionID()
 	appPath := resolveTunnelAppPath()
@@ -481,7 +481,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	if homeErr != nil {
 		home = "/Users/unknown"
 	}
-	profileCapabilities, credentialErr := resolveDarwinProfileCapabilities(agentPath, credentialTools, sshAuthSock)
+	profileCapabilities, credentialErr := resolveDarwinProfileCapabilities(agentPath, credentials, sshAuthSock)
 	if credentialErr != nil {
 		cleanupGateway()
 		_, _ = exec.Command(appPath, "stop").CombinedOutput()
@@ -499,11 +499,11 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 	ctlToken, ctlTokenErr := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, ctlToken)
 	env = append(env, grantEnvVars...)
-	credentialSession, credentialErr := prepareCredentialSession(credentialTools, ctlToken, agentPath)
+	credentialSession, credentialErr := prepareCredentialSession(credentials, ctlToken, agentPath)
 	if credentialErr != nil {
 		cleanupGateway()
 		_, _ = exec.Command(appPath, "stop").CombinedOutput()
-		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", credentialErr)
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential session bootstrap failed: %v\n", credentialErr)
 		os.Exit(1)
 	}
 	agentArgs, credentialErr = credentialSession.configureAgent(agentPath, agentArgs)
@@ -515,16 +515,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		os.Exit(1)
 	}
 	env = credentialSession.applyEnv(env)
-	for _, tool := range credentialTools {
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready for %s broker credentials\n", tool.Tool, tool.deliveryMode())
-		logger.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath, "delivery", tool.deliveryMode())
-		_ = emitter.Emit(ctx, audit.Event{
-			EventType: audit.CredentialToolReady,
-			Entity:    tool.auditEntity(),
-			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath, "delivery": tool.deliveryMode()},
-			Actor:     "shield",
-		})
-	}
+	reportCredentialSelections(ctx, credentials, emitter)
 
 	for k, v := range caEnvVars {
 		env = append(env, k+"="+v)

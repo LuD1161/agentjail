@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,7 +20,6 @@ import (
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/credentialaccess"
 	"github.com/LuD1161/agentjail/internal/credentials"
-	"github.com/LuD1161/agentjail/internal/credentialtools"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/sandbox"
 	auditstore "github.com/LuD1161/agentjail/internal/store"
@@ -30,20 +30,18 @@ type RPCRequest struct {
 	Action string `json:"action"`
 	// Token authenticates the caller as a process outside the sandbox. Required
 	// on every action (ADR 0067).
-	Token        string   `json:"token,omitempty"`
-	Name         string   `json:"name,omitempty"`
-	Value        string   `json:"value,omitempty"`
-	Scope        string   `json:"scope,omitempty"`
-	TTL          string   `json:"ttl,omitempty"`
-	GrantID      string   `json:"grant_id,omitempty"`
-	Tool         string   `json:"tool,omitempty"`
-	SessionToken string   `json:"session_token,omitempty"`
-	SessionID    string   `json:"session_id,omitempty"`
-	Project      string   `json:"project,omitempty"`
-	Agent        string   `json:"agent,omitempty"`
-	CredentialID string   `json:"credential_id,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
-	Tools        []string `json:"tools,omitempty"`
+	Token        string `json:"token,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Value        string `json:"value,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	TTL          string `json:"ttl,omitempty"`
+	GrantID      string `json:"grant_id,omitempty"`
+	SessionToken string `json:"session_token,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Agent        string `json:"agent,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 // RPCResponse is the newline-delimited JSON response from the server.
@@ -54,7 +52,7 @@ type RPCResponse struct {
 	EnvVars      map[string]string             `json:"env_vars,omitempty"`
 	GrantID      string                        `json:"grant_id,omitempty"`
 	Expires      string                        `json:"expires,omitempty"`
-	Delivery     *credentialtools.Delivery     `json:"delivery,omitempty"`
+	Delivery     *credentialaccess.Delivery    `json:"delivery,omitempty"`
 	SessionToken string                        `json:"session_token,omitempty"`
 	Credentials  []credentialaccess.Descriptor `json:"credentials,omitempty"`
 	Issuance     *credentialaccess.Issuance    `json:"issuance,omitempty"`
@@ -269,8 +267,8 @@ func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitt
 		}
 
 		// Control-plane verbs can mutate or enumerate the raw store. The narrow
-		// agent capability above can only discover and request typed records.
-		// See ADR 0131-agent-credential-discovery.
+		// agent capability above can only discover and request generic records.
+		// See ADR 0140-generic-credentials.
 		if !ctlauth.Valid(req.Token, token) {
 			slog.Warn("secrets: rejecting unauthenticated request", "action", req.Action)
 			_ = enc.Encode(RPCResponse{OK: false, Error: "unauthorized: control token required"})
@@ -302,7 +300,7 @@ func handleConn(conn net.Conn, store *Store, gm *credentials.GrantManager, emitt
 			continue
 		}
 
-		resp := handleRPC(&req, store, gm, emitter)
+		resp := handleRPC(&req, store, gm, emitter, access)
 		_ = enc.Encode(resp)
 	}
 }
@@ -311,24 +309,8 @@ func registerAgentSession(ctx context.Context, req *RPCRequest, sessions *creden
 	if req.SessionID == "" || req.Agent == "" {
 		return RPCResponse{OK: false, Error: "session_id and agent are required"}
 	}
-	tools := make([]credentialtools.Tool, 0, len(req.Tools))
-	seenTools := make(map[credentialtools.Tool]struct{}, len(req.Tools))
-	for _, value := range req.Tools {
-		tool, err := credentialtools.ParseTool(value)
-		if err != nil {
-			return RPCResponse{OK: false, Error: err.Error()}
-		}
-		if _, exists := seenTools[tool]; exists {
-			continue
-		}
-		seenTools[tool] = struct{}{}
-		tools = append(tools, tool)
-	}
-	if len(tools) == 0 {
-		return RPCResponse{OK: false, Error: "at least one credential tool is required"}
-	}
 	token, expires, err := sessions.Register(credentialaccess.Session{
-		ID: req.SessionID, Project: req.Project, Agent: req.Agent, Tools: tools,
+		ID: req.SessionID, Project: req.Project, Agent: req.Agent,
 	}, credentialaccess.DefaultSessionTTL)
 	if err != nil {
 		return RPCResponse{OK: false, Error: err.Error()}
@@ -345,15 +327,7 @@ func registerAgentSession(ctx context.Context, req *RPCRequest, sessions *creden
 func handleAgentCredentialRPC(ctx context.Context, req *RPCRequest, session credentialaccess.Session, access *credentialaccess.Service) RPCResponse {
 	switch req.Action {
 	case "credential_list":
-		var tool credentialtools.Tool
-		if req.Tool != "" {
-			parsed, err := credentialtools.ParseTool(req.Tool)
-			if err != nil {
-				return RPCResponse{OK: false, Error: err.Error()}
-			}
-			tool = parsed
-		}
-		credentials, err := access.List(ctx, session, tool)
+		credentials, err := access.List(ctx, session)
 		if err != nil {
 			return RPCResponse{OK: false, Error: err.Error()}
 		}
@@ -373,9 +347,12 @@ func handleAgentCredentialRPC(ctx context.Context, req *RPCRequest, session cred
 
 // handleRPC dispatches an RPC request to the appropriate handler. The caller
 // MUST have authenticated req.Token first (see handleConn).
-func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) RPCResponse {
+func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter, access *credentialaccess.Service) RPCResponse {
 	ctx := context.Background()
 	switch req.Action {
+	case "credential_set":
+		return handleCredentialSet(req, store, emitter)
+
 	case "set":
 		if err := store.Set(req.Name, req.Value); err != nil {
 			return RPCResponse{OK: false, Error: err.Error()}
@@ -407,11 +384,14 @@ func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emit
 		})
 		return RPCResponse{OK: true}
 
+	case "credential_delete":
+		return handleCredentialDelete(req, store, emitter)
+
 	case "grant":
 		return handleGrant(req, store, gm, emitter)
 
-	case "tool_grant":
-		return handleToolGrant(req, store, gm, emitter)
+	case "credential_grant":
+		return handleCredentialGrant(req, gm, emitter, access)
 
 	case "revoke":
 		if err := gm.Revoke(req.GrantID); err != nil {
@@ -429,41 +409,65 @@ func handleRPC(req *RPCRequest, store *Store, gm *credentials.GrantManager, emit
 	}
 }
 
-// handleToolGrant retrieves or issues credential material and presents it for
-// one registered CLI adapter. The control-token boundary keeps this response
-// outside the sandbox until the shield has prepared the session.
-func handleToolGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager, emitter audit.Emitter) RPCResponse {
-	tool, err := credentialtools.ParseTool(req.Tool)
-	if err != nil {
-		return RPCResponse{OK: false, Error: err.Error()}
-	}
-
-	var issuer toolMaterialIssuer = localToolMaterialIssuer{store: store}
-	material, issued, err := issuer.Issue(context.Background(), tool, req)
-	if err != nil {
-		return RPCResponse{OK: false, Error: err.Error()}
-	}
-	adapter, err := credentialtools.DefaultRegistry().Resolve(tool)
-	if err != nil {
-		return RPCResponse{OK: false, Error: err.Error()}
-	}
-	delivery, err := adapter.Present(material)
-	if err != nil {
-		return RPCResponse{OK: false, Error: err.Error()}
-	}
-
-	ttl := parseGrantTTL(req.TTL)
-	grant := issued
-	if grant == nil {
-		grant = &credentials.Grant{
-			ID:         credentials.NewGrantID(),
-			SecretName: req.Name,
-			Backend:    "static",
-			Scope:      "direct",
-			ExpiresAt:  time.Now().Add(ttl),
+func handleCredentialSet(req *RPCRequest, store *Store, emitter audit.Emitter) RPCResponse {
+	if _, recognized, err := credentialaccess.Decode(req.Value); err != nil || !recognized {
+		if err == nil {
+			err = errors.New("value is not a generic credential record")
 		}
+		return RPCResponse{OK: false, Error: err.Error()}
 	}
-	grant.SecretName = req.Name
+	if existing, err := store.Get(req.Name); err == nil {
+		if _, recognized, decodeErr := credentialaccess.Decode(existing); decodeErr != nil || !recognized {
+			return RPCResponse{OK: false, Error: fmt.Sprintf("name %q belongs to a non-credential broker entry", req.Name)}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	if err := store.Set(req.Name, req.Value); err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	slog.Info("credential stored", "name", req.Name)
+	_ = emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.CredentialStored, Entity: req.Name, Actor: "secrets",
+	})
+	return RPCResponse{OK: true}
+}
+
+func handleCredentialDelete(req *RPCRequest, store *Store, emitter audit.Emitter) RPCResponse {
+	existing, err := store.Get(req.Name)
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	if _, recognized, decodeErr := credentialaccess.Decode(existing); decodeErr != nil || !recognized {
+		return RPCResponse{OK: false, Error: fmt.Sprintf("name %q is not a generic credential", req.Name)}
+	}
+	if err := store.Delete(req.Name); err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	slog.Info("credential deleted", "name", req.Name)
+	_ = emitter.Emit(context.Background(), audit.Event{
+		EventType: audit.CredentialRemoved, Entity: req.Name, Actor: "secrets",
+	})
+	return RPCResponse{OK: true}
+}
+
+// handleCredentialGrant returns one exact generic delivery to the shield. The
+// control-token boundary keeps material outside the sandbox until launch.
+func handleCredentialGrant(req *RPCRequest, gm *credentials.GrantManager, emitter audit.Emitter, access *credentialaccess.Service) RPCResponse {
+	if req.SessionID == "" || req.Agent == "" {
+		return RPCResponse{OK: false, Error: "session_id and agent are required"}
+	}
+	issuance, err := access.RequestExact(context.Background(), credentialaccess.Session{
+		ID: req.SessionID, Project: req.Project, Agent: req.Agent,
+	}, credentialaccess.Request{CredentialID: credentialaccess.ID(req.Name)})
+	if err != nil {
+		return RPCResponse{OK: false, Error: err.Error()}
+	}
+	ttl := parseGrantTTL(req.TTL)
+	grant := &credentials.Grant{
+		ID: credentials.NewGrantID(), SecretName: req.Name, Backend: "static",
+		Scope: "direct", ExpiresAt: time.Now().Add(ttl),
+	}
 	grantID := gm.Register(grant)
 
 	ctx := context.Background()
@@ -473,74 +477,16 @@ func handleToolGrant(req *RPCRequest, store *Store, gm *credentials.GrantManager
 		Detail: map[string]string{
 			"type":     grant.Backend,
 			"grant_id": grantID,
-			"tool":     string(tool),
 		},
 		Actor: "secrets",
 	})
 
 	return RPCResponse{
 		OK:       true,
-		Delivery: &delivery,
+		Delivery: &issuance.Delivery,
 		GrantID:  grantID,
 		Expires:  grant.ExpiresAt.Format(time.RFC3339),
 	}
-}
-
-// toolMaterialIssuer is the source seam before CLI presentation. JIT,
-// Vault, and OpenBao issuers implement this contract without changing the
-// adapters or shield bootstrap. See ADR 0129-credentialed-cli-bootstrap.
-type toolMaterialIssuer interface {
-	Issue(context.Context, credentialtools.Tool, *RPCRequest) (credentialtools.Material, *credentials.Grant, error)
-}
-
-type localToolMaterialIssuer struct {
-	store *Store
-}
-
-func (i localToolMaterialIssuer) Issue(ctx context.Context, tool credentialtools.Tool, req *RPCRequest) (credentialtools.Material, *credentials.Grant, error) {
-	raw, err := i.store.Get(req.Name)
-	if err != nil {
-		return credentialtools.Material{}, nil, fmt.Errorf("load credential %q: %w", req.Name, err)
-	}
-
-	record, recognized, recordErr := credentialaccess.Decode(raw)
-	if recordErr != nil {
-		return credentialtools.Material{}, nil, fmt.Errorf("credential %q: %w", req.Name, recordErr)
-	}
-	if recognized {
-		descriptor := credentialaccess.Describe(credentialaccess.ID(req.Name), record)
-		if descriptor.Tool != tool {
-			return credentialtools.Material{}, nil, fmt.Errorf("credential %q is for %s, not %s", req.Name, descriptor.Tool, tool)
-		}
-		raw = record.Material
-	}
-
-	// Existing AWS AssumeRole entries keep using the shipped STS issuer. Static
-	// entries bypass issuance and are passed directly for this milestone.
-	if tool == credentialtools.ToolAWS {
-		cfg, cfgErr := i.store.loadConfig(req.Name)
-		if cfgErr == nil && cfg.RoleARN != "" {
-			grant, grantErr := backends["aws"].Grant(ctx, cfg, defaultScope(req.Scope), parseGrantTTL(req.TTL))
-			if grantErr != nil {
-				return credentialtools.Material{}, nil, grantErr
-			}
-			return awsMaterialFromGrant(grant), grant, nil
-		}
-	}
-
-	material, err := credentialtools.DecodeStatic(tool, raw)
-	if err != nil {
-		return credentialtools.Material{}, nil, fmt.Errorf("credential %q: %w", req.Name, err)
-	}
-	return material, nil, nil
-}
-
-func awsMaterialFromGrant(grant *credentials.Grant) credentialtools.Material {
-	return credentialtools.Material{Fields: map[credentialtools.Field]string{
-		credentialtools.FieldAccessKeyID:     grant.EnvVars["AWS_ACCESS_KEY_ID"],
-		credentialtools.FieldSecretAccessKey: grant.EnvVars["AWS_SECRET_ACCESS_KEY"],
-		credentialtools.FieldSessionToken:    grant.EnvVars["AWS_SESSION_TOKEN"],
-	}}
 }
 
 func parseGrantTTL(value string) time.Duration {
@@ -683,6 +629,14 @@ func rpcClient(socketPath string, req *RPCRequest) (*RPCResponse, error) {
 
 // runSet is the CLI client for `agentjail-secrets set <name> <value>`.
 func runSet(args []string) {
+	runSetAction(args, "set", "agentjail-secrets set", "stored")
+}
+
+func runCredentialSet(args []string) {
+	runSetAction(args, "credential_set", "agentjail-secrets credential-set", "")
+}
+
+func runSetAction(args []string, action, command, confirmation string) {
 	fs := flag.NewFlagSet("set", flag.ExitOnError)
 	socketPath := fs.String("socket", defaultSocketPath(), "path to Unix socket")
 	fromStdin := fs.Bool("stdin", false, "read the secret value from stdin")
@@ -690,7 +644,7 @@ func runSet(args []string) {
 
 	rest := fs.Args()
 	if (!*fromStdin && len(rest) != 2) || (*fromStdin && len(rest) != 1) {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-secrets set [--stdin] <name> [value]")
+		fmt.Fprintf(os.Stderr, "usage: %s [--stdin] <name> [value]\n", command)
 		os.Exit(64)
 	}
 	value := ""
@@ -710,7 +664,7 @@ func runSet(args []string) {
 		value = rest[1]
 	}
 
-	resp, err := rpcClient(*socketPath, &RPCRequest{Action: "set", Name: rest[0], Value: value})
+	resp, err := rpcClient(*socketPath, &RPCRequest{Action: action, Name: rest[0], Value: value})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-secrets: %v\n", err)
 		os.Exit(1)
@@ -719,7 +673,9 @@ func runSet(args []string) {
 		fmt.Fprintf(os.Stderr, "agentjail-secrets: %s\n", resp.Error)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "stored: %s\n", rest[0])
+	if confirmation != "" {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", confirmation, rest[0])
+	}
 }
 
 // runList is the CLI client for `agentjail-secrets list`.
@@ -742,19 +698,16 @@ func runList(args []string) {
 	}
 }
 
-// runDelete is the CLI client for `agentjail-secrets delete <name>`.
-func runDelete(args []string) {
-	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+// runCredentialList is the CLI client for the generic credential inventory.
+func runCredentialList(args []string) {
+	fs := flag.NewFlagSet("credential-list", flag.ExitOnError)
 	socketPath := fs.String("socket", defaultSocketPath(), "path to Unix socket")
 	fs.Parse(args)
 
-	rest := fs.Args()
-	if len(rest) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-secrets delete <name>")
-		os.Exit(64)
-	}
-
-	resp, err := rpcClient(*socketPath, &RPCRequest{Action: "delete", Name: rest[0]})
+	project, _ := os.Getwd()
+	resp, err := rpcClient(*socketPath, &RPCRequest{
+		Action: "credential_inventory", SessionID: "credential-cli", Project: project, Agent: "user",
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-secrets: %v\n", err)
 		os.Exit(1)
@@ -763,7 +716,43 @@ func runDelete(args []string) {
 		fmt.Fprintf(os.Stderr, "agentjail-secrets: %s\n", resp.Error)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "deleted: %s\n", rest[0])
+	for _, credential := range resp.Credentials {
+		fmt.Println(credential.ID)
+	}
+}
+
+// runDelete is the CLI client for `agentjail-secrets delete <name>`.
+func runDelete(args []string) {
+	runDeleteAction(args, "delete", "agentjail-secrets delete", "deleted")
+}
+
+func runCredentialDelete(args []string) {
+	runDeleteAction(args, "credential_delete", "agentjail-secrets credential-delete", "")
+}
+
+func runDeleteAction(args []string, action, command, confirmation string) {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	socketPath := fs.String("socket", defaultSocketPath(), "path to Unix socket")
+	fs.Parse(args)
+
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fmt.Fprintf(os.Stderr, "usage: %s <name>\n", command)
+		os.Exit(64)
+	}
+
+	resp, err := rpcClient(*socketPath, &RPCRequest{Action: action, Name: rest[0]})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail-secrets: %v\n", err)
+		os.Exit(1)
+	}
+	if !resp.OK {
+		fmt.Fprintf(os.Stderr, "agentjail-secrets: %s\n", resp.Error)
+		os.Exit(1)
+	}
+	if confirmation != "" {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", confirmation, rest[0])
+	}
 }
 
 // runGrant is the CLI client for `agentjail-secrets grant <name> --scope=<policy> --ttl=<duration>`.

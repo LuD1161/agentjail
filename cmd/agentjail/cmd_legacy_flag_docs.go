@@ -95,13 +95,13 @@ func init() {
 	runCmd.Flags().Bool("git-ssh", false, "enable Git over SSH by delegating all loaded SSH-agent identities")
 	runCmd.Flags().Bool("no-git-ssh", false, "disable policy-default Git over SSH for this launch")
 	runCmd.Flags().Bool("verbose", false, "mirror shield diagnostics to stderr")
-	runCmd.Flags().StringArray("credential", nil, "select broker credential as TOOL=NAME, for example aws=aws/dev (repeatable)")
+	runCmd.Flags().StringArray("credential", nil, "select an exact broker credential ID (repeatable)")
 	claudeCmd.Flags().Bool("tunnel", false, "route egress through the L7 policy tunnel")
 	claudeCmd.Flags().Bool("no-sandbox", false, "disable OS isolation and use weaker hook-only enforcement")
 	claudeCmd.Flags().Bool("git-ssh", false, "enable Git over SSH by delegating all loaded SSH-agent identities")
 	claudeCmd.Flags().Bool("no-git-ssh", false, "disable policy-default Git over SSH for this launch")
 	claudeCmd.Flags().Bool("verbose", false, "mirror shield diagnostics to stderr")
-	claudeCmd.Flags().StringArray("credential", nil, "select broker credential as TOOL=NAME, for example aws=aws/dev (repeatable)")
+	claudeCmd.Flags().StringArray("credential", nil, "select an exact broker credential ID (repeatable)")
 
 	feedbackCmd.Use = "feedback [message...]"
 	feedbackCmd.Long = "Send your message, AgentJail version, OS, random installation ID, and optional follow-up contact. If no message is supplied, prompt interactively."

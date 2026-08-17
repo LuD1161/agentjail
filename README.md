@@ -322,29 +322,31 @@ agentjail install --with-path-shim    # wrap `claude`, `codex`, and Cursor's `ag
 
 By default, hooks are wired but you launch the sandbox explicitly with `agentjail run -- <agent>`. The PATH shim installs wrappers for `claude`, `codex`, and Cursor's `agent` under `~/.agentjail/bin` and prepends that directory to your shell profile, so ordinary agent commands enter the canonical `agentjail run --tunnel -- <agent>` launch path without a special command. Child arguments keep the same boundary and policy defaults, including session SSH-agent setup, behave identically; the shim adds network visibility without bypassing `agentjail run`.
 
-### Credentialed CLI tools
+### Session credentials
 
-AWS CLI, `kubectl`, and GitHub CLI can receive an explicitly selected credential
-from AgentJail's encrypted local broker without exposing the host's `~/.aws`,
-`~/.kube`, or `~/.config/gh` stores.
+AgentJail can deliver an explicitly selected credential from its encrypted local
+broker without exposing host credential stores. Credential IDs are arbitrary:
+AgentJail does not infer a provider, account, permission level, or intended
+command from an ID, label, or tag.
 
-Import a credential while outside the sandbox:
-
-The first argument after `credential set` is a user-chosen broker name, not an
-AWS profile or file path. Give each credential a memorable name such as
-`aws/development`; use that exact name later when launching a shielded tool.
+Import a credential while outside the sandbox. Values come from environment,
+stdin, or copied files; they are never accepted in command arguments:
 
 ```sh
-# Reads AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and optional session/region vars.
-agentjail credential set aws/default --tool aws --label "Development" \
-  --account 111122223333 --from-current-env
+# Capture any set of current environment variables.
+agentjail credential set aws-read-only-cred-prod \
+  --from-env AWS_ACCESS_KEY_ID \
+  --from-env AWS_SECRET_ACCESS_KEY \
+  --from-env AWS_SESSION_TOKEN \
+  --label "Production read only" --tag aws --tag prod
 
-# Imports a single-cluster/context/user kubeconfig with inline credentials.
-agentjail credential set kube/dev --tool kubectl --label "Development cluster" \
-  --context dev-us-west --from-file ./dev.kubeconfig
+# Copy a file to a private mode-0600 session file and bind its path.
+agentjail credential set cluster-dev \
+  --from-file KUBECONFIG=./dev.kubeconfig --tag kubernetes --tag dev
 
-# Reads GH_TOKEN (or GITHUB_TOKEN).
-agentjail credential set github/default --tool gh --from-current-env
+# Read one token from stdin without putting it in argv.
+printf '%s' "$SLACK_TOKEN" | agentjail credential set slack-channel-read-token \
+  --from-stdin SLACK_TOKEN --tag slack
 
 agentjail credential list
 ```
@@ -352,10 +354,10 @@ agentjail credential list
 `agentjail credential list` prints only the stored broker identifiers, one per
 line; it never prints credential values. An empty result means none are stored.
 
-The label, account, and context fields are non-secret discovery metadata. New
-imports store them with the material in one encrypted typed record; legacy
-`aws/`, `kube/`, and `github/` entries remain readable. Arbitrary raw broker
-secrets are never inferred to be coding-agent credentials.
+Labels and tags are non-secret discovery metadata. They describe user intent but
+grant no authority; the external provider's IAM/RBAC remains the permission
+boundary. Raw broker values and older unreleased typed records are never inferred
+to be coding-agent credentials.
 
 Launch Codex or Claude normally through the shield:
 
@@ -363,50 +365,38 @@ Launch Codex or Claude normally through the shield:
 agentjail run -- codex
 ```
 
-Before sandbox activation, the shield discovers which typed broker tools are
-available, resolves and pins their installed CLI binaries, and gives the coding
-agent a narrow session capability. AgentJail adds a session-only credential MCP
-and native guidance without modifying the repository's `AGENTS.md` or
-`CLAUDE.md`. The coding agent follows this sequence:
+Before sandbox activation, the shield discovers whether broker credentials are
+available and gives the coding agent a narrow session capability. AgentJail adds
+a session-only credential MCP and native guidance without modifying the
+repository's `AGENTS.md` or `CLAUDE.md`. The coding agent follows this sequence:
 
-1. Call `list_credentials` for non-secret IDs, labels, AWS accounts, or
-   Kubernetes contexts.
+1. Call `list_credentials` for non-secret exact IDs, labels, and tags.
 2. Select the exact ID that matches the user's task. If more than one could
    match, ask the user; AgentJail never guesses or chooses a default.
-3. Call `request_credential` with that exact ID and a concrete reason.
+3. Call `request_credential` with that exact ID and, optionally, a non-secret
+   audit reason.
 4. Apply the returned environment variables or mode-0600 file for the requested
    CLI operation.
 
-The current bootstrap authorizer auto-approves every typed broker credential
+The current bootstrap authorizer auto-approves every generic broker credential
 (`discover: ["*"]`, `auto_approve: ["*"]`). The wildcard authorizes access; it
-does not select an identity. A session capability is limited to the CLI tools
-that were safely resolved before sandboxing and cannot list raw secrets or call
-broker set/delete operations.
+does not select an identity. A session capability cannot list raw secrets or
+call broker set/delete operations.
 
-`--credential=TOOL=NAME` remains available as an eager, explicitly selected
-compatibility path. It retrieves the named credential before agent startup and
-creates the standard interface directly: AWS environment variables, a
-mode-0600 kubeconfig named by `KUBECONFIG`, or `GH_TOKEN`.
+`--credential ID` is the eager path. It retrieves that exact credential before
+startup and applies its stored environment/file bindings to the session.
 
-The child process receives `AGENTJAIL_CREDENTIAL_TOOLS` as a comma-separated
-list of ready tool IDs. Credential discovery, the request reason, authorization,
+Credential discovery, the optional request reason, authorization,
 issuance, denial, and session lifecycle are audited without credential values;
 issuance fails closed when durable audit storage is unavailable.
-
-Kubeconfig import is strict and self-contained: `exec` and `auth-provider`
-plugins, `tokenFile`, certificate/key/CA file paths, unknown fields, and multiple
-YAML documents are rejected. Embed the token or certificate/key data instead;
-AgentJail never executes or follows credential sources from the imported file.
 
 This first OSS path performs **direct credential delivery**. The agent can read
 credentials made available to its own environment or session file, and a root
 or broadly privileged credential remains root or broadly privileged. Provider
 IAM/RBAC is the current scope boundary. Credential policy, company policy, and
-general JIT/Vault/OpenBao issuance are later layers that plug into the same
-issuer-independent adapter contract. See
-[ADR 0129-credentialed-cli-bootstrap](./docs/adr/0129-credentialed-cli-bootstrap.md).
-Agent-driven discovery and exact MCP issuance are defined by
-[ADR 0131-agent-credential-discovery](./docs/adr/0131-agent-credential-discovery.md).
+general JIT/Vault/OpenBao issuance are later layers that preserve exact identity
+while replacing static material. See
+[ADR 0140-generic-credentials](./docs/adr/0140-generic-credentials.md).
 
 It is **opt-in and never installed by `--all`** — `--all` is what `curl | sh` runs, and a piped installer should not silently edit your shell profile or intercept your `claude`. Once you opt in it is sticky: the rc block records the choice, so reinstall, `agentjail update`, and daemon auto-update all restore the complete shim set rather than silently dropping it ([ADR 0062](./docs/adr/0062-path-shim-consent-is-the-rc-block.md)).
 

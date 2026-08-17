@@ -8,91 +8,73 @@ import (
 	"github.com/LuD1161/agentjail/internal/credentialaccess"
 )
 
-func TestBuildCredentialValueAWSFromEnvironment(t *testing.T) {
+func TestBuildCredentialValueFromEnvironment(t *testing.T) {
 	t.Parallel()
-	env := map[string]string{
-		"AWS_ACCESS_KEY_ID":     "AKIATEST",
-		"AWS_SECRET_ACCESS_KEY": "secret",
-		"AWS_SESSION_TOKEN":     "session",
-		"AWS_REGION":            "us-west-1",
-	}
-	value, err := buildCredentialValue(credentialSourceOptions{Tool: "aws", FromEnv: true, Label: "Development", Account: "111122223333"}, strings.NewReader(""), func(key string) string { return env[key] }, nil)
+	env := map[string]string{"AWS_ACCESS_KEY_ID": "AKIATEST", "AWS_SECRET_ACCESS_KEY": "secret", "AWS_SESSION_TOKEN": "session"}
+	value, err := buildCredentialValue(credentialSourceOptions{
+		FromEnv: []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"},
+		Label:   "Production read only", Tags: []string{"prod", "aws"},
+	}, strings.NewReader(""), func(key string) string { return env[key] }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"AKIATEST", "secret", "session", "us-west-1"} {
-		if !strings.Contains(value, want) {
-			t.Fatalf("stored AWS JSON does not contain expected field %q", want)
-		}
+	record, recognized, err := credentialaccess.Decode(value)
+	if err != nil || !recognized {
+		t.Fatalf("Decode() = %#v, %v, %v", record, recognized, err)
 	}
-	for _, want := range []string{"Development", "111122223333", "agentjail_credential_version"} {
-		if !strings.Contains(value, want) {
-			t.Fatalf("stored credential record does not contain metadata %q", want)
-		}
+	if len(record.Delivery.Env) != 3 {
+		t.Fatalf("delivery = %#v", record.Delivery)
+	}
+	if descriptor := credentialaccess.Describe("anything", record); descriptor.Label != "Production read only" || strings.Join(descriptor.Tags, ",") != "aws,prod" {
+		t.Fatalf("descriptor = %#v", descriptor)
 	}
 }
 
-func TestBuildCredentialValueKubectlFromFile(t *testing.T) {
+func TestBuildCredentialValueFromFile(t *testing.T) {
 	t.Parallel()
-	const config = `apiVersion: v1
-kind: Config
-clusters:
-- name: test-cluster
-  cluster:
-    server: https://127.0.0.1:6443
-users:
-- name: test-user
-  user:
-    token: test-token
-contexts:
-- name: test
-  context: {cluster: test-cluster, user: test-user}
-current-context: test
-`
-	value, err := buildCredentialValue(credentialSourceOptions{Tool: "kubectl", FromFile: "/tmp/config"}, strings.NewReader(""), nil, func(path string) ([]byte, error) {
+	value, err := buildCredentialValue(credentialSourceOptions{FromFile: []string{"KUBECONFIG=/tmp/config"}}, strings.NewReader(""), nil, func(path string) ([]byte, error) {
 		if path != "/tmp/config" {
 			t.Fatalf("read path = %q", path)
 		}
-		return []byte(config), nil
+		return []byte("credential-file"), nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	record, recognized, err := credentialaccess.Decode(value)
-	if err != nil || !recognized || record.Material != config {
-		t.Fatalf("decoded value = %#v, %v, %v; want kubeconfig", record, recognized, err)
+	if err != nil || !recognized || string(record.Delivery.Files[0].Content) != "credential-file" || record.Delivery.Files[0].EnvVar != "KUBECONFIG" {
+		t.Fatalf("decoded value = %#v, %v, %v", record, recognized, err)
 	}
 }
 
-func TestBuildCredentialValueGitHubFromStdin(t *testing.T) {
+func TestBuildCredentialValueFromStdin(t *testing.T) {
 	t.Parallel()
-	value, err := buildCredentialValue(credentialSourceOptions{Tool: "gh", FromStdin: true}, strings.NewReader("ghp_test"), nil, nil)
+	value, err := buildCredentialValue(credentialSourceOptions{FromStdinEnv: "SLACK_TOKEN"}, strings.NewReader("token"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(value, "ghp_test") {
+	if !strings.Contains(value, "token") {
 		t.Fatalf("value = %q", value)
 	}
 }
 
-func TestBuildCredentialValueRequiresOneSource(t *testing.T) {
+func TestBuildCredentialValueValidatesSourcesAndBindings(t *testing.T) {
 	t.Parallel()
-	for _, options := range []credentialSourceOptions{
-		{Tool: "gh"},
-		{Tool: "gh", FromEnv: true, FromStdin: true},
-	} {
+	tests := []credentialSourceOptions{
+		{},
+		{FromEnv: []string{"TOKEN"}, FromStdinEnv: "OTHER_TOKEN"},
+		{FromFile: []string{"missing-equals"}},
+		{FromStdinEnv: "PATH"},
+	}
+	for _, options := range tests {
 		if _, err := buildCredentialValue(options, strings.NewReader("x"), func(string) string { return "x" }, func(string) ([]byte, error) { return []byte("x"), nil }); err == nil {
-			t.Fatalf("source selection succeeded: %#v", options)
+			t.Fatalf("invalid source succeeded: %#v", options)
 		}
 	}
-}
-
-func TestCredentialValueFromEnvRejectsKubeconfigList(t *testing.T) {
-	t.Parallel()
-	_, err := credentialValueFromEnv("kubectl", func(string) string { return "/a:/b" }, func(string) ([]byte, error) {
-		return nil, errors.New("must not read")
-	})
-	if err == nil {
-		t.Fatal("multiple kubeconfigs were accepted")
+	if _, err := buildCredentialValue(credentialSourceOptions{FromEnv: []string{"MISSING"}}, strings.NewReader(""), func(string) string { return "" }, nil); err == nil {
+		t.Fatal("empty environment source succeeded")
+	}
+	if _, err := readBoundedCredentialFile("x", func(string) ([]byte, error) { return nil, errors.New("read failed") }); err == nil {
+		t.Fatal("file read error was lost")
 	}
 }

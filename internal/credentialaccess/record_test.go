@@ -3,15 +3,14 @@ package credentialaccess
 import (
 	"strings"
 	"testing"
-
-	"github.com/LuD1161/agentjail/internal/credentialtools"
 )
-
-const testAWSMaterial = `{"access_key_id":"AKIATEST","secret_access_key":"secret","region":"us-east-1"}`
 
 func TestRecordRoundTripSeparatesMetadataFromMaterial(t *testing.T) {
 	t.Parallel()
-	record, err := NewRecord(credentialtools.ToolAWS, testAWSMaterial, "Development", "111122223333", "")
+	record, err := NewRecord(Delivery{Env: []EnvVar{
+		{Name: "AWS_ACCESS_KEY_ID", Value: "AKIATEST"},
+		{Name: "AWS_SECRET_ACCESS_KEY", Value: "secret"},
+	}}, "Production read only", []string{"prod", "aws", "prod"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,30 +22,46 @@ func TestRecordRoundTripSeparatesMetadataFromMaterial(t *testing.T) {
 	if err != nil || !recognized {
 		t.Fatalf("Decode() = %#v, %v, %v", decoded, recognized, err)
 	}
-	descriptor := Describe("aws/development", decoded)
-	if descriptor.Account != "111122223333" || descriptor.Label != "Development" || descriptor.Kind != "access_key" {
+	descriptor := Describe("aws-read-only-cred-prod", decoded)
+	if descriptor.Label != "Production read only" || strings.Join(descriptor.Tags, ",") != "aws,prod" {
 		t.Fatalf("descriptor = %#v", descriptor)
 	}
-	encodedDescriptor := strings.Join([]string{descriptor.Label, descriptor.Account, descriptor.Kind}, " ")
+	encodedDescriptor := descriptor.Label + strings.Join(descriptor.Tags, " ")
 	if strings.Contains(encodedDescriptor, "AKIATEST") || strings.Contains(encodedDescriptor, "secret") {
 		t.Fatal("descriptor exposed credential material")
 	}
 }
 
-func TestDecodeRejectsMalformedRecognizedRecord(t *testing.T) {
+func TestDecodeHidesOldUnreleasedAndRawRecords(t *testing.T) {
 	t.Parallel()
-	_, recognized, err := Decode(`{"agentjail_credential_version":1,"metadata":{"tool":"aws","kind":"token"},"material":"x"}`)
-	if !recognized || err == nil {
-		t.Fatalf("recognized=%v err=%v", recognized, err)
+	for _, raw := range []string{
+		`{"agentjail_credential_version":1,"metadata":{"tool":"aws","kind":"access_key"},"material":"x"}`,
+		"plain-secret",
+	} {
+		if _, recognized, err := Decode(raw); err != nil || recognized {
+			t.Fatalf("Decode(%q) recognized=%v err=%v", raw, recognized, err)
+		}
 	}
 }
 
-func TestLegacyOnlyRecognizesTypedCredentialPrefixes(t *testing.T) {
+func TestDeliveryRejectsSessionControlEnvironment(t *testing.T) {
 	t.Parallel()
-	if _, recognized, err := Legacy("aws/old", testAWSMaterial); err != nil || !recognized {
-		t.Fatalf("legacy AWS recognized=%v err=%v", recognized, err)
+	for _, name := range []string{"PATH", "AGENTJAIL_CREDENTIAL_SESSION_TOKEN", "DYLD_INSERT_LIBRARIES", "HTTPS_PROXY", "SSH_AUTH_SOCK"} {
+		if _, err := NewRecord(Delivery{Env: []EnvVar{{Name: name, Value: "x"}}}, "", nil); err == nil {
+			t.Fatalf("security-sensitive environment %q was accepted", name)
+		}
 	}
-	if _, recognized, err := Legacy("MY_PROD_API_KEY", "secret"); err != nil || recognized {
-		t.Fatalf("raw secret recognized=%v err=%v", recognized, err)
+}
+
+func TestDeliveryRejectsDuplicateAndUnsafeBindings(t *testing.T) {
+	t.Parallel()
+	for _, delivery := range []Delivery{
+		{Env: []EnvVar{{Name: "TOKEN", Value: "x"}, {Name: "TOKEN", Value: "y"}}},
+		{Files: []SessionFile{{EnvVar: "CONFIG", Name: "../escape", Content: []byte("x")}}},
+		{Env: []EnvVar{{Name: "bad-name", Value: "x"}}},
+	} {
+		if err := ValidateDelivery(delivery); err == nil {
+			t.Fatalf("unsafe delivery accepted: %#v", delivery)
+		}
 	}
 }

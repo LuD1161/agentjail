@@ -26,7 +26,7 @@ const (
 
 // Broker is the narrow capability consumed by the MCP server.
 type Broker interface {
-	List(context.Context, string) ([]credentialaccess.Descriptor, error)
+	List(context.Context) ([]credentialaccess.Descriptor, error)
 	Request(context.Context, credentialaccess.ID, string) (credentialaccess.Issuance, error)
 }
 
@@ -125,26 +125,23 @@ func toolDefinitions() []object {
 	return []object{
 		{
 			"name":        "list_credentials",
-			"description": "List non-secret credentials available to this AgentJail session. Call this before requesting a credential; optionally filter by CLI tool. This never returns credential material.",
+			"description": "List non-secret credential IDs, labels, and tags available to this AgentJail session. Call this before requesting a credential. This never returns credential material.",
 			"inputSchema": object{
-				"type": "object",
-				"properties": object{"tool": object{
-					"type": "string", "enum": []string{"aws", "kubectl", "gh"},
-					"description": "Optional CLI tool filter.",
-				}},
+				"type":                 "object",
+				"properties":           object{},
 				"additionalProperties": false,
 			},
 		},
 		{
 			"name":        "request_credential",
-			"description": "Request one exact credential ID returned by list_credentials. AgentJail never chooses an account or context. Provide a concrete task reason; if the user's target is ambiguous, ask the user before calling this tool. The bootstrap response contains real credential material for the CLI environment or file.",
+			"description": "Request one exact credential ID returned by list_credentials. AgentJail never infers a provider or purpose from the name, label, or tags. The bootstrap response contains real credential material for the session environment or a private file.",
 			"inputSchema": object{
 				"type": "object",
 				"properties": object{
 					"credential_id": object{"type": "string", "minLength": 1, "description": "Exact ID returned by list_credentials."},
-					"reason":        object{"type": "string", "minLength": 1, "maxLength": credentialaccess.MaxReasonBytes, "description": "Concrete operation requiring this credential; never include secrets."},
+					"reason":        object{"type": "string", "maxLength": credentialaccess.MaxReasonBytes, "description": "Optional non-secret audit note."},
 				},
-				"required":             []string{"credential_id", "reason"},
+				"required":             []string{"credential_id"},
 				"additionalProperties": false,
 			},
 		},
@@ -162,15 +159,13 @@ func callTool(ctx context.Context, request rpcRequest, broker Broker) rpcRespons
 	}
 	switch params.Name {
 	case "list_credentials":
-		var arguments struct {
-			Tool string `json:"tool"`
-		}
 		if len(params.Arguments) != 0 {
+			var arguments struct{}
 			if err := decodeStrict(params.Arguments, &arguments); err != nil {
 				return errorResponse(request.ID, -32602, "Invalid list_credentials arguments")
 			}
 		}
-		items, err := broker.List(ctx, arguments.Tool)
+		items, err := broker.List(ctx)
 		if err != nil {
 			return toolError(request.ID, err)
 		}
@@ -274,7 +269,6 @@ type unixBroker struct {
 type brokerRequest struct {
 	Action       string `json:"action"`
 	SessionToken string `json:"session_token"`
-	Tool         string `json:"tool,omitempty"`
 	CredentialID string `json:"credential_id,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 }
@@ -286,8 +280,8 @@ type brokerResponse struct {
 	Issuance    *credentialaccess.Issuance    `json:"issuance,omitempty"`
 }
 
-func (b *unixBroker) List(ctx context.Context, tool string) ([]credentialaccess.Descriptor, error) {
-	response, err := b.call(ctx, brokerRequest{Action: "credential_list", SessionToken: b.token, Tool: tool})
+func (b *unixBroker) List(ctx context.Context) ([]credentialaccess.Descriptor, error) {
+	response, err := b.call(ctx, brokerRequest{Action: "credential_list", SessionToken: b.token})
 	if err != nil {
 		return nil, err
 	}

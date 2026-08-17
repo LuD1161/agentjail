@@ -1,6 +1,6 @@
 # ADR 0131 — Agent credential discovery
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0140-generic-credentials](0140-generic-credentials.md)
 - **Date:** 2026-08-10
 - **Deciders:** agentjail-core
 - **Linear:** AGE-275, AGE-276, AGE-277, AGE-278, AGE-279

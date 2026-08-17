@@ -20,26 +20,28 @@ func init() {
 
 	credentialCmd.Example = `  agentjail credential list
 
-  # Import the AWS variables already exported in this terminal and store them
-  # under the user-chosen name "aws/development".
-  agentjail credential set aws/development --tool aws --from-current-env --label "Development account"
+	# Store an arbitrary bundle under an exact user-chosen ID.
+	agentjail credential set aws-read-only-cred-dev \
+	  --from-env AWS_ACCESS_KEY_ID --from-env AWS_SECRET_ACCESS_KEY \
+	  --label "Development read only" --tag aws --tag dev
 
-  agentjail credential remove aws/development`
-	credentialSetCmd.Example = `  # Requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the environment.
-  # "aws/development" is a user-chosen name, not an AWS profile or filesystem path.
-  agentjail credential set aws/development --tool aws --from-current-env --label "Development account"
+	agentjail credential remove aws-read-only-cred-dev`
+	credentialSetCmd.Example = `  # Capture any set of current environment variables.
+	agentjail credential set aws-read-only-cred-dev \
+	  --from-env AWS_ACCESS_KEY_ID --from-env AWS_SECRET_ACCESS_KEY \
+	  --from-env AWS_SESSION_TOKEN --label "Development read only" --tag aws --tag dev
 
-  # Import a kubeconfig file under the user-chosen name "kube/development".
-  agentjail credential set kube/development --tool kubectl --from-file ./dev.kubeconfig
+	# Copy a file into the private session and bind its path to KUBECONFIG.
+	agentjail credential set cluster-dev --from-file KUBECONFIG=./dev.kubeconfig --tag kubernetes
 
-  # Import the value of GH_TOKEN under the user-chosen name "github/work".
-  printf '%s' "$GH_TOKEN" | agentjail credential set github/work --tool gh --from-stdin`
-	credentialListCmd.Example = `  # Print stored identifiers, for example: aws/development
-  agentjail credential list
+	# Read one value from stdin without placing it in argv.
+	printf '%s' "$SLACK_TOKEN" | agentjail credential set slack-channel-read-token --from-stdin SLACK_TOKEN --tag slack`
+	credentialListCmd.Example = `  # Print stored exact identifiers, never values.
+	agentjail credential list
 
-  # Start Codex with that AWS credential selected before the sandbox starts.
-  agentjail run --credential=aws=aws/development -- codex`
-	credentialRemoveCmd.Example = `  agentjail credential remove aws/development`
+	# Start Codex with one exact credential selected before the sandbox starts.
+	agentjail run --credential aws-read-only-cred-dev -- codex`
+	credentialRemoveCmd.Example = `  agentjail credential remove aws-read-only-cred-dev`
 
 	doctorCmd.Example = `  agentjail doctor
   agentjail doctor --fix`
@@ -114,7 +116,7 @@ func init() {
 	runCmd.Example = `  agentjail run -- claude
   agentjail run --verbose -- codex
   agentjail run --git-ssh -- codex
-  agentjail run --credential=aws=aws/dev -- claude`
+	agentjail run --credential aws-read-only-cred-dev -- claude`
 	claudeCmd.Example = `  agentjail claude
   agentjail claude --verbose
   agentjail claude --git-ssh`
