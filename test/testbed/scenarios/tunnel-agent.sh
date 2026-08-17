@@ -125,8 +125,13 @@ grep -qi "<svg" "$WORK/pelican.html" 2>/dev/null && scn_ok "artifact contains in
 NEW_TOTAL="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE;" 2>/dev/null || echo 0)"
 MODEL_ROWS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%') and (path like '%responses%' or path like '%codex%');" 2>/dev/null || echo 0)"
 RESPONSE_POSTS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses';" 2>/dev/null || echo 0)"
-RESPONSE_COMPLETED="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and status_code between 200 and 299 and coalesce(error,'')='';" 2>/dev/null || echo 0)"
+# SSE clients may cancel after consuming 2xx response bytes; task completion is
+# independently proven above. See ADR 0092-persist-request-bodies (D1).
+RESPONSE_COMPLETED="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and status_code between 200 and 299 and response_size > 0 and coalesce(error,'')='';" 2>/dev/null || echo 0)"
 RESPONSE_ERRORS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and coalesce(error,'')<>'';" 2>/dev/null || echo 0)"
+RESPONSE_CLIENT_CANCELED="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and status_code between 200 and 299 and response_size > 0 and error='write response to client: context canceled';" 2>/dev/null || echo 0)"
+RESPONSE_ACCEPTED="$((RESPONSE_COMPLETED + RESPONSE_CLIENT_CANCELED))"
+RESPONSE_UNEXPECTED_ERRORS="$((RESPONSE_POSTS - RESPONSE_ACCEPTED))"
 REQUEST_BODY_PATHS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and coalesce(request_body_path,'')<>'';" 2>/dev/null || echo 0)"
 RESPONSE_BODY_PATHS="$(sqlite3 "$DB" "select count(*) from network_requests where id > $BEFORE and method='POST' and path='/backend-api/codex/responses' and coalesce(response_body_path,'')<>'';" 2>/dev/null || echo 0)"
 API_REQ_BYTES="$(sqlite3 "$DB" "select coalesce(sum(request_size),0) from network_requests where id > $BEFORE and (host like '%openai%' or host like '%chatgpt%');" 2>/dev/null || echo 0)"
@@ -134,14 +139,16 @@ API_RESP="$(sqlite3 "$DB" "select coalesce(sum(response_size),0) from network_re
 METRICS="${SCN_JSON%.result.json}.metrics.json"
 jq -nc --argjson rows "$NEW_TOTAL" --argjson model_rows "$MODEL_ROWS" \
   --argjson response_posts "$RESPONSE_POSTS" --argjson completed "$RESPONSE_COMPLETED" \
-  --argjson response_errors "$RESPONSE_ERRORS" --argjson request_bytes "$API_REQ_BYTES" \
+  --argjson response_errors "$RESPONSE_ERRORS" --argjson accepted "$RESPONSE_ACCEPTED" \
+  --argjson client_canceled "$RESPONSE_CLIENT_CANCELED" \
+  --argjson unexpected_errors "$RESPONSE_UNEXPECTED_ERRORS" --argjson request_bytes "$API_REQ_BYTES" \
   --argjson response_bytes "$API_RESP" --argjson request_body_paths "$REQUEST_BODY_PATHS" \
   --argjson response_body_paths "$RESPONSE_BODY_PATHS" \
-  '{schema_version:1,network_rows:$rows,model_endpoint_rows:$model_rows,response_posts:$response_posts,response_posts_completed:$completed,response_posts_with_error:$response_errors,request_bytes:$request_bytes,response_bytes:$response_bytes,request_body_paths:$request_body_paths,response_body_paths:$response_body_paths}' \
+  '{schema_version:1,network_rows:$rows,model_endpoint_rows:$model_rows,response_posts:$response_posts,response_posts_accepted:$accepted,response_posts_completed:$completed,response_posts_with_error:$response_errors,response_posts_client_canceled:$client_canceled,response_posts_unexpected_errors:$unexpected_errors,request_bytes:$request_bytes,response_bytes:$response_bytes,request_body_paths:$request_body_paths,response_body_paths:$response_body_paths}' \
   >"$METRICS"
-echo "  captured: $NEW_TOTAL new rows, $MODEL_ROWS model endpoint rows, $RESPONSE_POSTS response POSTs ($RESPONSE_COMPLETED completed, $RESPONSE_ERRORS errors), ${API_REQ_BYTES}B decrypted request, ${API_RESP}B decrypted response"
+echo "  captured: $NEW_TOTAL new rows, $MODEL_ROWS model endpoint rows, $RESPONSE_POSTS response POSTs ($RESPONSE_COMPLETED completed, $RESPONSE_CLIENT_CANCELED client-canceled, $RESPONSE_UNEXPECTED_ERRORS unexpected errors), ${API_REQ_BYTES}B decrypted request, ${API_RESP}B decrypted response"
 [ "$NEW_TOTAL" -gt 0 ] && scn_ok "tunnel captured new requests" || scn_fail "tunnel captured new requests"
-[ "$RESPONSE_POSTS" -gt 0 ] && [ "$RESPONSE_COMPLETED" -gt 0 ] && scn_ok "tunnel decrypted completed Codex response requests" || scn_fail "tunnel decrypted completed Codex response requests"
+[ "$RESPONSE_POSTS" -gt 0 ] && [ "$RESPONSE_ACCEPTED" -eq "$RESPONSE_POSTS" ] && [ "$RESPONSE_UNEXPECTED_ERRORS" -eq 0 ] && scn_ok "tunnel captured only successful or client-canceled Codex response streams" || scn_fail "tunnel captured only successful or client-canceled Codex response streams"
 [ "$API_REQ_BYTES" -gt 0 ] && scn_ok "tunnel saw decrypted request bytes" || scn_fail "tunnel saw decrypted request bytes"
 [ "$API_RESP" -gt 0 ] && scn_ok "tunnel saw decrypted response bytes" || scn_fail "tunnel saw decrypted response bytes"
 [ "$REQUEST_BODY_PATHS" -gt 0 ] && [ "$RESPONSE_BODY_PATHS" -gt 0 ] && scn_ok "tunnel persisted encrypted or explicitly degraded request and response bodies" || scn_fail "tunnel persisted encrypted or explicitly degraded request and response bodies"
