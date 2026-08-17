@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" fill="none">
+  <rect width="720" height="240" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <rect width="720" height="48" rx="12" fill="#161b22"/>
+  <rect y="12" width="720" height="36" fill="#161b22"/>
+  <circle cx="24" cy="24" r="6" fill="#3fb950"/>
+  <text x="44" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v1.6.0</text>
+  <text x="214" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Credentials without vendor-shaped policy</text>
+
+  <rect x="20" y="60" width="216" height="142" rx="8" fill="#1c2128" stroke="#58a6ff44"/>
+  <text x="36" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#58a6ff">ANY CREDENTIAL</text>
+  <text x="36" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">--credential exact-id</text>
+  <text x="36" y="130" font-family="monospace" font-size="10" fill="#8b949e">labels + tags</text>
+  <text x="36" y="150" font-family="monospace" font-size="10" fill="#8b949e">env · file · stdin</text>
+  <text x="36" y="180" font-family="monospace" font-size="10" fill="#6e7681">provider-neutral</text>
+
+  <rect x="252" y="60" width="216" height="142" rx="8" fill="#1c2128" stroke="#a371f744"/>
+  <text x="268" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#a371f7">HOST PROXY ON macOS</text>
+  <text x="268" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">native allow-once</text>
+  <text x="268" y="130" font-family="monospace" font-size="10" fill="#8b949e">exact argv + cwd</text>
+  <text x="268" y="150" font-family="monospace" font-size="10" fill="#8b949e">one-use proof</text>
+  <text x="268" y="180" font-family="monospace" font-size="10" fill="#6e7681">Linux policy parity</text>
+
+  <rect x="484" y="60" width="216" height="142" rx="8" fill="#1c2128" stroke="#3fb95044"/>
+  <text x="500" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950">RELEASE PROOF</text>
+  <text x="500" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">real Codex session</text>
+  <text x="500" y="130" font-family="monospace" font-size="10" fill="#8b949e">strict tunnel matrix</text>
+  <text x="500" y="150" font-family="monospace" font-size="10" fill="#8b949e">PASS / FAIL / SKIP</text>
+  <text x="500" y="180" font-family="monospace" font-size="10" fill="#6e7681">required SKIPs = 0</text>
+
+  <text x="360" y="225" text-anchor="middle" font-family="monospace" font-size="10" fill="#8b949e">CLI release does not install the macOS Network Extension</text>
+</svg>

@@ -4,6 +4,84 @@
 
 ## Unreleased
 
+## v1.6.0 - 2026-08-16
+
+![v1.6.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.6.0-summary.svg)
+
+## TL;DR
+
+- **Store credentials under arbitrary IDs** with optional labels and tags,
+  then deliver explicit environment variables or private session files without
+  teaching AgentJail what vendor or tool consumes them.
+- **Run eligible host commands from shielded Codex sessions on macOS** through
+  the same native allow-once host-proxy contract already used on Linux.
+- **Prove macOS tunnel enforcement instead of accepting SKIPs** with an approved
+  Tart golden image, strict policy matrix, structured scenario results, and a
+  real Codex release gate.
+- **Keep the distribution boundary explicit**: the CLI release does not install
+  or activate the macOS Network Extension.
+
+### Added
+
+- **Generic credential records**: `agentjail credential set ID` imports named
+  environment variables, mode-0600 file bindings, or one stdin value. Optional
+  labels and tags are discovery metadata, while the exact ID remains the only
+  selection key.
+- **Agent credential discovery**: shielded coding agents receive a session-only
+  MCP surface that lists non-secret IDs, labels, and tags and requests one exact
+  credential. Eager launches use `agentjail run --credential ID -- <command>`.
+- **macOS host proxy**: `agentjail proxy -- <argv...>` shares the Linux policy,
+  evidence, audit, timeout, output, and failure contracts while using Darwin
+  process-group primitives behind the platform interface.
+- **Fail-closed tunnel assertions**: `--require-tunnel` and
+  `AGENTJAIL_REQUIRE_TUNNEL=1` refuse fallback when a test or release claim
+  requires the transparent tunnel.
+
+### Changed
+
+- **Credential identity is provider-neutral**: IDs such as
+  `aws-read-only-cred-prod`, `cluster-dev`, or `slack-channel-read-token` are
+  opaque names. AgentJail no longer requires a tool, provider, account, or
+  context field and never infers permissions from a name or tag.
+- **Credential delivery shares one audited domain path**: eager launch and
+  agent-requested delivery use the same exact-selection, authorization,
+  durable-audit, issuance, expiry, revocation, and cleanup contract.
+- **macOS testbeds use one approved golden**: all Tart workflows clone
+  `golden-macos-mitm`; non-tunnel scenarios leave its inactive extension alone,
+  while tunnel assertions require it to be activated and enabled.
+- **Distribution stays CLI-only**: release tarballs contain `agentjail` and
+  `agentjail-hook`. They do not package, install, activate, or approve the
+  separately built macOS Network Extension application.
+
+### Fixed
+
+- **Darwin tunnel session selection**: live registered PIDs survive permission
+  errors from `kill(pid, 0)` and are reaped only when the process no longer
+  exists, preventing valid sessions from silently bypassing the gateway.
+- **Darwin temporary staging**: tunneled sessions use the same validated
+  per-user temporary-directory renderer as ordinary macOS shield sessions, so
+  image paste and other agent staging no longer fail under the tunnel.
+- **Codex test teardown and daemon readiness**: release scenarios drain probe
+  process groups, isolate subprocess state, wait for launchd readiness, and use
+  typed health evidence instead of one-shot terminal text.
+- **Credential residue cleanup**: scenario credentials are removed and verified
+  absent, fixture values are scanned across raw AgentJail storage, and the
+  release evidence manifest fails when required artifacts or prompts are absent.
+
+### Security
+
+- **No credential values in argv**: imports read from trusted environment
+  variables, stdin, or files. Bindings that could replace PATH, dynamic loaders,
+  proxy or TLS controls, shell startup, module paths, or SSH-agent state are
+  rejected before storage.
+- **Host execution remains exact and one-use**: the daemon binds native approval
+  to the authenticated session, executable, argv, cwd, project root, PATH,
+  broker PID, and fresh process ancestry. Shells, interpreters, missing proofs,
+  replay, timeout, and rejection fail closed.
+- **No all-SKIP tunnel passes**: the macOS release gate requires an activated
+  extension, at least one executed tunnel scenario, strict allow/deny/bypass
+  policy evidence, and zero required SKIPs.
+
 ## v1.5.0 - 2026-08-06
 
 ![v1.5.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.5.0-summary.svg)
