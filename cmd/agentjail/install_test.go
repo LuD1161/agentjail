@@ -312,6 +312,16 @@ func TestInstallAllFlag(t *testing.T) {
 	}
 }
 
+func TestInstallAllReconcilesAlreadyProtectedAgents(t *testing.T) {
+	state := agentInstallState{present: 3, installed: 3}
+	if !shouldSkipInstalledAgents(state, false) {
+		t.Fatal("regular install should stop after refreshing an already protected installation")
+	}
+	if shouldSkipInstalledAgents(state, true) {
+		t.Fatal("--all must reconcile already protected agents")
+	}
+}
+
 // TestInstallAllSelectsAllDetected verifies that with --all, all detected agents
 // are selected without using the picker.
 func TestInstallAllSelectsAllDetected(t *testing.T) {

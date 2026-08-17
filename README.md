@@ -306,7 +306,7 @@ When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-a
 **Manual / per-agent control:**
 ```sh
 agentjail install --for claude-code   # wire a single agent
-agentjail install --all               # non-interactive, install all detected
+agentjail install --all               # non-interactive, reconcile all detected
 ```
 
 **Agent discovery + picker:** the installer presents a styled interactive multi-select - all detected agents start checked; press Space to uncheck, Enter to confirm. Without a TTY (CI): hooks are wired for **all detected** agents automatically.

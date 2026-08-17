@@ -62,29 +62,10 @@ else
 	echo "    none running"
 fi
 
-# install-or-refresh: on a fresh box this creates the launchd plist + wires the
-# hooks (and copies hook + daemon + starts the daemon). Run the freshly-built
-# CLI so it finds its dev siblings in $SRC.
-echo "==> agentjail install (base infrastructure)"
-"$SRC/agentjail" install
-
-# A base install intentionally short-circuits when every detected agent is
-# already protected. That is correct for normal use, but a dev deployment must
-# also reconcile each adapter's owned hook entries so matcher/schema changes
-# become live immediately. Per-agent install preserves foreign hooks while
-# migrating or replacing AgentJail-owned entries.
-echo "==> reconciling AgentJail hook entries for detected agents"
-for agent in claude-code cursor codex; do
-	case "$agent" in
-	claude-code) agent_dir="$HOME/.claude" ;;
-	cursor) agent_dir="$HOME/.cursor" ;;
-	codex) agent_dir="$HOME/.codex" ;;
-	esac
-	if [ -d "$agent_dir" ]; then
-		"$SRC/agentjail" install --for "$agent"
-		echo "    reconciled $agent"
-	fi
-done
+# --all performs one infrastructure refresh and reconciles every detected
+# adapter's owned hook entries without repeating the daemon/secrets preamble.
+echo "==> agentjail install (infrastructure + detected hook reconciliation)"
+"$SRC/agentjail" install --all
 
 # Swap the 2 real binaries explicitly (install already did this using the
 # colocated $SRC build, so this is belt-and-suspenders) and re-affirm the 4

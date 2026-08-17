@@ -23,9 +23,9 @@
 //     failing the install.
 //  7. Detects which agents are present on the machine (claude-code, codex, cursor)
 //     and which of them already have the agentjail hook wired.
-//  8. If every detected agent is already protected, the run is just a binary +
-//     daemon refresh (steps 1-6 above): it skips the picker and reports, so
-//     re-running `curl … | sh` on an installed machine behaves like an update.
+//  8. If every detected agent is already protected, a regular run is just a
+//     binary + daemon refresh (steps 1-6 above). Explicit --all still
+//     reconciles every detected adapter's owned hook entries.
 //  9. Otherwise presents an interactive multi-select picker (already-protected
 //     agents are marked) or falls back to non-interactive selection.
 //
@@ -33,7 +33,8 @@
 // 11. Prints a summary and exits non-zero if any selected install failed.
 //
 // Use `agentjail install --for <agent>` for single-agent back-compat.
-// Use `agentjail install --all` / `--yes` for non-interactive "install all".
+// Use `agentjail install --all` to reconcile every detected agent, or `--yes`
+// for a non-interactive regular install.
 // `agentjail install --allow-unsupported` is a deprecated no-op kept for
 // back-compat: Linux is a fully supported install target (ADR 0051).
 //
@@ -137,7 +138,8 @@ type installResult struct {
 // Flags:
 //
 //	--for <agent>        install only a single named agent (back-compat)
-//	--all / --yes        non-interactive; select all detected agents
+//	--all                non-interactive; reconcile all detected agents
+//	--yes                non-interactive; select all agents needing install
 //	--allow-unsupported  deprecated no-op; Linux is fully supported now
 func runInstallCmd(args []string) {
 	forAgent, all, yes, allowUnsupported := parseInstallFlags(args)
@@ -274,14 +276,10 @@ func runInstallCmd(args []string) {
 	env := buildAgentsEnv(home)
 	detected := detectAll(env)
 
-	// Snapshot which detected agents are already protected. The daemon preamble
-	// above has already (re)installed the binaries and restarted the daemon, so
-	// if every detected agent is already wired this run is effectively just a
-	// binary/daemon refresh — there is nothing new to wire. Skip the picker and
-	// report, so re-running `curl … | sh` (or `agentjail install`) on an
-	// already-protected machine behaves like an update instead of re-prompting.
+	// Ordinary reinstalls stop after refreshing an already protected deployment.
+	// Explicit --all still reconciles every adapter's owned hook entries.
 	state := computeInstallState(detected, func(a agents.Agent) agents.Status { return a.Status(env) })
-	if state.allProtected() {
+	if shouldSkipInstalledAgents(state, all) {
 		v := buildinfo.Version
 		if v == "" {
 			v = "dev"
@@ -1714,6 +1712,11 @@ type agentInstallState struct {
 // is nothing new for the discovery flow to do, so a re-run is just a refresh.
 func (s agentInstallState) allProtected() bool {
 	return s.present > 0 && s.installed == s.present
+}
+
+// Explicit --all reconciles owned hook entries even when status already passes.
+func shouldSkipInstalledAgents(state agentInstallState, all bool) bool {
+	return state.allProtected() && !all
 }
 
 // computeInstallState builds an agentInstallState from detection results, using
