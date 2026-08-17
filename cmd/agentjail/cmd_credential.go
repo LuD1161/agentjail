@@ -45,10 +45,10 @@ Credential values must never be placed directly in command arguments.`,
 			Label:        credentialSetLabel, Tags: credentialSetTags,
 		}, os.Stdin, os.Getenv, os.ReadFile)
 		if err != nil {
-			return err
+			return reportCredentialError(cmd, err)
 		}
 		if err := callSecretsSetStdin(args[0], value); err != nil {
-			return fmt.Errorf("store credential in encrypted broker: %w", err)
+			return reportCredentialError(cmd, fmt.Errorf("store credential in encrypted broker: %w", err))
 		}
 		fmt.Fprintf(os.Stdout, "credential stored: %s\n", args[0])
 		return nil
@@ -64,7 +64,10 @@ Credential values and metadata are never printed. Use an exact returned ID with
 'agentjail run --credential ID -- <command>'.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return callSecretsCommand("credential-list")
+		if err := callSecretsCommand("credential-list"); err != nil {
+			return reportCredentialError(cmd, err)
+		}
+		return nil
 	},
 }
 
@@ -73,11 +76,16 @@ var credentialRemoveCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := callSecretsDelete(args[0]); err != nil {
-			return err
+			return reportCredentialError(cmd, err)
 		}
 		fmt.Fprintf(os.Stdout, "credential removed: %s\n", args[0])
 		return nil
 	},
+}
+
+func reportCredentialError(cmd *cobra.Command, err error) error {
+	fmt.Fprintln(cmd.ErrOrStderr(), err)
+	return err
 }
 
 func init() {

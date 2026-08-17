@@ -1,12 +1,46 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/LuD1161/agentjail/internal/credentialaccess"
+	"github.com/spf13/cobra"
 )
+
+func TestCredentialSetReportsRejectedBinding(t *testing.T) {
+	previousFromEnv := credentialSetFromEnv
+	previousFromFile := credentialSetFromFile
+	previousFromStdin := credentialSetFromStdinEnv
+	previousLabel := credentialSetLabel
+	previousTags := credentialSetTags
+	t.Cleanup(func() {
+		credentialSetFromEnv = previousFromEnv
+		credentialSetFromFile = previousFromFile
+		credentialSetFromStdinEnv = previousFromStdin
+		credentialSetLabel = previousLabel
+		credentialSetTags = previousTags
+	})
+
+	credentialSetFromEnv = []string{"PATH"}
+	credentialSetFromFile = nil
+	credentialSetFromStdinEnv = ""
+	credentialSetLabel = ""
+	credentialSetTags = nil
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&stderr)
+
+	err := credentialSetCmd.RunE(cmd, []string{"unsafe-session-binding"})
+	if err == nil {
+		t.Fatal("unsafe PATH binding succeeded")
+	}
+	if !strings.Contains(stderr.String(), "can alter session security") {
+		t.Fatalf("stderr = %q, want security rejection", stderr.String())
+	}
+}
 
 func TestBuildCredentialValueFromEnvironment(t *testing.T) {
 	t.Parallel()

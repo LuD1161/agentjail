@@ -1206,6 +1206,17 @@ but only one enforced the evidence contract before returning material.
   service, and inject an issuance-audit failure into each public path. See ADR
   0140-generic-credentials.
 
+## 92. Returned errors can still be silent
+
+Credential validation correctly rejected a session-control environment name,
+and unit tests confirmed the returned error. The Cobra root suppressed automatic
+error printing, while its executor discarded the error text, so the CLI exited
+non-zero without telling the user why and the release gate caught the missing
+failure evidence.
+
+- **Rule:** when the command root owns error presentation, test both the exit
+  result and the user-visible error text at the command boundary.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that
