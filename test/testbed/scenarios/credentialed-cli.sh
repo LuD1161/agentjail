@@ -46,6 +46,7 @@ cleanup() {
         /tmp/agentjail-aws-config-list /tmp/agentjail-aws-identity.json \
         /tmp/agentjail-kube-version.json /tmp/agentjail-credential-stub.js \
         /tmp/agentjail-agent-kubeconfig \
+        /tmp/agentjail-credential-checkpoint \
         /tmp/agentjail-missing-credential.log \
         /tmp/agentjail-credential-stub.stderr \
         /tmp/agentjail-credential-stub.crt /tmp/agentjail-credential-stub.key \
@@ -319,29 +320,42 @@ CHECK='set -eu
 hash_stream() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | awk "{print \$1}"
 }
+checkpoint() { printf "%s\n" "$1" > /tmp/agentjail-credential-checkpoint; }
+checkpoint aws-config-source
 aws configure list > /tmp/agentjail-aws-config-list
 grep -Eq "access_key[[:space:]].*[[:space:]]env" /tmp/agentjail-aws-config-list
 grep -Eq "secret_key[[:space:]].*[[:space:]]env" /tmp/agentjail-aws-config-list
+checkpoint aws-fingerprints
 test "$(printf %s "$AWS_ACCESS_KEY_ID" | hash_stream)" = __AWS_ACCESS_FINGERPRINT__
 test "$(printf %s "$AWS_SECRET_ACCESS_KEY" | hash_stream)" = __AWS_SECRET_FINGERPRINT__
 test "$(printf %s "$AWS_SESSION_TOKEN" | hash_stream)" = __AWS_SESSION_FINGERPRINT__
 test "$AWS_DEFAULT_REGION" = us-west-2
 test "$AWS_EC2_METADATA_DISABLED" = true
+checkpoint aws-request
 aws sts get-caller-identity --endpoint-url "__STUB_URL__" \
     --ca-bundle /tmp/agentjail-credential-stub.crt --no-cli-pager \
     > /tmp/agentjail-aws-identity.json
 grep -q 123456789012 /tmp/agentjail-aws-identity.json
+checkpoint kube-context
 test "$(kubectl config current-context)" = agentjail-test
 test "$(kubectl config view --raw --minify -o "jsonpath={.users[0].user.token}" | hash_stream)" = __KUBE_FINGERPRINT__
+checkpoint kube-request
 kubectl get --raw /version > /tmp/agentjail-kube-version.json
 grep -q v1.30.0 /tmp/agentjail-kube-version.json
+checkpoint kube-file-mode
 test "$(stat -c %a "$KUBECONFIG" 2>/dev/null || stat -f %Lp "$KUBECONFIG")" = 600
+checkpoint kube-file-path
 temp_root=${TMPDIR:-/tmp}; temp_root=${temp_root%/}
 case "$KUBECONFIG" in "$temp_root"/agentjail-credentials-*/credential-1) ;; *) exit 21 ;; esac
+checkpoint github-token
 test "$(gh auth token | tr -d "\\n" | hash_stream)" = __GH_FINGERPRINT__
+checkpoint ambient-aws
 ! cat "$HOME/.aws/credentials" 2>/dev/null | grep -q HOST_AWS_SECRET_SENTINEL
+checkpoint ambient-kube
 ! cat "$HOME/.kube/config" 2>/dev/null | grep -q HOST_KUBE_SECRET_SENTINEL
+checkpoint ambient-github
 ! cat "$HOME/.config/gh/hosts.yml" 2>/dev/null | grep -q HOST_GH_SECRET_SENTINEL
+checkpoint complete
 '
 CHECK=${CHECK/__GH_FINGERPRINT__/$GH_FINGERPRINT}
 CHECK=${CHECK/__AWS_ACCESS_FINGERPRINT__/$AWS_ACCESS_FINGERPRINT}
@@ -373,7 +387,8 @@ fi
 if [ "$RC" = 0 ]; then
     ok "one shielded session used AWS env, kubeconfig file, and GH env credentials"
 else
-    bad "credentialed CLI session failed (rc=$RC)"
+    CHECKPOINT="$(cat /tmp/agentjail-credential-checkpoint 2>/dev/null || printf unavailable)"
+    bad "credentialed CLI session failed at $CHECKPOINT (rc=$RC)"
 fi
 
 if grep -qx AWS_SIGV4_OK /tmp/agentjail-credential-stub/log 2>/dev/null; then
