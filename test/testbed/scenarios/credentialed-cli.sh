@@ -349,7 +349,10 @@ checkpoint kube-file-path
 temp_root=${TMPDIR:-/tmp}; temp_root=${temp_root%/}
 case "$KUBECONFIG" in "$temp_root"/agentjail-credentials-*/credential-1) ;; *) exit 21 ;; esac
 checkpoint github-token
-test "$(gh auth token | tr -d "\\n" | hash_stream)" = __GH_FINGERPRINT__
+gh_config_dir="$(dirname "$KUBECONFIG")/gh-config"
+mkdir "$gh_config_dir"; chmod 700 "$gh_config_dir"
+test "$(GH_CONFIG_DIR="$gh_config_dir" gh auth token | tr -d "\\n" | hash_stream)" = __GH_FINGERPRINT__
+rm -r "$gh_config_dir"
 checkpoint ambient-aws
 ! cat "$HOME/.aws/credentials" 2>/dev/null | grep -q HOST_AWS_SECRET_SENTINEL
 checkpoint ambient-kube
