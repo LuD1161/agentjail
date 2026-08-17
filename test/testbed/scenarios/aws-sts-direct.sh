@@ -12,7 +12,7 @@ credential=$(jq -r .credential_name "$INPUT"); account=$(jq -r .account "$INPUT"
 role=$(jq -r .role_name "$INPUT"); region=$(jq -r .region "$INPUT")
 target=$(jq -r .target_bucket "$INPUT"); decoy=$(jq -r .decoy_bucket "$INPUT"); marker_sha=$(jq -r .marker_key_sha256 "$INPUT")
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-brokered(){ env -u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_EC2_METADATA_DISABLED=true AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null "$AJ" run --no-git-ssh --credential="aws=$credential" -- aws --region "$region" --ca-bundle /tmp/agentjail-aws-ca-bundle.crt --no-cli-pager "$@"; }
+brokered(){ env -u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_EC2_METADATA_DISABLED=true AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null "$AJ" run --no-git-ssh --credential "$credential" -- aws --region "$region" --ca-bundle /tmp/agentjail-aws-ca-bundle.crt --no-cli-pager "$@"; }
 
 if [ ! -e "$HOME/.aws/credentials" ] && [ ! -e "$HOME/.aws/config" ]; then ok "guest has no ambient shared AWS configuration"; else bad "guest has no ambient shared AWS configuration"; fi
 if env -u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_EC2_METADATA_DISABLED=true AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null aws --region "$region" --ca-bundle /tmp/agentjail-aws-ca-bundle.crt sts get-caller-identity >/tmp/aws-direct-outside.out 2>/tmp/aws-direct-outside.err; then bad "AWS identity is unavailable outside the broker session"; else ok "AWS identity is unavailable outside the broker session"; fi

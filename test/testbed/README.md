@@ -63,9 +63,9 @@ distinguishes broad endpoint rows from exact completed `POST
 /backend-api/codex/responses` calls.
 
 This mode deliberately contains unsanitized transcripts, paths, database
-content, and credential material returned to the coding agent by the static
-bootstrap broker. That transcript exposure is the explicit limitation in ADR
-0131-agent-credential-discovery; JIT/phantom delivery is a separate architectural
+content, and credential material returned to the coding agent by the generic
+bootstrap broker. Static session exposure is the explicit limitation in ADR
+0140-generic-credentials; JIT/phantom delivery is a separate architectural
 phase. Keep the directory owner-only, give it only to the authorized reviewer,
 never add it to Git, and delete it after the review. The gate inventories every
 long string path in the disposable Codex auth schema and byte-scans every
@@ -264,7 +264,7 @@ stays healthy precisely when enforcement is off.
 | `chaos-daemon-outage` | daemon stopped mid-session; stale socket file | hook still renders a decision and never hangs; fail-open is **visible** on stdout `systemMessage` (ADR 0073 — Claude Code discards hook stderr on exit 0) on both the claude and codex paths; sentinel written; `doctor` reports the fail-open window; the divergence signature reproduces; daemon + sentinel restored |
 | `agent-conformance` | native hook JSON for Claude, Codex, and Cursor | common project allow and sensitive-path / destructive-command denies produce the correct adapter-specific result without requiring provider login |
 | `codex-approval` | real Codex 0.147 TUI through explicit non-tunnel `agentjail run`, a guest-local bare Git remote, and a user-authored custom Bash `ask` | built-in and previously unknown custom rules open the same `shell-command` prompt; approve executes once; decline, `never`, and `--ignore-rules` leave no effect; guest auth is removed on exit |
-| `credentialed-cli` | two AWS accounts, one Kubernetes context, local SigV4/bearer verifiers, and real Codex with disposable auth | Codex lists non-secret choices, requests exact IDs with reasons, uses trusted `aws`/`kubectl` executable fingerprints, completes authenticated reads, never selects the decoy account, and leaves reasoned value-free audit events |
+| `credentialed-cli` | arbitrary credential IDs with generic environment/file bindings, local SigV4/bearer verifiers, and real Codex with disposable auth | Codex selects exact IDs from optional labels/tags, completes authenticated reads, never selects the decoy, and leaves value-free lifecycle audits; an unavailable ID and unsafe process-control binding fail closed |
 | `tunnel-agent` | real Codex through the installed PATH shim with `AGENTJAIL_REQUIRE_TUNNEL=1` | strict policy/bypass matrix executes; SQLite proves the extension registered the session and decrypted non-empty model requests/responses; no fallback or all-SKIP result can pass |
 | `chaos-supervisor-restart` | `SIGTERM` (clean exit) then `SIGKILL` (crash) to the daemon PID | supervisor respawns on **both** paths; `Restart=always` / `KeepAlive=true` pinned per OS (ADR 0070 — the updater's clean `exit(0)` went un-restarted under `Restart=on-failure`); enforcement proven real again, not just `is-active` green |
 | `chaos-hook-tamper` | hook entry stripped / settings file deleted, daemon up **and** down | hookwatch re-injects with the daemon up (ADR 0026); does **not** with the daemon down — the watchdog is a goroutine inside the daemon, blind during the outage it should mitigate; a full file delete is a pinned gap (hookwatch only repairs an existing file) |
