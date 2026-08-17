@@ -43,7 +43,7 @@ git config --global user.email "agent@testbed.local" 2>/dev/null || true
 
 # ---- 0b. credentialed CLI release-gate clients -----------------------------
 # Golden images may predate the credentialed CLI scenario, so provisioning
-# repairs the required clients before running it. See ADR 0129-credentialed-cli-bootstrap.
+# repairs the required clients before running it. See ADR 0140-generic-credentials.
 if [ "$(uname -s)" = "Linux" ]; then
     if ! command -v gh >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
         log "installing credentialed CLI package prerequisites"

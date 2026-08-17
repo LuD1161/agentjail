@@ -21,9 +21,12 @@ def main() -> int:
     command = [
         os.path.expanduser("~/.agentjail/bin/agentjail"),
         "credential", "set", os.environ["AGENTJAIL_IMPORT_NAME"],
-        "--tool", "aws", "--from-current-env",
-        "--label", "Temporary least-privilege AWS STS test role",
-        "--account", os.environ["AGENTJAIL_IMPORT_ACCOUNT"],
+        "--from-env", "AWS_ACCESS_KEY_ID",
+        "--from-env", "AWS_SECRET_ACCESS_KEY",
+        "--from-env", "AWS_SESSION_TOKEN",
+        "--from-env", "AWS_DEFAULT_REGION",
+        "--label", "Temporary AWS STS role for account " + os.environ["AGENTJAIL_IMPORT_ACCOUNT"],
+        "--tag", "aws", "--tag", "temporary", "--tag", "sts",
     ]
     result = subprocess.run(
         command, env=env, stdin=subprocess.DEVNULL,

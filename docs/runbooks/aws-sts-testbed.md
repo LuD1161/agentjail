@@ -120,7 +120,7 @@ hardening failure cannot orphan it.
 This workflow proves Codex credential discovery and exact request, direct
 session-only delivery, AWS identity, least-privilege enforcement, negative
 outcomes, audit ordering, leakage checks, and bounded cleanup. ADR
-0131-agent-credential-discovery explicitly accepts that bootstrap MCP material is
+0140-generic-credentials explicitly accepts that static session material is
 visible to the coding agent; this harness prevents an unnecessary second copy in
 a shell transcript. It does not prove the Darwin tunnel or MITM path; run the
 strict tunnel scenario separately, serially, because macOS has one global
