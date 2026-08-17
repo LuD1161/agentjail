@@ -61,10 +61,16 @@ func Run(args []string) int {
 		runServer(rest)
 	case "set":
 		runSet(rest)
+	case "credential-set":
+		runCredentialSet(rest)
 	case "list":
 		runList(rest)
+	case "credential-list":
+		runCredentialList(rest)
 	case "delete":
 		runDelete(rest)
+	case "credential-delete":
+		runCredentialDelete(rest)
 	case "grant":
 		runGrant(rest)
 	case "revoke":

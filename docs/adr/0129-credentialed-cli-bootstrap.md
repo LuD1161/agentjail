@@ -1,6 +1,6 @@
 # ADR 0129 — Credentialed CLI bootstrap
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0140-generic-credentials](0140-generic-credentials.md)
 - **Date:** 2026-08-09
 - **Deciders:** agentjail-core
 - **Linear:** AGE-275, AGE-276, AGE-277, AGE-278, AGE-279

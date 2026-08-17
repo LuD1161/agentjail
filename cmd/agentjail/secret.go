@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 )
 
-// callSecretsDelete invokes `agentjail-secrets delete <name>`.
+// callSecretsDelete invokes the typed credential delete path.
 func callSecretsDelete(name string) error {
 	bin, err := findSecretsBinary()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(bin, "delete", name)
+	cmd := exec.Command(bin, "credential-delete", name)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -21,7 +21,7 @@ Available Commands:
   allow           Request a project host allowlist change
   completion      Generate the autocompletion script for the specified shell
   cost            Summarize agent spending across projects and models
-  credential      Manage credentials for shielded CLI tools
+  credential      Manage credentials for shielded sessions
   doctor          Run comprehensive protection diagnostics
   feedback        Send feedback with disclosed diagnostic metadata
   grant           Review and decide project host requests
@@ -265,8 +265,8 @@ Global Flags:
 ```text
 Manage static credentials in AgentJail's encrypted local broker.
 
-These credentials are delivered directly to explicitly selected CLI tools.
-They are not narrowed by a credential policy or JIT issuer.
+Credential names are arbitrary exact identifiers. AgentJail does not infer a
+provider, account, permission level, or intended command from a name or tag.
 
 Usage:
   agentjail credential [command]
@@ -274,16 +274,17 @@ Usage:
 Examples:
   agentjail credential list
 
-  # Import the AWS variables already exported in this terminal and store them
-  # under the user-chosen name "aws/development".
-  agentjail credential set aws/development --tool aws --from-current-env --label "Development account"
+  # Store an arbitrary bundle under an exact user-chosen ID.
+  agentjail credential set aws-read-only-cred-dev \
+    --from-env AWS_ACCESS_KEY_ID --from-env AWS_SECRET_ACCESS_KEY \
+    --label "Development read only" --tag aws --tag dev
 
-  agentjail credential remove aws/development
+  agentjail credential remove aws-read-only-cred-dev
 
 Available Commands:
   list        List stored credential identifiers without revealing their values
   remove      Remove a credential from the encrypted broker
-  set         Import a static AWS, Kubernetes, or GitHub CLI credential
+  set         Store a credential under an arbitrary exact name
 
 Flags:
   -h, --help   help for credential
@@ -297,22 +298,20 @@ Use "agentjail credential [command] --help" for more information about a command
 ## `agentjail credential list --help`
 
 ```text
-List the user-chosen identifiers stored in AgentJail's encrypted broker,
-one per line, such as aws/development or github/work.
+List the user-chosen identifiers stored in AgentJail's encrypted broker.
 
-Credential values and metadata are never printed. No output means the broker
-contains no credentials. Use a returned identifier as NAME in
-'agentjail run --credential=TOOL=NAME -- <agent>'.
+Credential values and metadata are never printed. Use an exact returned ID with
+'agentjail run --credential ID -- <command>'.
 
 Usage:
   agentjail credential list
 
 Examples:
-  # Print stored identifiers, for example: aws/development
+  # Print stored exact identifiers, never values.
   agentjail credential list
 
-  # Start Codex with that AWS credential selected before the sandbox starts.
-  agentjail run --credential=aws=aws/development -- codex
+  # Start Codex with one exact credential selected before the sandbox starts.
+  agentjail run --credential aws-read-only-cred-dev -- codex
 
 Flags:
   -h, --help   help for list
@@ -330,7 +329,7 @@ Usage:
   agentjail credential remove <name>
 
 Examples:
-  agentjail credential remove aws/development
+  agentjail credential remove aws-read-only-cred-dev
 
 Flags:
   -h, --help   help for remove
@@ -342,46 +341,39 @@ Global Flags:
 ## `agentjail credential set --help`
 
 ```text
-Import one credential into AgentJail's encrypted local broker.
+Store one credential bundle in AgentJail's encrypted local broker.
 
-<name> is the identifier you choose for this credential, such as
-aws/development. You use the same name later with
-'agentjail run --credential=aws=aws/development -- ...'. The --tool value
-selects both the credential format and the shielded CLI that may receive it.
+<name> is an arbitrary identifier such as aws-read-only-cred-prod or
+slack-channel-read-token. Names and optional labels/tags are descriptive only;
+the external service still defines what the credential can do.
 
-Choose exactly one source: --from-current-env, --from-file, or --from-stdin.
---from-current-env reads variables inherited from the shell as follows:
-
-  --tool aws       Requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
-                   Also imports optional AWS_SESSION_TOKEN and
-                   AWS_REGION or AWS_DEFAULT_REGION.
-  --tool kubectl   Reads the kubeconfig file named by KUBECONFIG, which must
-                   contain exactly one file path.
-  --tool gh        Reads GH_TOKEN, falling back to GITHUB_TOKEN.
+Use one or more --from-env NAME flags to capture current environment values.
+Use --from-file ENV=PATH to expose copied content through ENV as a private
+mode-0600 session file. For a single value on stdin, use --from-stdin ENV.
+Credential values must never be placed directly in command arguments.
 
 Usage:
   agentjail credential set <name> [flags]
 
 Examples:
-  # Requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the environment.
-  # "aws/development" is a user-chosen name, not an AWS profile or filesystem path.
-  agentjail credential set aws/development --tool aws --from-current-env --label "Development account"
+  # Capture any set of current environment variables.
+  agentjail credential set aws-read-only-cred-dev \
+    --from-env AWS_ACCESS_KEY_ID --from-env AWS_SECRET_ACCESS_KEY \
+    --from-env AWS_SESSION_TOKEN --label "Development read only" --tag aws --tag dev
 
-  # Import a kubeconfig file under the user-chosen name "kube/development".
-  agentjail credential set kube/development --tool kubectl --from-file ./dev.kubeconfig
+  # Copy a file into the private session and bind its path to KUBECONFIG.
+  agentjail credential set cluster-dev --from-file KUBECONFIG=./dev.kubeconfig --tag kubernetes
 
-  # Import the value of GH_TOKEN under the user-chosen name "github/work".
-  printf '%s' "$GH_TOKEN" | agentjail credential set github/work --tool gh --from-stdin
+  # Read one value from stdin without placing it in argv.
+  printf '%s' "$SLACK_TOKEN" | agentjail credential set slack-channel-read-token --from-stdin SLACK_TOKEN --tag slack
 
 Flags:
-      --account string     non-secret account or tenant identifier
-      --context string     non-secret cluster or context identifier
-      --from-current-env   import from the current shell environment using the variables documented above
-      --from-file string   import a kubeconfig or other credential content from PATH
-      --from-stdin         read credential content from standard input (useful for tokens and scripts)
-  -h, --help               help for set
-      --label string       non-secret label shown to coding agents
-      --tool string        CLI allowed to receive the credential: aws, kubectl, or gh (required)
+      --from-env stringArray    capture environment variable NAME and deliver it under the same name (repeatable)
+      --from-file stringArray   copy PATH into a private session file and expose its path through ENV, as ENV=PATH (repeatable)
+      --from-stdin string       read one credential value from standard input and deliver it through ENV
+  -h, --help                    help for set
+      --label string            optional non-secret description shown during discovery
+      --tag stringArray         optional non-secret discovery tag (repeatable)
 
 Global Flags:
       --no-color   Disable color in human-readable output
@@ -1076,10 +1068,10 @@ Examples:
   agentjail run -- claude
   agentjail run --verbose -- codex
   agentjail run --git-ssh -- codex
-  agentjail run --credential=aws=aws/dev -- claude
+  agentjail run --credential aws-read-only-cred-dev -- claude
 
 Flags:
-      --credential stringArray   select broker credential as TOOL=NAME, for example aws=aws/dev (repeatable)
+      --credential stringArray   select an exact broker credential ID (repeatable)
       --git-ssh                  enable Git over SSH by delegating all loaded SSH-agent identities
   -h, --help                     help for run
       --no-git-ssh               disable policy-default Git over SSH for this launch

@@ -8,13 +8,16 @@ import (
 
 func TestParseRunOptionsCredentialMappings(t *testing.T) {
 	t.Parallel()
-	options, rest := parseRunOptions([]string{
-		"--credential=aws=aws/default",
-		"--credential=kubectl=kube/dev",
+	options, rest, err := parseRunOptions([]string{
+		"--credential", "aws-read-only-cred-prod",
+		"--credential=cluster-dev",
 		"--",
 		"codex",
 	})
-	if len(options.credentials) != 2 || options.credentials[0] != "aws=aws/default" || options.credentials[1] != "kubectl=kube/dev" {
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(options.credentials) != 2 || options.credentials[0] != "aws-read-only-cred-prod" || options.credentials[1] != "cluster-dev" {
 		t.Fatalf("credentials = %#v", options.credentials)
 	}
 	if len(rest) != 2 || rest[0] != "--" || rest[1] != "codex" {
@@ -24,12 +27,24 @@ func TestParseRunOptionsCredentialMappings(t *testing.T) {
 
 func TestParseRunOptionsRequireTunnel(t *testing.T) {
 	t.Parallel()
-	options, rest := parseRunOptions([]string{"--require-tunnel", "--", "codex", "exec"})
+	options, rest, err := parseRunOptions([]string{"--require-tunnel", "--", "codex", "exec"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !options.requireTunnel {
 		t.Fatalf("options = %#v, want requireTunnel", options)
 	}
 	if len(rest) != 3 || rest[0] != "--" || rest[1] != "codex" || rest[2] != "exec" {
 		t.Fatalf("rest = %#v", rest)
+	}
+}
+
+func TestParseRunOptionsRejectsMissingCredentialID(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"--credential"}, {"--credential", "--", "codex"}, {"--credential="}} {
+		if _, _, err := parseRunOptions(args); err == nil {
+			t.Fatalf("parseRunOptions(%q) succeeded, want error", args)
+		}
 	}
 }
 

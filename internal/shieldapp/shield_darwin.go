@@ -339,9 +339,9 @@ type darwinProfileCapabilities struct {
 	CredentialBrokerSocket  string
 }
 
-func resolveDarwinProfileCapabilities(agentPath string, credentialTools credentialSelections, sshAuthSock sandbox.SSHAuthSock) (darwinProfileCapabilities, error) {
+func resolveDarwinProfileCapabilities(agentPath string, credentials credentialSelections, sshAuthSock sandbox.SSHAuthSock) (darwinProfileCapabilities, error) {
 	capabilities := darwinProfileCapabilities{SSHAuthSock: sshAuthSock}
-	if len(credentialTools) == 0 || !supportsCredentialMCP(agentPath) {
+	if len(credentials) == 0 || !supportsCredentialMCP(agentPath) {
 		return capabilities, nil
 	}
 	executable, err := credentialMCPCommand()
@@ -704,7 +704,7 @@ func appendCredentialMCPReadCapability(sb *strings.Builder, executable string) {
 		return
 	}
 	// The session MCP executable is validated before profile construction; grant
-	// only that literal beneath the self-read deny. See ADR 0131-agent-credential-discovery.
+	// only that literal beneath the self-read deny. See ADR 0140-generic-credentials.
 	fmt.Fprintf(sb, "(allow file-read*\n    (literal %q))\n\n", executable)
 }
 
@@ -713,7 +713,7 @@ func appendCredentialMCPNetworkCapability(sb *strings.Builder, socket string) {
 		return
 	}
 	// The session token remains the authorization boundary; Seatbelt grants only
-	// its exact broker socket. See ADR 0131-agent-credential-discovery.
+	// its exact broker socket. See ADR 0140-generic-credentials.
 	fmt.Fprintf(sb, "(allow network-outbound\n    (literal %q))\n\n", socket)
 }
 
@@ -804,7 +804,7 @@ func isControlSocketPath(p, home string) bool {
 //
 // The sandbox is applied before execve, so the process and all its
 // descendants inherit the restrictions — no hook bypass is possible.
-func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, requireTunnel bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, tunnelMode bool, requireTunnel bool, mitmMode bool, ipv6Mode bool, sshAuthSock sandbox.SSHAuthSock, credentials credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	if !profilePrint {
 		ensureLocalUI(context.Background(), emitter)
 	}
@@ -826,8 +826,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 			os.Exit(0)
 		}
 		ctx := context.Background()
-		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), requireTunnel, mitmMode, ipv6Mode, sshAuthSock, credentialTools, emitter, func() {
-			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, credentialTools, policyPath, startTime, emitter)
+		startTunnelDarwin(ctx, cfg, agentPath, agentArgs, resolveNetpacksDir(), requireTunnel, mitmMode, ipv6Mode, sshAuthSock, credentials, emitter, func() {
+			runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, credentials, policyPath, startTime, emitter)
 		})
 		// startTunnelDarwin either os.Exit's on success/fatal-error, or (on a
 		// fail-open setup failure) invokes fallback above, which itself never
@@ -835,14 +835,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		// startTunnelDarwin's doc comment.
 		return
 	}
-	runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, credentialTools, policyPath, startTime, emitter)
+	runShieldNoTunnel(cfg, agentPath, agentArgs, profilePrint, noNetproxy, sshAuthSock, credentials, policyPath, startTime, emitter)
 }
 
 // runShieldNoTunnel is the non-tunnel (default) macOS launch path: sbpl +
 // optional netproxy. Split out of runShield so --tunnel can dispatch to
 // startTunnelDarwin instead, and so a fail-open tunnel setup failure can fall
 // back into exactly this path. See runShield's doc comment above.
-func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
+func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []string, profilePrint bool, noNetproxy bool, sshAuthSock sandbox.SSHAuthSock, credentials credentialSelections, policyPath string, startTime time.Time, emitter audit.Emitter) {
 	ctx := context.Background()
 	_ = startTime // TODO: add startup timing + session summary to macOS shield
 	home, err := os.UserHomeDir()
@@ -874,7 +874,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	// (it emits the control-socket deny + localhost-only egress); it does not
 	// need the proxy to be running yet, so we generate before starting it and
 	// avoid spawning a proxy just to print the profile.
-	capabilities, credentialErr := resolveDarwinProfileCapabilities(agentPath, credentialTools, sshAuthSock)
+	capabilities, credentialErr := resolveDarwinProfileCapabilities(agentPath, credentials, sshAuthSock)
 	if credentialErr != nil {
 		fmt.Fprintf(os.Stderr, "agentjail-shield: credential MCP profile setup failed: %v\n", credentialErr)
 		os.Exit(1)
@@ -930,7 +930,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 			Detail:    map[string]string{"error": "sandbox-exec not found"},
 			Actor:     "shield",
 		})
-		execAgent(ctx, cfg, agentPath, agentArgs, withNetproxy, sessionToken, sshAuthSock, credentialTools, emitter)
+		execAgent(ctx, cfg, agentPath, agentArgs, withNetproxy, sessionToken, sshAuthSock, credentials, emitter)
 		return
 	}
 
@@ -950,9 +950,9 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 	darwinCtlToken, darwinCtlTokenErr := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
-	credentialSession, credentialErr := prepareCredentialSession(credentialTools, darwinCtlToken, agentPath)
+	credentialSession, credentialErr := prepareCredentialSession(credentials, darwinCtlToken, agentPath)
 	if credentialErr != nil {
-		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", credentialErr)
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential session bootstrap failed: %v\n", credentialErr)
 		if netproxyCmd != nil {
 			_ = netproxyCmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -965,16 +965,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		os.Exit(1)
 	}
 	env = credentialSession.applyEnv(env)
-	for _, tool := range credentialTools {
-		fmt.Fprintf(os.Stderr, "agentjail-shield INFO: %s ready for %s broker credentials\n", tool.Tool, tool.deliveryMode())
-		slog.Info("credentialed tool ready", "tool", tool.Tool, "credential_name", tool.Name, "binary", tool.BinaryPath, "delivery", tool.deliveryMode())
-		_ = emitter.Emit(ctx, audit.Event{
-			EventType: audit.CredentialToolReady,
-			Entity:    tool.auditEntity(),
-			Detail:    map[string]string{"tool": string(tool.Tool), "binary": tool.BinaryPath, "delivery": tool.deliveryMode()},
-			Actor:     "shield",
-		})
-	}
+	reportCredentialSelections(ctx, credentials, emitter)
 
 	// --- Provider capture gateway (A2): a registered provider agent with the
 	// gateway enabled can no longer syscall.Exec -- an in-process gateway
@@ -1073,7 +1064,7 @@ func runShieldNoTunnel(cfg *config.PolicyConfig, agentPath string, agentArgs []s
 		EventType: audit.ShieldActivated,
 		Actor:     "shield",
 	})
-	if len(credentialTools) > 0 {
+	if len(credentials) > 0 {
 		childArgv := append([]string{"-p", profile, agentPath}, agentArgs...)
 		child := exec.Command(sandboxExecPath, childArgv...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -1114,7 +1105,7 @@ func recordSandboxExecFailure(ctx context.Context, emitter audit.Emitter, err er
 
 // execAgent execs the agent directly (no sandbox) — used when sandbox-exec
 // is absent (fail-open path).  Env stripping still applies.
-func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token, sshAuthSock sandbox.SSHAuthSock, credentialTools credentialSelections, emitter audit.Emitter) {
+func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, agentArgs []string, withNetproxy bool, sessionToken proxyctl.Token, sshAuthSock sandbox.SSHAuthSock, credentials credentialSelections, emitter audit.Emitter) {
 	// FIX1 (ADR 0039): same clean-then-strip ordering as runShield's sandbox
 	// path -- the fail-open fallback must not leak a broader environment
 	// than the sandboxed path does.
@@ -1131,9 +1122,9 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 	darwinCtlToken, darwinCtlTokenErr := ctlauth.Load()
 	grantEnvVars, activeGrants := requestSecretGrants(cfg, darwinCtlToken)
 	env = append(env, grantEnvVars...)
-	credentialSession, credentialErr := prepareCredentialSession(credentialTools, darwinCtlToken, agentPath)
+	credentialSession, credentialErr := prepareCredentialSession(credentials, darwinCtlToken, agentPath)
 	if credentialErr != nil {
-		fmt.Fprintf(os.Stderr, "agentjail-shield: credentialed tool bootstrap failed: %v\n", credentialErr)
+		fmt.Fprintf(os.Stderr, "agentjail-shield: credential session bootstrap failed: %v\n", credentialErr)
 		os.Exit(1)
 	}
 	agentArgs, credentialErr = credentialSession.configureAgent(agentPath, agentArgs)
@@ -1205,7 +1196,7 @@ func execAgent(ctx context.Context, cfg *config.PolicyConfig, agentPath string, 
 		unregisterHostProxyLaunch(registeredHostProxy, darwinCtlToken)
 		os.Exit(exitCode)
 	}
-	if len(credentialTools) > 0 {
+	if len(credentials) > 0 {
 		child := exec.Command(agentPath, agentArgs...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 		child.Env = env

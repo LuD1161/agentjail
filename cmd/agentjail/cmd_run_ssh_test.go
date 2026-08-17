@@ -19,7 +19,10 @@ type promptReadWriter struct {
 }
 
 func TestParseRunOptionsConsumesGitSSHOnlyAsLeadingLaunchFlag(t *testing.T) {
-	options, rest := parseRunOptions([]string{"--git-ssh", "--tunnel", "--verbose", "--", "claude", "--git-ssh"})
+	options, rest, err := parseRunOptions([]string{"--git-ssh", "--tunnel", "--verbose", "--", "claude", "--git-ssh"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !options.gitSSH || options.noGitSSH || !options.tunnelMode || options.noSandbox || !options.verbose {
 		t.Fatalf("options = %#v", options)
 	}
@@ -41,11 +44,17 @@ func TestRunHelpDocumentsSSHForwarding(t *testing.T) {
 }
 
 func TestParseRunOptionsGitSSHOverrides(t *testing.T) {
-	on, rest := parseRunOptions([]string{"--git-ssh", "--", "codex"})
+	on, rest, err := parseRunOptions([]string{"--git-ssh", "--", "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !on.gitSSH || on.noGitSSH || len(rest) != 2 {
 		t.Fatalf("enabled options = %#v, rest = %v", on, rest)
 	}
-	off, rest := parseRunOptions([]string{"--no-git-ssh", "--", "cursor"})
+	off, rest, err := parseRunOptions([]string{"--no-git-ssh", "--", "cursor"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if off.gitSSH || !off.noGitSSH || len(rest) != 2 {
 		t.Fatalf("disabled options = %#v, rest = %v", off, rest)
 	}

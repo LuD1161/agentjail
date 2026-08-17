@@ -121,10 +121,13 @@ func TestBroker_EveryVerbRequiresToken(t *testing.T) {
 	for _, req := range []RPCRequest{
 		{Action: "list"},
 		{Action: "set", Name: "X", Value: "y"},
+		{Action: "credential_set", Name: "X", Value: "y"},
 		{Action: "delete", Name: "MY_PROD_API_KEY"},
+		{Action: "credential_delete", Name: "MY_PROD_API_KEY"},
 		{Action: "grant", Name: "MY_PROD_API_KEY"},
+		{Action: "credential_grant", Name: "MY_PROD_API_KEY"},
 		{Action: "revoke", GrantID: "whatever"},
-		{Action: "session_register", SessionID: "session-1", Agent: "codex", Tools: []string{"aws"}},
+		{Action: "session_register", SessionID: "session-1", Agent: "codex"},
 		{Action: "session_revoke", SessionToken: "whatever"},
 		{Action: "credential_inventory"},
 	} {
@@ -176,10 +179,13 @@ func TestBroker_EmptyServerTokenFailsClosed(t *testing.T) {
 	}
 }
 
-func TestBroker_AgentCapabilityCanOnlyAccessTypedCredentials(t *testing.T) {
+func TestBroker_AgentCapabilityCanOnlyAccessCredentialRecords(t *testing.T) {
 	const controlToken = "the-real-token"
 	sock, store := brokerFixture(t, controlToken)
-	record, err := credentialaccess.NewRecord("aws", `{"access_key_id":"AKIADEV","secret_access_key":"secret"}`, "development", "111111111111", "")
+	record, err := credentialaccess.NewRecord(credentialaccess.Delivery{Env: []credentialaccess.EnvVar{
+		{Name: "AWS_ACCESS_KEY_ID", Value: "AKIADEV"},
+		{Name: "AWS_SECRET_ACCESS_KEY", Value: "secret"},
+	}}, "development", []string{"aws", "dev"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +198,7 @@ func TestBroker_AgentCapabilityCanOnlyAccessTypedCredentials(t *testing.T) {
 	}
 
 	registered := ask(t, sock, RPCRequest{
-		Action: "session_register", Token: controlToken, SessionID: "session-1", Project: "/repo", Agent: "codex", Tools: []string{"aws"},
+		Action: "session_register", Token: controlToken, SessionID: "session-1", Project: "/repo", Agent: "codex",
 	})
 	if !registered.OK || registered.SessionToken == "" {
 		t.Fatalf("register agent session: %+v", registered)
@@ -221,8 +227,8 @@ func TestBroker_AgentCapabilityCanOnlyAccessTypedCredentials(t *testing.T) {
 	if got := deliveryEnv(issued.Issuance.Delivery.Env)["AWS_ACCESS_KEY_ID"]; got != "AKIADEV" {
 		t.Fatalf("issued access key = %q", got)
 	}
-	if got := ask(t, sock, RPCRequest{Action: "tool_grant", SessionToken: registered.SessionToken, Name: "aws/development", Tool: "aws"}); got.OK {
-		t.Fatalf("agent capability invoked control-plane tool grant: %+v", got)
+	if got := ask(t, sock, RPCRequest{Action: "credential_grant", SessionToken: registered.SessionToken, Name: "aws/development"}); got.OK {
+		t.Fatalf("agent capability invoked control-plane credential grant: %+v", got)
 	}
 	if got := ask(t, sock, RPCRequest{Action: "session_revoke", Token: controlToken, SessionToken: registered.SessionToken}); !got.OK {
 		t.Fatalf("revoke session: %+v", got)

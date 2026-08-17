@@ -33,7 +33,7 @@ const (
 	CredentialRemoved           = "credential.removed"
 	CredentialIssued            = "credential.issued"
 	CredentialRevoked           = "credential.revoked"
-	CredentialToolReady         = "credential.tool_ready"
+	CredentialReady             = "credential.ready"
 	CredentialSessionRegistered = "credential.session_registered"
 	CredentialSessionRevoked    = "credential.session_revoked"
 	CredentialListed            = "credential.listed"

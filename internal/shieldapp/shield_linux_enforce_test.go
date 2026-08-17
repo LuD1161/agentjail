@@ -58,7 +58,7 @@ func TestMain(m *testing.M) {
 // "home=EACCES", "home=ok", or "home=ERR:<msg>".
 func runLandlockChild() {
 	// Apply Landlock with nil config, no network restriction (FS-only test).
-	if err := applyLandlock(nil, 0, nil); err != nil {
+	if err := applyLandlock(nil, 0); err != nil {
 		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -106,7 +106,7 @@ func runLandlockChild() {
 // Results are printed as "denied_port=EACCES", "denied_port=ERR:<msg>",
 // "allowed_port=ok", "allowed_port=EACCES", "allowed_port=ERR:<msg>".
 func runLandlockNetChild() {
-	if err := applyLandlock(nil, netproxyDefaultPort, nil); err != nil {
+	if err := applyLandlock(nil, netproxyDefaultPort); err != nil {
 		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -163,7 +163,7 @@ func runLandlockNetChild() {
 func runLandlockAgentjailChild() {
 	// FS-only Landlock (no TCP restriction). Landlock's TCP net rules do not
 	// cover AF_UNIX, so netproxyPort is irrelevant here.
-	if err := applyLandlock(nil, 0, nil); err != nil {
+	if err := applyLandlock(nil, 0); err != nil {
 		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -424,7 +424,7 @@ func TestLandlockAgentjailStateEnforcement(t *testing.T) {
 //   - store_read=EACCES (denied, expected) | =ok (LEAK) | =ERR:<msg>
 //   - policy_read=ok (allowed, expected) | =EACCES (over-broad deny) | =ERR:<msg>
 func runLandlockSecretsChild() {
-	if err := applyLandlock(nil, 0, nil); err != nil {
+	if err := applyLandlock(nil, 0); err != nil {
 		fmt.Fprintf(os.Stdout, "applyLandlock failed: %v\n", err)
 		os.Exit(1)
 	}

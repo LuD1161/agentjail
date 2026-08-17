@@ -70,6 +70,17 @@ func runClaudeCmd(args []string) int {
 	// loop sees them the same way it does for `agentjail run --no-sandbox -- ...`.
 	var lead []string
 	for len(args) > 0 && isRunLaunchFlag(args[0]) {
+		if args[0] == "--credential" {
+			lead = append(lead, args[0])
+			args = args[1:]
+			if len(args) == 0 {
+				lead = append(lead, "")
+				break
+			}
+			lead = append(lead, args[0])
+			args = args[1:]
+			continue
+		}
 		lead = append(lead, args[0])
 		args = args[1:]
 	}
@@ -79,7 +90,11 @@ func runClaudeCmd(args []string) int {
 
 func runRunCmd(args []string) int {
 	// Launch flags are recognized only before the child command.
-	options, args := parseRunOptions(args)
+	options, args, err := parseRunOptions(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail run: %v\n", err)
+		return 2
+	}
 	if options.requireTunnel {
 		options.tunnelMode = true
 	}
@@ -100,7 +115,7 @@ func runRunCmd(args []string) int {
 		return 2
 	}
 	if options.noSandbox && len(options.credentials) > 0 {
-		fmt.Fprintln(os.Stderr, "agentjail run: credentialed tools require the OS sandbox; remove --no-sandbox")
+		fmt.Fprintln(os.Stderr, "agentjail run: credential delivery requires the OS sandbox; remove --no-sandbox")
 		return 2
 	}
 
@@ -220,7 +235,7 @@ type runOptions struct {
 }
 
 func isRunLaunchFlag(arg string) bool {
-	if strings.HasPrefix(arg, "--credential=") {
+	if arg == "--credential" || strings.HasPrefix(arg, "--credential=") {
 		return true
 	}
 	switch arg {
@@ -233,19 +248,26 @@ func isRunLaunchFlag(arg string) bool {
 
 // parseRunOptions consumes only AgentJail's leading launch flags; everything
 // after the command belongs to the child agent unchanged.
-func parseRunOptions(args []string) (runOptions, []string) {
+func parseRunOptions(args []string) (runOptions, []string, error) {
 	var options runOptions
 	for len(args) > 0 {
 		if strings.HasPrefix(args[0], "--credential=") {
 			value := strings.TrimPrefix(args[0], "--credential=")
 			if value == "" {
-				return options, args
+				return options, args, fmt.Errorf("--credential requires a non-empty ID")
 			}
 			options.credentials = append(options.credentials, value)
 			args = args[1:]
 			continue
 		}
 		switch args[0] {
+		case "--credential":
+			if len(args) < 2 || args[1] == "" || strings.HasPrefix(args[1], "--") {
+				return options, args, fmt.Errorf("--credential requires a non-empty ID")
+			}
+			options.credentials = append(options.credentials, args[1])
+			args = args[2:]
+			continue
 		case "--tunnel":
 			options.tunnelMode = true
 		case "--require-tunnel":
@@ -259,11 +281,11 @@ func parseRunOptions(args []string) (runOptions, []string) {
 		case "--verbose":
 			options.verbose = true
 		default:
-			return options, args
+			return options, args, nil
 		}
 		args = args[1:]
 	}
-	return options, args
+	return options, args, nil
 }
 
 // resolveRealAgent finds the real agent binary on PATH, skipping the agentjail

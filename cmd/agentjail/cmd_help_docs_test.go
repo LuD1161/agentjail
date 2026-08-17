@@ -11,36 +11,34 @@ import (
 
 func TestCredentialSetHelpDefinesCredentialNameAndSources(t *testing.T) {
 	help := credentialSetCmd.Long + "\n" + credentialSetCmd.Example
-	for _, flagName := range []string{"tool", "from-current-env", "from-file", "from-stdin"} {
+	for _, flagName := range []string{"from-env", "from-file", "from-stdin", "label", "tag"} {
 		help += "\n" + credentialSetCmd.Flags().Lookup(flagName).Usage
 	}
 
 	for _, want := range []string{
-		"identifier you choose",
+		"arbitrary identifier",
 		"AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY",
-		"optional AWS_SESSION_TOKEN",
+		"AWS_SESSION_TOKEN",
 		"KUBECONFIG",
-		"GH_TOKEN, falling back to GITHUB_TOKEN",
-		"Choose exactly one source",
+		"SLACK_TOKEN",
+		"descriptive only",
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("credential set help does not explain %q", want)
 		}
 	}
-	if usage := credentialSetCmd.Flags().Lookup("from-current-env").Usage; strings.Contains(usage, " + ") {
-		t.Errorf("--from-current-env usage compresses required variables ambiguously: %s", usage)
+	if credentialSetCmd.Flags().Lookup("tool") != nil || credentialSetCmd.Flags().Lookup("from-current-env") != nil {
+		t.Fatal("provider-coupled credential flags remain public")
 	}
 }
 
 func TestCredentialListHelpExplainsOutputAndNextStep(t *testing.T) {
 	help := strings.Join(strings.Fields(credentialListCmd.Long+"\n"+credentialListCmd.Example), " ")
 	for _, want := range []string{
-		"one per line",
 		"never printed",
-		"No output means",
-		"--credential=TOOL=NAME",
-		"--credential=aws=aws/development",
+		"exact returned ID",
+		"--credential aws-read-only-cred-dev",
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("credential list help does not explain %q", want)

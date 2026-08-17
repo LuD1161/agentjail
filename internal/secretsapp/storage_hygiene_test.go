@@ -9,7 +9,6 @@ import (
 
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/credentialaccess"
-	"github.com/LuD1161/agentjail/internal/credentialtools"
 	eventstore "github.com/LuD1161/agentjail/internal/store"
 )
 
@@ -30,8 +29,11 @@ func TestCredentialLifecycleLeavesNoPlaintextInEventStore(t *testing.T) {
 		secretKey = "agentjail-repro-secret-20260815"
 		token     = "agentjail-repro-token-20260815"
 	)
-	material := `{"access_key_id":"` + accessKey + `","secret_access_key":"` + secretKey + `","session_token":"` + token + `","region":"us-west-2"}`
-	record, err := credentialaccess.NewRecord(credentialtools.ToolAWS, material, "Storage hygiene", "123456789012", "")
+	record, err := credentialaccess.NewRecord(credentialaccess.Delivery{Env: []credentialaccess.EnvVar{
+		{Name: "AWS_ACCESS_KEY_ID", Value: accessKey},
+		{Name: "AWS_SECRET_ACCESS_KEY", Value: secretKey},
+		{Name: "AWS_SESSION_TOKEN", Value: token},
+	}}, "Storage hygiene", []string{"aws", "test"})
 	if err != nil {
 		t.Fatalf("build credential record: %v", err)
 	}
@@ -48,7 +50,7 @@ func TestCredentialLifecycleLeavesNoPlaintextInEventStore(t *testing.T) {
 	}
 
 	service := credentialaccess.NewService(vault, credentialaccess.AllowAllBrokerCredentials{}, emitter, true)
-	session := credentialaccess.Session{ID: "storage-hygiene", Project: dir, Agent: "codex", Tools: []credentialtools.Tool{credentialtools.ToolAWS}}
+	session := credentialaccess.Session{ID: "storage-hygiene", Project: dir, Agent: "codex"}
 	if _, err := service.RequestExact(ctx, session, credentialaccess.Request{CredentialID: "aws/repro", Reason: "verify exact storage hygiene"}); err != nil {
 		t.Fatalf("issue credential: %v", err)
 	}

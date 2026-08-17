@@ -9,52 +9,40 @@ import (
 
 var credentialCmd = &cobra.Command{
 	Use:   "credential",
-	Short: "Manage credentials for shielded CLI tools",
+	Short: "Manage credentials for shielded sessions",
 	Long: `Manage static credentials in AgentJail's encrypted local broker.
 
-These credentials are delivered directly to explicitly selected CLI tools.
-They are not narrowed by a credential policy or JIT issuer.`,
+Credential names are arbitrary exact identifiers. AgentJail does not infer a
+provider, account, permission level, or intended command from a name or tag.`,
 }
 
 var (
-	credentialSetTool      string
-	credentialSetFromEnv   bool
-	credentialSetFromFile  string
-	credentialSetFromStdin bool
-	credentialSetLabel     string
-	credentialSetAccount   string
-	credentialSetContext   string
+	credentialSetFromEnv      []string
+	credentialSetFromFile     []string
+	credentialSetFromStdinEnv string
+	credentialSetLabel        string
+	credentialSetTags         []string
 )
 
 var credentialSetCmd = &cobra.Command{
 	Use:   "set <name>",
-	Short: "Import a static AWS, Kubernetes, or GitHub CLI credential",
-	Long: `Import one credential into AgentJail's encrypted local broker.
+	Short: "Store a credential under an arbitrary exact name",
+	Long: `Store one credential bundle in AgentJail's encrypted local broker.
 
-<name> is the identifier you choose for this credential, such as
-aws/development. You use the same name later with
-'agentjail run --credential=aws=aws/development -- ...'. The --tool value
-selects both the credential format and the shielded CLI that may receive it.
+<name> is an arbitrary identifier such as aws-read-only-cred-prod or
+slack-channel-read-token. Names and optional labels/tags are descriptive only;
+the external service still defines what the credential can do.
 
-Choose exactly one source: --from-current-env, --from-file, or --from-stdin.
---from-current-env reads variables inherited from the shell as follows:
-
-  --tool aws       Requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
-                   Also imports optional AWS_SESSION_TOKEN and
-                   AWS_REGION or AWS_DEFAULT_REGION.
-  --tool kubectl   Reads the kubeconfig file named by KUBECONFIG, which must
-                   contain exactly one file path.
-  --tool gh        Reads GH_TOKEN, falling back to GITHUB_TOKEN.`,
+Use one or more --from-env NAME flags to capture current environment values.
+Use --from-file ENV=PATH to expose copied content through ENV as a private
+mode-0600 session file. For a single value on stdin, use --from-stdin ENV.
+Credential values must never be placed directly in command arguments.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		value, err := buildCredentialValue(credentialSourceOptions{
-			Tool:      credentialSetTool,
-			FromEnv:   credentialSetFromEnv,
-			FromFile:  credentialSetFromFile,
-			FromStdin: credentialSetFromStdin,
-			Label:     credentialSetLabel,
-			Account:   credentialSetAccount,
-			Context:   credentialSetContext,
+			FromEnv: credentialSetFromEnv, FromFile: credentialSetFromFile,
+			FromStdinEnv: credentialSetFromStdinEnv,
+			Label:        credentialSetLabel, Tags: credentialSetTags,
 		}, os.Stdin, os.Getenv, os.ReadFile)
 		if err != nil {
 			return err
@@ -62,44 +50,42 @@ Choose exactly one source: --from-current-env, --from-file, or --from-stdin.
 		if err := callSecretsSetStdin(args[0], value); err != nil {
 			return fmt.Errorf("store credential in encrypted broker: %w", err)
 		}
-		fmt.Fprintf(os.Stdout, "credential stored: %s (tool=%s)\n", args[0], credentialSetTool)
+		fmt.Fprintf(os.Stdout, "credential stored: %s\n", args[0])
 		return nil
 	},
 }
 
 var credentialListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List stored credential identifiers without revealing their values",
-	Long: `List the user-chosen identifiers stored in AgentJail's encrypted broker,
-one per line, such as aws/development or github/work.
+	Short: "List stored credential identifiers without revealing values",
+	Long: `List the user-chosen identifiers stored in AgentJail's encrypted broker.
 
-Credential values and metadata are never printed. No output means the broker
-contains no credentials. Use a returned identifier as NAME in
-'agentjail run --credential=TOOL=NAME -- <agent>'.`,
+Credential values and metadata are never printed. Use an exact returned ID with
+'agentjail run --credential ID -- <command>'.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return callSecretsCommand("list")
+		return callSecretsCommand("credential-list")
 	},
 }
 
 var credentialRemoveCmd = &cobra.Command{
-	Use:   "remove <name>",
-	Short: "Remove a credential from the encrypted broker",
-	Args:  cobra.ExactArgs(1),
+	Use: "remove <name>", Short: "Remove a credential from the encrypted broker",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return callSecretsDelete(args[0])
+		if err := callSecretsDelete(args[0]); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "credential removed: %s\n", args[0])
+		return nil
 	},
 }
 
 func init() {
-	credentialSetCmd.Flags().StringVar(&credentialSetTool, "tool", "", "CLI allowed to receive the credential: aws, kubectl, or gh (required)")
-	credentialSetCmd.Flags().BoolVar(&credentialSetFromEnv, "from-current-env", false, "import from the current shell environment using the variables documented above")
-	credentialSetCmd.Flags().StringVar(&credentialSetFromFile, "from-file", "", "import a kubeconfig or other credential content from PATH")
-	credentialSetCmd.Flags().BoolVar(&credentialSetFromStdin, "from-stdin", false, "read credential content from standard input (useful for tokens and scripts)")
-	credentialSetCmd.Flags().StringVar(&credentialSetLabel, "label", "", "non-secret label shown to coding agents")
-	credentialSetCmd.Flags().StringVar(&credentialSetAccount, "account", "", "non-secret account or tenant identifier")
-	credentialSetCmd.Flags().StringVar(&credentialSetContext, "context", "", "non-secret cluster or context identifier")
-	_ = credentialSetCmd.MarkFlagRequired("tool")
+	credentialSetCmd.Flags().StringArrayVar(&credentialSetFromEnv, "from-env", nil, "capture environment variable NAME and deliver it under the same name (repeatable)")
+	credentialSetCmd.Flags().StringArrayVar(&credentialSetFromFile, "from-file", nil, "copy PATH into a private session file and expose its path through ENV, as ENV=PATH (repeatable)")
+	credentialSetCmd.Flags().StringVar(&credentialSetFromStdinEnv, "from-stdin", "", "read one credential value from standard input and deliver it through ENV")
+	credentialSetCmd.Flags().StringVar(&credentialSetLabel, "label", "", "optional non-secret description shown during discovery")
+	credentialSetCmd.Flags().StringArrayVar(&credentialSetTags, "tag", nil, "optional non-secret discovery tag (repeatable)")
 	credentialCmd.AddCommand(credentialSetCmd, credentialListCmd, credentialRemoveCmd)
 	rootCmd.AddCommand(credentialCmd)
 }

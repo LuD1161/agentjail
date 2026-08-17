@@ -3,12 +3,12 @@ package credentialaccess
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/audit"
-	"github.com/LuD1161/agentjail/internal/credentialtools"
 )
 
 type memoryVault map[string]string
@@ -23,7 +23,7 @@ func (v memoryVault) List() ([]string, error) {
 func (v memoryVault) Get(name string) (string, error) {
 	value, ok := v[name]
 	if !ok {
-		return "", errors.New("not found")
+		return "", os.ErrNotExist
 	}
 	return value, nil
 }
@@ -41,9 +41,9 @@ func (e *eventEmitter) Emit(_ context.Context, event audit.Event) error {
 	return nil
 }
 
-func encodedAWS(t *testing.T, label, account, key string) string {
+func encodedCredential(t *testing.T, label, tag, key string) string {
 	t.Helper()
-	record, err := NewRecord(credentialtools.ToolAWS, `{"access_key_id":"`+key+`","secret_access_key":"secret-`+key+`"}`, label, account, "")
+	record, err := NewRecord(Delivery{Env: []EnvVar{{Name: "ACCESS_TOKEN", Value: key}}}, label, []string{tag})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,116 +54,62 @@ func encodedAWS(t *testing.T, label, account, key string) string {
 	return raw
 }
 
-func TestListAndRequestExactAcrossMultipleAccounts(t *testing.T) {
+func TestListAndRequestExactArbitraryCredentialIDs(t *testing.T) {
 	t.Parallel()
 	vault := memoryVault{
-		"aws/development": encodedAWS(t, "Development", "111122223333", "AKIADEV"),
-		"aws/production":  encodedAWS(t, "Production", "444455556666", "AKIAPROD"),
-		"untyped-secret":  "must-not-be-visible",
+		"aws-read-only-cred-dev":   encodedCredential(t, "Development", "dev", "dev-secret"),
+		"slack-channel-read-token": encodedCredential(t, "Support channel", "slack", "slack-secret"),
+		"untyped-secret":           "must-not-be-visible",
 	}
 	emitter := &eventEmitter{}
 	service := NewService(vault, AllowAllBrokerCredentials{}, emitter, true)
 	session := Session{ID: "session-1", Project: "/repo", Agent: "codex"}
 
-	items, err := service.List(context.Background(), session, credentialtools.ToolAWS)
+	items, err := service.List(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 || items[0].ID != "aws/development" || items[1].ID != "aws/production" {
+	if len(items) != 2 || items[0].ID != "aws-read-only-cred-dev" || items[1].ID != "slack-channel-read-token" {
 		t.Fatalf("items = %#v", items)
 	}
-	issuance, err := service.RequestExact(context.Background(), session, Request{
-		CredentialID: "aws/production",
-		Reason:       "Read the requested production S3 report",
-	})
+	issuance, err := service.RequestExact(context.Background(), session, Request{CredentialID: "slack-channel-read-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := make(map[string]string)
-	for _, variable := range issuance.Delivery.Env {
-		env[variable.Name] = variable.Value
-	}
-	if env["AWS_ACCESS_KEY_ID"] != "AKIAPROD" || strings.Contains(env["AWS_SECRET_ACCESS_KEY"], "AKIADEV") {
-		t.Fatalf("wrong credential issued: %#v", env)
+	if got := issuance.Delivery.Env[0].Value; got != "slack-secret" {
+		t.Fatalf("issued value = %q", got)
 	}
 	for _, event := range emitter.events {
 		for _, value := range event.Detail {
-			if strings.Contains(value, "secret-AKIAPROD") {
+			if strings.Contains(value, "slack-secret") {
 				t.Fatal("audit detail contains credential material")
 			}
 		}
 	}
 }
 
-func TestRequestRequiresDurableReasonedAudit(t *testing.T) {
+func TestRequestRequiresDurableAuditButReasonIsOptional(t *testing.T) {
 	t.Parallel()
-	vault := memoryVault{"aws/development": encodedAWS(t, "Development", "111122223333", "AKIADEV")}
+	vault := memoryVault{"credential": encodedCredential(t, "", "test", "secret")}
 	session := Session{ID: "session-1", Project: "/repo", Agent: "codex"}
+	if _, err := NewService(vault, AllowAllBrokerCredentials{}, &eventEmitter{}, true).RequestExact(context.Background(), session, Request{CredentialID: "credential"}); err != nil {
+		t.Fatalf("optional reason rejected: %v", err)
+	}
 	for _, test := range []struct {
-		name    string
-		reason  string
-		durable bool
-		failAt  string
+		name, reason, failAt string
+		durable              bool
 	}{
-		{name: "empty reason", durable: true},
 		{name: "oversized reason", reason: strings.Repeat("x", MaxReasonBytes+1), durable: true},
-		{name: "audit unavailable", reason: "read report"},
-		{name: "request audit fails", reason: "read report", durable: true, failAt: audit.CredentialAccessRequested},
-		{name: "issued audit fails", reason: "read report", durable: true, failAt: audit.CredentialAccessIssued},
+		{name: "audit unavailable"},
+		{name: "request audit fails", durable: true, failAt: audit.CredentialAccessRequested},
+		{name: "issued audit fails", durable: true, failAt: audit.CredentialAccessIssued},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			emitter := &eventEmitter{failAt: test.failAt}
-			service := NewService(vault, AllowAllBrokerCredentials{}, emitter, test.durable)
-			if _, err := service.RequestExact(context.Background(), session, Request{CredentialID: "aws/development", Reason: test.reason}); err == nil {
+			service := NewService(vault, AllowAllBrokerCredentials{}, &eventEmitter{failAt: test.failAt}, test.durable)
+			if _, err := service.RequestExact(context.Background(), session, Request{CredentialID: "credential", Reason: test.reason}); err == nil {
 				t.Fatal("credential request succeeded")
 			}
 		})
-	}
-}
-
-func TestSessionToolScopeFiltersListAndExactRequest(t *testing.T) {
-	t.Parallel()
-	kubeRecord, err := NewRecord(credentialtools.ToolKubernetes, `apiVersion: v1
-kind: Config
-clusters:
-- name: development
-  cluster:
-    server: https://127.0.0.1:6443
-users:
-- name: development
-  user:
-    token: test-token
-contexts:
-- name: development
-  context:
-    cluster: development
-    user: development
-current-context: development
-`, "Development cluster", "", "development")
-	if err != nil {
-		t.Fatal(err)
-	}
-	kubeRaw, err := Encode(kubeRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	vault := memoryVault{
-		"aws/development":  encodedAWS(t, "Development", "111122223333", "AKIADEV"),
-		"kube/development": kubeRaw,
-	}
-	service := NewService(vault, AllowAllBrokerCredentials{}, &eventEmitter{}, true)
-	session := Session{ID: "session-1", Agent: "codex", Tools: []credentialtools.Tool{credentialtools.ToolAWS}}
-	items, err := service.List(context.Background(), session, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 1 || items[0].Tool != credentialtools.ToolAWS {
-		t.Fatalf("items = %#v", items)
-	}
-	if _, err := service.RequestExact(context.Background(), session, Request{
-		CredentialID: "kube/development", Reason: "Inspect the development cluster",
-	}); err == nil || !strings.Contains(err.Error(), "not available in this session") {
-		t.Fatalf("out-of-scope request error = %v", err)
 	}
 }
 

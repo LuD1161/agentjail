@@ -1195,6 +1195,16 @@ other temporary staging failed only in tunneled sessions.
   renderer, making parity true by construction; tests must exercise each launch
   mode at the behavior boundary. See ADR 0034-platform-backend-shared-contract
   and ADR 0054-macos-shield-tempdir-afunix-parity.
+## 91. Two credential paths can cross different audit boundaries
+
+Agent-driven credential requests failed closed when durable request and
+issuance audit was unavailable, while eager `--credential ID` delivery used a
+separate broker handler whose audit was best-effort. Both paths had green tests,
+but only one enforced the evidence contract before returning material.
+
+- **Rule:** route every delivery mode through the same credential-access domain
+  service, and inject an issuance-audit failure into each public path. See ADR
+  0140-generic-credentials.
 
 ## 70. A successful detach is not proof of an unmounted image
 

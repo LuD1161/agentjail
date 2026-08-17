@@ -110,12 +110,12 @@ func Run(args []string) int {
 	gitSSH := fs.Bool("git-ssh", false, "enable Git over SSH for this launch by delegating all loaded SSH-agent identities")
 	noGitSSH := fs.Bool("no-git-ssh", false, "disable automatic Git-over-SSH capability for this launch")
 	var credentialFlags credentialSelections
-	fs.Var(&credentialFlags, "credential", "make one broker credential available to a CLI as TOOL=NAME; repeat for multiple tools")
+	fs.Var(&credentialFlags, "credential", "make one exact broker credential available to the session by ID; repeatable")
 	auditJSON := fs.String("audit-json", "", "write environment audit findings as JSON to PATH (use '-' for stdout)")
 	auditStrict := fs.Bool("audit-strict", false, "refuse to launch if critical audit findings (AdminAccess, root, IMDSv1) or if cloud metadata (IMDS) is reachable in port-only mode")
 	verbose := fs.Bool("verbose", false, "also mirror structured shield logs to stderr")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--require-tunnel] [--no-mitm] [--tunnel-ipv6|--no-tunnel-ipv6] [--git-ssh|--no-git-ssh] [--credential=TOOL=NAME] [--audit-json=PATH] [--audit-strict] [--verbose] -- <agent-cmd> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: agentjail-shield [--policy=PATH] [--profile-print] [--netproxy] [--tunnel] [--require-tunnel] [--no-mitm] [--tunnel-ipv6|--no-tunnel-ipv6] [--git-ssh|--no-git-ssh] [--credential=ID] [--audit-json=PATH] [--audit-strict] [--verbose] -- <agent-cmd> [args...]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  --policy=PATH       path to ~/.agentjail/policy.yaml (default: ~/.agentjail/policy.yaml)")
 		fmt.Fprintln(os.Stderr, "  --profile-print     print the generated sandbox profile to stderr and exit 0")
@@ -130,7 +130,7 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "  --no-tunnel-ipv6    disable the default IPv6 tunnel datapath")
 		fmt.Fprintln(os.Stderr, "  --git-ssh          enable Git over SSH for this launch; delegates all loaded SSH-agent identities")
 		fmt.Fprintln(os.Stderr, "  --no-git-ssh       disable policy-default Git over SSH for this launch")
-		fmt.Fprintln(os.Stderr, "  --credential=TOOL=NAME  expose a selected broker credential to aws, kubectl, or gh; repeatable")
+		fmt.Fprintln(os.Stderr, "  --credential=ID     expose the exact broker credential ID to the session; repeatable")
 		fmt.Fprintln(os.Stderr, "  --audit-json=PATH   write environment audit as JSON to PATH (use '-' for stdout)")
 		fmt.Fprintln(os.Stderr, "  --audit-strict      refuse to launch if critical audit findings, or if IMDS is reachable in port-only mode")
 		fmt.Fprintln(os.Stderr, "  --verbose           also mirror structured shield logs to stderr (default: ~/.agentjail/logs/ only)")
@@ -314,29 +314,17 @@ func Run(args []string) int {
 		return 127
 	}
 	agentArgs := rest[1:]
-	explicitCredentialTools, err := resolveCredentialSelections(credentialFlags)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "agentjail-shield: %v\n", err)
-		return 1
-	}
-	var discoveredCredentialTools credentialSelections
+	explicitCredentials := credentialFlags
+	var discoveredCredentials credentialSelections
 	if credentialToken, tokenErr := ctlauth.Load(); tokenErr == nil && supportsCredentialMCP(agentPath) {
 		discovered, discoverErr := discoverCredentialSelections(credentialToken)
 		if discoverErr != nil {
 			fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: credential discovery unavailable: %v\n", discoverErr)
 		} else {
-			resolvedDiscovered, unavailableTools, resolveErr := resolveAvailableCredentialSelections(discovered)
-			if resolveErr != nil {
-				fmt.Fprintf(os.Stderr, "agentjail-shield: %v\n", resolveErr)
-				return 1
-			}
-			discoveredCredentialTools = resolvedDiscovered
-			for _, tool := range unavailableTools {
-				fmt.Fprintf(os.Stderr, "agentjail-shield WARNING: broker has %s credentials but the CLI is not installed; hiding them from this session\n", tool)
-			}
+			discoveredCredentials = discovered
 		}
 	}
-	credentialTools := mergeCredentialSelections(explicitCredentialTools, discoveredCredentialTools)
+	credentials := mergeCredentialSelections(explicitCredentials, discoveredCredentials)
 
 	// Run the environment audit before shield setup.  The audit is
 	// best-effort and non-blocking: warnings are printed to stderr.
@@ -415,7 +403,7 @@ func Run(args []string) int {
 	runShield(cfg, agentPath, agentArgs, *profilePrint, noNetproxyEffective, *tunnelMode, *requireTunnel,
 		resolveMITM(*mitmMode, *noMITM, cfg.Network.TunnelMITM),
 		resolveTunnelIPv6(*tunnelIPv6Flag, *noTunnelIPv6, os.Getenv(tunnelIPv6EnvVar) == "1", cfg.Network.TunnelIPv6),
-		sshAuthSock, credentialTools, *policyPath, startTime, emitter)
+		sshAuthSock, credentials, *policyPath, startTime, emitter)
 	return 0
 }
 
