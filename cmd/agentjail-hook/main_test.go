@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LuD1161/agentjail/internal/approvalexec"
+	"github.com/LuD1161/agentjail/internal/credentialguidance"
 	"github.com/LuD1161/agentjail/internal/wire"
 )
 
@@ -266,7 +267,7 @@ func TestCodexCredentialSessionGuidanceAndInternalTools(t *testing.T) {
 	}
 	lifecycle := `{"hook_event_name":"SessionStart","session_id":"credential-session","cwd":"/tmp/test-project"}`
 	stdout, stderr, code := runHookWithArgs(t, bin, lifecycle, env, []string{"--agent=codex"})
-	if code != 0 || len(stderr) != 0 || !bytes.Contains(stdout, []byte("list_credentials")) || !bytes.Contains(stdout, []byte("AgentJail never chooses")) {
+	if code != 0 || len(stderr) != 0 || !bytes.Contains(stdout, []byte(credentialguidance.SessionInstructions)) {
 		t.Fatalf("lifecycle code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 
