@@ -78,7 +78,8 @@ echo "INFO  $(gh --version 2>&1 | head -1)"
 mkdir -p "$HOME/.aws" "$HOME/.kube" "$HOME/.config/gh"
 printf 'HOST_AWS_SECRET_SENTINEL\n' > "$HOME/.aws/credentials"
 printf 'HOST_KUBE_SECRET_SENTINEL\n' > "$HOME/.kube/config"
-printf 'HOST_GH_SECRET_SENTINEL\n' > "$HOME/.config/gh/hosts.yml"
+printf 'github.com:\n  users:\n    host-sentinel:\n      oauth_token: HOST_GH_SECRET_SENTINEL\n  user: host-sentinel\n' \
+    > "$HOME/.config/gh/hosts.yml"
 
 AWS_ACCESS_FINGERPRINT=$(printf %s AKIATESTBED000000001 | hash_stream)
 AWS_SECRET_FINGERPRINT=$(printf %s testbed-secret-not-real | hash_stream)
