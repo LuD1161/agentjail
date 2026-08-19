@@ -56,6 +56,8 @@ import (
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/custompolicy"
+	"github.com/LuD1161/agentjail/internal/grant"
+	"github.com/LuD1161/agentjail/internal/grantapproval"
 	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/hostproxy"
@@ -83,8 +85,12 @@ type server struct {
 	// repo-root cache, and AWS profile cache.
 	evaluator          policyeval.Evaluator
 	approvals          *approvalexec.Manager
+	grantAuthority     daemonGrantAuthority
+	grantApprovals     *grantapproval.CodexAdapter
 	hostProxyApprovals *hostproxy.Manager
 	hostProxyExecutor  hostproxy.Executor
+	grantPending       codexGrantPendings
+	policyEpoch        atomic.Uint64
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
@@ -368,6 +374,7 @@ func (s *server) reloadPolicy(ctx context.Context) error {
 	// Set only after the engine swap succeeds: a failed reload keeps serving the
 	// old engine, so the old enforcement mode must stay with it.
 	s.setMonitoring(newCfg.Monitoring())
+	s.policyEpoch.Add(1)
 
 	slog.Info("policy reloaded",
 		"rules_dir", s.rulesDir,
@@ -557,7 +564,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		// observed peer's actual Codex ancestor, never the caller-reported PID.
 		// See ADR 0118-codex-approval-broker.
 		verifiedCodexPID := 0
-		if req.Agent == "codex" && req.HookEvent == "PreToolUse" {
+		if req.Agent == "codex" && (req.HookEvent == "PreToolUse" || req.HookEvent == "Stop") {
 			if peerUID, uidErr := extractPeerUID(conn); uidErr == nil && peerUID == os.Getuid() {
 				if peerPID, pidErr := extractPeerPID(conn); pidErr == nil {
 					verifiedCodexPID, _ = procutil.FindAncestorPID(peerPID, func(pid int) bool {
@@ -607,7 +614,11 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 
-		if req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
+		if req.Agent == "codex" && req.HookEvent == "Stop" && verifiedCodexPID > 0 {
+			s.revokeCodexSession(req.SessionID, verifiedCodexPID)
+		}
+
+		if req.HookEvent != "Stop" && req.SessionID != "" && s.activeSessions != nil && req.AgentPID > 0 {
 			if verifiedCodexPID <= 0 || !s.activeSessions.bindVerified(req.SessionID, verifiedCodexPID, policyeval.CanonicalizeCWD(req.CWD)) {
 				s.activeSessions.update(req.SessionID, req.AgentPID, req.CWD)
 			}
@@ -661,7 +672,15 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					approvalOperation = approvalexec.HostProxyOperation
 				}
 			}
-			if bridgeEligible && s.approvals != nil && verifiedCodexPID > 0 {
+			if bridgeEligible && approvalOperation == approvalexec.ShellCommandOperation {
+				if s.grantAuthority == nil || s.grantApprovals == nil || verifiedCodexPID <= 0 || !s.beginCodexRuntimeGrant(ctx, req, &resp, verifiedCodexPID) {
+					resp.CodexApprovalBridge = false
+					resp.EffectiveAction = "deny"
+					resp.TranslationReason = "Codex runtime grant request unavailable; fail closed"
+				}
+			} else if bridgeEligible && s.approvals != nil && verifiedCodexPID > 0 {
+				// Host-proxy and legacy Git broker operations return typed proxy or
+				// compatibility authority, not executable shell grants (ADR 0141-runtime-grants).
 				command, _ := req.ToolInput["command"].(string)
 				meta, mintErr := s.approvals.Mint(approvalexec.MintRequest{
 					SessionID: approvalexec.SessionID(req.SessionID),
@@ -865,6 +884,7 @@ func (s *server) handleApprovalPrompt(
 	invocation approvalexec.BrokerInvocation,
 ) {
 	meta, err := s.approvals.Inspect(invocation.ChallengeID, time.Now())
+	pending, generic := s.grantPending.get(invocation.ChallengeID)
 	if err == nil {
 		peerUID, uidErr := extractPeerUID(conn)
 		peerPID, pidErr := extractPeerPID(conn)
@@ -880,17 +900,37 @@ func (s *server) handleApprovalPrompt(
 		boundary, err = procutil.NextStartBoundary()
 	}
 	if err == nil {
-		_, err = s.approvals.ObservePrompt(approvalexec.ObserveRequest{
-			ChallengeID: invocation.ChallengeID,
-			Operation:   invocation.Operation,
-			SessionID:   approvalexec.SessionID(req.SessionID),
-			TurnID:      approvalexec.TurnID(req.TurnID),
-			CWD:         req.CWD,
-			FreshAfter:  uint64(boundary),
-			Now:         time.Now(),
-		})
+		now := time.Now()
+		if generic {
+			if s.grantApprovals == nil || pending.intent.PolicyEpoch() != s.runtimePolicyEpoch() {
+				err = grant.ErrStalePolicyEpoch
+			} else {
+				evidence, evidenceErr := s.codexEvidence(
+					pending, grantapproval.Nonce(invocation.ChallengeID),
+					s.approvals.CurrentEpoch(meta.SessionID), uint64(boundary), true, now,
+				)
+				if evidenceErr != nil {
+					err = evidenceErr
+				} else if outcome := s.grantApprovals.Observe(ctx, evidence, now); outcome != grantapproval.OutcomePending {
+					err = approvalexec.ErrBinding
+				}
+			}
+		} else {
+			_, err = s.approvals.ObservePrompt(approvalexec.ObserveRequest{
+				ChallengeID: invocation.ChallengeID,
+				Operation:   invocation.Operation,
+				SessionID:   approvalexec.SessionID(req.SessionID),
+				TurnID:      approvalexec.TurnID(req.TurnID),
+				CWD:         req.CWD,
+				FreshAfter:  uint64(boundary),
+				Now:         now,
+			})
+		}
 	}
 	if err != nil {
+		if pending, found := s.grantPending.take(invocation.ChallengeID); found {
+			s.cancelCodexRuntimeGrant(invocation.ChallengeID, pending)
+		}
 		slog.Warn("codex approval prompt rejected", "challenge_ref", approvalRef(invocation.ChallengeID), "err", err)
 		_ = enc.Encode(policyeval.Response{
 			ID: req.ID, Action: "deny", PolicyAction: "deny",
@@ -918,9 +958,15 @@ func (s *server) handleApprovalRedeem(
 ) {
 	var req approvalexec.WireRedeemRequest
 	if err := json.Unmarshal(line, &req); err != nil || req.ChallengeID == "" {
+		if req.ChallengeID != "" {
+			if pending, found := s.grantPending.take(req.ChallengeID); found {
+				s.cancelCodexRuntimeGrant(req.ChallengeID, pending)
+			}
+		}
 		_ = enc.Encode(approvalexec.WireRedeemResponse{Error: "malformed approval redemption"})
 		return
 	}
+	pending, generic := s.grantPending.take(req.ChallengeID)
 	meta, err := s.approvals.Inspect(req.ChallengeID, time.Now())
 	var verifiedSession approvalexec.SessionID
 	peerFresh := false
@@ -940,7 +986,25 @@ func (s *server) handleApprovalRedeem(
 		}
 	}
 	var redeemed approvalexec.Redemption
-	if err == nil {
+	if err == nil && generic {
+		if s.grantApprovals == nil || s.grantAuthority == nil || pending.intent.PolicyEpoch() != s.runtimePolicyEpoch() {
+			err = grant.ErrStalePolicyEpoch
+		} else {
+			now := time.Now()
+			evidence, evidenceErr := s.codexEvidence(
+				pending, grantapproval.Nonce(req.ChallengeID), s.approvals.CurrentEpoch(meta.SessionID),
+				meta.FreshAfter, peerFresh, now,
+			)
+			if evidenceErr != nil {
+				err = evidenceErr
+			} else if redemption, outcome := s.grantApprovals.Redeem(ctx, evidence, now); outcome != grantapproval.OutcomeAllowOnce {
+				err = approvalexec.ErrBinding
+			} else {
+				redeemed = redemption
+				err = s.activateCodexRuntimeGrant(ctx, pending, meta)
+			}
+		}
+	} else if err == nil {
 		// Redeem owns the burn. Even an invalid peer reaches this one-use state
 		// transition with empty verification fields. See ADR 0118-codex-approval-broker.
 		redeemed, err = s.approvals.Redeem(approvalexec.RedeemRequest{
@@ -949,6 +1013,14 @@ func (s *server) handleApprovalRedeem(
 			CurrentEpoch:   s.approvals.CurrentEpoch(meta.SessionID),
 			Now:            time.Now(),
 		})
+	}
+	if err != nil && generic {
+		// A stale or malformed generic transition can fail before the adapter
+		// reaches approvalexec.Redeem; burn its native challenge explicitly.
+		if s.grantApprovals != nil {
+			s.grantApprovals.Cancel(grantapproval.Nonce(req.ChallengeID))
+		}
+		s.failCodexRuntimeRedemption(pending)
 	}
 	if err == nil {
 		if auditErr := s.emitApprovalAudit(ctx, audit.CodexApprovalRedeemed, meta); auditErr != nil {
@@ -1577,6 +1649,7 @@ func Run(args []string) int {
 		policyPath:         *policyPath,
 		idleTimeout:        defaultAgentConnIdleTimeout,
 	}
+	srv.policyEpoch.Store(1)
 
 	// Open the SQLite event store (ADR 0018). Failure is non-fatal: the daemon
 	// continues without persistence (fail-open on logging). On first run, if
@@ -1585,6 +1658,12 @@ func Run(args []string) int {
 	// drain goroutine.
 	if st, serr := store.Open(*dbPath); serr == nil {
 		srv.eventStore = st
+		if authority, grantErr := newDaemonGrantAuthority(st); grantErr == nil {
+			srv.grantAuthority = authority
+			srv.grantApprovals = grantapproval.NewCodexAdapter(srv.approvals)
+		} else {
+			slog.Warn("runtime grants unavailable; Codex shell approval will fail closed", "err", grantErr)
+		}
 		srv.decCh = make(chan store.DecisionRecord, 1024)
 		migrateDaemonLog(ctx, st, *logPath)
 		srv.decWg.Add(1)
@@ -1819,6 +1898,7 @@ func Run(args []string) int {
 			}
 			// Stop accepting new connections.
 			cancel()
+			srv.revokeRuntimeGrants()
 			_ = ln.Close()
 			// Drain in-flight connections with a 5-second deadline.
 			done := make(chan struct{})
