@@ -364,6 +364,26 @@ func TestControlServerGrantApprove_ExpiredGrantDeniedAfterTTL(t *testing.T) {
 	}
 }
 
+func TestSessionRegistryDeniesGrantAndSessionAtExactExpiry(t *testing.T) {
+	registry := newSessionRegistry()
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	registry.register("tok-a", "session-a", "/repo", proxyctl.SessionPolicy{}, time.Second, now)
+	pending, err := registry.requestGrant("tok-a", "api.example.com", 1000, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.approveGrant(pending.GrantID, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := now.Add(time.Second)
+	if registry.allowedHost("tok-a", "api.example.com", expiresAt) {
+		t.Fatal("grant remained authorized at its exact expiry")
+	}
+	if registry.sessionValid("tok-a", expiresAt) {
+		t.Fatal("session remained authorized at its exact expiry")
+	}
+}
+
 func TestControlServerGrantApprove_DeadLeaseSessionRefused(t *testing.T) {
 	cs, sock, done := startTestControlServer(t, audit.NopEmitter{}, true)
 	defer done()

@@ -99,7 +99,7 @@ func (s *session) allowed(host string, now time.Time) bool {
 	}
 	h := normalizeHost(host)
 	for _, g := range s.granted {
-		if now.After(g.Expiry) {
+		if !now.Before(g.Expiry) {
 			continue
 		}
 		if matchHost(normalizeHost(g.Host), h) {
@@ -179,7 +179,7 @@ func (r *sessionRegistry) installConnector(route proxyctl.ConnectorRoute, now ti
 	defer r.mu.Unlock()
 	var matched *session
 	for _, s := range r.sessions {
-		if s.sessionID == route.SessionID && !now.After(s.leaseExpiry) {
+		if s.sessionID == route.SessionID && now.Before(s.leaseExpiry) {
 			if matched != nil {
 				return errUnknownSession
 			}
@@ -212,7 +212,7 @@ func (r *sessionRegistry) connector(tok proxyctl.Token, id string, now time.Time
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[tok]
-	if !ok || now.After(s.leaseExpiry) {
+	if !ok || !now.Before(s.leaseExpiry) {
 		return proxyctl.ConnectorRoute{}, false
 	}
 	route, ok := s.connectors[id]
@@ -230,7 +230,7 @@ func (r *sessionRegistry) lookup(tok proxyctl.Token, now time.Time) (*session, b
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[tok]
-	if !ok || now.After(s.leaseExpiry) {
+	if !ok || !now.Before(s.leaseExpiry) {
 		return nil, false
 	}
 	return s, true
@@ -246,7 +246,7 @@ func (r *sessionRegistry) sessionValid(tok proxyctl.Token, now time.Time) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[tok]
-	return ok && !now.After(s.leaseExpiry)
+	return ok && now.Before(s.leaseExpiry)
 }
 
 // allowedHost reports whether host is permitted for tok's session: the static
@@ -259,7 +259,7 @@ func (r *sessionRegistry) allowedHost(tok proxyctl.Token, host string, now time.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[tok]
-	if !ok || now.After(s.leaseExpiry) {
+	if !ok || !now.Before(s.leaseExpiry) {
 		return false
 	}
 	return s.allowed(host, now)
@@ -276,7 +276,7 @@ func (r *sessionRegistry) requestGrant(tok proxyctl.Token, host string, ttlMs in
 	defer r.mu.Unlock()
 
 	s, ok := r.sessions[tok]
-	if !ok || now.After(s.leaseExpiry) {
+	if !ok || !now.Before(s.leaseExpiry) {
 		return pendingGrant{}, errUnknownSession
 	}
 
@@ -369,7 +369,7 @@ func (r *sessionRegistry) approveGrant(grantID string, now time.Time, emitAudit 
 	}
 	delete(s.pending, grantID)
 
-	if now.After(s.leaseExpiry) {
+	if !now.Before(s.leaseExpiry) {
 		return "", errSessionDead
 	}
 
@@ -434,7 +434,7 @@ func (r *sessionRegistry) reap(now time.Time) reapResult {
 
 	var res reapResult
 	for t, s := range r.sessions {
-		if now.After(s.leaseExpiry) {
+		if !now.Before(s.leaseExpiry) {
 			res.ExpiredSessions = append(res.ExpiredSessions, t)
 			for gid := range s.pending {
 				delete(r.grantIndex, gid)
@@ -445,7 +445,7 @@ func (r *sessionRegistry) reap(now time.Time) reapResult {
 
 		kept := s.granted[:0]
 		for _, g := range s.granted {
-			if now.After(g.Expiry) {
+			if !now.Before(g.Expiry) {
 				res.ExpiredGrants = append(res.ExpiredGrants, g)
 				continue
 			}
@@ -454,7 +454,7 @@ func (r *sessionRegistry) reap(now time.Time) reapResult {
 		s.granted = kept
 
 		for gid, pg := range s.pending {
-			if now.After(pg.Expires) {
+			if !now.Before(pg.Expires) {
 				delete(s.pending, gid)
 				delete(r.grantIndex, gid)
 			}
