@@ -182,3 +182,9 @@ func (a *CodexAdapter) cancel(nonce Nonce) {
 	}
 	a.forget(nonce)
 }
+
+// Cancel burns a pending native prompt when its owning consumer rejects the
+// surrounding lifecycle transition before executable authority is returned.
+func (a *CodexAdapter) Cancel(nonce Nonce) {
+	a.cancel(nonce)
+}
