@@ -227,3 +227,5 @@ is introduced or renumbered.
 | `0c478c27`, `9321c1dd`, `b742d4b1`, `29a44121` | 5 | Connector activation/config/probe, fixed netproxy routing primitive, and Linux guest transport foundation |
 | `97615653`, `87c42ee5`, `c5a0f65b`, `143cdda8` | 5 | Verified launch capability foundation plus release-blocking route-lifetime remediation; production hook routing stays fail-closed |
 | `326191b2` | 2, 6 | Reentrant approval-audit reservation prevents mutex deadlock and preserves fail-closed rollback |
+| `ebbd3a28` | 5, 6 | Opaque capability non-persistence, generic-error, environment, and pre-bind teardown regressions |
+| `c5eb80d8` | 3–6 | README, architecture, sandbox, ADR, and tracker reconciled to the partial fail-closed production boundary |
