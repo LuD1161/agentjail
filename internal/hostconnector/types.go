@@ -91,7 +91,7 @@ type Connector struct {
 }
 
 func NewConnector(id ConnectorID, transport Transport, destination Destination, probe ReadinessProbe) (Connector, error) {
-	if strings.TrimSpace(string(id)) == "" || !transport.valid() || !destination.valid() || !probe.valid() {
+	if !validConnectorID(id) || !transport.valid() || !destination.valid() || !probe.valid() {
 		return Connector{}, ErrInvalidConnector
 	}
 	if transport == TransportCDP && probe != ProbeChromeCDP {
@@ -104,6 +104,18 @@ func NewConnector(id ConnectorID, transport Transport, destination Destination, 
 		return Connector{}, fmt.Errorf("%w: CDP probe path must be /json/version", ErrInvalidConnector)
 	}
 	return Connector{id: id, transport: transport, destination: destination, probe: probe}, nil
+}
+
+func validConnectorID(id ConnectorID) bool {
+	if strings.TrimSpace(string(id)) == "" {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Connector) ID() ConnectorID { return c.id }

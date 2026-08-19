@@ -159,6 +159,69 @@ func startEchoServer(t *testing.T) net.Listener {
 	return ln
 }
 
+func TestConfiguredConnectorRouteDialsOnlyInstalledDestination(t *testing.T) {
+	upstream := startEchoServer(t)
+	host, portText, err := net.SplitHostPort(upstream.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := net.LookupPort("tcp", portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newSessionRegistry()
+	registry.register(testToken, "session-a", "/tmp/test-cwd", proxyctl.SessionPolicy{}, time.Hour, time.Now())
+	if err := registry.installConnector(proxyctl.ConnectorRoute{SessionID: "session-a", ConnectorID: "chrome-cdp", Host: host, Port: uint16(port)}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	proxyAddr := serveProxy(t, &proxy{registry: registry, emitter: audit.NopEmitter{}, logger: discardLogger()})
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	fmt.Fprint(client, connectReq("chrome-cdp.connector.agentjail:443", testToken))
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status = %d", resp.StatusCode)
+	}
+	if _, err := client.Write([]byte("fixed destination")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len("fixed destination"))
+	if _, err := io.ReadFull(client, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "fixed destination" {
+		t.Fatalf("echo = %q", buf)
+	}
+}
+
+func TestConnectorRouteRejectsUnknownIDAndCrossSession(t *testing.T) {
+	registry := newSessionRegistry()
+	registry.register(testToken, "session-a", "/tmp/test-cwd", proxyctl.SessionPolicy{AllowedHosts: []string{"example.com"}}, time.Hour, time.Now())
+	registry.register("second-token", "session-b", "/tmp/test-cwd", proxyctl.SessionPolicy{}, time.Hour, time.Now())
+	proxyAddr := serveProxy(t, &proxy{registry: registry, emitter: audit.NopEmitter{}, logger: discardLogger()})
+	for _, token := range []proxyctl.Token{testToken, "second-token"} {
+		client, err := net.Dial("tcp", proxyAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(client, connectReq("chrome-cdp.connector.agentjail:443", token))
+		resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+		client.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("unknown route status = %d, want 403", resp.StatusCode)
+		}
+	}
+}
+
 // ---- CONNECT data-plane tests (per-session token) ----
 
 // TestCONNECTRequest_AllowedHost verifies a CONNECT for an allowed host tunnels

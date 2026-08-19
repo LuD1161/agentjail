@@ -334,7 +334,16 @@ func (p *proxy) handleConn(conn net.Conn) {
 		return
 	}
 
+	routeID, isConnector := connectorTarget(host, port)
+	dialTarget := target
 	allowed := p.registry.allowedHost(tok, host, time.Now())
+	if isConnector {
+		route, found := p.registry.connector(tok, routeID, time.Now())
+		allowed = found
+		if found {
+			dialTarget = net.JoinHostPort(route.Host, fmt.Sprint(route.Port))
+		}
+	}
 	decision := "allow"
 	if !allowed {
 		decision = "deny"
@@ -358,7 +367,7 @@ func (p *proxy) handleConn(conn net.Conn) {
 	// Dial the upstream target. A timeout is required here -- an unreachable
 	// or slow-to-respond upstream must not hang this CONNECT (and the
 	// goroutine handling it) indefinitely.
-	upstream, err := net.DialTimeout("tcp", target, upstreamDialTimeout)
+	upstream, err := net.DialTimeout("tcp", dialTarget, upstreamDialTimeout)
 	if err != nil {
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\ncould not connect to upstream: %v\n", err)
 		p.logger.Error("upstream dial failed", "target", target, "err", err)
@@ -387,6 +396,22 @@ func (p *proxy) handleConn(conn net.Conn) {
 	}()
 	<-done
 	<-done
+}
+
+const connectorTargetSuffix = ".connector.agentjail"
+
+// connectorTarget recognizes the only synthetic CONNECT authority accepted for
+// a host connector. It never falls through to allowed-host matching: a typo or
+// uninstalled ID is denied rather than becoming arbitrary host forwarding.
+func connectorTarget(host, port string) (string, bool) {
+	if port != "443" || !strings.HasSuffix(host, connectorTargetSuffix) {
+		return "", false
+	}
+	id := strings.TrimSuffix(host, connectorTargetSuffix)
+	if id == "" || strings.ContainsAny(id, ".:/\\") {
+		return "", false
+	}
+	return id, true
 }
 
 // isGrantSentinel reports whether method+target is a runtime host grant

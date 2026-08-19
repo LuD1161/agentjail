@@ -108,3 +108,22 @@ func GrantDeny(sockPath, ctlToken, grantID string, timeout time.Duration) error 
 	}
 	return nil
 }
+
+func InstallConnector(sockPath, ctlToken string, route ConnectorRoute, timeout time.Duration) error {
+	return connectorRoute(sockPath, ctlToken, ReqConnectorInstall, route, timeout)
+}
+
+func RemoveConnector(sockPath, ctlToken, sessionID, connectorID string, timeout time.Duration) error {
+	return connectorRoute(sockPath, ctlToken, ReqConnectorRemove, ConnectorRoute{SessionID: sessionID, ConnectorID: connectorID}, timeout)
+}
+
+func connectorRoute(sockPath, ctlToken string, typ RequestType, route ConnectorRoute, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: typ, CtlToken: ctlToken, Connector: &route}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("connector route refused: %s", resp.Error)
+	}
+	return nil
+}
