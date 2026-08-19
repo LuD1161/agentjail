@@ -82,7 +82,8 @@ type grantServer struct {
 	reload func(context.Context) error
 	// ctlToken authenticates callers as processes outside the sandbox. Every
 	// verb on this socket requires it (ADR 0069).
-	ctlToken string
+	ctlToken         string
+	connectorCleanup func(string)
 }
 
 // acquireGrantCtlSocket makes the daemon the singleton owner of the grant
@@ -337,7 +338,7 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	case grantctl.ReqSessionLaunchRegister:
 		peerPID, peerErr := extractPeerPID(conn)
 		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil ||
-			!gs.activeSessions.registerLaunch(peerPID, req.LaunchRoot, req.LaunchPath, req.ConnectorCapability) {
+			!gs.activeSessions.registerLaunch(peerPID, req.LaunchRoot, req.LaunchPath, req.ConnectorCapability, req.NetproxySessionID) {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch metadata"})
 			return
 		}
@@ -349,9 +350,18 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 
 	case grantctl.ReqSessionLaunchUnregister:
 		peerPID, peerErr := extractPeerPID(conn)
+		var sessions []string
+		if gs.activeSessions != nil {
+			sessions = gs.activeSessions.sessionsForLaunch(peerPID)
+		}
 		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil || !gs.activeSessions.unregisterLaunch(peerPID) {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch revocation"})
 			return
+		}
+		if gs.connectorCleanup != nil {
+			for _, sessionID := range sessions {
+				gs.connectorCleanup(sessionID)
+			}
 		}
 		gs.reply(conn, grantctl.Response{OK: true})
 

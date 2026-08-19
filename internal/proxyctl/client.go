@@ -128,8 +128,8 @@ func RegisterConnectorCapability(sockPath, ctlToken string, token Token, capabil
 	return nil
 }
 
-func UseConnectorCapability(sockPath, capability, connectorID string, timeout time.Duration) error {
-	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityUse, ConnectorCapability: capability, Connector: &ConnectorRoute{ConnectorID: connectorID}}, timeout)
+func UseConnectorCapability(sockPath, capability, sessionID, connectorID string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityUse, ConnectorCapability: capability, Connector: &ConnectorRoute{SessionID: sessionID, ConnectorID: connectorID}}, timeout)
 	if err != nil {
 		return err
 	}
@@ -139,8 +139,8 @@ func UseConnectorCapability(sockPath, capability, connectorID string, timeout ti
 	return nil
 }
 
-func RemoveConnectorCapability(sockPath, capability, connectorID string, timeout time.Duration) error {
-	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityRemove, ConnectorCapability: capability, Connector: &ConnectorRoute{ConnectorID: connectorID}}, timeout)
+func RemoveConnectorCapability(sockPath, capability, sessionID, connectorID string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityRemove, ConnectorCapability: capability, Connector: &ConnectorRoute{SessionID: sessionID, ConnectorID: connectorID}}, timeout)
 	if err != nil {
 		return err
 	}

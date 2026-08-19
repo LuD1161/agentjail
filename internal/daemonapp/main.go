@@ -1790,6 +1790,9 @@ func Run(args []string) int {
 			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
 		} else {
 			srv.grantSrv = gs
+			if srv.connectorBroker != nil {
+				gs.connectorCleanup = func(sessionID string) { srv.connectorBroker.EndSession(context.Background(), sessionID) }
+			}
 			go srv.grantSrv.serveCtl(ctx)
 			go srv.grantSrv.startReaper(ctx, 60*time.Second)
 			slog.Info("grant control server listening", "socket", ctlSockPath)

@@ -19,11 +19,11 @@ func (b *connectorCapabilityBroker) Use(_ context.Context, binding hostconnector
 	if b.sessions == nil {
 		return hostconnector.Use{}, hostconnector.ErrInactive
 	}
-	capability, ok := b.sessions.connectorCapability(string(binding.Principal().SessionID()))
+	capability, netproxySessionID, ok := b.sessions.connectorCapability(string(binding.Principal().SessionID()))
 	if !ok {
 		return hostconnector.Use{}, hostconnector.ErrInactive
 	}
-	if err := proxyctl.UseConnectorCapability(proxyctl.ControlSocketPath(), capability, string(id), time.Second); err != nil {
+	if err := proxyctl.UseConnectorCapability(proxyctl.ControlSocketPath(), capability, netproxySessionID, string(id), time.Second); err != nil {
 		return hostconnector.Use{}, err
 	}
 	b.mu.Lock()
@@ -42,7 +42,7 @@ func (b *connectorCapabilityBroker) EndSession(_ context.Context, sessionID stri
 	if b.sessions == nil {
 		return
 	}
-	capability, ok := b.sessions.connectorCapability(sessionID)
+	capability, netproxySessionID, ok := b.sessions.connectorCapability(sessionID)
 	if !ok {
 		return
 	}
@@ -51,6 +51,6 @@ func (b *connectorCapabilityBroker) EndSession(_ context.Context, sessionID stri
 	delete(b.used, sessionID)
 	b.mu.Unlock()
 	for id := range ids {
-		_ = proxyctl.RemoveConnectorCapability(proxyctl.ControlSocketPath(), capability, string(id), time.Second)
+		_ = proxyctl.RemoveConnectorCapability(proxyctl.ControlSocketPath(), capability, netproxySessionID, string(id), time.Second)
 	}
 }
