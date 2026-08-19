@@ -122,6 +122,12 @@ usable; failure is fail-closed. Expiry and one-use consumption are checked
 atomically at authorization time. Reapers and connector cleanup are hygiene,
 not the permission boundary. Session termination revokes all session grants.
 
+Requested, denied, activation-failed, consumed, expired, and revoked records
+are best-effort lifecycle evidence written only after a non-authorizing or
+terminal transition. Their audit failure cannot restore authority. Lifecycle
+emitters run outside grant-manager locks so durable stores may re-enter lookup
+without deadlocking; canonical policy decisions remain separate in `decisions`.
+
 Migration is incremental:
 
 1. introduce the typed domain and adapter seam without changing enforcement;

@@ -135,10 +135,16 @@ const (
 	CodexPromptObserved   = "codex_approval.prompt_observed"
 	CodexApprovalRedeemed = "codex_approval.redeemed"
 	CodexApprovalRejected = "codex_approval.rejected"
-	// RuntimeGrantApproved and RuntimeGrantActivated are durable lifecycle
-	// records; canonical policy decisions remain in decisions (ADR 0141).
+	// Runtime grant lifecycle records; canonical policy decisions remain in
+	// decisions. See ADR 0141-runtime-grants.
+	RuntimeGrantRequested            = "runtime_grant.requested"
 	RuntimeGrantApproved             = "runtime_grant.approved"
 	RuntimeGrantActivated            = "runtime_grant.activated"
+	RuntimeGrantDenied               = "runtime_grant.denied"
+	RuntimeGrantActivationFailed     = "runtime_grant.activation_failed"
+	RuntimeGrantConsumed             = "runtime_grant.consumed"
+	RuntimeGrantExpired              = "runtime_grant.expired"
+	RuntimeGrantRevoked              = "runtime_grant.revoked"
 	HostProxySessionRegistered       = "host_proxy.session_registered"
 	HostProxySessionRegisterFailed   = "host_proxy.session_register_failed"
 	HostProxyRequested               = "host_proxy.requested"

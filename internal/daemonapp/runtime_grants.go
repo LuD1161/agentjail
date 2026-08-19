@@ -56,16 +56,28 @@ func (a daemonGrantAudit) EmitLifecycle(ctx context.Context, event grant.Lifecyc
 	}
 	var eventType string
 	switch event.Type {
+	case grant.LifecycleRequested:
+		eventType = audit.RuntimeGrantRequested
 	case grant.LifecycleApproved:
 		eventType = audit.RuntimeGrantApproved
 	case grant.LifecycleActivated:
 		eventType = audit.RuntimeGrantActivated
+	case grant.LifecycleDenied:
+		eventType = audit.RuntimeGrantDenied
+	case grant.LifecycleActivationFailed:
+		eventType = audit.RuntimeGrantActivationFailed
+	case grant.LifecycleConsumed:
+		eventType = audit.RuntimeGrantConsumed
+	case grant.LifecycleExpired:
+		eventType = audit.RuntimeGrantExpired
+	case grant.LifecycleRevoked:
+		eventType = audit.RuntimeGrantRevoked
 	default:
 		return fmt.Errorf("unsupported runtime grant lifecycle event %q", event.Type)
 	}
 	detail := map[string]string{
 		"action":       string(event.Action),
-		"resource_ref": string(event.Resource.ID()),
+		"resource_ref": runtimeGrantReference(string(event.Resource.ID())),
 		"scope":        string(event.Scope.Kind()),
 		"policy_epoch": strconv.FormatUint(uint64(event.PolicyEpoch), 10),
 		"request_ref":  runtimeGrantReference(string(event.RequestID)),

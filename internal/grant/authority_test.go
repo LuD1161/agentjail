@@ -162,11 +162,78 @@ func TestManagerLifecycleAuditsAuthorityCreation(t *testing.T) {
 		t.Fatalf("Authorize(active) error = %v", err)
 	}
 	events := audit.Events()
-	if len(events) != 2 || events[0].Type != LifecycleApproved || events[1].Type != LifecycleActivated {
-		t.Fatalf("audit events = %#v, want approval then activation", events)
+	if len(events) != 3 || events[0].Type != LifecycleRequested || events[1].Type != LifecycleApproved || events[2].Type != LifecycleActivated {
+		t.Fatalf("audit events = %#v, want request, approval, then activation", events)
 	}
-	if events[0].GrantID != grant.ID() || events[0].RequestID != grant.RequestID() || !events[0].At.Equal(clock.Now()) {
-		t.Fatalf("approval event = %#v, want bound timestamped lifecycle record", events[0])
+	if events[1].GrantID != grant.ID() || events[1].RequestID != grant.RequestID() || !events[1].At.Equal(clock.Now()) {
+		t.Fatalf("approval event = %#v, want bound timestamped lifecycle record", events[1])
+	}
+}
+
+func TestManagerAuditsEveryTerminalLifecycle(t *testing.T) {
+	manager, clock, audit := setupManager(t, Capacity{Global: 16, PerSession: 16})
+	deniedRequest := requestFor(t, clock.Now(), "denied", SessionScope(), 1)
+	denied, err := manager.Request(context.Background(), deniedRequest, askDecision(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Deny(context.Background(), denied.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	failedRequest := requestFor(t, clock.Now(), "failed", SessionScope(), 1)
+	failed := activeGrant(t, manager, failedRequest)
+	if _, err := manager.FailActivation(context.Background(), failed.ID()); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("FailActivation(active) error = %v, want invalid transition", err)
+	}
+	failedPending, err := manager.Request(context.Background(), requestFor(t, clock.Now(), "failed-pending", SessionScope(), 1), askDecision(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Approve(context.Background(), failedPending.ID(), "proof"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.FailActivation(context.Background(), failedPending.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	onceRequest := requestFor(t, clock.Now(), "consumed", OnceScope(), 1)
+	activeGrant(t, manager, onceRequest)
+	claim, err := manager.Claim(accessFor(t, onceRequest, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Commit(claim); err != nil {
+		t.Fatal(err)
+	}
+
+	ttl, err := NewTTLScope(clock.Now(), clock.Now().Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredRequest := requestFor(t, clock.Now(), "expired", ttl, 1)
+	activeGrant(t, manager, expiredRequest)
+	clock.Set(clock.Now().Add(time.Second))
+	if _, err := manager.Authorize(accessFor(t, expiredRequest, 1)); !errors.Is(err, ErrGrantExpired) {
+		t.Fatalf("Authorize(expired) error = %v", err)
+	}
+
+	revokedRequest := requestFor(t, clock.Now(), "revoked", SessionScope(), 1)
+	activeGrant(t, manager, revokedRequest)
+	if got := manager.RevokeSession("revoked"); got != 1 {
+		t.Fatalf("RevokeSession() = %d, want 1", got)
+	}
+
+	seen := make(map[LifecycleEventType]bool)
+	for _, event := range audit.Events() {
+		seen[event.Type] = true
+	}
+	for _, eventType := range []LifecycleEventType{
+		LifecycleRequested, LifecycleDenied, LifecycleActivationFailed, LifecycleConsumed, LifecycleExpired, LifecycleRevoked,
+	} {
+		if !seen[eventType] {
+			t.Fatalf("missing lifecycle audit event %q: %#v", eventType, audit.Events())
+		}
 	}
 }
 
