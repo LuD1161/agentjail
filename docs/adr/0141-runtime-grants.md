@@ -103,6 +103,18 @@ transport until a compatibility-tested adapter can carry other resource
 requests through a native prompt. This ADR does not infer approval from a hook
 retry and does not claim that agent hooks dynamically add MCP configuration.
 
+As verified against installed Codex CLI `0.148.0` on 2026-08-19 and the
+official Hooks/Rules sources recorded in the compatibility fixture,
+`PreToolUse`/`PermissionRequest` establish no MCP-specific native approval or
+post-forwarding receipt. `grantapproval.CodexAdapter` therefore returns typed
+unsupported for `mcp_call`; no retry, prompt visibility, or `PostToolUse`
+observation can activate an MCP grant. The shipped first MCP grant enforcement
+point is the daemon's hook response boundary for exact, startup-configured
+server/tool/arguments. A one-use claim commits at its final allow response,
+the strongest honest evidence currently available; delivery after that point is
+ambiguous and is never rolled back. A future MCP proxy must replace this with
+actual JSON-RPC forwarding evidence.
+
 ### Lifecycle durability and migration
 
 Approval and activation audit records are written before authority becomes
@@ -139,4 +151,8 @@ are not part of the first release.
   duplication is explicit and bounded rather than hidden behind aliases.
 - Preconfiguration is required for the first MCP/connector release; users
   cannot grant arbitrary host ports discovered by an agent mid-session.
+- The hook boundary is not the proposed `agentjail-mcp-proxy`: it cannot
+  inspect MCP JSON-RPC frames, prove upstream reachability, or observe a
+  server response. A configured-route connector additionally requires its
+  host-side `Use` proof at the final authorization boundary.
 - No new dependency is introduced.

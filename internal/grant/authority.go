@@ -412,7 +412,7 @@ func (m *Manager) Lookup(id GrantID) (Grant, error) {
 func (m *Manager) Authorize(access Access) (Grant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	record, err := m.findAccessLocked(access, m.clock.Now())
+	record, err := m.findAccessLocked(access, m.clock.Now(), nil)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -425,7 +425,56 @@ func (m *Manager) Authorize(access Access) (Grant, error) {
 func (m *Manager) Claim(access Access) (Claim, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	record, err := m.findAccessLocked(access, m.clock.Now())
+	record, err := m.findAccessLocked(access, m.clock.Now(), nil)
+	if err != nil {
+		return Claim{}, err
+	}
+	if record.grant.request.scope.Kind() != ScopeOnce {
+		return Claim{}, ErrClaimRequired
+	}
+	if record.claimed {
+		return Claim{}, ErrGrantAlreadyClaimed
+	}
+	id, err := m.ids.NewClaimID()
+	if err != nil || !id.Valid() {
+		return Claim{}, idError(err, ErrInvalidClaimID)
+	}
+	if _, exists := m.claims[id]; exists {
+		return Claim{}, ErrClaimNotFound
+	}
+	record.claimed = true
+	m.claims[id] = &claimRecord{grantID: record.grant.id, status: claimPending}
+	return Claim{id: id, grantID: record.grant.id}, nil
+}
+
+// AuthorizeWithAdapter applies a resource adapter's non-widening coverage
+// contract while retaining the exact principal, action, and epoch binding.
+// See ADR 0141-runtime-grants.
+func (m *Manager) AuthorizeWithAdapter(access Access, adapter ResourceAdapter) (Grant, error) {
+	if adapter == nil || adapter.Kind() != access.Resource().Kind() {
+		return Grant{}, ErrAdapterKind
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, err := m.findAccessLocked(access, m.clock.Now(), adapter)
+	if err != nil {
+		return Grant{}, err
+	}
+	if record.grant.request.scope.Kind() == ScopeOnce {
+		return Grant{}, ErrClaimRequired
+	}
+	return record.grant, nil
+}
+
+// ClaimWithAdapter atomically reserves a one-use grant whose resource covers
+// the requested resource under the supplied adapter.
+func (m *Manager) ClaimWithAdapter(access Access, adapter ResourceAdapter) (Claim, error) {
+	if adapter == nil || adapter.Kind() != access.Resource().Kind() {
+		return Claim{}, ErrAdapterKind
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, err := m.findAccessLocked(access, m.clock.Now(), adapter)
 	if err != nil {
 		return Claim{}, err
 	}
@@ -546,7 +595,7 @@ func (m *Manager) recordLocked(id GrantID, now time.Time) (*grantRecord, error) 
 	return record, nil
 }
 
-func (m *Manager) findAccessLocked(access Access, now time.Time) (*grantRecord, error) {
+func (m *Manager) findAccessLocked(access Access, now time.Time, adapter ResourceAdapter) (*grantRecord, error) {
 	if !access.principal.Valid() || !access.resource.Valid() || !access.action.Valid() || access.epoch == 0 {
 		return nil, ErrAccessMismatch
 	}
@@ -555,9 +604,16 @@ func (m *Manager) findAccessLocked(access Access, now time.Time) (*grantRecord, 
 	stale := false
 	revoked := false
 	inactive := false
+	consumed := false
 	for _, record := range m.grants {
 		grant := record.grant
-		if grant.request.principal != access.principal || grant.request.action != access.action || grant.request.resource.Resource() != access.resource {
+		if grant.request.principal != access.principal || grant.request.action != access.action {
+			continue
+		}
+		if adapter == nil && grant.request.resource.Resource() != access.resource {
+			continue
+		}
+		if adapter != nil && !adapter.Covers(grant.request.resource.Resource(), access.resource) {
 			continue
 		}
 		matched = true
@@ -571,6 +627,10 @@ func (m *Manager) findAccessLocked(access Access, now time.Time) (*grantRecord, 
 		}
 		if grant.state == StateRevoked {
 			revoked = true
+			continue
+		}
+		if grant.state == StateConsumed {
+			consumed = true
 			continue
 		}
 		if grant.state != StateActive {
@@ -590,6 +650,12 @@ func (m *Manager) findAccessLocked(access Access, now time.Time) (*grantRecord, 
 	}
 	if revoked {
 		return nil, ErrGrantRevoked
+	}
+	if consumed {
+		if adapter != nil {
+			return nil, ErrGrantAlreadyClaimed
+		}
+		return nil, ErrGrantNotActive
 	}
 	if inactive {
 		return nil, ErrGrantNotActive
