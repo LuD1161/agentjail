@@ -10,6 +10,9 @@ import (
 )
 
 var (
+	ErrInvalidGrantID   = errors.New("invalid grant ID")
+	ErrInvalidRequestID = errors.New("invalid grant request ID")
+	ErrInvalidClaimID   = errors.New("invalid grant claim ID")
 	ErrInvalidPrincipal = errors.New("invalid grant principal")
 	ErrInvalidAction    = errors.New("invalid grant action")
 	ErrInvalidResource  = errors.New("invalid grant resource")
@@ -18,6 +21,8 @@ var (
 )
 
 type GrantID string
+type RequestID string
+type ClaimID string
 type ApprovalReference string
 type PrincipalID string
 type SessionID string
@@ -27,6 +32,18 @@ type ResourceKind string
 type ResourceID string
 type ScopeKind string
 type State string
+
+func (id GrantID) Valid() bool {
+	return present(string(id))
+}
+
+func (id RequestID) Valid() bool {
+	return present(string(id))
+}
+
+func (id ClaimID) Valid() bool {
+	return present(string(id))
+}
 
 const (
 	ActionExec          Action = "exec"
