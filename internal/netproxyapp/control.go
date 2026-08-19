@@ -202,7 +202,7 @@ func (r *sessionRegistry) registerConnectorCapability(token proxyctl.Token, capa
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.sessions[token]
-	if !ok || now.After(s.leaseExpiry) || route.SessionID != s.sessionID {
+	if !ok || !now.Before(s.leaseExpiry) || route.SessionID != s.sessionID {
 		return errUnknownSession
 	}
 	if s.connectorCapabilities[capability] == nil {
@@ -216,7 +216,7 @@ func (r *sessionRegistry) useConnectorCapability(capability, sessionID, connecto
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.sessions {
-		if now.After(s.leaseExpiry) {
+		if !now.Before(s.leaseExpiry) {
 			continue
 		}
 		if s.sessionID != sessionID {

@@ -120,7 +120,10 @@ func (s *server) wireRuntimeGrantServices(eventStore store.EventStore, cfg *agen
 	s.grantApprovals = grantapproval.NewCodexAdapter(s.approvals)
 	s.mcpGrantControl = mcpgrant.NewControl(manager)
 	s.connectorBroker = &connectorCapabilityBroker{sessions: s.activeSessions}
-	s.mcpGrants = configuredMCPGrantBoundary(mcpgrant.NewManagerAuthority(manager), cfg, s.connectorBroker)
+	// The hook observes no MCP forwarding receipt, so installing a raw route
+	// here would outlive a one-use or TTL grant. Keep connector calls denied
+	// until the MCP reverse proxy can enforce each forwarding operation.
+	s.mcpGrants = configuredMCPGrantBoundary(mcpgrant.NewManagerAuthority(manager), cfg, nil)
 	return nil
 }
 
