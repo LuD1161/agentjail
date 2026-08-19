@@ -503,19 +503,20 @@ The agent runs inside a microVM. The proposed substrate is **Microsandbox** (bui
 #### Configured host connectors across the boundary
 
 Runtime approval for a configured host connector is not host reachability. The
-host side dials the fixed configured destination after its readiness probe; a
-guest can use only the corresponding synthetic ConnectorID route. On Linux a
-trusted container launcher may bind-mount a private, session-scoped AF_UNIX
-endpoint into the guest. That endpoint carries only the configured connector
-through the existing session-token netproxy route—there is no wildcard listener,
-source-IP trust, guest-selected TCP destination, or guest-loopback shortcut.
-The socket is removed on revoke, expiry, or session end.
+tree contains fixed-destination probe, synthetic ConnectorID route, verified
+launch capability, and Linux private AF_UNIX transport primitives, but the
+runtime MCP hook does not activate them. Its allow response cannot safely bind
+a raw route or an existing tunnel to grant consumption, expiry, or revocation;
+production connector use therefore fails closed pending a grant-aware MCP data
+plane. There is no wildcard listener, source-IP trust, guest-selected TCP
+destination, or guest-loopback shortcut.
 
 The current tree has no production container or microVM launcher. In particular,
 the Firecracker/libkrun code is research-only and provides neither vsock nor a
 shared socket registration seam; doctor reports microVM guest transport as
-unavailable and the Firecracker fixture exits unavailable. macOS Tier-1 uses the
-same-host netproxy route; no macOS VM/container guest transport is claimed. See
+unavailable and the Firecracker fixture exits unavailable. The same-host
+netproxy primitive is likewise not exposed through runtime MCP grants; no
+macOS VM/container guest transport is claimed. See
 [ADR 0141-runtime-grants](./adr/0141-runtime-grants.md).
 
 ### Tier 3 — Kernel Module (strongest isolation)

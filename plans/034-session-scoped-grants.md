@@ -1,6 +1,7 @@
 # Session-scoped capability grants
 
-Status: IN PROGRESS  
+Status: PARTIAL — safe foundations implemented; native MCP approval and a
+grant-aware connector data plane remain release blockers  
 Owner: unassigned  
 Started: 2026-08-19  
 Linear migration: parent draft is currently represented by AGE-93; lifecycle
@@ -42,8 +43,8 @@ attest any required bridge before the grant becomes usable.
 | 2 | Implement the generic runtime grant lifecycle | 1 | DONE |
 | 3 | Bridge generic grant requests to native agent approval prompts | 1, 2 | PARTIAL — Codex shell allow-once is verified; native MCP approval has no supported transport and fails closed |
 | 4 | Enforce session-scoped MCP grants | 1, 2, 3 | PARTIAL — startup-configured exact server/tool/argument grants enforce at the hook boundary; no JSON-RPC reverse proxy/delivery receipt |
-| 5 | Bridge approved host-local MCP connectors across isolation boundaries | 1; integration after 4 | PARTIAL — same-host route and Linux bind-mounted AF_UNIX primitive exist; no production container launcher, microVM, or macOS guest transport |
-| 6 | Add release-gate coverage, diagnostics, and user documentation | 2–5 | PARTIAL — deterministic composition fixture, clean-VM capability evidence, doctor distinctions, and docs land; unavailable native/platform paths remain explicit SKIPs |
+| 5 | Bridge approved host-local MCP connectors across isolation boundaries | 1; integration after 4 | PARTIAL — typed config/probe, same-host route, verified launch capability, and Linux AF_UNIX foundations exist; production MCP connector routing is intentionally fail-closed because the hook cannot enforce route lifetime; no container launcher, microVM, or macOS guest transport |
+| 6 | Add release-gate coverage, diagnostics, and user documentation | 2–5 | PARTIAL — deterministic composition fixture, doctor distinctions, adversarial fail-closed coverage, and docs land; unavailable native approval/data-plane/platform paths remain explicit SKIPs |
 
 ## 1. Define the generic typed grant domain and adapter contract
 
@@ -219,3 +220,10 @@ is introduced or renumbered.
 | `6437e36e` | 6 | `go test ./test -run TestRuntimeGrantProductionLikeFlow`; fixed CDP `/json/version` probe; one-use replay; strict argument/server/session/epoch/locked-deny and TTL/session-end denials |
 | `6437e36e` | 6 | `go test ./cmd/agentjail -run 'TestConnectorDoctor|TestRuntimeGrantDoctor'`; value-free doctor state matrix and transport capability evidence |
 | `6437e36e` | 6 | `test/testbed/scenarios/runtime-grants.sh` is included in the Codex release gate and preserves explicit capability SKIPs for unavailable launcher/native MCP paths |
+| `def820a6` | 1 | Typed generic grant vocabulary, scopes, adapters, and migration contract |
+| `fa8f9702`, `792dd20f`, `f38bdf37` | 2 | Concurrent lifecycle authority, race hardening, and complete lock-safe lifecycle audit coverage |
+| `f45b33bc`, `b0d62f9b`, `4edfd073` | 3 | Exact approval evidence and bounded Codex shell allow-once integration; MCP remains unsupported/fail-closed |
+| `b5755126`, `4f5f7b05`, `ab0218c1`, `7227ef28` | 4 | Strict MCP canonicalization, shared authority, policy-epoch enforcement, and hook-boundary claims |
+| `0c478c27`, `9321c1dd`, `b742d4b1`, `29a44121` | 5 | Connector activation/config/probe, fixed netproxy routing primitive, and Linux guest transport foundation |
+| `97615653`, `87c42ee5`, `c5a0f65b`, `143cdda8` | 5 | Verified launch capability foundation plus release-blocking route-lifetime remediation; production hook routing stays fail-closed |
+| `326191b2` | 2, 6 | Reentrant approval-audit reservation prevents mutex deadlock and preserves fail-closed rollback |

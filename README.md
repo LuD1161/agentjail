@@ -696,15 +696,20 @@ revocation, and `ttl` expires synchronously. A grant is exact to its principal,
 session, action, resource, arguments, and policy epoch. Different connector,
 server, tool, arguments, session, or epoch is denied.
 
-The supported Tier-1 path is same-host use through the configured netproxy
-route. Linux supplies a session-scoped AF_UNIX endpoint for a trusted container
-launcher to bind-mount, but this repository does not ship that launcher, so the
-release fixture capability-SKIPs it. MicroVM and macOS VM/container transports
-are unsupported: no production shared socket or vsock launch seam exists, and
-they fail closed rather than assuming guest loopback is the host. `agentjail
-doctor` reports value-free runtime-grant diagnoses: policy deny, approval
-unavailable/pending/denied, inactive/expired/revoked, transport unavailable,
-activation/probe failure, upstream unreachable, or active.
+Same-host netproxy routing and a session-scoped Linux AF_UNIX endpoint exist as
+transport foundations, but grant-driven MCP connector routing is intentionally
+disabled. A hook allow response cannot bind a raw route or an already-open
+tunnel to the exact MCP grant, so enabling that route would let one-use or TTL
+authority outlive its scope. The release fixture capability-SKIPs the Linux
+endpoint because this repository also does not ship the trusted container
+launcher that would bind-mount it. MicroVM and macOS VM/container transports
+remain unavailable: no production shared socket or vsock launch seam exists.
+All of these paths fail closed rather than treating guest loopback as the host
+or exposing a session-long connector route. `agentjail doctor` currently
+reports static transport capabilities and value-free diagnostic meanings; it
+does not query a live grant. A future authenticated status seam can distinguish
+an actual pending, denied, inactive, expired, revoked, unreachable, or active
+grant without exposing its resource or approval evidence.
 
 Codex CLI 0.148.0 has a verified native allow-once transport for shell commands
 only. It has no MCP-specific native approval receipt, so MCP grant approval

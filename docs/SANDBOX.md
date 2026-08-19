@@ -263,16 +263,20 @@ registers allowlists is denied to the agent. See
 
 ### Configured host connectors
 
-An approved configured connector (for example a host Chrome CDP endpoint) is
-not an arbitrary TCP exception. On the same host, the connector uses the
-session-aware netproxy route. For a Linux container, AgentJail can create a
-private AF_UNIX endpoint that a **trusted launcher** bind-mounts into the guest;
-it opens only the configured ConnectorID route and remains bound to the session
-token. The socket is mode/owner checked and is removed when the connector is
-revoked or the session ends. Guest loopback is never host loopback.
+Configured-connector validation and transport primitives (for example for a
+host Chrome CDP endpoint) are not arbitrary TCP exceptions. The same-host
+netproxy route and Linux private AF_UNIX endpoint are foundations only: runtime
+MCP grants do not activate either path. A hook response cannot bind the raw
+route or an existing tunnel to the exact grant lifetime, so production wiring
+denies connector use until the MCP data plane can enforce that boundary. A
+future **trusted launcher** may bind-mount the Linux endpoint into the guest;
+the primitive is restricted to its configured ConnectorID and session token.
+Guest loopback is never host loopback.
 
-No production container or microVM launcher currently injects this endpoint.
-Until one does, a guest connector route is unavailable rather than guessed.
+No production container or microVM launcher currently injects this endpoint,
+and same-host grant-driven connector routing is also disabled. Until a
+grant-aware MCP proxy and launcher exist, a connector route is unavailable
+rather than guessed.
 Firecracker/libkrun research code has no vsock or shared-socket launch seam;
 macOS VM/container transport is likewise unavailable. `agentjail doctor` names
 these transport limits separately from connector authorization, activation, and

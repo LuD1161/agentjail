@@ -115,6 +115,13 @@ the strongest honest evidence currently available; delivery after that point is
 ambiguous and is never rolled back. A future MCP proxy must replace this with
 actual JSON-RPC forwarding evidence.
 
+The host-connector capability broker is not wired into that hook boundary. A
+raw netproxy route would remain usable independently of a consumed, expired, or
+revoked MCP grant, and removing a route cannot attest or terminate an
+already-open tunnel. Configured connector calls therefore fail closed until a
+grant-aware MCP data plane binds each forwarded operation and active connection
+to the grant ID, scope, policy epoch, and terminal lifecycle.
+
 ### Lifecycle durability and migration
 
 Approval and activation audit records are written before authority becomes
@@ -137,9 +144,10 @@ Migration is incremental:
 5. adapt credential issuance only after its backend revocation semantics fit
    the shared lifecycle.
 
-The existing wire protocols and persisted records do not change in the first
-slice. Serialization boundaries decode into the new domain through explicit
-adapters rather than type aliases or untyped maps.
+The grant and proxy control protocols grow additive typed fields for verified
+launch capabilities; no runtime grant or capability value is persisted.
+Serialization boundaries decode into the domain through explicit adapters
+rather than type aliases or untyped maps.
 
 Dynamic registration of an arbitrary MCP server that was unknown at session
 startup, arbitrary raw TCP forwarding, and unconfined host command execution
@@ -149,8 +157,9 @@ are not part of the first release.
 
 - File, command, network, MCP, and credential authority share one scope and
   lifecycle vocabulary without sharing unsafe resource matching logic.
-- Native allow-once approval can authorize a preconfigured connector, but the
-  grant remains unusable until the namespace bridge is verified.
+- The typed lifecycle can represent approval and activation for a
+  preconfigured connector, but current native MCP approval and data-plane
+  boundaries leave it deliberately unusable.
 - The design adds an activation phase and adapter conformance tests to every
   resource integration.
 - Existing grant implementations coexist during migration, so temporary
@@ -158,7 +167,7 @@ are not part of the first release.
 - Preconfiguration is required for the first MCP/connector release; users
   cannot grant arbitrary host ports discovered by an agent mid-session.
 - The hook boundary is not the proposed `agentjail-mcp-proxy`: it cannot
-  inspect MCP JSON-RPC frames, prove upstream reachability, or observe a
-  server response. A configured-route connector additionally requires its
-  host-side `Use` proof at the final authorization boundary.
+  inspect MCP JSON-RPC frames, prove upstream reachability, observe a server
+  response, or safely lease a connector route. Configured connector routing is
+  kept fail-closed until that data-plane boundary exists.
 - No new dependency is introduced.
