@@ -267,6 +267,14 @@ func (m *Manager) Inspect(id ChallengeID, now time.Time) (Metadata, error) {
 	return ch.Metadata, nil
 }
 
+// Burn invalidates a challenge without executing it. Adapter cancellation and
+// malformed generic evidence must never leave a native prompt redeemable.
+func (m *Manager) Burn(id ChallengeID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.challenges, id)
+}
+
 // Redeem burns the challenge on every attempt. A failed or disconnected broker
 // can never retry with the same authorization.
 func (m *Manager) Redeem(req RedeemRequest) (Redemption, error) {
