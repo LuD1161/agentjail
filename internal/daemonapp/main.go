@@ -90,6 +90,7 @@ type server struct {
 	runtimeGrantManager *grant.Manager
 	grantApprovals      *grantapproval.CodexAdapter
 	mcpGrantControl     *mcpgrant.Control
+	connectorBroker     *connectorCapabilityBroker
 	hostProxyApprovals  *hostproxy.Manager
 	hostProxyExecutor   hostproxy.Executor
 	grantPending        codexGrantPendings
@@ -1674,7 +1675,7 @@ func Run(args []string) int {
 		hostProxyApprovals: hostproxy.NewManager(nil, 0),
 		hostProxyExecutor:  hostproxy.NewExecutor(),
 		activeSessions:     newActiveTracker(filepath.Dir(*policyPath)),
-		mcpGrants:          configuredMCPGrantBoundary(nil, cfg),
+		mcpGrants:          configuredMCPGrantBoundary(nil, cfg, &connectorCapabilityBroker{}),
 		connSem:            make(chan struct{}, maxAgentConns),
 		rulesDir:           *rulesDir,
 		policyPath:         *policyPath,

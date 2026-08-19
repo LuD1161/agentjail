@@ -232,6 +232,17 @@ func RegisterSessionLaunch(sockPath, ctlToken string, pid int, root, pathValue s
 	return nil
 }
 
+func RegisterSessionLaunchConnector(sockPath, ctlToken string, pid int, root, pathValue, netproxySessionID, capability string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqSessionLaunchRegister, CtlToken: ctlToken, LaunchPID: pid, LaunchRoot: root, LaunchPath: pathValue, NetproxySessionID: netproxySessionID, ConnectorCapability: capability}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return &RefusedError{Op: ReqSessionLaunchRegister, Reason: resp.Error}
+	}
+	return nil
+}
+
 func UnregisterSessionLaunch(sockPath, ctlToken string, pid int, timeout time.Duration) error {
 	resp, err := roundTrip(sockPath, Request{
 		Type: ReqSessionLaunchUnregister, CtlToken: ctlToken, LaunchPID: pid,

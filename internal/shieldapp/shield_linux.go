@@ -202,6 +202,7 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	var netproxyCmd *exec.Cmd       // non-nil only if WE started the proxy (we must clean it up)
 	netproxyReady := false          // true if a proxy is available (ours or pre-existing)
 	var sessionToken proxyctl.Token // this session's per-session proxy credential
+	var netproxySessionID string
 	if !noNetproxy {
 		netproxyPort = netproxyDefaultPort
 		netproxyBin, findErr := findNetproxyBinary()
@@ -220,7 +221,8 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 		// 0067-control-plane-token-auth. Incompatible/unverifiable proxy ->
 		// fail closed inside ensureSessionProxy.
 		shieldCwd, _ := os.Getwd()
-		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, fmt.Sprintf("shield-%d", os.Getpid()), shieldCwd, resolveSessionPolicy(ctx, cfg, emitter))
+		netproxySessionID = fmt.Sprintf("shield-%d", os.Getpid())
+		cmd, tok, startErr := ensureSessionProxy(netproxyBin, netproxyDefaultAddr, netproxySessionID, shieldCwd, resolveSessionPolicy(ctx, cfg, emitter))
 		if startErr != nil {
 			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not start/register netproxy: %v", startErr))
 		}
@@ -268,6 +270,14 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	// this point we cannot read it either (ADR 0067). Best-effort -- a missing
 	// token costs the grants, it must not block the sandbox.
 	ctlToken, ctlTokenErr := ctlauth.Load()
+	connectorCapability := ""
+	if netproxyReady && ctlTokenErr == nil {
+		var connectorErr error
+		connectorCapability, connectorErr = registerConnectorCapabilities(cfg, ctlToken, sessionToken, netproxySessionID)
+		if connectorErr != nil {
+			abortOnNetproxyFailure(ctx, emitter, fmt.Sprintf("could not register host connectors: %v", connectorErr))
+		}
+	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -416,6 +426,9 @@ func runShield(cfg *config.PolicyConfig, agentPath string, agentArgs []string, p
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr
 	registeredHostProxy := registerHostProxyLaunch(ctx, ctlToken, ctlTokenErr, env, emitter)
+	if !registerConnectorLaunch(ctlToken, env, netproxySessionID, connectorCapability) {
+		registeredHostProxy = false
+	}
 
 	// Intercept SIGINT and SIGTERM so the shield survives to print the
 	// session summary. The agent child is in the same process group and

@@ -96,19 +96,21 @@ type Request struct {
 	CtlToken string `json:"ctl_token,omitempty"`
 	// ProtocolVersion is required for versioned review requests. Zero is not
 	// an alias for v1. See ADR 0133-macos-menu-review.
-	ProtocolVersion ProtocolVersion   `json:"protocol_version,omitempty"`
-	SessionID       string            `json:"session_id,omitempty"`
-	CWD             string            `json:"cwd,omitempty"`
-	Host            string            `json:"host,omitempty"`
-	TTLMs           int64             `json:"ttl_ms,omitempty"`
-	Reason          string            `json:"reason,omitempty"`
-	GrantID         string            `json:"grant_id,omitempty"`
-	UpdateStatus    UpdateAuditStatus `json:"update_status,omitempty"`
-	UpdateVersion   string            `json:"update_version,omitempty"`
-	UpdateOS        string            `json:"update_os,omitempty"`
-	LaunchPID       int               `json:"launch_pid,omitempty"`
-	LaunchRoot      string            `json:"launch_root,omitempty"`
-	LaunchPath      string            `json:"launch_path,omitempty"`
+	ProtocolVersion     ProtocolVersion   `json:"protocol_version,omitempty"`
+	SessionID           string            `json:"session_id,omitempty"`
+	CWD                 string            `json:"cwd,omitempty"`
+	Host                string            `json:"host,omitempty"`
+	TTLMs               int64             `json:"ttl_ms,omitempty"`
+	Reason              string            `json:"reason,omitempty"`
+	GrantID             string            `json:"grant_id,omitempty"`
+	UpdateStatus        UpdateAuditStatus `json:"update_status,omitempty"`
+	UpdateVersion       string            `json:"update_version,omitempty"`
+	UpdateOS            string            `json:"update_os,omitempty"`
+	LaunchPID           int               `json:"launch_pid,omitempty"`
+	LaunchRoot          string            `json:"launch_root,omitempty"`
+	LaunchPath          string            `json:"launch_path,omitempty"`
+	NetproxySessionID   string            `json:"netproxy_session_id,omitempty"`
+	ConnectorCapability string            `json:"connector_capability,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).
