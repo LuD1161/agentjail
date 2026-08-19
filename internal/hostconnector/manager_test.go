@@ -75,12 +75,13 @@ func (a *fakeAdapter) CloseCalls() int {
 }
 
 type fakeBackend struct {
-	mu      sync.Mutex
-	err     error
-	adapter *fakeAdapter
-	calls   int
-	started chan struct{}
-	release <-chan struct{}
+	mu       sync.Mutex
+	err      error
+	adapter  *fakeAdapter
+	endpoint *fakeEndpointAdapter
+	calls    int
+	started  chan struct{}
+	release  <-chan struct{}
 }
 
 func (b *fakeBackend) Activate(_ context.Context, _ Activation) (Adapter, error) {
@@ -90,6 +91,7 @@ func (b *fakeBackend) Activate(_ context.Context, _ Activation) (Adapter, error)
 	release := b.release
 	err := b.err
 	adapter := b.adapter
+	endpoint := b.endpoint
 	b.mu.Unlock()
 	if started != nil {
 		close(started)
@@ -99,6 +101,9 @@ func (b *fakeBackend) Activate(_ context.Context, _ Activation) (Adapter, error)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if endpoint != nil {
+		return endpoint, nil
 	}
 	return adapter, nil
 }
@@ -327,6 +332,28 @@ func TestSessionEndRejectsAndClosesConnector(t *testing.T) {
 	}
 }
 
+func TestEndpointRequiresActiveGuestTransport(t *testing.T) {
+	manager, binding, _, _, backend, _ := newTestManager(t)
+	if _, err := manager.Endpoint(binding, "chrome-cdp"); !errors.Is(err, ErrInactive) {
+		t.Fatalf("Endpoint() error = %v, want inactive", err)
+	}
+	endpoint := GuestEndpoint{isolation: IsolationLinuxContainer, socket: "/run/agentjail/connectors/chrome-cdp.sock"}
+	backend.endpoint = &fakeEndpointAdapter{fakeAdapter: &fakeAdapter{}, endpoint: endpoint}
+	if err := manager.Activate(context.Background(), binding, "chrome-cdp", grant.SessionScope()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := manager.Endpoint(binding, "chrome-cdp")
+	if err != nil || got.SocketPath() != endpoint.SocketPath() {
+		t.Fatalf("Endpoint() = %#v, %v", got, err)
+	}
+	if err := manager.EndSession(context.Background(), binding.Principal().SessionID()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Endpoint(binding, "chrome-cdp"); !errors.Is(err, ErrInactive) {
+		t.Fatalf("Endpoint after session end error = %v, want inactive", err)
+	}
+}
+
 func TestReadyAuditFailureClosesAdapterWithoutActiveAuthority(t *testing.T) {
 	manager, binding, _, _, backend, auditor := newTestManager(t)
 	auditor.errState = StateActive
@@ -381,6 +408,15 @@ func TestAuditTransitionExcludesDestination(t *testing.T) {
 type captureEmitter struct {
 	event audit.Event
 }
+
+type fakeEndpointAdapter struct {
+	fakeAdapter *fakeAdapter
+	endpoint    GuestEndpoint
+}
+
+func (a *fakeEndpointAdapter) Close() error { return a.fakeAdapter.Close() }
+
+func (a *fakeEndpointAdapter) GuestEndpoint() GuestEndpoint { return a.endpoint }
 
 func (e *captureEmitter) Emit(_ context.Context, event audit.Event) error {
 	e.event = event

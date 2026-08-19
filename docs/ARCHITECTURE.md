@@ -500,6 +500,24 @@ The agent runs inside a microVM. The proposed substrate is **Microsandbox** (bui
 
 > Substrate selection, the two-backend split, and the long-term pros/cons are decided in [ADR 0016](./adr/0016-tier2-microsandbox-substrate.md) (status: Proposed). The libkrun and Firecracker spikes live under [`agentjail/research/`](../agentjail/research/).
 
+#### Configured host connectors across the boundary
+
+Runtime approval for a configured host connector is not host reachability. The
+host side dials the fixed configured destination after its readiness probe; a
+guest can use only the corresponding synthetic ConnectorID route. On Linux a
+trusted container launcher may bind-mount a private, session-scoped AF_UNIX
+endpoint into the guest. That endpoint carries only the configured connector
+through the existing session-token netproxy route—there is no wildcard listener,
+source-IP trust, guest-selected TCP destination, or guest-loopback shortcut.
+The socket is removed on revoke, expiry, or session end.
+
+The current tree has no production container or microVM launcher. In particular,
+the Firecracker/libkrun code is research-only and provides neither vsock nor a
+shared socket registration seam; doctor reports microVM guest transport as
+unavailable and the Firecracker fixture exits unavailable. macOS Tier-1 uses the
+same-host netproxy route; no macOS VM/container guest transport is claimed. See
+[ADR 0141-runtime-grants](./adr/0141-runtime-grants.md).
+
 ### Tier 3 — Kernel Module (strongest isolation)
 
 A kernel module (eBPF LSM on Linux, macOS SystemExtension) intercepts all file, network, and process events system-wide, regardless of whether the agent runs in a container or directly on the host.

@@ -261,6 +261,23 @@ The shield automatically sets `HTTPS_PROXY`, `HTTP_PROXY`, and `ALL_PROXY`
 registers allowlists is denied to the agent. See
 [ADR 0042](./adr/0042-session-aware-netproxy-control-plane.md).
 
+### Configured host connectors
+
+An approved configured connector (for example a host Chrome CDP endpoint) is
+not an arbitrary TCP exception. On the same host, the connector uses the
+session-aware netproxy route. For a Linux container, AgentJail can create a
+private AF_UNIX endpoint that a **trusted launcher** bind-mounts into the guest;
+it opens only the configured ConnectorID route and remains bound to the session
+token. The socket is mode/owner checked and is removed when the connector is
+revoked or the session ends. Guest loopback is never host loopback.
+
+No production container or microVM launcher currently injects this endpoint.
+Until one does, a guest connector route is unavailable rather than guessed.
+Firecracker/libkrun research code has no vsock or shared-socket launch seam;
+macOS VM/container transport is likewise unavailable. `agentjail doctor` names
+these transport limits separately from connector authorization, activation, and
+upstream readiness.
+
 A blocked host can be requested for future project sessions: the agent files a request with
 `agentjail allow host <h>` through the daemon socket, and a human approves it
 with `agentjail grant approve <grant_id>` from an unsandboxed terminal.

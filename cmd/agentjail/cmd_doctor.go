@@ -15,6 +15,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/hostconnector"
 	"github.com/LuD1161/agentjail/internal/keyring"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/sshagent"
@@ -92,6 +93,7 @@ func doctorSections() []doctorSection {
 			checks := append(checkNetworkInterception(), checkTLSInterceptionPosture(), checkBodyEncryption())
 			return append(checks, checkNetworkKnobSources()...)
 		}},
+		{name: "Host Connectors", run: func(string) []doctorCheck { return checkConnectorTransport() }},
 		{name: "Daemon", run: checkDaemon, gatesExit: true},
 		// Everything above reports what is configured RIGHT NOW; this reports
 		// whether enforcement actually ran (ADR 0082-doctor-attests-enforcement).
@@ -223,6 +225,7 @@ func doctorSectionTitle(u *ui.UI, name string) string {
 		"Platform":             "🖥  ",
 		"Shield":               "🛡  ",
 		"Network Interception": "🌐  ",
+		"Host Connectors":      "🔌  ",
 		"Daemon":               "⚙  ",
 		"Protection":           "🔒  ",
 		"Hooks":                "🪝  ",
@@ -230,6 +233,39 @@ func doctorSectionTitle(u *ui.UI, name string) string {
 		"SSH":                  "🔑  ",
 	}
 	return u.Emoji(emoji[name]) + name
+}
+
+// checkConnectorTransport reports authorization, activation, and reachability
+// separately. Doctor has no live connector request to inspect, so the first,
+// second, and upstream checks remain deliberately unknown rather than claiming
+// a configured route works from a guest.
+func checkConnectorTransport() []doctorCheck {
+	checks := []doctorCheck{
+		{
+			label:  "Connector authorization",
+			status: statusSkip,
+			detail: "no live connector grant to inspect; approval alone never creates reachability",
+		},
+		{
+			label:  "Connector activation",
+			status: statusSkip,
+			detail: "no active connector route recorded; activation requires a host readiness probe",
+		},
+		{
+			label:  "Connector upstream",
+			status: statusSkip,
+			detail: "no configured connector probe was run; an unreachable upstream is activation failure, not authorization",
+		},
+	}
+	for _, report := range hostconnector.TransportCapabilities() {
+		status := statusOK
+		if report.State == hostconnector.StateUnavailable {
+			status = statusSkip
+		}
+		label := "Connector transport: " + string(report.Isolation)
+		checks = append(checks, doctorCheck{label: label, status: status, detail: report.Detail})
+	}
+	return checks
 }
 
 func checkPlatform() []doctorCheck {
