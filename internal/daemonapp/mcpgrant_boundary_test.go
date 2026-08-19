@@ -169,6 +169,16 @@ func TestDaemonMCPGrantRequiresConfiguredConnectorUseProof(t *testing.T) {
 	}
 }
 
+func TestDaemonMCPGrantConfiguredConnectorWithoutDataPlaneLeaseStaysDenied(t *testing.T) {
+	manager := newMCPGrantManager(t)
+	activateDaemonMCPGrant(t, manager, grant.OnceScope())
+	_, socket := newMCPGrantDaemon(t, manager, []MCPConnectorRoute{{Server: "filesystem", Connector: "filesystem"}}, nil)
+	response := sendRequest(t, socket, mcpHookRequest("/allowed", nil))
+	if response.Action != "deny" || response.PolicyAction != "ask" || response.EffectiveAction != "deny" || response.Adapter != "mcp_runtime_grant" {
+		t.Fatalf("configured connector without a grant-aware data-plane lease was allowed: %#v", response)
+	}
+}
+
 func TestDaemonMCPGrantReloadEpochInvalidatesSharedAuthority(t *testing.T) {
 	manager := newMCPGrantManager(t)
 	activateDaemonMCPGrant(t, manager, grant.SessionScope())
