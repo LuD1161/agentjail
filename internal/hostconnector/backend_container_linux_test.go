@@ -100,6 +100,21 @@ func TestLinuxGuestSocketRejectsInvalidPrivateRuntimeDir(t *testing.T) {
 	}
 }
 
+func TestLinuxGuestSocketRejectsSymlinkedRuntimeDir(t *testing.T) {
+	target := t.TempDir()
+	if err := os.Chmod(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "runtime")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := newLinuxConnectorBridge(LinuxContainerConfig{SessionID: "session-a", Token: proxyctl.Token("token-a"), RuntimeDir: link}, "chrome-cdp", "127.0.0.1:1", time.Second)
+	if err == nil {
+		t.Fatal("symlinked runtime directory was accepted")
+	}
+}
+
 func TestLinuxGuestSocketCannotReuseWrongConnectorPath(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil {

@@ -223,7 +223,7 @@ func validRuntimeDir(path string) bool {
 	if !filepath.IsAbs(path) {
 		return false
 	}
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return false
 	}
