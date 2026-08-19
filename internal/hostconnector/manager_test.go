@@ -29,17 +29,33 @@ func (c *fakeClock) Set(now time.Time) {
 }
 
 type fakeAuthorizer struct {
-	mu    sync.Mutex
-	err   error
-	calls int
+	mu      sync.Mutex
+	err     error
+	calls   int
+	lease   UseLease
+	started chan struct{}
+	release <-chan struct{}
 }
 
 func (a *fakeAuthorizer) Begin(_ context.Context, _ Binding, _ ConnectorID, _ grant.Scope) (UseLease, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.calls++
-	if a.err != nil {
-		return nil, a.err
+	started := a.started
+	release := a.release
+	lease := a.lease
+	err := a.err
+	a.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		<-release
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lease != nil {
+		return lease, nil
 	}
 	return fakeUseLease{}, nil
 }
@@ -391,6 +407,53 @@ func TestRevokeDuringActivationClosesLateAdapter(t *testing.T) {
 	if backend.adapter.CloseCalls() != 1 {
 		t.Fatal("late adapter was not closed")
 	}
+}
+
+func TestRevokeDuringAuthorizationClosesLateLease(t *testing.T) {
+	manager, binding, _, authorizer, backend, _ := newTestManager(t)
+	lease := &countingLease{}
+	authorizer.lease = lease
+	authorizer.started = make(chan struct{})
+	release := make(chan struct{})
+	authorizer.release = release
+	activate := make(chan error, 1)
+	go func() {
+		activate <- manager.Activate(context.Background(), binding, "chrome-cdp", grant.SessionScope())
+	}()
+	<-authorizer.started
+	if err := manager.Revoke(context.Background(), binding, "chrome-cdp"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-activate; !errors.Is(err, ErrRevoked) {
+		t.Fatalf("Activate() error = %v, want revoked", err)
+	}
+	if lease.CloseCalls() != 1 {
+		t.Fatalf("late authorization lease close calls=%d, want 1", lease.CloseCalls())
+	}
+	if backend.Calls() != 0 {
+		t.Fatal("revoked authorization reached backend activation")
+	}
+}
+
+type countingLease struct {
+	mu         sync.Mutex
+	closeCalls int
+}
+
+func (l *countingLease) Use(context.Context) error { return nil }
+
+func (l *countingLease) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closeCalls++
+	return nil
+}
+
+func (l *countingLease) CloseCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closeCalls
 }
 
 func TestAuditTransitionExcludesDestination(t *testing.T) {
