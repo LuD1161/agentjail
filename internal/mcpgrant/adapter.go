@@ -13,6 +13,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/LuD1161/agentjail/internal/grant"
 )
@@ -136,6 +137,9 @@ func ParseCallParams(server ServerID, params []byte) (Call, error) {
 			}
 			arguments = canonicalArguments(field.value.canonical())
 		case "_meta":
+			if _, ok := field.value.(jsonObject); !ok {
+				return Call{}, fmt.Errorf("%w: _meta must be an object", ErrInvalidParams)
+			}
 			// Metadata is validated structurally but excluded from authority.
 		default:
 			return Call{}, fmt.Errorf("%w: unsupported parameter %q", ErrInvalidParams, field.name)
@@ -394,6 +398,9 @@ func (value jsonObject) canonical() string {
 }
 
 func parseJSON(input []byte) (jsonValue, error) {
+	if !utf8.Valid(input) {
+		return nil, errors.New("JSON is not valid UTF-8")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.UseNumber()
 	value, err := parseValue(decoder)

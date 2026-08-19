@@ -3,7 +3,9 @@ package mcpgrant
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 var ErrInvalidHookTool = errors.New("invalid MCP hook tool name")
@@ -18,6 +20,9 @@ func ParseHookCall(toolName string, toolInput map[string]interface{}) (Call, err
 	}
 	arguments := make(map[string]interface{}, len(toolInput))
 	for key, value := range toolInput {
+		if !utf8.ValidString(key) || !validHookValue(value, 0) {
+			return Call{}, ErrInvalidArguments
+		}
 		if key == "_meta" {
 			if _, ok := value.(map[string]interface{}); !ok {
 				return Call{}, ErrInvalidArguments
@@ -31,6 +36,38 @@ func ParseHookCall(toolName string, toolInput map[string]interface{}) (Call, err
 		return Call{}, ErrInvalidArguments
 	}
 	return NewCall(server, tool, encoded)
+}
+
+// validHookValue admits only the JSON graph decoded at the hook boundary.
+// See ADR 0141-runtime-grants.
+func validHookValue(value interface{}, depth int) bool {
+	if depth > 64 {
+		return false
+	}
+	switch typed := value.(type) {
+	case nil, bool:
+		return true
+	case string:
+		return utf8.ValidString(typed)
+	case float64:
+		return !math.IsNaN(typed) && !math.IsInf(typed, 0)
+	case []interface{}:
+		for _, entry := range typed {
+			if !validHookValue(entry, depth+1) {
+				return false
+			}
+		}
+		return true
+	case map[string]interface{}:
+		for key, entry := range typed {
+			if !utf8.ValidString(key) || !validHookValue(entry, depth+1) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func parseHookToolName(toolName string) (ServerID, ToolID, bool) {

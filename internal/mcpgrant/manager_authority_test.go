@@ -172,6 +172,30 @@ func TestParseHookCallRejectsInvalidMetadataAndNames(t *testing.T) {
 	}
 }
 
+func TestParseHookCallRejectsNonJSONAndInvalidUnicodeValues(t *testing.T) {
+	invalidUTF8 := string([]byte{0xff})
+	for _, input := range []map[string]interface{}{
+		{"path": invalidUTF8},
+		{"path": 1},
+		{"path": map[string]interface{}{"nested": make(chan int)}},
+		{"_meta": map[string]interface{}{"progress": invalidUTF8}},
+	} {
+		if _, err := ParseHookCall("mcp__filesystem__read_file", input); err == nil {
+			t.Fatalf("invalid hook input %#v was accepted", input)
+		}
+	}
+	first, err := ParseHookCall("mcp__filesystem__read_file", map[string]interface{}{
+		"depth": float64(1), "path": "/repo/a", "_meta": map[string]interface{}{"progress": "opaque"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := mustCall(t, "filesystem", "read_file", `{"depth":1,"path":"/repo/a"}`)
+	if first.ArgumentsDigest() != second.ArgumentsDigest() {
+		t.Fatal("hook input did not canonicalize to the strict call authority")
+	}
+}
+
 func TestControlWithoutAuthorityFailsClosed(t *testing.T) {
 	principal := runtimePrincipal(t, "session-a")
 	call := mustCall(t, "filesystem", "read_file", `{}`)
