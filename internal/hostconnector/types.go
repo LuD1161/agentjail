@@ -54,10 +54,12 @@ type Destination struct {
 func NewDestination(host string, port uint16, path string) (Destination, error) {
 	host = strings.TrimSpace(host)
 	if host == "" || port == 0 || strings.Contains(host, "://") ||
-		strings.ContainsAny(host, " \t\r\n/@?#") || net.ParseIP(host) == nil && strings.Contains(host, ":") {
+		strings.ContainsAny(host, " \t\r\n/@?#*") || net.ParseIP(host) == nil && strings.Contains(host, ":") {
 		return Destination{}, ErrInvalidConnector
 	}
-	if path == "" || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#") {
+	if path == "" || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#\\") ||
+		strings.Contains(path, "//") || strings.Contains(path, "/../") || strings.HasSuffix(path, "/..") ||
+		strings.Contains(path, "%") {
 		return Destination{}, ErrInvalidConnector
 	}
 	return Destination{host: host, port: port, path: path}, nil
@@ -66,6 +68,17 @@ func NewDestination(host string, port uint16, path string) (Destination, error) 
 func (d Destination) valid() bool {
 	_, err := NewDestination(d.host, d.port, d.path)
 	return err == nil
+}
+
+func (d Destination) Host() string { return d.host }
+
+func (d Destination) Port() uint16 { return d.port }
+
+func (d Destination) Path() string { return d.path }
+
+func (d Destination) loopback() bool {
+	ip := net.ParseIP(d.host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Connector is a preconfigured host resource. Agent-side requests name only
@@ -84,12 +97,22 @@ func NewConnector(id ConnectorID, transport Transport, destination Destination, 
 	if transport == TransportCDP && probe != ProbeChromeCDP {
 		return Connector{}, fmt.Errorf("%w: CDP requires Chrome CDP readiness", ErrInvalidConnector)
 	}
+	if transport == TransportCDP && !destination.loopback() {
+		return Connector{}, fmt.Errorf("%w: CDP destination must be loopback", ErrInvalidConnector)
+	}
+	if transport == TransportCDP && destination.path != "/json/version" {
+		return Connector{}, fmt.Errorf("%w: CDP probe path must be /json/version", ErrInvalidConnector)
+	}
 	return Connector{id: id, transport: transport, destination: destination, probe: probe}, nil
 }
 
 func (c Connector) ID() ConnectorID { return c.id }
 
 func (c Connector) Transport() Transport { return c.transport }
+
+func (c Connector) Destination() Destination { return c.destination }
+
+func (c Connector) Probe() ReadinessProbe { return c.probe }
 
 func (c Connector) valid() bool {
 	_, err := NewConnector(c.id, c.transport, c.destination, c.probe)
