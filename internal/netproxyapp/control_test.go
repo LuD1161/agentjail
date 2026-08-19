@@ -436,6 +436,83 @@ func TestControlServerGrantApprove_AuditUnavailableRefusesAndDoesNotApply(t *tes
 	}
 }
 
+func TestRegistryApprovalAuditReentersWithoutDeadlock(t *testing.T) {
+	registry := newSessionRegistry()
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	registry.register("tok-a", "session-a", "/repo", proxyctl.SessionPolicy{}, time.Hour, now)
+	pending, err := registry.requestGrant("tok-a", "api.example.com", 1000, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := registry.approveGrant(pending.GrantID, now, func(string) error {
+			if grants := registry.listPending(); len(grants) != 1 {
+				return fmt.Errorf("pending grants during audit = %d", len(grants))
+			}
+			return nil
+		})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval audit deadlocked while reentering the registry")
+	}
+}
+
+func TestRegistryApprovalReservationSerializesAndRollsBackAuditFailure(t *testing.T) {
+	registry := newSessionRegistry()
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	registry.register("tok-a", "session-a", "/repo", proxyctl.SessionPolicy{}, time.Hour, now)
+	pending, err := registry.requestGrant("tok-a", "api.example.com", 1000, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		_, err := registry.approveGrant(pending.GrantID, now, func(string) error {
+			close(entered)
+			<-release
+			return nil
+		})
+		first <- err
+	}()
+	<-entered
+	if _, err := registry.approveGrant(pending.GrantID, now, nil); !errors.Is(err, errGrantAuditPending) {
+		t.Fatalf("concurrent approval error = %v, want %v", err, errGrantAuditPending)
+	}
+	if err := registry.denyGrant(pending.GrantID); !errors.Is(err, errGrantAuditPending) {
+		t.Fatalf("concurrent denial error = %v, want %v", err, errGrantAuditPending)
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.approveGrant(pending.GrantID, now, nil); !errors.Is(err, errGrantNotFound) {
+		t.Fatalf("second approval error = %v, want %v", err, errGrantNotFound)
+	}
+
+	failing, err := registry.requestGrant("tok-a", "retry.example.com", 1000, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.approveGrant(failing.GrantID, now, func(string) error { return errors.New("audit down") }); err == nil {
+		t.Fatal("audit failure approved a grant")
+	}
+	if listed := registry.listPending(); len(listed) != 1 || listed[0].GrantID != failing.GrantID {
+		t.Fatalf("audit failure did not restore pending grant: %#v", listed)
+	}
+	if _, err := registry.approveGrant(failing.GrantID, now, nil); err != nil {
+		t.Fatalf("restored grant could not be retried: %v", err)
+	}
+}
+
 func TestControlServerGrantDeny(t *testing.T) {
 	cs, sock, done := startTestControlServer(t, audit.NopEmitter{}, true)
 	defer done()
