@@ -44,6 +44,12 @@ func (b *connectorCapabilityBroker) Use(_ context.Context, binding hostconnector
 }
 
 func (b *connectorCapabilityBroker) EndSession(_ context.Context, sessionID string) {
+	b.mu.Lock()
+	if b.ended == nil {
+		b.ended = make(map[string]struct{})
+	}
+	b.ended[sessionID] = struct{}{}
+	b.mu.Unlock()
 	if b.sessions == nil {
 		return
 	}
@@ -52,10 +58,6 @@ func (b *connectorCapabilityBroker) EndSession(_ context.Context, sessionID stri
 		return
 	}
 	b.mu.Lock()
-	if b.ended == nil {
-		b.ended = make(map[string]struct{})
-	}
-	b.ended[sessionID] = struct{}{}
 	ids := b.used[sessionID]
 	delete(b.used, sessionID)
 	b.mu.Unlock()

@@ -2,6 +2,8 @@ package daemonapp
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/LuD1161/agentjail/internal/grant"
@@ -30,5 +32,36 @@ func TestConnectorBrokerEndSessionRemovesRecordedRoute(t *testing.T) {
 	}
 	if _, err := broker.Use(context.Background(), binding, "filesystem"); err == nil {
 		t.Fatal("use succeeded after session end")
+	}
+}
+
+func TestActiveSessionJSONDoesNotPersistConnectorCapability(t *testing.T) {
+	tracker := newActiveTracker(t.TempDir())
+	tracker.sessions["provider"] = &sessionState{PID: 42, CWD: "/repo", ConnectorCapability: "opaque-capability", NetproxySessionID: "shield-session"}
+	tracker.flush()
+	data, err := os.ReadFile(tracker.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "opaque-capability") || strings.Contains(string(data), "shield-session") {
+		t.Fatalf("active session JSON leaked connector metadata: %s", data)
+	}
+}
+
+func TestConnectorBrokerPreBindEndCannotLaterUse(t *testing.T) {
+	tracker := newActiveTracker(t.TempDir())
+	broker := &connectorCapabilityBroker{sessions: tracker}
+	broker.EndSession(context.Background(), "provider")
+	tracker.sessions["provider"] = &sessionState{Root: "/repo", Path: "/bin/agent", ConnectorCapability: "opaque", NetproxySessionID: "shield"}
+	principal, err := grant.NewPrincipal("agent", "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := hostconnector.NewBinding(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.Use(context.Background(), binding, "filesystem"); err == nil {
+		t.Fatal("use succeeded after pre-bind teardown")
 	}
 }

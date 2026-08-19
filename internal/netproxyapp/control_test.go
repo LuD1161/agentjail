@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -644,6 +645,8 @@ func TestConnectorCapabilityBindsExactSessionAndExpires(t *testing.T) {
 	}
 	if err := r.useConnectorCapability("wrong-cap", "shield-a", "filesystem", now); err == nil {
 		t.Fatal("wrong capability use succeeded")
+	} else if strings.Contains(err.Error(), "wrong-cap") || strings.Contains(err.Error(), "opaque-cap") {
+		t.Fatalf("wrong-capability error leaked opaque input: %v", err)
 	}
 	if err := r.useConnectorCapability("opaque-cap", "shield-a", "filesystem", now); err != nil {
 		t.Fatal(err)
