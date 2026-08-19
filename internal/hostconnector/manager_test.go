@@ -34,11 +34,14 @@ type fakeAuthorizer struct {
 	calls int
 }
 
-func (a *fakeAuthorizer) Authorize(_ context.Context, _ Binding, _ ConnectorID, _ grant.Scope) error {
+func (a *fakeAuthorizer) Begin(_ context.Context, _ Binding, _ ConnectorID, _ grant.Scope) (UseLease, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls++
-	return a.err
+	if a.err != nil {
+		return nil, a.err
+	}
+	return fakeUseLease{}, nil
 }
 
 func (a *fakeAuthorizer) Calls() int {
@@ -46,6 +49,11 @@ func (a *fakeAuthorizer) Calls() int {
 	defer a.mu.Unlock()
 	return a.calls
 }
+
+type fakeUseLease struct{}
+
+func (fakeUseLease) Use(context.Context) error { return nil }
+func (fakeUseLease) Close() error              { return nil }
 
 type fakeAdapter struct {
 	mu         sync.Mutex
@@ -163,7 +171,7 @@ func newTestManager(t *testing.T) (*Manager, Binding, *fakeClock, *fakeAuthorize
 
 func TestAuthorizationWithoutActivationCannotBeUsed(t *testing.T) {
 	manager, binding, _, authorizer, backend, _ := newTestManager(t)
-	if err := authorizer.Authorize(context.Background(), binding, "chrome-cdp", grant.SessionScope()); err != nil {
+	if _, err := authorizer.Begin(context.Background(), binding, "chrome-cdp", grant.SessionScope()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.Use(context.Background(), binding, "chrome-cdp"); !errors.Is(err, ErrInactive) {

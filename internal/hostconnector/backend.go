@@ -35,10 +35,21 @@ type Adapter interface {
 	Close() error
 }
 
-// Authorizer is implemented by the runtime grant lifecycle. It verifies the
-// exact principal, session, connector, and scope before activation begins.
+// Authorizer is implemented by the runtime grant lifecycle. Begin verifies the
+// exact principal, session, connector, and scope before activation begins and
+// returns a lease whose Use operation is the authorization boundary for every
+// connector use. A once lease must atomically claim then commit the underlying
+// grant; activation alone must never leave that generic grant reusable.
 type Authorizer interface {
-	Authorize(context.Context, Binding, ConnectorID, grant.Scope) error
+	Begin(context.Context, Binding, ConnectorID, grant.Scope) (UseLease, error)
+}
+
+// UseLease binds an activation to the generic grant lifecycle. Close is called
+// when activation fails or the route is torn down before use; it rolls back an
+// uncommitted one-use claim and cannot restore a committed grant.
+type UseLease interface {
+	Use(context.Context) error
+	Close() error
 }
 
 // Auditor records connector lifecycle events durably. Activation refuses to

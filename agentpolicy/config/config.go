@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/LuD1161/agentjail/internal/hostconnector"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -267,6 +268,11 @@ type NetworkConfig struct {
 	// enforced set, which always includes the non-removable essentials.
 	AllowedHosts []string `yaml:"allowed_hosts"`
 
+	// HostConnectors are host-owned, pre-session service definitions. They are
+	// intentionally excluded from project overlays: an agent-writable project
+	// file must never add a host destination.
+	HostConnectors []HostConnectorConfig `yaml:"host_connectors"`
+
 	// TunnelMITM sets this install's standing posture for TLS interception
 	// under --tunnel. Tri-state: absent = on (the default), false = standing
 	// opt-out, true = explicit opt-in. --mitm / --no-mitm override it per
@@ -285,6 +291,42 @@ type NetworkConfig struct {
 	// the AGENTJAIL_TUNNEL_IPV6 env var is a transitional override, one release.
 	// See ADR 0110-network-flag-consolidation and ADR 0138-dual-stack-default.
 	TunnelIPv6 *bool `yaml:"tunnel_ipv6"`
+}
+
+// HostConnectorConfig identifies one fixed host-local service. It is decoded
+// only from trusted policy configuration; agent requests may name its ID but
+// never supply its host, port, path, or readiness probe.
+type HostConnectorConfig struct {
+	ID        string `yaml:"id"`
+	Transport string `yaml:"transport"`
+	Host      string `yaml:"host"`
+	Port      uint16 `yaml:"port"`
+	Path      string `yaml:"path"`
+	Probe     string `yaml:"probe"`
+}
+
+// ConfiguredHostConnectors converts validated YAML into the shared typed
+// connector contract used by every platform backend.
+func (n NetworkConfig) ConfiguredHostConnectors() ([]hostconnector.Connector, error) {
+	connectors := make([]hostconnector.Connector, 0, len(n.HostConnectors))
+	for _, configured := range n.HostConnectors {
+		destination, err := hostconnector.NewDestination(configured.Host, configured.Port, configured.Path)
+		if err != nil {
+			return nil, fmt.Errorf("network.host_connectors[%q]: %w", configured.ID, err)
+		}
+		connector, err := hostconnector.NewConnector(
+			hostconnector.ConnectorID(configured.ID), hostconnector.Transport(configured.Transport), destination,
+			hostconnector.ReadinessProbe(configured.Probe),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("network.host_connectors[%q]: %w", configured.ID, err)
+		}
+		connectors = append(connectors, connector)
+	}
+	if _, err := hostconnector.NewRegistry(connectors); err != nil {
+		return nil, fmt.Errorf("network.host_connectors: %w", err)
+	}
+	return connectors, nil
 }
 
 // EssentialAllowedHosts returns the minimal, non-removable set of hosts an
@@ -635,6 +677,9 @@ func decode(r io.Reader) (*PolicyConfig, error) {
 	if err := validateCost(cfg.Cost); err != nil {
 		return cfg, err
 	}
+	if _, err := cfg.Network.ConfiguredHostConnectors(); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -882,6 +927,11 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 		result.Network.AllowedHosts = append([]string(nil), overlay.Network.AllowedHosts...)
 	} else {
 		result.Network.AllowedHosts = append([]string(nil), base.Network.AllowedHosts...)
+	}
+	if overlay.Network.HostConnectors != nil {
+		result.Network.HostConnectors = append([]HostConnectorConfig(nil), overlay.Network.HostConnectors...)
+	} else {
+		result.Network.HostConnectors = append([]HostConnectorConfig(nil), base.Network.HostConnectors...)
 	}
 
 	// Network.TunnelMITM -- tri-state pointer, so nil means "not stated" and

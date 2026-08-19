@@ -32,6 +32,7 @@ type record struct {
 	scope     grant.Scope
 	state     LifecycleState
 	adapter   Adapter
+	lease     UseLease
 }
 
 // Manager is the activation authority for configured host connectors.
@@ -82,14 +83,17 @@ func (m *Manager) Activate(ctx context.Context, binding Binding, id ConnectorID,
 		m.fail(ctx, key, record)
 		return fmt.Errorf("%w: %v", ErrAudit, err)
 	}
-	if err := m.authorizer.Authorize(ctx, binding, id, scope); err != nil {
+	lease, err := m.authorizer.Begin(ctx, binding, id, scope)
+	if err != nil || lease == nil {
 		m.fail(ctx, key, record)
 		return fmt.Errorf("%w: authorization: %v", ErrActivation, err)
 	}
+	record.lease = lease
 
 	adapter, err := m.backend.Activate(ctx, Activation{connector: connector, binding: binding})
 	if err != nil || adapter == nil {
 		m.fail(ctx, key, record)
+		_ = lease.Close()
 		if err == nil {
 			err = ErrActivation
 		}
@@ -101,6 +105,7 @@ func (m *Manager) Activate(ctx context.Context, binding Binding, id ConnectorID,
 		state := record.state
 		m.mu.Unlock()
 		_ = adapter.Close()
+		_ = lease.Close()
 		return stateError(state)
 	}
 	// Keep revocation and use behind this durable transition: no caller can
@@ -108,6 +113,7 @@ func (m *Manager) Activate(ctx context.Context, binding Binding, id ConnectorID,
 	if err := m.record(ctx, record, StateActive); err != nil {
 		m.mu.Unlock()
 		_ = adapter.Close()
+		_ = lease.Close()
 		m.fail(ctx, key, record)
 		return fmt.Errorf("%w: %v", ErrAudit, err)
 	}
@@ -140,6 +146,11 @@ func (m *Manager) Use(ctx context.Context, binding Binding, id ConnectorID) (Use
 		state := record.state
 		m.mu.Unlock()
 		return Use{}, stateError(state)
+	}
+	if err := record.lease.Use(ctx); err != nil {
+		adapter := m.transitionLocked(record, StateRevoked)
+		m.mu.Unlock()
+		return Use{}, m.finishTerminal(ctx, record, adapter, err)
 	}
 	use := Use{ConnectorID: id, Transport: record.connector.Transport()}
 	if record.scope.Kind() != grant.ScopeOnce {
@@ -218,7 +229,28 @@ func (m *Manager) transitionLocked(record *record, state LifecycleState) Adapter
 	record.state = state
 	adapter := record.adapter
 	record.adapter = nil
+	lease := record.lease
+	record.lease = nil
+	if lease != nil {
+		return &terminalAdapter{adapter: adapter, lease: lease}
+	}
 	return adapter
+}
+
+type terminalAdapter struct {
+	adapter Adapter
+	lease   UseLease
+}
+
+func (a *terminalAdapter) Close() error {
+	var errs []error
+	if a.adapter != nil {
+		errs = append(errs, a.adapter.Close())
+	}
+	if a.lease != nil {
+		errs = append(errs, a.lease.Close())
+	}
+	return errors.Join(errs...)
 }
 
 func (m *Manager) finishTerminal(ctx context.Context, record *record, adapter Adapter, prior error) error {
