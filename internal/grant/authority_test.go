@@ -244,6 +244,73 @@ func TestManagerAuditFailureDoesNotExposeAuthority(t *testing.T) {
 	}
 }
 
+func TestAuthorityCreatingAuditMayReenterManager(t *testing.T) {
+	manager, clock, _ := setupManager(t, Capacity{Global: 4, PerSession: 2})
+	manager.audit = reentrantAudit{manager: manager}
+	request := requestFor(t, clock.Now(), "session-1", SessionScope(), 1)
+	pending, err := manager.Request(context.Background(), request, askDecision(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.Approve(context.Background(), pending.ID(), "proof")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval audit deadlocked while reentering manager")
+	}
+	if _, err := manager.Activate(context.Background(), pending.ID()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type reentrantAudit struct{ manager *Manager }
+
+func (a reentrantAudit) EmitLifecycle(_ context.Context, event LifecycleEvent) error {
+	_, err := a.manager.Lookup(event.GrantID)
+	return err
+}
+
+type collidingIDs struct {
+	request int
+	grant   int
+}
+
+func (s *collidingIDs) NewRequestID() (RequestID, error) {
+	s.request++
+	return RequestID("request-collision"), nil
+}
+
+func (s *collidingIDs) NewGrantID() (GrantID, error) {
+	s.grant++
+	return GrantID(fmt.Sprintf("grant-%d", s.grant)), nil
+}
+
+func (s *collidingIDs) NewClaimID() (ClaimID, error) { return "claim", nil }
+
+func TestManagerRejectsLiveRequestIDCollision(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)}
+	manager, err := NewManager(ManagerConfig{
+		Clock: clock, IDs: &collidingIDs{}, Audit: &recordingAudit{}, Capacity: Capacity{Global: 4, PerSession: 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := requestFor(t, clock.Now(), "session-1", SessionScope(), 1)
+	if _, err := manager.Request(context.Background(), request, askDecision(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Request(context.Background(), request, askDecision(t)); !errors.Is(err, ErrInvalidRequestID) {
+		t.Fatalf("duplicate request ID error = %v, want %v", err, ErrInvalidRequestID)
+	}
+}
+
 func TestManagerExpiryEpochAndSessionBinding(t *testing.T) {
 	manager, clock, _ := setupManager(t, Capacity{Global: 4, PerSession: 2})
 	scope, err := NewTTLScope(clock.Now(), clock.Now().Add(time.Minute))

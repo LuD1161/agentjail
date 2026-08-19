@@ -193,6 +193,7 @@ type Manager struct {
 	audit    LifecycleAudit
 	capacity Capacity
 	grants   map[GrantID]*grantRecord
+	requests map[RequestID]GrantID
 	claims   map[ClaimID]*claimRecord
 }
 
@@ -213,7 +214,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if !cfg.Capacity.valid() {
 		return nil, ErrInvalidCapacity
 	}
-	return &Manager{clock: cfg.Clock, ids: cfg.IDs, audit: cfg.Audit, capacity: cfg.Capacity, grants: make(map[GrantID]*grantRecord), claims: make(map[ClaimID]*claimRecord)}, nil
+	return &Manager{clock: cfg.Clock, ids: cfg.IDs, audit: cfg.Audit, capacity: cfg.Capacity, grants: make(map[GrantID]*grantRecord), requests: make(map[RequestID]GrantID), claims: make(map[ClaimID]*claimRecord)}, nil
 }
 
 // Grant is an immutable lifecycle snapshot returned by Manager operations.
@@ -240,8 +241,9 @@ func (g Grant) DeniedAt() (time.Time, bool)         { return g.deniedAt, !g.deni
 func (g Grant) TerminalAt() (time.Time, bool)       { return g.terminalAt, !g.terminalAt.IsZero() }
 
 type grantRecord struct {
-	grant   Grant
-	claimed bool
+	grant    Grant
+	claimed  bool
+	auditing bool
 }
 
 // Access binds a use to one principal/session, canonical resource, action, and epoch.
@@ -318,8 +320,12 @@ func (m *Manager) Request(_ context.Context, request Request, decision Canonical
 	if _, exists := m.grants[grantID]; exists {
 		return Grant{}, ErrInvalidGrantID
 	}
+	if _, exists := m.requests[requestID]; exists {
+		return Grant{}, ErrInvalidRequestID
+	}
 	grant := Grant{id: grantID, requestID: requestID, request: request, state: StateRequested}
 	m.grants[grantID] = &grantRecord{grant: grant}
+	m.requests[requestID] = grantID
 	return grant, nil
 }
 
@@ -331,17 +337,33 @@ func (m *Manager) Approve(ctx context.Context, id GrantID, approval ApprovalRefe
 		return Grant{}, ErrInvalidApproval
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.recordLocked(id, m.clock.Now())
 	if err != nil {
+		m.mu.Unlock()
 		return Grant{}, err
 	}
-	if record.grant.state != StateRequested {
+	if record.grant.state != StateRequested || record.auditing {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidTransition
 	}
 	now := m.clock.Now()
-	if err := m.audit.EmitLifecycle(ctx, m.eventFor(record.grant, LifecycleApproved, approval, now)); err != nil {
+	event := m.eventFor(record.grant, LifecycleApproved, approval, now)
+	record.auditing = true
+	m.mu.Unlock()
+	if err := m.audit.EmitLifecycle(ctx, event); err != nil {
+		m.mu.Lock()
+		record.auditing = false
+		m.mu.Unlock()
 		return Grant{}, fmt.Errorf("%w: approve grant: %v", ErrAuditFailed, err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record.auditing = false
+	if m.expireLocked(record, m.clock.Now()) {
+		return Grant{}, ErrGrantExpired
+	}
+	if record.grant.state != StateRequested {
+		return Grant{}, ErrInvalidTransition
 	}
 	record.grant.state, record.grant.approval, record.grant.approvedAt = StateApproved, approval, now
 	return record.grant, nil
@@ -349,17 +371,33 @@ func (m *Manager) Approve(ctx context.Context, id GrantID, approval ApprovalRefe
 
 func (m *Manager) Activate(ctx context.Context, id GrantID) (Grant, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.recordLocked(id, m.clock.Now())
 	if err != nil {
+		m.mu.Unlock()
 		return Grant{}, err
 	}
-	if record.grant.state != StateApproved {
+	if record.grant.state != StateApproved || record.auditing {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidTransition
 	}
 	now := m.clock.Now()
-	if err := m.audit.EmitLifecycle(ctx, m.eventFor(record.grant, LifecycleActivated, record.grant.approval, now)); err != nil {
+	event := m.eventFor(record.grant, LifecycleActivated, record.grant.approval, now)
+	record.auditing = true
+	m.mu.Unlock()
+	if err := m.audit.EmitLifecycle(ctx, event); err != nil {
+		m.mu.Lock()
+		record.auditing = false
+		m.mu.Unlock()
 		return Grant{}, fmt.Errorf("%w: activate grant: %v", ErrAuditFailed, err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record.auditing = false
+	if m.expireLocked(record, m.clock.Now()) {
+		return Grant{}, ErrGrantExpired
+	}
+	if record.grant.state != StateApproved {
+		return Grant{}, ErrInvalidTransition
 	}
 	record.grant.state, record.grant.activatedAt = StateActive, now
 	return record.grant, nil
@@ -440,7 +478,7 @@ func (m *Manager) Claim(access Access) (Claim, error) {
 		return Claim{}, idError(err, ErrInvalidClaimID)
 	}
 	if _, exists := m.claims[id]; exists {
-		return Claim{}, ErrClaimNotFound
+		return Claim{}, ErrInvalidClaimID
 	}
 	record.claimed = true
 	m.claims[id] = &claimRecord{grantID: record.grant.id, status: claimPending}
@@ -489,7 +527,7 @@ func (m *Manager) ClaimWithAdapter(access Access, adapter ResourceAdapter) (Clai
 		return Claim{}, idError(err, ErrInvalidClaimID)
 	}
 	if _, exists := m.claims[id]; exists {
-		return Claim{}, ErrClaimNotFound
+		return Claim{}, ErrInvalidClaimID
 	}
 	record.claimed = true
 	m.claims[id] = &claimRecord{grantID: record.grant.id, status: claimPending}
@@ -689,6 +727,7 @@ func (m *Manager) cleanupTerminalLocked() int {
 	for id, record := range m.grants {
 		if !isLive(record.grant.state) {
 			delete(m.grants, id)
+			delete(m.requests, record.grant.requestID)
 			for claimID, claim := range m.claims {
 				if claim.grantID == id {
 					delete(m.claims, claimID)
