@@ -267,6 +267,45 @@ func TestAgentSocket_RefusesReload(t *testing.T) {
 	}
 }
 
+func TestAgentSocket_RefusesMCPApprovalControl(t *testing.T) {
+	sock := filepath.Join(shortSockDir(t), "daemon.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	srv := &server{idleTimeout: 2 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr == nil {
+			srv.acceptConn(ctx, conn)
+		}
+	}()
+
+	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte(`{"type":"control","op":"mcp_approve"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || !strings.Contains(response.Error, "unknown control op") {
+		t.Fatalf("agent socket accepted MCP approval control: %+v", response)
+	}
+}
+
 // TestAgentSocket_StillServesPing: ping must stay on the agent socket — the
 // single-instance guard probes it there to tell a live daemon from a squatter
 // (singleton.go). Moving it would break that guard.

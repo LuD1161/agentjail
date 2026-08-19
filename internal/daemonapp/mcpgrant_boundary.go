@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/grant"
 	"github.com/LuD1161/agentjail/internal/hostconnector"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
@@ -47,10 +48,10 @@ func NewMCPGrantBoundary(servers mcpgrant.ServerRegistry, upstream mcpgrant.Upst
 
 // configuredMCPGrantBoundary takes exact server identities only from the
 // agent's startup configuration. Policy globs do not register a server.
-func configuredMCPGrantBoundary() *MCPGrantBoundary {
+func configuredMCPGrantBoundary(authority mcpgrant.Authority, cfg *agentconfig.PolicyConfig) *MCPGrantBoundary {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, nil, nil, nil)
+		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, authority, nil, nil)
 	}
 	entries := mcpclient.DiscoverServersWithConfig(home)
 	servers := make([]mcpgrant.ServerID, 0, len(entries))
@@ -62,9 +63,34 @@ func configuredMCPGrantBoundary() *MCPGrantBoundary {
 	}
 	registry, err := mcpgrant.NewStaticServers(servers...)
 	if err != nil {
-		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, nil, nil, nil)
+		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, authority, nil, nil)
 	}
-	return NewMCPGrantBoundary(registry, configuredMCPUpstream{}, nil, nil, nil)
+	return NewMCPGrantBoundary(registry, configuredMCPUpstream{}, authority, configuredMCPConnectorRoutes(cfg), nil)
+}
+
+// configuredMCPConnectorRoutes maps only exact, fixed MCP connector IDs to
+// matching configured MCP server IDs. The daemon has no netproxy control token
+// or session transport, so a route with no trusted Use proof remains denied.
+func configuredMCPConnectorRoutes(cfg *agentconfig.PolicyConfig) []MCPConnectorRoute {
+	if cfg == nil {
+		return nil
+	}
+	connectors, err := cfg.Network.ConfiguredHostConnectors()
+	if err != nil {
+		return nil
+	}
+	routes := make([]MCPConnectorRoute, 0, len(connectors))
+	for _, connector := range connectors {
+		if connector.Transport() != hostconnector.TransportMCP {
+			continue
+		}
+		server := mcpgrant.ServerID(connector.ID())
+		if _, err := mcpgrant.NewStaticServers(server); err != nil {
+			continue
+		}
+		routes = append(routes, MCPConnectorRoute{Server: server, Connector: connector.ID()})
+	}
+	return routes
 }
 
 type configuredMCPUpstream struct{}
