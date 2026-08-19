@@ -79,6 +79,9 @@ func (a *CodexAdapter) Verify(ctx context.Context, intent Intent, evidence Evide
 }
 
 func (a *CodexAdapter) Begin(ctx context.Context, request CodexShellRequest) CodexPrompt {
+	if a == nil {
+		return CodexPrompt{Outcome: OutcomeMalformedEvidence}
+	}
 	prompt, outcome := a.Project(ctx, request.Intent)
 	if outcome != OutcomePending {
 		return CodexPrompt{Prompt: prompt, Outcome: outcome}
@@ -86,6 +89,7 @@ func (a *CodexAdapter) Begin(ctx context.Context, request CodexShellRequest) Cod
 	if a.manager == nil || request.Command == "" || request.CWD == "" || request.AgentPID <= 0 || request.Now.IsZero() {
 		return CodexPrompt{Prompt: prompt, Outcome: OutcomeMalformedEvidence}
 	}
+	a.reap(request.Now)
 	meta, err := a.manager.Mint(approvalexec.MintRequest{
 		SessionID: approvalexec.SessionID(request.Intent.Principal().Session()),
 		TurnID:    approvalexec.TurnID(request.Intent.Binding().Turn()),
@@ -111,6 +115,9 @@ func (a *CodexAdapter) Begin(ctx context.Context, request CodexShellRequest) Cod
 // Observe binds Codex PermissionRequest to the generic request. Seeing the
 // prompt is intentionally still pending; it is not user authorization.
 func (a *CodexAdapter) Observe(ctx context.Context, evidence Evidence, now time.Time) Outcome {
+	if a == nil || a.manager == nil {
+		return OutcomeMalformedEvidence
+	}
 	if outcome := contextOutcome(ctx); outcome != OutcomePending {
 		a.cancel(evidence.Nonce())
 		return outcome
@@ -139,6 +146,9 @@ func (a *CodexAdapter) Observe(ctx context.Context, evidence Evidence, now time.
 // Redeem returns allow-once only after exact evidence and approvalexec's
 // one-use, session, epoch, and fresh-process checks succeed.
 func (a *CodexAdapter) Redeem(ctx context.Context, evidence Evidence, now time.Time) (approvalexec.Redemption, Outcome) {
+	if a == nil || a.manager == nil {
+		return approvalexec.Redemption{}, OutcomeMalformedEvidence
+	}
 	if outcome := contextOutcome(ctx); outcome != OutcomePending {
 		a.cancel(evidence.Nonce())
 		return approvalexec.Redemption{}, outcome
@@ -183,8 +193,30 @@ func (a *CodexAdapter) cancel(nonce Nonce) {
 	a.forget(nonce)
 }
 
+// reap removes the adapter mirror of native challenges that have expired or
+// been consumed. The native manager remains the authority. See ADR 0141-runtime-grants.
+func (a *CodexAdapter) reap(now time.Time) {
+	if a.manager == nil || now.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	nonces := make([]Nonce, 0, len(a.pending))
+	for nonce := range a.pending {
+		nonces = append(nonces, nonce)
+	}
+	a.mu.Unlock()
+	for _, nonce := range nonces {
+		if _, err := a.manager.Inspect(approvalexec.ChallengeID(nonce), now); err != nil {
+			a.forget(nonce)
+		}
+	}
+}
+
 // Cancel burns a pending native prompt when its owning consumer rejects the
 // surrounding lifecycle transition before executable authority is returned.
 func (a *CodexAdapter) Cancel(nonce Nonce) {
+	if a == nil {
+		return
+	}
 	a.cancel(nonce)
 }
