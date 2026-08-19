@@ -23,6 +23,18 @@ This is the right MVP layer. But it has fundamental limits:
 
 The strategic question: **where do we eventually do MCP enforcement?**
 
+### Current runtime-grant boundary
+
+Track 4 adds a narrower, shipped daemon hook gate for a canonical policy
+`ask`: an active session grant can authorize one exact preconfigured
+server/tool/argument call. This remains a hook response boundary, not this
+proxy. It normalizes hook `_meta`, fails closed for unknown configuration or
+unavailable authority, and consumes a one-use grant at the final allow response
+because the hook contract has no forwarding receipt. It cannot validate actual
+JSON-RPC envelopes, prove upstream reachability, inspect responses, or undo an
+ambiguous delivered allow. The proxy proposed below remains the work that gives
+these properties a real wire boundary.
+
 ## Decision
 
 Build **`agentjail-mcp-proxy`** — a thin process that sits between Claude

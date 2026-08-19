@@ -62,6 +62,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/hookwatch"
 	"github.com/LuD1161/agentjail/internal/hostproxy"
 	"github.com/LuD1161/agentjail/internal/logrotate"
+	"github.com/LuD1161/agentjail/internal/mcpgrant"
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/policyeval"
 	"github.com/LuD1161/agentjail/internal/procutil"
@@ -121,6 +122,10 @@ type server struct {
 
 	// grantSrv handles runtime host grant requests. Nil-safe.
 	grantSrv *grantServer
+
+	// mcpGrants is the hook-side gate for configured MCP calls. It has no
+	// agent-controlled approval transport; unavailable authority denies asks.
+	mcpGrants *MCPGrantBoundary
 
 	// connSem bounds the number of concurrent agent-socket connections
 	// (P9): an agent that holds write access to daemon.sock could otherwise
@@ -627,6 +632,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		start := time.Now()
 		resp, err := s.evaluator.Eval(ctx, req)
 		elapsed := time.Since(start)
+		var mcpResolution mcpGrantResolution
 
 		if err == nil {
 			// Monitor mode downgrades here, before telemetry and persistence, so
@@ -653,6 +659,22 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			resp.TranslationReason = translation.TranslationReason
 			resp.DeferToNativePermission = translation.DeferToNativePermission
 			resp.CodexApprovalBridge = translation.CodexApprovalBridge
+			var mcpResult mcpgrant.Result
+			var mcpErr error
+			mcpResolution, mcpResult, mcpErr = s.mcpGrants.check(ctx, req, grant.PolicyEpoch(s.policyEpoch.Load()), resp.PolicyAction)
+			if resp.PolicyAction == "ask" && s.mcpGrants != nil && strings.HasPrefix(req.ToolName, "mcp__") {
+				resp.Adapter = "mcp_runtime_grant"
+				if mcpErr != nil {
+					resp.Action, resp.EffectiveAction = "deny", "deny"
+					resp.TranslationReason = "MCP runtime grant denied: " + mcpErr.Error()
+				} else if mcpResult.Effective == mcpgrant.EffectiveGrantAllow && mcpResult.Final == mcpgrant.FinalForwardAuthorized {
+					resp.Action, resp.EffectiveAction = "allow", "allow"
+					resp.TranslationReason = "MCP runtime grant authorized at the hook response boundary"
+				} else {
+					resp.Action, resp.EffectiveAction = "deny", "deny"
+					resp.TranslationReason = "MCP runtime grant denied: " + string(mcpResult.Effective)
+				}
+			}
 			bridgeEligible := translation.CodexApprovalBridge
 			approvalOperation := codexApprovalOperationFor(req.Capabilities)
 			var preparedHostProxyTarget hostproxy.Target
@@ -742,6 +764,12 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		// write follows. If the client has already disconnected we still log
 		// the eval result for forensics (the log is useful even when the hook
 		// fell open).
+		if err == nil && resp.Adapter == "mcp_runtime_grant" && resp.EffectiveAction == "allow" {
+			if commitErr := mcpResolution.commit(ctx); commitErr != nil {
+				resp.Action, resp.EffectiveAction = "deny", "deny"
+				resp.TranslationReason = "MCP runtime grant commit failed: " + commitErr.Error()
+			}
+		}
 		encErr := enc.Encode(resp)
 		if encErr != nil {
 			if isClientGone(encErr) {
@@ -1644,6 +1672,7 @@ func Run(args []string) int {
 		hostProxyApprovals: hostproxy.NewManager(nil, 0),
 		hostProxyExecutor:  hostproxy.NewExecutor(),
 		activeSessions:     newActiveTracker(filepath.Dir(*policyPath)),
+		mcpGrants:          configuredMCPGrantBoundary(),
 		connSem:            make(chan struct{}, maxAgentConns),
 		rulesDir:           *rulesDir,
 		policyPath:         *policyPath,

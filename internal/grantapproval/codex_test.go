@@ -11,6 +11,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/grant"
+	"github.com/LuD1161/agentjail/internal/mcpgrant"
 )
 
 const (
@@ -108,6 +109,28 @@ func TestCodexAllowOnceBindsExactShellRequest(t *testing.T) {
 	}
 	if _, got := adapter.Redeem(context.Background(), proof, now); got == OutcomeAllowOnce {
 		t.Fatal("replayed evidence authorized")
+	}
+}
+
+func TestCodexMCPPromptIsUnsupportedAndDoesNotAuthorize(t *testing.T) {
+	adapter, intent, _ := codexFixture(t)
+	resource, err := mcpgrant.NewResource("filesystem", "read_file", mcpgrant.AnyArguments())
+	if err != nil {
+		t.Fatal(err)
+	}
+	display, err := NewDisplayContext("review MCP read", "requires an MCP grant transport with exact forwarding evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpIntent, err := NewIntent(
+		intent.Request(), intent.Grant(), intent.Principal(), agentpolicy.ActionAsk, grant.ActionMCPCall,
+		resource, grant.OnceScope(), intent.PolicyEpoch(), intent.Binding(), display,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, outcome := adapter.Project(context.Background(), mcpIntent); outcome != OutcomeUnsupported || outcome.Authorizes() {
+		t.Fatalf("Codex MCP prompt outcome = %q, want unsupported non-authorizing", outcome)
 	}
 }
 
