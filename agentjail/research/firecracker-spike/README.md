@@ -47,6 +47,7 @@ See [`../../docs/DECISIONS.md`](../../docs/DECISIONS.md) entry "Firecracker stay
 |---|---|
 | `boot.sh` | One bash script: preflight → fetch assets → build Alpine+Claude rootfs → boot via jailer → run either the uptime probe or the network self-test |
 | `net.sh` | Network helper sourced by `boot.sh`: bridge/tap creation, namespace-backed upstream services, iptables allowlist install/teardown |
+| `connector-transport-fixture.sh` | Executable fail-closed proof that the spike has no registered vsock or shared AF_UNIX connector transport |
 | `allowlist.yaml` | Destination CIDRs allowed out of the guest bridge; everything else is rejected |
 | `README.md` | This file — design, reproduction steps, caveats |
 
@@ -144,6 +145,26 @@ with `bash -n`, `shellcheck`, and the explicit Darwin preflight failure:
 ```text
 [boot.sh] ERROR: Firecracker requires Linux + KVM; this host is Darwin. See README.md.
 ```
+
+## Connector transport boundary
+
+The spike does **not** implement the production guest-to-host connector
+transport. Its TAP/virtio-net path reaches deterministic upstream namespaces;
+it has no vsock device, no shared AF_UNIX socket mount, and no AgentJail session
+registration seam. Therefore a configured host connector cannot be claimed as
+reachable from this guest, and guest `127.0.0.1` must never stand in for host
+loopback.
+
+Run the executable fixture to make that absence observable:
+
+```sh
+./connector-transport-fixture.sh
+# exits 2: UNAVAILABLE, until a production launcher wires a session-scoped
+# vsock or bind-mounted AF_UNIX endpoint and its token/ConnectorID registration
+```
+
+This is deliberately a failure result, not a skipped success. The typed runtime
+capability report surfaces the same state to `agentjail doctor`.
 
 ## Hard requirement: Linux + KVM
 

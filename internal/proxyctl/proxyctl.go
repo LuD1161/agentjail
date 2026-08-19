@@ -28,7 +28,28 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 )
+
+// ConnectorAuthoritySuffix is the synthetic HTTPS authority carried by the
+// data plane for one configured host connector. It is not a DNS name the
+// client can resolve; netproxy recognizes it before ordinary host matching.
+const ConnectorAuthoritySuffix = ".connector.agentjail"
+
+// ConnectorAuthority returns the only data-plane target for a configured
+// connector ID. IDs are intentionally label-shaped so they cannot smuggle a
+// host, port, path, or a second authority into a CONNECT request.
+func ConnectorAuthority(id string) (string, bool) {
+	if id == "" || strings.ContainsAny(id, ".:/\\") {
+		return "", false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return "", false
+		}
+	}
+	return id + ConnectorAuthoritySuffix, true
+}
 
 // ProtocolVersion is the control-plane wire protocol version. It is bumped on
 // any incompatible change to the Request/Response shapes or semantics. A shield

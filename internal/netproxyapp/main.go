@@ -398,17 +398,15 @@ func (p *proxy) handleConn(conn net.Conn) {
 	<-done
 }
 
-const connectorTargetSuffix = ".connector.agentjail"
-
 // connectorTarget recognizes the only synthetic CONNECT authority accepted for
 // a host connector. It never falls through to allowed-host matching: a typo or
 // uninstalled ID is denied rather than becoming arbitrary host forwarding.
 func connectorTarget(host, port string) (string, bool) {
-	if port != "443" || !strings.HasSuffix(host, connectorTargetSuffix) {
+	if port != "443" || !strings.HasSuffix(host, proxyctl.ConnectorAuthoritySuffix) {
 		return "", false
 	}
-	id := strings.TrimSuffix(host, connectorTargetSuffix)
-	if id == "" || strings.ContainsAny(id, ".:/\\") {
+	id := strings.TrimSuffix(host, proxyctl.ConnectorAuthoritySuffix)
+	if authority, ok := proxyctl.ConnectorAuthority(id); !ok || authority != host {
 		return "", false
 	}
 	return id, true

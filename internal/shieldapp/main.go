@@ -226,6 +226,9 @@ func Run(args []string) int {
 			})
 		}
 	}
+	for _, report := range connectorTransportCapabilities() {
+		slog.Debug("host connector transport capability", "isolation", report.Isolation, "state", report.State, "detail", report.Detail)
+	}
 	// The '--' separator is required.
 	rest := fs.Args()
 	if len(rest) == 0 {

@@ -68,6 +68,24 @@ connectors are preconfigured typed resources. A host-side adapter owns the
 actual dial and exposes only the approved connector through the isolation
 transport. Guest loopback is never interpreted as host loopback.
 
+Linux containers use a session-scoped AF_UNIX endpoint when a trusted launcher
+bind-mounts that endpoint into the guest. The endpoint opens only the configured
+synthetic connector authority through netproxy; the existing netproxy session
+token, session identity, and ConnectorID remain mandatory, and no guest request
+can choose a host or port. The endpoint directory and socket are host-owned,
+mode-checked, and removed with connector revocation/session end. This repository
+does not yet contain a production container launcher, so the launcher must not
+advertise that endpoint until it has performed the mount injection.
+
+The Firecracker and libkrun work remains research code with no production launch
+seam for vsock or a mounted socket. MicroVM connector capability is therefore
+explicitly unavailable. Its executable fixture demonstrates the missing
+primitive; it must not fall back to guest loopback or a host-gateway address.
+
+The macOS Tier-1 Seatbelt path remains same-host and uses the existing netproxy
+endpoint. No macOS VM/container connector transport is claimed until a real
+shared transport is wired and verified.
+
 Running Landlock and Seatbelt profiles remain immutable. If a requested
 resource cannot be reached through an existing proxy/control boundary, the
 request is unsupported for that session and fails closed.

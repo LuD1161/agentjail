@@ -204,20 +204,31 @@ func TestConnectorRouteRejectsUnknownIDAndCrossSession(t *testing.T) {
 	registry := newSessionRegistry()
 	registry.register(testToken, "session-a", "/tmp/test-cwd", proxyctl.SessionPolicy{AllowedHosts: []string{"example.com"}}, time.Hour, time.Now())
 	registry.register("second-token", "session-b", "/tmp/test-cwd", proxyctl.SessionPolicy{}, time.Hour, time.Now())
+	if err := registry.installConnector(proxyctl.ConnectorRoute{
+		SessionID: "session-a", ConnectorID: "chrome-cdp", Host: "127.0.0.1", Port: 9225,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	proxyAddr := serveProxy(t, &proxy{registry: registry, emitter: audit.NopEmitter{}, logger: discardLogger()})
-	for _, token := range []proxyctl.Token{testToken, "second-token"} {
+	for _, test := range []struct {
+		token proxyctl.Token
+		want  int
+	}{
+		{token: "second-token", want: http.StatusForbidden},
+		{token: "wrong-token", want: http.StatusProxyAuthRequired},
+	} {
 		client, err := net.Dial("tcp", proxyAddr)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprint(client, connectReq("chrome-cdp.connector.agentjail:443", token))
+		fmt.Fprint(client, connectReq("chrome-cdp.connector.agentjail:443", test.token))
 		resp, err := http.ReadResponse(bufio.NewReader(client), nil)
 		client.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("unknown route status = %d, want 403", resp.StatusCode)
+		if resp.StatusCode != test.want {
+			t.Fatalf("connector route status = %d, want %d", resp.StatusCode, test.want)
 		}
 	}
 }

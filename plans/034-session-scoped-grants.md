@@ -42,7 +42,7 @@ attest any required bridge before the grant becomes usable.
 | 2 | Implement the generic runtime grant lifecycle | 1 | TODO |
 | 3 | Bridge generic grant requests to native agent approval prompts | 1, 2 | TODO |
 | 4 | Enforce session-scoped MCP grants | 1, 2, 3 | TODO |
-| 5 | Bridge approved host-local MCP connectors across isolation boundaries | 1; integration after 4 | TODO |
+| 5 | Bridge approved host-local MCP connectors across isolation boundaries | 1; integration after 4 | IN PROGRESS — same-host route and Linux bind-mounted AF_UNIX transport; microVM launch primitive unavailable |
 | 6 | Add release-gate coverage, diagnostics, and user documentation | 2–5 | TODO |
 
 ## 1. Define the generic typed grant domain and adapter contract
