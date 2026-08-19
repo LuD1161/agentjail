@@ -62,3 +62,10 @@ companion. The dedicated board, dependency graph, file ownership, shared
 worktree commit lock, and product-wide acceptance criteria live in
 [`plans/macos-app/README.md`](./macos-app/README.md). Product source remains
 unchanged at planning time.
+
+## 2026-08-19 session-scoped capability grants
+
+[`034-session-scoped-grants.md`](./034-session-scoped-grants.md) is the local
+source of truth for the generic grant parent and its six implementation tracks
+until the work can be migrated to Linear. Track 1 is IN PROGRESS; tracks 2–6
+remain TODO.
