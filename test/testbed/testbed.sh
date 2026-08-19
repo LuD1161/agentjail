@@ -435,7 +435,7 @@ do_gate() {
 
     if [ "$scenario_override" -eq 0 ]; then
         case "$TESTBED_AGENT" in
-            codex) scenarios=("e2e-smoke" "codex-approval" "credentialed-cli" "tunnel-agent") ;;
+            codex) scenarios=("e2e-smoke" "runtime-grants" "codex-approval" "credentialed-cli" "tunnel-agent") ;;
             claude-code) scenarios=("e2e-smoke") ;;
         esac
     fi
@@ -513,6 +513,12 @@ do_gate() {
     for s in "${scenarios[@]}"; do
         log "RELEASE GATE: running scenario '$s' on a clean box"
         case "$s" in
+            runtime-grants)
+                # Unavailable transports are explicit release evidence; retain SKIPs.
+                if ! do_test "$name" "$s"; then
+                    gate_rc=1; failed_scenario="$s"; break
+                fi
+                ;;
             tunnel-agent|codex-approval|credentialed-cli)
                 if ! do_test "$name" "$s" --codex-auth "$codex_auth" --require-no-skip; then
                     gate_rc=1; failed_scenario="$s"; break

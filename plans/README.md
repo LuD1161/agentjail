@@ -67,5 +67,7 @@ unchanged at planning time.
 
 [`034-session-scoped-grants.md`](./034-session-scoped-grants.md) is the local
 source of truth for the generic grant parent and its six implementation tracks
-until the work can be migrated to Linear. Track 1 is IN PROGRESS; tracks 2–6
-remain TODO.
+until the work can be migrated to Linear. Tracks 1–2 are DONE. Tracks 3–6 are
+PARTIAL: Codex MCP native approval, a full MCP reverse proxy/delivery receipt,
+and production container/microVM/macOS guest transports remain unavailable and
+are recorded as fail-closed capability gaps rather than completion.

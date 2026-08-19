@@ -241,6 +241,7 @@ func doctorSectionTitle(u *ui.UI, name string) string {
 // a configured route works from a guest.
 func checkConnectorTransport() []doctorCheck {
 	checks := []doctorCheck{
+		runtimeGrantDiagnosticCheck(grantDiagnosticUnknown),
 		{
 			label:  "Connector authorization",
 			status: statusSkip,
