@@ -115,6 +115,10 @@ const (
 	// ReqGrantDeny discards a pending grant request by GrantID without
 	// applying it. CtlToken required, same GrantID-only shape as approve.
 	ReqGrantDeny RequestType = "grant_deny"
+	// ReqConnectorInstall installs one fixed configured route for an existing
+	// shield session. The agent never receives this control verb or destination.
+	ReqConnectorInstall RequestType = "connector_install"
+	ReqConnectorRemove  RequestType = "connector_remove"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
@@ -148,7 +152,18 @@ type Request struct {
 	// grant_deny. This is the ONLY identifying field those two verbs carry --
 	// no Token, no session identity -- netproxy resolves session->Token from
 	// its own in-memory pending map by GrantID.
-	GrantID string `json:"grant_id,omitempty"`
+	GrantID   string          `json:"grant_id,omitempty"`
+	Connector *ConnectorRoute `json:"connector,omitempty"`
+}
+
+// ConnectorRoute is host-owned control-plane input for a named connector.
+// SessionID+ConnectorID identify the route; Host+Port are never data-plane
+// client input and must never be logged with a token.
+type ConnectorRoute struct {
+	SessionID   string `json:"session_id"`
+	ConnectorID string `json:"connector_id"`
+	Host        string `json:"host,omitempty"`
+	Port        uint16 `json:"port,omitempty"`
 }
 
 // Response is the control-plane response envelope (JSON on the socket).

@@ -87,6 +87,7 @@ type session struct {
 	cwd         string
 	pending     map[string]*pendingGrant // keyed by GrantID
 	granted     []grantedHost
+	connectors  map[string]proxyctl.ConnectorRoute
 }
 
 // allowed reports whether host is permitted under this session: the static
@@ -166,7 +167,56 @@ func (r *sessionRegistry) register(tok proxyctl.Token, sessionID, cwd string, po
 		sessionID:   sessionID,
 		cwd:         cwd,
 		pending:     make(map[string]*pendingGrant),
+		connectors:  make(map[string]proxyctl.ConnectorRoute),
 	}
+}
+
+func (r *sessionRegistry) installConnector(route proxyctl.ConnectorRoute, now time.Time) error {
+	if route.SessionID == "" || route.ConnectorID == "" || route.Host == "" || route.Port == 0 {
+		return errUnknownSession
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var matched *session
+	for _, s := range r.sessions {
+		if s.sessionID == route.SessionID && !now.After(s.leaseExpiry) {
+			if matched != nil {
+				return errUnknownSession
+			}
+			matched = s
+		}
+	}
+	if matched == nil {
+		return errUnknownSession
+	}
+	matched.connectors[route.ConnectorID] = route
+	return nil
+}
+
+func (r *sessionRegistry) removeConnector(route proxyctl.ConnectorRoute) error {
+	if route.SessionID == "" || route.ConnectorID == "" {
+		return errUnknownSession
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sessions {
+		if s.sessionID == route.SessionID {
+			delete(s.connectors, route.ConnectorID)
+			return nil
+		}
+	}
+	return errUnknownSession
+}
+
+func (r *sessionRegistry) connector(tok proxyctl.Token, id string, now time.Time) (proxyctl.ConnectorRoute, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.sessions[tok]
+	if !ok || now.After(s.leaseExpiry) {
+		return proxyctl.ConnectorRoute{}, false
+	}
+	route, ok := s.connectors[id]
+	return route, ok
 }
 
 // lookup returns the token's session if it is registered and its lease has not
@@ -644,6 +694,28 @@ func (cs *controlServer) handle(conn net.Conn) {
 			Actor:     "netproxy",
 			RefID:     req.GrantID,
 		})
+		cs.reply(conn, proxyctl.Response{OK: true})
+
+	case proxyctl.ReqConnectorInstall:
+		if req.Connector == nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector_install requires connector"})
+			return
+		}
+		if err := cs.registry.installConnector(*req.Connector, time.Now()); err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		cs.reply(conn, proxyctl.Response{OK: true})
+
+	case proxyctl.ReqConnectorRemove:
+		if req.Connector == nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector_remove requires connector"})
+			return
+		}
+		if err := cs.registry.removeConnector(*req.Connector); err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
 		cs.reply(conn, proxyctl.Response{OK: true})
 
 	default:
