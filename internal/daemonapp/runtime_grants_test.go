@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/grant"
 	"github.com/LuD1161/agentjail/internal/grantapproval"
+	"github.com/LuD1161/agentjail/internal/mcpgrant"
 	"github.com/LuD1161/agentjail/internal/policyeval"
 	"github.com/LuD1161/agentjail/internal/store"
 )
@@ -38,6 +40,46 @@ func TestCodexSubprocessResourceFingerprintsExactIntent(t *testing.T) {
 func TestNewDaemonGrantAuthorityRequiresDurableStore(t *testing.T) {
 	if _, err := newDaemonGrantAuthority(nil); err == nil {
 		t.Fatal("newDaemonGrantAuthority(nil) succeeded")
+	}
+}
+
+func TestWireRuntimeGrantServicesSharesConcreteManagerWithMCPControl(t *testing.T) {
+	withTempHome(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	approvals := approvalexec.NewManager(bytes.NewReader(bytes.Repeat([]byte{3}, 64)), time.Minute, time.Minute)
+	srv := &server{approvals: approvals}
+	srv.policyEpoch.Store(7)
+	if err := srv.wireRuntimeGrantServices(st, agentconfig.Default()); err != nil {
+		t.Fatalf("wireRuntimeGrantServices: %v", err)
+	}
+	if srv.runtimeGrantManager == nil || srv.mcpGrantControl == nil || srv.grantApprovals == nil {
+		t.Fatal("runtime grant services were not fully wired")
+	}
+	if authority, ok := srv.grantAuthority.(*grant.Manager); !ok || authority != srv.runtimeGrantManager {
+		t.Fatal("Codex shell authority is not the shared concrete manager")
+	}
+
+	principal, err := grant.NewPrincipal("claude", "session-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := mcpgrant.NewCall("filesystem", "read_file", []byte(`{"path":"/allowed"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := srv.mcpGrantControl.Request(context.Background(), principal, call, grant.SessionScope(), 7, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.mcpGrantControl.ApproveAndActivate(context.Background(), pending.ID(), "trusted-companion"); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := srv.runtimeGrantManager.Lookup(pending.ID()); err != nil || current.State() != grant.StateActive {
+		t.Fatalf("MCP control did not activate through shared manager: %+v, %v", current, err)
 	}
 }
 

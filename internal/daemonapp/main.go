@@ -84,14 +84,16 @@ type Response = policyeval.Response
 type server struct {
 	// evaluator owns the OPA engine, LRU cache, per-project engines,
 	// repo-root cache, and AWS profile cache.
-	evaluator          policyeval.Evaluator
-	approvals          *approvalexec.Manager
-	grantAuthority     daemonGrantAuthority
-	grantApprovals     *grantapproval.CodexAdapter
-	hostProxyApprovals *hostproxy.Manager
-	hostProxyExecutor  hostproxy.Executor
-	grantPending       codexGrantPendings
-	policyEpoch        atomic.Uint64
+	evaluator           policyeval.Evaluator
+	approvals           *approvalexec.Manager
+	grantAuthority      daemonGrantAuthority
+	runtimeGrantManager *grant.Manager
+	grantApprovals      *grantapproval.CodexAdapter
+	mcpGrantControl     *mcpgrant.Control
+	hostProxyApprovals  *hostproxy.Manager
+	hostProxyExecutor   hostproxy.Executor
+	grantPending        codexGrantPendings
+	policyEpoch         atomic.Uint64
 
 	// wg tracks in-flight connections so graceful shutdown can drain them.
 	wg sync.WaitGroup
@@ -1672,7 +1674,7 @@ func Run(args []string) int {
 		hostProxyApprovals: hostproxy.NewManager(nil, 0),
 		hostProxyExecutor:  hostproxy.NewExecutor(),
 		activeSessions:     newActiveTracker(filepath.Dir(*policyPath)),
-		mcpGrants:          configuredMCPGrantBoundary(),
+		mcpGrants:          configuredMCPGrantBoundary(nil, cfg),
 		connSem:            make(chan struct{}, maxAgentConns),
 		rulesDir:           *rulesDir,
 		policyPath:         *policyPath,
@@ -1687,10 +1689,7 @@ func Run(args []string) int {
 	// drain goroutine.
 	if st, serr := store.Open(*dbPath); serr == nil {
 		srv.eventStore = st
-		if authority, grantErr := newDaemonGrantAuthority(st); grantErr == nil {
-			srv.grantAuthority = authority
-			srv.grantApprovals = grantapproval.NewCodexAdapter(srv.approvals)
-		} else {
+		if grantErr := srv.wireRuntimeGrantServices(st, cfg); grantErr != nil {
 			slog.Warn("runtime grants unavailable; Codex shell approval will fail closed", "err", grantErr)
 		}
 		srv.decCh = make(chan store.DecisionRecord, 1024)

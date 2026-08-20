@@ -12,11 +12,13 @@ import (
 	"sync"
 	"time"
 
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/grant"
 	"github.com/LuD1161/agentjail/internal/grantapproval"
+	"github.com/LuD1161/agentjail/internal/mcpgrant"
 	"github.com/LuD1161/agentjail/internal/policyeval"
 	"github.com/LuD1161/agentjail/internal/store"
 )
@@ -99,6 +101,26 @@ func newDaemonGrantAuthority(eventStore store.EventStore) (daemonGrantAuthority,
 			PerSession: runtimeGrantCapacityPerSession,
 		},
 	})
+}
+
+// wireRuntimeGrantServices installs one concrete authority for every daemon
+// runtime-grant adapter. The MCP control handle stays daemon-internal: no
+// agent-socket request can request, review, or approve an MCP grant.
+func (s *server) wireRuntimeGrantServices(eventStore store.EventStore, cfg *agentconfig.PolicyConfig) error {
+	authority, err := newDaemonGrantAuthority(eventStore)
+	if err != nil {
+		return err
+	}
+	manager, ok := authority.(*grant.Manager)
+	if !ok {
+		return fmt.Errorf("runtime grant authority has unexpected type")
+	}
+	s.grantAuthority = manager
+	s.runtimeGrantManager = manager
+	s.grantApprovals = grantapproval.NewCodexAdapter(s.approvals)
+	s.mcpGrantControl = mcpgrant.NewControl(manager)
+	s.mcpGrants = configuredMCPGrantBoundary(mcpgrant.NewManagerAuthority(manager), cfg)
+	return nil
 }
 
 func runtimeGrantReference(value string) string {

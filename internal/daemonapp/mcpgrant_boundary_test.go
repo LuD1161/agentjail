@@ -168,3 +168,14 @@ func TestDaemonMCPGrantRequiresConfiguredConnectorUseProof(t *testing.T) {
 		t.Fatalf("connector failure was not enforced at boundary: calls=%d response=%#v", connector.calls, response)
 	}
 }
+
+func TestDaemonMCPGrantReloadEpochInvalidatesSharedAuthority(t *testing.T) {
+	manager := newMCPGrantManager(t)
+	activateDaemonMCPGrant(t, manager, grant.SessionScope())
+	srv, socket := newMCPGrantDaemon(t, manager, nil, nil)
+	srv.policyEpoch.Store(8)
+	response := sendRequest(t, socket, mcpHookRequest("/allowed", nil))
+	if response.Action != "deny" || response.PolicyAction != "ask" || response.EffectiveAction != "deny" || response.Adapter != "mcp_runtime_grant" {
+		t.Fatalf("reload epoch did not invalidate MCP grant: %#v", response)
+	}
+}
