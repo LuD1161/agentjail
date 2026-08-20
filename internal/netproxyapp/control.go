@@ -58,7 +58,15 @@ type pendingGrant struct {
 	Reason  string
 	Created time.Time
 	Expires time.Time
+	state   pendingGrantState
 }
+
+type pendingGrantState uint8
+
+const (
+	pendingGrantOpen pendingGrantState = iota
+	pendingGrantAuditReserved
+)
 
 // grantedHost is one approved runtime host grant, additive to the
 // session's static allowlist until Expiry.
@@ -140,6 +148,7 @@ var (
 	errPendingCapSession = errors.New("too many pending grant requests for this session")
 	errPendingCapGlobal  = errors.New("too many pending grant requests across all sessions")
 	errGrantNotFound     = errors.New("grant not found or already decided")
+	errGrantAuditPending = errors.New("grant approval audit is already in progress")
 	errSessionDead       = errors.New("owning session lease is no longer live")
 )
 
@@ -343,6 +352,9 @@ func (r *sessionRegistry) requestGrant(tok proxyctl.Token, host string, ttlMs in
 	// entry (fresh TTL/reason/expiry) instead of adding a new one.
 	for _, pg := range s.pending {
 		if pg.Host == host {
+			if pg.state != pendingGrantOpen {
+				return pendingGrant{}, errGrantAuditPending
+			}
 			pg.TTLMs = ttlMs
 			pg.Reason = reason
 			pg.Expires = now.Add(pendingGrantTTL)
@@ -372,6 +384,7 @@ func (r *sessionRegistry) requestGrant(tok proxyctl.Token, host string, ttlMs in
 		Reason:  reason,
 		Created: now,
 		Expires: now.Add(pendingGrantTTL),
+		state:   pendingGrantOpen,
 	}
 	s.pending[gid] = pg
 	r.grantIndex[gid] = tok
@@ -398,52 +411,64 @@ func (r *sessionRegistry) listPending() []proxyctl.GrantInfo {
 	return out
 }
 
-// approveGrant atomically claims the pending request identified by grantID:
-// it removes the entry from the pending set (and the grant index) BEFORE
-// calling emitAudit, so a concurrent second approve/deny for the same
-// grantID always loses the race and sees errGrantNotFound. It verifies the
-// owning session's lease is still live (else errSessionDead, and the claimed
-// entry is discarded rather than restored -- the session is gone regardless).
-// emitAudit is called BEFORE the grant is applied; if it returns an error the
-// grant is NOT applied (fail-closed audit, see ADR 0044) and that error is
-// returned to the caller. Only on a nil emitAudit result does the host get
-// appended to the session's granted set.
+// approveGrant reserves one pending request before durable audit, then applies
+// it only if the same reservation remains live. See ADR 0044-runtime-host-grants.
 func (r *sessionRegistry) approveGrant(grantID string, now time.Time, emitAudit func(host string) error) (host string, err error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	tok, ok := r.grantIndex[grantID]
 	if !ok {
+		r.mu.Unlock()
 		return "", errGrantNotFound
 	}
-	delete(r.grantIndex, grantID)
-
 	s, ok := r.sessions[tok]
 	if !ok {
+		r.mu.Unlock()
 		return "", errSessionDead
 	}
 	pg, ok := s.pending[grantID]
 	if !ok {
+		r.mu.Unlock()
 		return "", errGrantNotFound
 	}
-	delete(s.pending, grantID)
-
 	if !now.Before(s.leaseExpiry) {
+		r.mu.Unlock()
 		return "", errSessionDead
 	}
+	if pg.state != pendingGrantOpen {
+		r.mu.Unlock()
+		return "", errGrantAuditPending
+	}
+	pg.state = pendingGrantAuditReserved
+	host = pg.Host
+	r.mu.Unlock()
 
 	if emitAudit != nil {
-		if aerr := emitAudit(pg.Host); aerr != nil {
+		if aerr := emitAudit(host); aerr != nil {
+			r.mu.Lock()
+			if current, ok := r.sessions[tok]; ok && current == s && current.pending[grantID] == pg && pg.state == pendingGrantAuditReserved {
+				pg.state = pendingGrantOpen
+			}
+			r.mu.Unlock()
 			return "", fmt.Errorf("audit unavailable, grant not applied: %w", aerr)
 		}
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.sessions[tok]; !ok || current != s || !now.Before(s.leaseExpiry) {
+		return "", errSessionDead
+	}
+	if s.pending[grantID] != pg || pg.state != pendingGrantAuditReserved {
+		return "", errGrantNotFound
+	}
+	delete(s.pending, grantID)
+	delete(r.grantIndex, grantID)
 	s.granted = append(s.granted, grantedHost{
 		Host:    pg.Host,
 		GrantID: pg.GrantID,
 		Expiry:  now.Add(time.Duration(pg.TTLMs) * time.Millisecond),
 	})
-	return pg.Host, nil
+	return host, nil
 }
 
 // denyGrant discards the pending request identified by grantID without
@@ -457,6 +482,10 @@ func (r *sessionRegistry) denyGrant(grantID string) error {
 	}
 	delete(r.grantIndex, grantID)
 	if s, ok := r.sessions[tok]; ok {
+		if pg, exists := s.pending[grantID]; exists && pg.state != pendingGrantOpen {
+			r.grantIndex[grantID] = tok
+			return errGrantAuditPending
+		}
 		delete(s.pending, grantID)
 	}
 	return nil
