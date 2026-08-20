@@ -247,3 +247,11 @@ func projectRoot(t *testing.T) string {
 		cwd = parent
 	}
 }
+
+func TestProxyEnvironmentDoesNotCarryConnectorCapability(t *testing.T) {
+	for _, entry := range proxyEnvVars("127.0.0.1:9100", proxyctl.Token("session-token")) {
+		if strings.Contains(entry, "opaque-connector-capability") {
+			t.Fatalf("agent proxy environment leaked connector capability: %q", entry)
+		}
+	}
+}
