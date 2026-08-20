@@ -108,6 +108,14 @@ func TestRejectAmbiguousOrInvalidJSON(t *testing.T) {
 			_, err := ParseCallParams("filesystem", []byte(`{"name":"read_file","arguments":[]}`))
 			return err
 		}},
+		{"non-object metadata", func() error {
+			_, err := ParseCallParams("filesystem", []byte(`{"name":"read_file","_meta":true}`))
+			return err
+		}},
+		{"invalid UTF-8", func() error {
+			_, err := NewCall("filesystem", "read_file", []byte{'{', '"', 'x', '"', ':', '"', 0xff, '"', '}'})
+			return err
+		}},
 		{"invalid JSON", func() error { _, err := NewCall("filesystem", "read_file", []byte(`{"path":`)); return err }},
 		{"trailing JSON", func() error { _, err := NewCall("filesystem", "read_file", []byte(`{} {}`)); return err }},
 		{"non-finite number", func() error { _, err := NewCall("filesystem", "read_file", []byte(`{"x":NaN}`)); return err }},
