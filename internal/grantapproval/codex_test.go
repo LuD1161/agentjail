@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/approvalexec"
@@ -326,6 +327,39 @@ func TestCodexCancellationTimeoutAndMalformedEvidenceFailClosed(t *testing.T) {
 	}
 	if _, got := adapter.Redeem(context.Background(), Evidence{}, now); got != OutcomeMalformedEvidence {
 		t.Fatalf("Redeem(malformed) = %q", got)
+	}
+}
+
+func TestCodexBeginReapsExpiredPendingMirror(t *testing.T) {
+	adapter, intent, now := codexFixture(t)
+	begin(t, adapter, intent, now)
+	adapter.mu.Lock()
+	if len(adapter.pending) != 1 {
+		adapter.mu.Unlock()
+		t.Fatal("pending challenge was not tracked")
+	}
+	adapter.mu.Unlock()
+	second := adapter.Begin(context.Background(), CodexShellRequest{
+		Intent: intent, Command: "git push origin topic", CWD: "/repo", AgentPID: 42, Now: now.Add(2 * time.Second),
+	})
+	if second.Outcome != OutcomePending {
+		t.Fatalf("second Begin() = %#v", second)
+	}
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if len(adapter.pending) != 1 {
+		t.Fatalf("expired pending mirror count=%d, want 1", len(adapter.pending))
+	}
+}
+
+func TestDisplayContextTruncatesOnUTF8Boundary(t *testing.T) {
+	value := strings.Repeat("界", maxDisplayText/len("界")+2)
+	display, err := NewDisplayContext(value, "approved consequence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Reason()) > maxDisplayText || !utf8.ValidString(display.Reason()) {
+		t.Fatalf("bounded display reason is invalid UTF-8: %q", display.Reason())
 	}
 }
 

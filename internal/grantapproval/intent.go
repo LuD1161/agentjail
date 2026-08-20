@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/LuD1161/agentjail/internal/agentpolicy"
 	"github.com/LuD1161/agentjail/internal/grant"
@@ -306,10 +307,19 @@ func boundedDisplayText(value string) string {
 		return r
 	}, value)
 	value = strings.TrimSpace(value)
-	if len(value) > maxDisplayText {
-		return value[:maxDisplayText]
+	if len(value) <= maxDisplayText {
+		return value
 	}
-	return value
+	var result strings.Builder
+	result.Grow(maxDisplayText)
+	for _, r := range value {
+		width := utf8.RuneLen(r)
+		if result.Len()+width > maxDisplayText {
+			break
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
 func present(value string) bool {
