@@ -664,6 +664,56 @@ agentjail mcp where <server>      # show which projects use a given MCP server
 
 Install auto-seeds the allowlist from your existing MCP config (including Claude Code plugins). Changes require interactive terminal confirmation.
 
+**Session-scoped MCP grants and host connectors:**
+
+Runtime grants are narrow authority for an already configured MCP tool or host
+connector. They never override an explicit or locked policy deny, and they do
+not turn an arbitrary server name, host, port, or path into a new route. Add a
+host-local Chrome CDP connector to the trusted global policy before the session
+starts:
+
+```yaml
+network:
+  host_connectors:
+    - id: chrome-cdp
+      transport: cdp
+      host: 127.0.0.1
+      port: 9225
+      path: /json/version
+      probe: chrome_cdp
+```
+
+The connector ID is the only identity an agent-side request may name. CDP is
+restricted to loopback and the fixed `/json/version` readiness probe; invalid,
+non-loopback, duplicate, or project-overlay connector definitions are rejected.
+The policy must exist before session startup. Dynamic MCP registration and
+agent-selected host destinations are unsupported.
+
+An eligible canonical `ask` follows `requested → approved → active`. Approval
+does not imply reachability: activation requires the fixed readiness probe.
+`once` is consumed at authorization, `session` ends on session stop or
+revocation, and `ttl` expires synchronously. A grant is exact to its principal,
+session, action, resource, arguments, and policy epoch. Different connector,
+server, tool, arguments, session, or epoch is denied.
+
+The supported Tier-1 path is same-host use through the configured netproxy
+route. Linux supplies a session-scoped AF_UNIX endpoint for a trusted container
+launcher to bind-mount, but this repository does not ship that launcher, so the
+release fixture capability-SKIPs it. MicroVM and macOS VM/container transports
+are unsupported: no production shared socket or vsock launch seam exists, and
+they fail closed rather than assuming guest loopback is the host. `agentjail
+doctor` reports value-free runtime-grant diagnoses: policy deny, approval
+unavailable/pending/denied, inactive/expired/revoked, transport unavailable,
+activation/probe failure, upstream unreachable, or active.
+
+Codex CLI 0.148.0 has a verified native allow-once transport for shell commands
+only. It has no MCP-specific native approval receipt, so MCP grant approval
+fails closed rather than treating a retry or visible prompt as approval. The
+compatibility fixture records the official Hooks and Rules sources and
+verification date. To recover, correct trusted preconfiguration or upstream
+readiness, end the affected session, and request a new grant; never work around
+a denial by dynamically registering an MCP server.
+
 **Per-folder policy (trusted projects):**
 ```sh
 # a repo can widen its own session's allowlist via ./.agentjail/policy.yaml

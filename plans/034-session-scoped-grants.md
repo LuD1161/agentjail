@@ -38,12 +38,12 @@ attest any required bridge before the grant becomes usable.
 
 | Track | Work item | Depends on | Status |
 |------:|-----------|------------|--------|
-| 1 | Define the generic typed grant domain and adapter contract | — | IN PROGRESS |
-| 2 | Implement the generic runtime grant lifecycle | 1 | TODO |
-| 3 | Bridge generic grant requests to native agent approval prompts | 1, 2 | TODO |
-| 4 | Enforce session-scoped MCP grants | 1, 2, 3 | TODO |
-| 5 | Bridge approved host-local MCP connectors across isolation boundaries | 1; integration after 4 | IN PROGRESS — same-host route and Linux bind-mounted AF_UNIX transport; microVM launch primitive unavailable |
-| 6 | Add release-gate coverage, diagnostics, and user documentation | 2–5 | TODO |
+| 1 | Define the generic typed grant domain and adapter contract | — | DONE |
+| 2 | Implement the generic runtime grant lifecycle | 1 | DONE |
+| 3 | Bridge generic grant requests to native agent approval prompts | 1, 2 | PARTIAL — Codex shell allow-once is verified; native MCP approval has no supported transport and fails closed |
+| 4 | Enforce session-scoped MCP grants | 1, 2, 3 | PARTIAL — startup-configured exact server/tool/argument grants enforce at the hook boundary; no JSON-RPC reverse proxy/delivery receipt |
+| 5 | Bridge approved host-local MCP connectors across isolation boundaries | 1; integration after 4 | PARTIAL — same-host route and Linux bind-mounted AF_UNIX primitive exist; no production container launcher, microVM, or macOS guest transport |
+| 6 | Add release-gate coverage, diagnostics, and user documentation | 2–5 | PARTIAL — deterministic composition fixture, clean-VM capability evidence, doctor distinctions, and docs land; unavailable native/platform paths remain explicit SKIPs |
 
 ## 1. Define the generic typed grant domain and adapter contract
 
@@ -211,3 +211,11 @@ Each track owns focused unit and integration tests. Before merge, run the full
 repository gates required by `AGENTS.md`, including `go build ./...`,
 `go vet ./...`, `go test ./...`, `make smoke`, and `make adr-check` when the ADR
 is introduced or renumbered.
+
+## Execution log
+
+| Commit | Track | Evidence |
+|---|---:|---|
+| pending local commit | 6 | `go test ./test -run TestRuntimeGrantProductionLikeFlow`; fixed CDP `/json/version` probe; one-use replay; strict argument/server/session/epoch/locked-deny and TTL/session-end denials |
+| pending local commit | 6 | `go test ./cmd/agentjail -run 'TestConnectorDoctor|TestRuntimeGrantDoctor'`; value-free doctor state matrix and transport capability evidence |
+| pending local commit | 6 | `test/testbed/scenarios/runtime-grants.sh` is included in the Codex release gate and preserves explicit capability SKIPs for unavailable launcher/native MCP paths |
