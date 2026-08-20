@@ -559,6 +559,9 @@ func TestConnectorCapabilityBindsExactSessionAndExpires(t *testing.T) {
 	if err := r.registerConnectorCapability("token-a", "opaque-cap", route, now); err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := r.connector("token-a", "filesystem", now); ok {
+		t.Fatal("capability registration installed direct connector reachability")
+	}
 	if err := r.useConnectorCapability("opaque-cap", "shield-b", "filesystem", now); err == nil {
 		t.Fatal("cross-session capability use succeeded")
 	}
