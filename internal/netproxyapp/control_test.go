@@ -549,3 +549,35 @@ func TestAcquireControlSocketClearsStale(t *testing.T) {
 	ln.Close()
 	lock.Close()
 }
+
+func TestConnectorCapabilityBindsExactSessionAndExpires(t *testing.T) {
+	r := newSessionRegistry()
+	now := time.Now()
+	r.register("token-a", "shield-a", "/repo", proxyctl.SessionPolicy{}, time.Hour, now)
+	r.register("token-b", "shield-b", "/repo", proxyctl.SessionPolicy{}, time.Hour, now)
+	route := proxyctl.ConnectorRoute{SessionID: "shield-a", ConnectorID: "filesystem", Host: "127.0.0.1", Port: 8080}
+	if err := r.registerConnectorCapability("token-a", "opaque-cap", route, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.useConnectorCapability("opaque-cap", "shield-b", "filesystem", now); err == nil {
+		t.Fatal("cross-session capability use succeeded")
+	}
+	if err := r.useConnectorCapability("wrong-cap", "shield-a", "filesystem", now); err == nil {
+		t.Fatal("wrong capability use succeeded")
+	}
+	if err := r.useConnectorCapability("opaque-cap", "shield-a", "filesystem", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.connector("token-a", "filesystem", now); !ok {
+		t.Fatal("capability did not install route")
+	}
+	if err := r.removeConnectorCapability("opaque-cap", "shield-a", "filesystem"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.connector("token-a", "filesystem", now); ok {
+		t.Fatal("capability removal retained route")
+	}
+	if err := r.useConnectorCapability("opaque-cap", "shield-a", "filesystem", now.Add(2*time.Hour)); err == nil {
+		t.Fatal("expired capability use succeeded")
+	}
+}

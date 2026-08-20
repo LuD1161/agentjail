@@ -25,6 +25,7 @@ type sessionState struct {
 	Path                string `json:"-"`
 	LaunchPID           int    `json:"-"`
 	ConnectorCapability string `json:"-"`
+	NetproxySessionID   string `json:"-"`
 }
 
 type launchState struct {
@@ -32,6 +33,7 @@ type launchState struct {
 	Path                string
 	StartMarker         procutil.StartMarker
 	ConnectorCapability string
+	NetproxySessionID   string
 }
 
 // activeTracker maintains a map of session IDs to their agent PIDs and CWDs.
@@ -52,7 +54,7 @@ func newActiveTracker(agentjailDir string) *activeTracker {
 	}
 }
 
-func (t *activeTracker) registerLaunch(pid int, root, pathValue string, connectorCapability ...string) bool {
+func (t *activeTracker) registerLaunch(pid int, root, pathValue, connectorCapability, netproxySessionID string) bool {
 	root = filepath.Clean(root)
 	if pid <= 1 || !filepath.IsAbs(root) || pathValue == "" {
 		return false
@@ -68,11 +70,10 @@ func (t *activeTracker) registerLaunch(pid int, root, pathValue string, connecto
 			delete(t.launches, existingPID)
 		}
 	}
-	capability := ""
-	if len(connectorCapability) == 1 {
-		capability = connectorCapability[0]
+	if (connectorCapability == "") != (netproxySessionID == "") {
+		return false
 	}
-	t.launches[pid] = launchState{Root: root, Path: pathValue, StartMarker: startMarker, ConnectorCapability: capability}
+	t.launches[pid] = launchState{Root: root, Path: pathValue, StartMarker: startMarker, ConnectorCapability: connectorCapability, NetproxySessionID: netproxySessionID}
 	return true
 }
 
@@ -125,14 +126,26 @@ func (t *activeTracker) bindVerified(sessionID string, agentPID int, cwd string)
 	if _, exists := t.launches[launchPID]; !exists {
 		return false
 	}
-	t.sessions[sessionID] = &sessionState{PID: agentPID, CWD: canonicalCWD, Root: launch.Root, Path: launch.Path, LaunchPID: launchPID, ConnectorCapability: launch.ConnectorCapability}
+	t.sessions[sessionID] = &sessionState{PID: agentPID, CWD: canonicalCWD, Root: launch.Root, Path: launch.Path, LaunchPID: launchPID, ConnectorCapability: launch.ConnectorCapability, NetproxySessionID: launch.NetproxySessionID}
 	t.flush()
 	return true
 }
 
-func (t *activeTracker) connectorCapability(sessionID string) (string, bool) {
+func (t *activeTracker) connectorCapability(sessionID string) (string, string, bool) {
 	state, ok := t.metadata(sessionID)
-	return state.ConnectorCapability, ok && state.ConnectorCapability != ""
+	return state.ConnectorCapability, state.NetproxySessionID, ok && state.ConnectorCapability != "" && state.NetproxySessionID != ""
+}
+
+func (t *activeTracker) sessionsForLaunch(pid int) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var ids []string
+	for id, state := range t.sessions {
+		if state.LaunchPID == pid {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (t *activeTracker) metadata(sessionID string) (sessionState, bool) {

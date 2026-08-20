@@ -212,11 +212,14 @@ func (r *sessionRegistry) registerConnectorCapability(token proxyctl.Token, capa
 	return nil
 }
 
-func (r *sessionRegistry) useConnectorCapability(capability, connectorID string, now time.Time) error {
+func (r *sessionRegistry) useConnectorCapability(capability, sessionID, connectorID string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.sessions {
 		if now.After(s.leaseExpiry) {
+			continue
+		}
+		if s.sessionID != sessionID {
 			continue
 		}
 		if routes := s.connectorCapabilities[capability]; routes != nil {
@@ -231,10 +234,13 @@ func (r *sessionRegistry) useConnectorCapability(capability, connectorID string,
 	return errUnknownSession
 }
 
-func (r *sessionRegistry) removeConnectorCapability(capability, connectorID string) error {
+func (r *sessionRegistry) removeConnectorCapability(capability, sessionID, connectorID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range r.sessions {
+		if s.sessionID != sessionID {
+			continue
+		}
 		if routes := s.connectorCapabilities[capability]; routes != nil {
 			if _, ok := routes[connectorID]; !ok {
 				return errUnknownSession
@@ -785,7 +791,7 @@ func (cs *controlServer) handle(conn net.Conn) {
 			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector capability use requires connector"})
 			return
 		}
-		if err := cs.registry.useConnectorCapability(req.ConnectorCapability, req.Connector.ConnectorID, time.Now()); err != nil {
+		if err := cs.registry.useConnectorCapability(req.ConnectorCapability, req.Connector.SessionID, req.Connector.ConnectorID, time.Now()); err != nil {
 			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
 			return
 		}
@@ -795,7 +801,7 @@ func (cs *controlServer) handle(conn net.Conn) {
 			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector capability removal requires connector"})
 			return
 		}
-		if err := cs.registry.removeConnectorCapability(req.ConnectorCapability, req.Connector.ConnectorID); err != nil {
+		if err := cs.registry.removeConnectorCapability(req.ConnectorCapability, req.Connector.SessionID, req.Connector.ConnectorID); err != nil {
 			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
 			return
 		}

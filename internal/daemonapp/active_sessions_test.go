@@ -156,7 +156,7 @@ func TestAuthenticatedSessionIgnoresUnverifiedRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !at.registerLaunch(os.Getpid(), cwd, "/trusted/bin") {
+	if !at.registerLaunch(os.Getpid(), cwd, "/trusted/bin", "", "") {
 		t.Fatal("register launch")
 	}
 	if !at.bindVerified("session-1", os.Getpid(), cwd) {
@@ -166,5 +166,26 @@ func TestAuthenticatedSessionIgnoresUnverifiedRefresh(t *testing.T) {
 	state, ok := at.metadata("session-1")
 	if !ok || state.PID != os.Getpid() || state.CWD != filepath.Clean(cwd) || state.Path != "/trusted/bin" {
 		t.Fatalf("authenticated state changed: %+v, %v", state, ok)
+	}
+}
+
+func TestActiveTrackerConnectorCapabilityRequiresVerifiedBinding(t *testing.T) {
+	at := newActiveTracker(t.TempDir())
+	cwd := t.TempDir()
+	if !at.registerLaunch(os.Getpid(), cwd, "/trusted/bin", "opaque-cap", "shield-session") {
+		t.Fatal("register launch")
+	}
+	if _, _, ok := at.connectorCapability("provider-session"); ok {
+		t.Fatal("unbound provider received connector capability")
+	}
+	if !at.bindVerified("provider-session", os.Getpid(), cwd) {
+		t.Fatal("bind verified")
+	}
+	capability, netproxySession, ok := at.connectorCapability("provider-session")
+	if !ok || capability != "opaque-cap" || netproxySession != "shield-session" {
+		t.Fatalf("capability binding = %q %q %t", capability, netproxySession, ok)
+	}
+	if _, _, ok := at.connectorCapability("sibling-session"); ok {
+		t.Fatal("unbound sibling received connector capability")
 	}
 }
