@@ -135,8 +135,17 @@ func (s CryptoIDSource) next() (string, error) {
 type LifecycleEventType string
 
 const (
-	LifecycleApproved  LifecycleEventType = "grant.approved"
-	LifecycleActivated LifecycleEventType = "grant.activated"
+	// Approved and Activated are fail-closed before usable authority. Requested
+	// and terminal events are best-effort after their non-authorizing transition.
+	// See ADR 0141-runtime-grants.
+	LifecycleRequested        LifecycleEventType = "grant.requested"
+	LifecycleApproved         LifecycleEventType = "grant.approved"
+	LifecycleActivated        LifecycleEventType = "grant.activated"
+	LifecycleDenied           LifecycleEventType = "grant.denied"
+	LifecycleActivationFailed LifecycleEventType = "grant.activation_failed"
+	LifecycleConsumed         LifecycleEventType = "grant.consumed"
+	LifecycleExpired          LifecycleEventType = "grant.expired"
+	LifecycleRevoked          LifecycleEventType = "grant.revoked"
 )
 
 // LifecycleEvent is the bounded, non-secret projection needed by durable audit.
@@ -187,14 +196,15 @@ type Authority interface {
 }
 
 type Manager struct {
-	mu       sync.Mutex
-	clock    Clock
-	ids      IDSource
-	audit    LifecycleAudit
-	capacity Capacity
-	grants   map[GrantID]*grantRecord
-	requests map[RequestID]GrantID
-	claims   map[ClaimID]*claimRecord
+	mu             sync.Mutex
+	clock          Clock
+	ids            IDSource
+	audit          LifecycleAudit
+	capacity       Capacity
+	grants         map[GrantID]*grantRecord
+	requests       map[RequestID]GrantID
+	claims         map[ClaimID]*claimRecord
+	terminalEvents []LifecycleEvent
 }
 
 func NewManager(cfg ManagerConfig) (*Manager, error) {
@@ -296,36 +306,60 @@ func (m *Manager) Request(_ context.Context, request Request, decision Canonical
 		return Grant{}, ErrInvalidRequest
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	now := m.clock.Now()
 	if request.requestedAt.After(now) {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidRequest
 	}
 	requestID, err := m.ids.NewRequestID()
 	if err != nil || !requestID.Valid() {
+		m.mu.Unlock()
 		return Grant{}, idError(err, ErrInvalidRequestID)
 	}
 	grantID, err := m.ids.NewGrantID()
 	if err != nil || !grantID.Valid() {
+		m.mu.Unlock()
 		return Grant{}, idError(err, ErrInvalidGrantID)
 	}
 	m.expireAllLocked(now)
 	m.cleanupTerminalLocked()
 	if m.liveCountLocked() >= m.capacity.Global {
+		m.mu.Unlock()
 		return Grant{}, ErrGlobalCapacity
 	}
 	if m.liveCountForSessionLocked(request.principal.SessionID()) >= m.capacity.PerSession {
+		m.mu.Unlock()
 		return Grant{}, ErrSessionCapacity
 	}
 	if _, exists := m.grants[grantID]; exists {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidGrantID
 	}
 	if _, exists := m.requests[requestID]; exists {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidRequestID
 	}
 	grant := Grant{id: grantID, requestID: requestID, request: request, state: StateRequested}
-	m.grants[grantID] = &grantRecord{grant: grant}
+	record := &grantRecord{grant: grant, auditing: true}
+	m.grants[grantID] = record
 	m.requests[requestID] = grantID
+	event := m.eventFor(grant, LifecycleRequested, "", now)
+	m.mu.Unlock()
+	_ = m.audit.EmitLifecycle(context.Background(), event)
+	m.mu.Lock()
+	record.auditing = false
+	if m.expireLocked(record, m.clock.Now()) {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+		return Grant{}, ErrGrantExpired
+	}
+	if record.grant.state != StateRequested {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+		return Grant{}, ErrInvalidTransition
+	}
+	m.mu.Unlock()
+	m.emitTerminalEvents()
 	return grant, nil
 }
 
@@ -340,6 +374,7 @@ func (m *Manager) Approve(ctx context.Context, id GrantID, approval ApprovalRefe
 	record, err := m.recordLocked(id, m.clock.Now())
 	if err != nil {
 		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Grant{}, err
 	}
 	if record.grant.state != StateRequested || record.auditing {
@@ -357,16 +392,21 @@ func (m *Manager) Approve(ctx context.Context, id GrantID, approval ApprovalRefe
 		return Grant{}, fmt.Errorf("%w: approve grant: %v", ErrAuditFailed, err)
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record.auditing = false
 	if m.expireLocked(record, m.clock.Now()) {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Grant{}, ErrGrantExpired
 	}
 	if record.grant.state != StateRequested {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidTransition
 	}
 	record.grant.state, record.grant.approval, record.grant.approvedAt = StateApproved, approval, now
-	return record.grant, nil
+	grant := record.grant
+	m.mu.Unlock()
+	m.emitTerminalEvents()
+	return grant, nil
 }
 
 func (m *Manager) Activate(ctx context.Context, id GrantID) (Grant, error) {
@@ -374,6 +414,7 @@ func (m *Manager) Activate(ctx context.Context, id GrantID) (Grant, error) {
 	record, err := m.recordLocked(id, m.clock.Now())
 	if err != nil {
 		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Grant{}, err
 	}
 	if record.grant.state != StateApproved || record.auditing {
@@ -391,46 +432,61 @@ func (m *Manager) Activate(ctx context.Context, id GrantID) (Grant, error) {
 		return Grant{}, fmt.Errorf("%w: activate grant: %v", ErrAuditFailed, err)
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record.auditing = false
 	if m.expireLocked(record, m.clock.Now()) {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Grant{}, ErrGrantExpired
 	}
 	if record.grant.state != StateApproved {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidTransition
 	}
 	record.grant.state, record.grant.activatedAt = StateActive, now
-	return record.grant, nil
+	grant := record.grant
+	m.mu.Unlock()
+	m.emitTerminalEvents()
+	return grant, nil
 }
 
 func (m *Manager) FailActivation(_ context.Context, id GrantID) (Grant, error) {
-	return m.transition(id, StateApproved, StateActivationFailed)
+	grant, err := m.transition(id, StateApproved, StateActivationFailed)
+	m.emitTerminalEvents()
+	return grant, err
 }
 
 func (m *Manager) Deny(_ context.Context, id GrantID) (Grant, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.recordLocked(id, m.clock.Now())
 	if err != nil {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Grant{}, err
 	}
-	if record.grant.state != StateRequested {
+	if record.grant.state != StateRequested || record.auditing {
+		m.mu.Unlock()
 		return Grant{}, ErrInvalidTransition
 	}
 	now := m.clock.Now()
 	m.terminalLocked(record, StateDenied, now)
 	record.grant.deniedAt = now
-	return record.grant, nil
+	grant := record.grant
+	m.mu.Unlock()
+	m.emitTerminalEvents()
+	return grant, nil
 }
 
 func (m *Manager) transition(id GrantID, from, to State) (Grant, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+	}()
 	record, err := m.recordLocked(id, m.clock.Now())
 	if err != nil {
 		return Grant{}, err
 	}
-	if record.grant.state != from {
+	if record.grant.state != from || record.auditing {
 		return Grant{}, ErrInvalidTransition
 	}
 	m.terminalLocked(record, to, m.clock.Now())
@@ -439,8 +495,9 @@ func (m *Manager) transition(id GrantID, from, to State) (Grant, error) {
 
 func (m *Manager) Lookup(id GrantID) (Grant, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.recordLocked(id, m.clock.Now())
+	m.mu.Unlock()
+	m.emitTerminalEvents()
 	if err != nil {
 		return Grant{}, err
 	}
@@ -449,8 +506,9 @@ func (m *Manager) Lookup(id GrantID) (Grant, error) {
 
 func (m *Manager) Authorize(access Access) (Grant, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.findAccessLocked(access, m.clock.Now(), nil)
+	m.mu.Unlock()
+	m.emitTerminalEvents()
 	if err != nil {
 		return Grant{}, err
 	}
@@ -462,27 +520,35 @@ func (m *Manager) Authorize(access Access) (Grant, error) {
 
 func (m *Manager) Claim(access Access) (Claim, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.findAccessLocked(access, m.clock.Now(), nil)
 	if err != nil {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Claim{}, err
 	}
 	if record.grant.request.scope.Kind() != ScopeOnce {
+		m.mu.Unlock()
 		return Claim{}, ErrClaimRequired
 	}
 	if record.claimed {
+		m.mu.Unlock()
 		return Claim{}, ErrGrantAlreadyClaimed
 	}
 	id, err := m.ids.NewClaimID()
 	if err != nil || !id.Valid() {
+		m.mu.Unlock()
 		return Claim{}, idError(err, ErrInvalidClaimID)
 	}
 	if _, exists := m.claims[id]; exists {
+		m.mu.Unlock()
 		return Claim{}, ErrInvalidClaimID
 	}
 	record.claimed = true
 	m.claims[id] = &claimRecord{grantID: record.grant.id, status: claimPending}
-	return Claim{id: id, grantID: record.grant.id}, nil
+	claim := Claim{id: id, grantID: record.grant.id}
+	m.mu.Unlock()
+	m.emitTerminalEvents()
+	return claim, nil
 }
 
 // AuthorizeWithAdapter applies a resource adapter's non-widening coverage
@@ -493,8 +559,9 @@ func (m *Manager) AuthorizeWithAdapter(access Access, adapter ResourceAdapter) (
 		return Grant{}, ErrAdapterKind
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.findAccessLocked(access, m.clock.Now(), adapter)
+	m.mu.Unlock()
+	m.emitTerminalEvents()
 	if err != nil {
 		return Grant{}, err
 	}
@@ -511,32 +578,43 @@ func (m *Manager) ClaimWithAdapter(access Access, adapter ResourceAdapter) (Clai
 		return Claim{}, ErrAdapterKind
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, err := m.findAccessLocked(access, m.clock.Now(), adapter)
 	if err != nil {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
 		return Claim{}, err
 	}
 	if record.grant.request.scope.Kind() != ScopeOnce {
+		m.mu.Unlock()
 		return Claim{}, ErrClaimRequired
 	}
 	if record.claimed {
+		m.mu.Unlock()
 		return Claim{}, ErrGrantAlreadyClaimed
 	}
 	id, err := m.ids.NewClaimID()
 	if err != nil || !id.Valid() {
+		m.mu.Unlock()
 		return Claim{}, idError(err, ErrInvalidClaimID)
 	}
 	if _, exists := m.claims[id]; exists {
+		m.mu.Unlock()
 		return Claim{}, ErrInvalidClaimID
 	}
 	record.claimed = true
 	m.claims[id] = &claimRecord{grantID: record.grant.id, status: claimPending}
-	return Claim{id: id, grantID: record.grant.id}, nil
+	claim := Claim{id: id, grantID: record.grant.id}
+	m.mu.Unlock()
+	m.emitTerminalEvents()
+	return claim, nil
 }
 
 func (m *Manager) Commit(claim Claim) (Grant, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+	}()
 	record, claimed, err := m.claimLocked(claim)
 	if err != nil {
 		return Grant{}, err
@@ -565,7 +643,10 @@ func (m *Manager) Commit(claim Claim) (Grant, error) {
 
 func (m *Manager) Rollback(claim Claim) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+	}()
 	record, claimed, err := m.claimLocked(claim)
 	if err != nil {
 		return err
@@ -596,7 +677,10 @@ func (m *Manager) RevokeSession(sessionID SessionID) int {
 		return 0
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+	}()
 	now := m.clock.Now()
 	m.expireAllLocked(now)
 	n := 0
@@ -614,7 +698,10 @@ func (m *Manager) RevokeSession(sessionID SessionID) int {
 // under lock, so this cleanup cannot create an authorization window.
 func (m *Manager) Reap() int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer func() {
+		m.mu.Unlock()
+		m.emitTerminalEvents()
+	}()
 	m.expireAllLocked(m.clock.Now())
 	return m.cleanupTerminalLocked()
 }
@@ -750,6 +837,36 @@ func (m *Manager) expireLocked(record *grantRecord, now time.Time) bool {
 
 func (m *Manager) terminalLocked(record *grantRecord, state State, now time.Time) {
 	record.grant.state, record.grant.terminalAt = state, now
+	if eventType, ok := terminalLifecycleEvent(state); ok {
+		m.terminalEvents = append(m.terminalEvents, m.eventFor(record.grant, eventType, record.grant.approval, now))
+	}
+}
+
+func (m *Manager) emitTerminalEvents() {
+	m.mu.Lock()
+	events := append([]LifecycleEvent(nil), m.terminalEvents...)
+	m.terminalEvents = nil
+	m.mu.Unlock()
+	for _, event := range events {
+		_ = m.audit.EmitLifecycle(context.Background(), event)
+	}
+}
+
+func terminalLifecycleEvent(state State) (LifecycleEventType, bool) {
+	switch state {
+	case StateDenied:
+		return LifecycleDenied, true
+	case StateActivationFailed:
+		return LifecycleActivationFailed, true
+	case StateConsumed:
+		return LifecycleConsumed, true
+	case StateExpired:
+		return LifecycleExpired, true
+	case StateRevoked:
+		return LifecycleRevoked, true
+	default:
+		return "", false
+	}
 }
 func (m *Manager) liveCountLocked() int {
 	n := 0

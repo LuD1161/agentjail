@@ -3,6 +3,7 @@ package daemonapp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -143,6 +144,64 @@ func TestRuntimeGrantAuditFailureFailsClosed(t *testing.T) {
 	}
 	if _, err := manager.Approve(context.Background(), runtimeGrant.ID(), "approval-ref"); !errors.Is(err, grant.ErrAuditFailed) {
 		t.Fatalf("Approve() error = %v, want durable audit failure", err)
+	}
+}
+
+func TestDaemonGrantAuditNeverPersistsExactMCPArguments(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "events.db")
+	eventStore, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "authorization-token-do-not-persist"
+	arguments := []byte(`{"authorization":"` + secret + `","path":"/repo/a"}`)
+	constraint, err := mcpgrant.StrictArguments(arguments)
+	if err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	resource, err := mcpgrant.NewResource("filesystem", "read_file", constraint)
+	if err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	principal, err := grant.NewPrincipal("codex", "session")
+	if err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	err = (daemonGrantAudit{store: eventStore}).EmitLifecycle(context.Background(), grant.LifecycleEvent{
+		Type: grant.LifecycleRequested, GrantID: "grant", RequestID: "request", Principal: principal,
+		Action: grant.ActionMCPCall, Resource: resource, Scope: grant.OnceScope(), PolicyEpoch: 1, At: time.Now(),
+	})
+	if err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	entries, err := eventStore.ListAuditLog(context.Background(), store.AuditLogFilter{Limit: 10})
+	if err != nil {
+		_ = eventStore.Close()
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || strings.Contains(entries[0].Detail, secret) {
+		_ = eventStore.Close()
+		t.Fatalf("runtime grant audit detail leaked exact arguments: %#v", entries)
+	}
+	if err := eventStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	encodedArguments := base64.RawURLEncoding.EncodeToString(arguments)
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		contents, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(contents, []byte(secret)) || bytes.Contains(contents, []byte(encodedArguments)) {
+			t.Fatalf("runtime grant audit leaked MCP argument material to %s", path)
+		}
 	}
 }
 
