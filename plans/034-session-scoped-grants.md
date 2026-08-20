@@ -216,6 +216,6 @@ is introduced or renumbered.
 
 | Commit | Track | Evidence |
 |---|---:|---|
-| pending local commit | 6 | `go test ./test -run TestRuntimeGrantProductionLikeFlow`; fixed CDP `/json/version` probe; one-use replay; strict argument/server/session/epoch/locked-deny and TTL/session-end denials |
-| pending local commit | 6 | `go test ./cmd/agentjail -run 'TestConnectorDoctor|TestRuntimeGrantDoctor'`; value-free doctor state matrix and transport capability evidence |
-| pending local commit | 6 | `test/testbed/scenarios/runtime-grants.sh` is included in the Codex release gate and preserves explicit capability SKIPs for unavailable launcher/native MCP paths |
+| `6437e36e` | 6 | `go test ./test -run TestRuntimeGrantProductionLikeFlow`; fixed CDP `/json/version` probe; one-use replay; strict argument/server/session/epoch/locked-deny and TTL/session-end denials |
+| `6437e36e` | 6 | `go test ./cmd/agentjail -run 'TestConnectorDoctor|TestRuntimeGrantDoctor'`; value-free doctor state matrix and transport capability evidence |
+| `6437e36e` | 6 | `test/testbed/scenarios/runtime-grants.sh` is included in the Codex release gate and preserves explicit capability SKIPs for unavailable launcher/native MCP paths |
