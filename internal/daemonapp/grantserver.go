@@ -350,18 +350,20 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 
 	case grantctl.ReqSessionLaunchUnregister:
 		peerPID, peerErr := extractPeerPID(conn)
-		var sessions []string
-		if gs.activeSessions != nil {
-			sessions = gs.activeSessions.sessionsForLaunch(peerPID)
-		}
-		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil || !gs.activeSessions.unregisterLaunch(peerPID) {
+		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch revocation"})
 			return
 		}
+		var sessions []string
+		sessions = gs.activeSessions.sessionsForLaunch(peerPID)
 		if gs.connectorCleanup != nil {
 			for _, sessionID := range sessions {
 				gs.connectorCleanup(sessionID)
 			}
+		}
+		if !gs.activeSessions.unregisterLaunch(peerPID) {
+			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch revocation"})
+			return
 		}
 		gs.reply(conn, grantctl.Response{OK: true})
 

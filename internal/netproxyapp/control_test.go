@@ -577,7 +577,7 @@ func TestConnectorCapabilityBindsExactSessionAndExpires(t *testing.T) {
 	if _, ok := r.connector("token-a", "filesystem", now); ok {
 		t.Fatal("capability removal retained route")
 	}
-	if err := r.useConnectorCapability("opaque-cap", "shield-a", "filesystem", now.Add(2*time.Hour)); err == nil {
+	if err := r.useConnectorCapability("opaque-cap", "shield-a", "filesystem", now.Add(time.Hour)); err == nil {
 		t.Fatal("expired capability use succeeded")
 	}
 }
