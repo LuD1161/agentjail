@@ -337,7 +337,7 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	case grantctl.ReqSessionLaunchRegister:
 		peerPID, peerErr := extractPeerPID(conn)
 		if peerErr != nil || req.LaunchPID != peerPID || gs.activeSessions == nil ||
-			!gs.activeSessions.registerLaunch(peerPID, req.LaunchRoot, req.LaunchPath) {
+			!gs.activeSessions.registerLaunch(peerPID, req.LaunchRoot, req.LaunchPath, req.ConnectorCapability) {
 			gs.reply(conn, grantctl.Response{OK: false, Error: "invalid session launch metadata"})
 			return
 		}

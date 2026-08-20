@@ -117,6 +117,39 @@ func RemoveConnector(sockPath, ctlToken, sessionID, connectorID string, timeout 
 	return connectorRoute(sockPath, ctlToken, ReqConnectorRemove, ConnectorRoute{SessionID: sessionID, ConnectorID: connectorID}, timeout)
 }
 
+func RegisterConnectorCapability(sockPath, ctlToken string, token Token, capability string, route ConnectorRoute, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityRegister, CtlToken: ctlToken, Token: token, ConnectorCapability: capability, Connector: &route}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("connector capability refused: %s", resp.Error)
+	}
+	return nil
+}
+
+func UseConnectorCapability(sockPath, capability, connectorID string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityUse, ConnectorCapability: capability, Connector: &ConnectorRoute{ConnectorID: connectorID}}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("connector capability refused: %s", resp.Error)
+	}
+	return nil
+}
+
+func RemoveConnectorCapability(sockPath, capability, connectorID string, timeout time.Duration) error {
+	resp, err := roundTrip(sockPath, Request{Type: ReqConnectorCapabilityRemove, ConnectorCapability: capability, Connector: &ConnectorRoute{ConnectorID: connectorID}}, timeout)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("connector capability refused: %s", resp.Error)
+	}
+	return nil
+}
+
 func connectorRoute(sockPath, ctlToken string, typ RequestType, route ConnectorRoute, timeout time.Duration) error {
 	resp, err := roundTrip(sockPath, Request{Type: typ, CtlToken: ctlToken, Connector: &route}, timeout)
 	if err != nil {

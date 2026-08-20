@@ -81,13 +81,14 @@ const pendingGrantTTL = time.Hour
 // runtime host grants. All fields other than al's own internal lock
 // are protected by the owning sessionRegistry's mutex.
 type session struct {
-	al          *allowlist
-	leaseExpiry time.Time
-	sessionID   string
-	cwd         string
-	pending     map[string]*pendingGrant // keyed by GrantID
-	granted     []grantedHost
-	connectors  map[string]proxyctl.ConnectorRoute
+	al                    *allowlist
+	leaseExpiry           time.Time
+	sessionID             string
+	cwd                   string
+	pending               map[string]*pendingGrant // keyed by GrantID
+	granted               []grantedHost
+	connectors            map[string]proxyctl.ConnectorRoute
+	connectorCapabilities map[string]map[string]proxyctl.ConnectorRoute
 }
 
 // allowed reports whether host is permitted under this session: the static
@@ -162,12 +163,13 @@ func (r *sessionRegistry) register(tok proxyctl.Token, sessionID, cwd string, po
 		}
 	}
 	r.sessions[tok] = &session{
-		al:          al,
-		leaseExpiry: now.Add(ttl),
-		sessionID:   sessionID,
-		cwd:         cwd,
-		pending:     make(map[string]*pendingGrant),
-		connectors:  make(map[string]proxyctl.ConnectorRoute),
+		al:                    al,
+		leaseExpiry:           now.Add(ttl),
+		sessionID:             sessionID,
+		cwd:                   cwd,
+		pending:               make(map[string]*pendingGrant),
+		connectors:            make(map[string]proxyctl.ConnectorRoute),
+		connectorCapabilities: make(map[string]map[string]proxyctl.ConnectorRoute),
 	}
 }
 
@@ -191,6 +193,57 @@ func (r *sessionRegistry) installConnector(route proxyctl.ConnectorRoute, now ti
 	}
 	matched.connectors[route.ConnectorID] = route
 	return nil
+}
+
+func (r *sessionRegistry) registerConnectorCapability(token proxyctl.Token, capability string, route proxyctl.ConnectorRoute, now time.Time) error {
+	if token == "" || capability == "" || route.ConnectorID == "" || route.Host == "" || route.Port == 0 {
+		return errUnknownSession
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[token]
+	if !ok || now.After(s.leaseExpiry) || route.SessionID != s.sessionID {
+		return errUnknownSession
+	}
+	if s.connectorCapabilities[capability] == nil {
+		s.connectorCapabilities[capability] = make(map[string]proxyctl.ConnectorRoute)
+	}
+	s.connectorCapabilities[capability][route.ConnectorID] = route
+	return nil
+}
+
+func (r *sessionRegistry) useConnectorCapability(capability, connectorID string, now time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sessions {
+		if now.After(s.leaseExpiry) {
+			continue
+		}
+		if routes := s.connectorCapabilities[capability]; routes != nil {
+			route, ok := routes[connectorID]
+			if !ok {
+				return errUnknownSession
+			}
+			s.connectors[connectorID] = route
+			return nil
+		}
+	}
+	return errUnknownSession
+}
+
+func (r *sessionRegistry) removeConnectorCapability(capability, connectorID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sessions {
+		if routes := s.connectorCapabilities[capability]; routes != nil {
+			if _, ok := routes[connectorID]; !ok {
+				return errUnknownSession
+			}
+			delete(s.connectors, connectorID)
+			return nil
+		}
+	}
+	return errUnknownSession
 }
 
 func (r *sessionRegistry) removeConnector(route proxyctl.ConnectorRoute) error {
@@ -615,7 +668,7 @@ func (cs *controlServer) handle(conn net.Conn) {
 
 	// Authenticate before dispatch, so a verb added later is gated by default
 	// rather than by remembering to gate it (ADR 0068).
-	if req.Type != proxyctl.ReqFingerprint && !ctlauth.Valid(req.CtlToken, cs.ctlToken) {
+	if req.Type != proxyctl.ReqFingerprint && req.Type != proxyctl.ReqConnectorCapabilityUse && req.Type != proxyctl.ReqConnectorCapabilityRemove && !ctlauth.Valid(req.CtlToken, cs.ctlToken) {
 		cs.logger.Warn("control request rejected: invalid control token", "type", req.Type)
 		cs.reply(conn, proxyctl.Response{OK: false, Error: "unauthorized"})
 		return
@@ -713,6 +766,36 @@ func (cs *controlServer) handle(conn net.Conn) {
 			return
 		}
 		if err := cs.registry.removeConnector(*req.Connector); err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		cs.reply(conn, proxyctl.Response{OK: true})
+	case proxyctl.ReqConnectorCapabilityRegister:
+		if req.Connector == nil || req.ConnectorCapability == "" {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector capability registration requires connector and capability"})
+			return
+		}
+		if err := cs.registry.registerConnectorCapability(req.Token, req.ConnectorCapability, *req.Connector, time.Now()); err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		cs.reply(conn, proxyctl.Response{OK: true})
+	case proxyctl.ReqConnectorCapabilityUse:
+		if req.Connector == nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector capability use requires connector"})
+			return
+		}
+		if err := cs.registry.useConnectorCapability(req.ConnectorCapability, req.Connector.ConnectorID, time.Now()); err != nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
+			return
+		}
+		cs.reply(conn, proxyctl.Response{OK: true})
+	case proxyctl.ReqConnectorCapabilityRemove:
+		if req.Connector == nil {
+			cs.reply(conn, proxyctl.Response{OK: false, Error: "connector capability removal requires connector"})
+			return
+		}
+		if err := cs.registry.removeConnectorCapability(req.ConnectorCapability, req.Connector.ConnectorID); err != nil {
 			cs.reply(conn, proxyctl.Response{OK: false, Error: err.Error()})
 			return
 		}

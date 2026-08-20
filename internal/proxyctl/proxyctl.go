@@ -80,6 +80,11 @@ func NewToken() (Token, error) {
 	return Token(base64.RawURLEncoding.EncodeToString(b)), nil
 }
 
+func NewConnectorCapability() (string, error) {
+	token, err := NewToken()
+	return string(token), err
+}
+
 // Fingerprint identifies a running netproxy so a launching shield can decide
 // whether to reuse it. ProtocolVersion governs compatibility (reuse vs. fail
 // closed); BinaryVersion is informational -- a shield does NOT restart a proxy
@@ -138,8 +143,11 @@ const (
 	ReqGrantDeny RequestType = "grant_deny"
 	// ReqConnectorInstall installs one fixed configured route for an existing
 	// shield session. The agent never receives this control verb or destination.
-	ReqConnectorInstall RequestType = "connector_install"
-	ReqConnectorRemove  RequestType = "connector_remove"
+	ReqConnectorInstall            RequestType = "connector_install"
+	ReqConnectorRemove             RequestType = "connector_remove"
+	ReqConnectorCapabilityRegister RequestType = "connector_capability_register"
+	ReqConnectorCapabilityUse      RequestType = "connector_capability_use"
+	ReqConnectorCapabilityRemove   RequestType = "connector_capability_remove"
 )
 
 // Request is the control-plane request envelope (JSON on the socket).
@@ -173,8 +181,9 @@ type Request struct {
 	// grant_deny. This is the ONLY identifying field those two verbs carry --
 	// no Token, no session identity -- netproxy resolves session->Token from
 	// its own in-memory pending map by GrantID.
-	GrantID   string          `json:"grant_id,omitempty"`
-	Connector *ConnectorRoute `json:"connector,omitempty"`
+	GrantID             string          `json:"grant_id,omitempty"`
+	Connector           *ConnectorRoute `json:"connector,omitempty"`
+	ConnectorCapability string          `json:"connector_capability,omitempty"`
 }
 
 // ConnectorRoute is host-owned control-plane input for a named connector.

@@ -119,7 +119,8 @@ func (s *server) wireRuntimeGrantServices(eventStore store.EventStore, cfg *agen
 	s.runtimeGrantManager = manager
 	s.grantApprovals = grantapproval.NewCodexAdapter(s.approvals)
 	s.mcpGrantControl = mcpgrant.NewControl(manager)
-	s.mcpGrants = configuredMCPGrantBoundary(mcpgrant.NewManagerAuthority(manager), cfg)
+	s.connectorBroker = &connectorCapabilityBroker{sessions: s.activeSessions}
+	s.mcpGrants = configuredMCPGrantBoundary(mcpgrant.NewManagerAuthority(manager), cfg, s.connectorBroker)
 	return nil
 }
 
@@ -393,6 +394,9 @@ func (s *server) revokeCodexSession(sessionID string, agentPID int) {
 		s.grantAuthority.RevokeSession(grant.SessionID(sessionID))
 		s.grantAuthority.Reap()
 	}
+	if s.connectorBroker != nil {
+		s.connectorBroker.EndSession(context.Background(), sessionID)
+	}
 }
 
 func (s *server) revokeRuntimeGrants() {
@@ -405,6 +409,9 @@ func (s *server) revokeRuntimeGrants() {
 		}
 		if s.grantAuthority != nil {
 			s.grantAuthority.RevokeSession(grant.SessionID(session.SessionID))
+		}
+		if s.connectorBroker != nil {
+			s.connectorBroker.EndSession(context.Background(), session.SessionID)
 		}
 	}
 	if s.grantAuthority != nil {

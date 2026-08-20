@@ -231,6 +231,29 @@ func loadCtlToken() (string, error) {
 	return ctlToken, nil
 }
 
+func registerConnectorCapabilities(cfg *config.PolicyConfig, ctlToken string, token proxyctl.Token, sessionID string) (string, error) {
+	if cfg == nil || len(cfg.Network.HostConnectors) == 0 {
+		return "", nil
+	}
+	if ctlToken == "" || token == "" || sessionID == "" {
+		return "", fmt.Errorf("connector control capability unavailable")
+	}
+	capability, err := proxyctl.NewConnectorCapability()
+	if err != nil {
+		return "", err
+	}
+	for _, connector := range cfg.Network.HostConnectors {
+		if connector.ID == "" || connector.Host == "" || connector.Port == 0 {
+			return "", fmt.Errorf("invalid configured connector")
+		}
+		route := proxyctl.ConnectorRoute{SessionID: sessionID, ConnectorID: connector.ID, Host: connector.Host, Port: connector.Port}
+		if err := proxyctl.RegisterConnectorCapability(proxyctl.ControlSocketPath(), ctlToken, token, capability, route, registerTimeout); err != nil {
+			return "", err
+		}
+	}
+	return capability, nil
+}
+
 // spawnNetproxy starts agentjail-netproxy as a child process. It logs per-CONNECT
 // decisions (allow/deny) and upstream dial errors at info level to
 // ~/.agentjail/netproxy.log so the proxy is observable -- the shield execs into

@@ -40,6 +40,21 @@ func unregisterHostProxyLaunch(registered bool, ctlToken string) {
 	}
 }
 
+func registerConnectorLaunch(ctlToken string, env []string, netproxySessionID, capability string) bool {
+	if capability == "" {
+		return true
+	}
+	root, err := os.Getwd()
+	if err == nil {
+		root, err = filepath.EvalSymlinks(root)
+	}
+	pathValue := environmentValue(env, "PATH")
+	if err != nil || pathValue == "" {
+		return false
+	}
+	return grantctl.RegisterSessionLaunchConnector(grantctl.ControlSocketPath(), ctlToken, os.Getpid(), root, pathValue, netproxySessionID, capability, 500*time.Millisecond) == nil
+}
+
 func environmentValue(env []string, key string) string {
 	prefix := key + "="
 	for _, entry := range env {

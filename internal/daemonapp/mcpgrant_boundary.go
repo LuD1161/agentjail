@@ -48,10 +48,10 @@ func NewMCPGrantBoundary(servers mcpgrant.ServerRegistry, upstream mcpgrant.Upst
 
 // configuredMCPGrantBoundary takes exact server identities only from the
 // agent's startup configuration. Policy globs do not register a server.
-func configuredMCPGrantBoundary(authority mcpgrant.Authority, cfg *agentconfig.PolicyConfig) *MCPGrantBoundary {
+func configuredMCPGrantBoundary(authority mcpgrant.Authority, cfg *agentconfig.PolicyConfig, connectors connectorUser) *MCPGrantBoundary {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, authority, nil, nil)
+		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, authority, nil, connectors)
 	}
 	entries := mcpclient.DiscoverServersWithConfig(home)
 	servers := make([]mcpgrant.ServerID, 0, len(entries))
@@ -63,9 +63,9 @@ func configuredMCPGrantBoundary(authority mcpgrant.Authority, cfg *agentconfig.P
 	}
 	registry, err := mcpgrant.NewStaticServers(servers...)
 	if err != nil {
-		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, authority, nil, nil)
+		return NewMCPGrantBoundary(emptyMCPServers{}, configuredMCPUpstream{}, authority, nil, connectors)
 	}
-	return NewMCPGrantBoundary(registry, configuredMCPUpstream{}, authority, configuredMCPConnectorRoutes(cfg), nil)
+	return NewMCPGrantBoundary(registry, configuredMCPUpstream{}, authority, configuredMCPConnectorRoutes(cfg), connectors)
 }
 
 // configuredMCPConnectorRoutes maps only exact, fixed MCP connector IDs to
