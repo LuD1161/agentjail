@@ -62,7 +62,8 @@ func NewManager(registry *Registry, authorizer Authorizer, backend Backend, audi
 // backend-owned readiness probe. A usable state is recorded only after both
 // durable audit and backend activation succeed.
 func (m *Manager) Activate(ctx context.Context, binding Binding, id ConnectorID, scope grant.Scope) error {
-	if !binding.valid() || !scope.ValidAt(m.clock.Now()) {
+	now := m.clock.Now()
+	if !binding.valid() || !scope.ValidAt(now) {
 		return ErrActivation
 	}
 	connector, err := m.registry.Lookup(id)
@@ -86,9 +87,20 @@ func (m *Manager) Activate(ctx context.Context, binding Binding, id ConnectorID,
 	lease, err := m.authorizer.Begin(ctx, binding, id, scope)
 	if err != nil || lease == nil {
 		m.fail(ctx, key, record)
+		if err == nil {
+			err = ErrActivation
+		}
 		return fmt.Errorf("%w: authorization: %v", ErrActivation, err)
 	}
+	m.mu.Lock()
+	if m.records[key] != record || record.state != StateActivating {
+		state := record.state
+		m.mu.Unlock()
+		_ = lease.Close()
+		return stateError(state)
+	}
 	record.lease = lease
+	m.mu.Unlock()
 
 	adapter, err := m.backend.Activate(ctx, Activation{connector: connector, binding: binding})
 	if err != nil || adapter == nil {
@@ -105,21 +117,23 @@ func (m *Manager) Activate(ctx context.Context, binding Binding, id ConnectorID,
 		state := record.state
 		m.mu.Unlock()
 		_ = adapter.Close()
-		_ = lease.Close()
 		return stateError(state)
 	}
+	record.adapter = adapter
+	m.mu.Unlock()
+
 	// Keep revocation and use behind this durable transition: no caller can
 	// observe active authority before its audit record exists.
 	if err := m.record(ctx, record, StateActive); err != nil {
-		m.mu.Unlock()
-		_ = adapter.Close()
-		_ = lease.Close()
 		m.fail(ctx, key, record)
 		return fmt.Errorf("%w: %v", ErrAudit, err)
 	}
-	record.adapter = adapter
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.records[key] != record || record.state != StateActivating {
+		return stateError(record.state)
+	}
 	record.state = StateActive
-	m.mu.Unlock()
 	return nil
 }
 
@@ -147,12 +161,33 @@ func (m *Manager) Use(ctx context.Context, binding Binding, id ConnectorID) (Use
 		m.mu.Unlock()
 		return Use{}, stateError(state)
 	}
-	if err := record.lease.Use(ctx); err != nil {
+	lease := record.lease
+	use := Use{ConnectorID: id, Transport: record.connector.Transport()}
+	m.mu.Unlock()
+	if lease == nil {
+		return Use{}, ErrInactive
+	}
+	if err := lease.Use(ctx); err != nil {
+		m.mu.Lock()
 		adapter := m.transitionLocked(record, StateRevoked)
 		m.mu.Unlock()
+		if adapter == nil {
+			return Use{}, err
+		}
 		return Use{}, m.finishTerminal(ctx, record, adapter, err)
 	}
-	use := Use{ConnectorID: id, Transport: record.connector.Transport()}
+
+	m.mu.Lock()
+	if record.scope.ExpiredAt(m.clock.Now()) {
+		adapter := m.transitionLocked(record, StateExpired)
+		m.mu.Unlock()
+		return Use{}, m.finishTerminal(ctx, record, adapter, ErrExpired)
+	}
+	if record.state != StateActive {
+		state := record.state
+		m.mu.Unlock()
+		return Use{}, stateError(state)
+	}
 	if record.scope.Kind() != grant.ScopeOnce {
 		m.mu.Unlock()
 		return use, nil
@@ -177,6 +212,11 @@ func (m *Manager) Revoke(ctx context.Context, binding Binding, id ConnectorID) e
 		m.mu.Unlock()
 		return ErrInactive
 	}
+	if record.state != StateActive && record.state != StateActivating {
+		state := record.state
+		m.mu.Unlock()
+		return stateError(state)
+	}
 	adapter := m.transitionLocked(record, StateRevoked)
 	m.mu.Unlock()
 	return m.finishTerminal(ctx, record, adapter, nil)
@@ -190,7 +230,7 @@ func (m *Manager) EndSession(ctx context.Context, sessionID grant.SessionID) err
 	m.mu.Lock()
 	terminals := make([]terminal, 0)
 	for _, record := range m.records {
-		if record.binding.Principal().SessionID() == sessionID {
+		if record.binding.Principal().SessionID() == sessionID && (record.state == StateActive || record.state == StateActivating) {
 			terminals = append(terminals, terminal{record: record, adapter: m.transitionLocked(record, StateRevoked)})
 		}
 	}
@@ -271,12 +311,16 @@ func (m *Manager) finishTerminal(ctx context.Context, record *record, adapter Ad
 
 func (m *Manager) fail(ctx context.Context, key recordKey, record *record) {
 	m.mu.Lock()
+	var adapter Adapter
 	recorded := false
 	if m.records[key] == record && record.state == StateActivating {
-		record.state = StateActivationFailed
+		adapter = m.transitionLocked(record, StateActivationFailed)
 		recorded = true
 	}
 	m.mu.Unlock()
+	if adapter != nil {
+		_ = adapter.Close()
+	}
 	if recorded {
 		_ = m.record(ctx, record, StateActivationFailed)
 	}
