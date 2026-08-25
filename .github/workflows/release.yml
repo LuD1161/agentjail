@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to embed in private validation artifacts (for example v1.7.0)
+        required: true
+        default: v1.7.0
+        type: string
+
+env:
+  RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
 jobs:
   build:
@@ -64,7 +74,7 @@ jobs:
           CGO_ENABLED: '0'
           POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
         run: |
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${RELEASE_VERSION}"
           LDFLAGS="-X github.com/LuD1161/agentjail/internal/buildinfo.Version=${VERSION} -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=${POSTHOG_KEY} -X github.com/LuD1161/agentjail/internal/selfupdate.SigningPubKey=RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ -s -w"
           mkdir -p dist
           for bin in agentjail agentjail-hook; do
@@ -132,7 +142,7 @@ jobs:
 
       - name: package tarball
         run: |
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${RELEASE_VERSION}"
           TARBALL="agentjail-${VERSION}-${{ matrix.platform }}.tar.gz"
           # Ship the project license + third-party attributions alongside the binaries.
           cp LICENSE NOTICE THIRD_PARTY_LICENSES dist/
@@ -228,7 +238,7 @@ jobs:
           SIGNING_MODE: developer-id
           NOTARY_PROFILE: agentjail-ci-notary
           NOTARIZE: '1'
-          MACOS_APP_VERSION: ${{ github.ref_name }}
+          MACOS_APP_VERSION: ${{ env.RELEASE_VERSION }}
           MACOS_BUILD_NUMBER: ${{ github.run_number }}
         run: make macos-app
 
@@ -290,7 +300,7 @@ jobs:
       - name: verify terminal installer against transported DMG
         env:
           AGENTJAIL_DRY_RUN: '1'
-          AGENTJAIL_VERSION: ${{ github.ref_name }}
+          AGENTJAIL_VERSION: ${{ env.RELEASE_VERSION }}
           LOCAL_MACOS_DMG: ${{ github.workspace }}/dist/AgentJail.dmg
         run: sh install.sh
 
@@ -343,6 +353,7 @@ jobs:
     name: create GitHub release
     needs: [build, gatekeeper-verify, macos-app-verify]
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     permissions:
       contents: write
 
@@ -370,14 +381,14 @@ jobs:
           echo "$MINISIGN_KEY" | base64 -d > /tmp/minisign.key
           minisign -S -s /tmp/minisign.key -m dist/SHA256SUMS \
             -x dist/SHA256SUMS.minisig \
-            -t "agentjail ${{ github.ref_name }}" -q
+            -t "agentjail ${{ env.RELEASE_VERSION }}" -q
           rm -f /tmp/minisign.key
           echo "SHA256SUMS.minisig created"
 
       - name: extract CHANGELOG section for this release
         id: changelog
         run: |
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${RELEASE_VERSION}"
           # Extract everything from the ## $VERSION line to the next version heading.
           BODY=$(awk "/^## ${VERSION}[ $]/{found=1; next} found && /^## v[0-9]/{exit} found{print}" CHANGELOG.md)
           if [ -z "$BODY" ]; then
@@ -390,11 +401,11 @@ jobs:
       - name: create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
           body_path: ${{ steps.changelog.outputs.body_path }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          prerelease: ${{ contains(env.RELEASE_VERSION, '-alpha') || contains(env.RELEASE_VERSION, '-beta') || contains(env.RELEASE_VERSION, '-rc') }}
           files: |
             dist/*.tar.gz
             dist/AgentJail.dmg
@@ -414,7 +425,7 @@ jobs:
     name: update Homebrew tap
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
+    if: ${{ !contains(env.RELEASE_VERSION, '-alpha') && !contains(env.RELEASE_VERSION, '-beta') && !contains(env.RELEASE_VERSION, '-rc') }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -429,7 +440,7 @@ jobs:
       - name: render Formula/agentjail.rb
         run: |
           set -eu
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_VERSION}"
           VERSION="${TAG#v}"
           REPO="LuD1161/agentjail"
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
@@ -494,7 +505,7 @@ jobs:
       - name: push formula to tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_VERSION }}
         run: |
           set -eu
           if [ -z "${TAP_TOKEN:-}" ]; then

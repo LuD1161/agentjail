@@ -202,6 +202,29 @@ signature, and Gatekeeper result before it writes either the app or bundled CLI.
 An upgrade stages and verifies the replacement before moving the existing app;
 a failed post-copy assessment restores the previous app.
 
+Before a public tag, run the `release` workflow manually against the private
+staging repository with a tag-shaped numeric version such as `v1.7.0`. A manual
+run performs the signed/notarized app, DMG, transported-artifact, and installer
+checks and retains the artifacts for testing, but it does not create a GitHub
+release or update Homebrew. Only a pushed tag publishes those outputs.
+
+The private repository needs these Actions secrets before that run:
+
+- `APPLE_CERTIFICATE_P12` and `APPLE_CERTIFICATE_PASSWORD` for the base64-encoded
+  Developer ID Application certificate export and its export password;
+- `APPLE_APP_PROVISION_PROFILE` and `APPLE_EXTENSION_PROVISION_PROFILE` for the
+  base64-encoded distribution profiles;
+- `APPLE_ID`, `APPLE_ID_PASSWORD`, and `APPLE_TEAM_ID` for notarization, where
+  the password is an app-specific password and the Team ID is `Q98Z3744J2`;
+- `APPLE_SIGNING_IDENTITY`, set to the exact Developer ID Application identity;
+- `POSTHOG_PROJECT_KEY` if the private artifact should exercise production
+  telemetry delivery. Without it, telemetry remains locally inspectable but no
+  backend is compiled into the binaries.
+
+Encode binary secret files without line wrapping and paste only the encoded
+result into GitHub Actions; never commit the certificate, profiles, passwords,
+or encoded values to either repository.
+
 ## 6. Replace the app in the GUI golden VM
 
 1. Confirm the sole persistent image is the stopped `golden-macos-mitm` golden.
