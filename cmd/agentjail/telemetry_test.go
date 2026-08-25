@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -36,6 +37,30 @@ func TestRunTelemetry_StatusEnableDisable(t *testing.T) {
 	c, _ = telemetry.LoadConsent(p)
 	if !c.Enabled {
 		t.Fatal("enable did not persist")
+	}
+}
+
+func TestRunTelemetry_StatusJSONOmitsAnonymousID(t *testing.T) {
+	p := telemetry.Paths{Base: t.TempDir()}
+	var out bytes.Buffer
+	if code := runTelemetryWith(p, func(string) string { return "" }, []string{"status", "json"}, &out); code != 0 {
+		t.Fatalf("status json exit=%d", code)
+	}
+	var status struct {
+		Enabled bool   `json:"enabled"`
+		Source  string `json:"source"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || status.Source != "config" {
+		t.Fatalf("status=%+v", status)
+	}
+	if strings.Contains(out.String(), "anonymous") {
+		t.Fatalf("machine status exposed anonymous ID: %q", out.String())
+	}
+	if code := runTelemetryWith(p, func(string) string { return "" }, []string{"status", "unexpected"}, &out); code != 2 {
+		t.Fatalf("unexpected status mode exit=%d", code)
 	}
 }
 

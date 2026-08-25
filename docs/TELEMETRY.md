@@ -38,6 +38,12 @@ we don't collect it.
 | `agentjail telemetry view` | Print the exact JSON currently queued to be sent |
 | `agentjail telemetry reset` | Generate a new anonymous ID and clear the queue |
 
+The macOS app exposes the same persisted enable/disable choice under
+**Settings → Anonymous usage metrics** and shows when an environment or CI
+override is authoritative. `agentjail telemetry status --json` provides the
+bounded machine-readable state used by the app; it intentionally omits the
+anonymous installation ID.
+
 **Resolution order** (first match wins): the `AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS`
 env var → CI auto-detection → your `~/.agentjail/telemetry.json` setting → default
 (on). The env var accepts `false`/`0`/`no` to disable and `true`/`1`/`yes` to enable.

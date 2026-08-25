@@ -189,6 +189,32 @@ final class ApprovalAppCompositionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(loginService.statusCount, 3)
     }
 
+    func testTelemetryMutationUsesTypedServiceAndHonorsExternalOverrides() async {
+        let telemetryService = CompositionTelemetryService(status: .enabled(.config))
+        let composition = makeComposition(
+            client: CompositionReviewClient(snapshotResult: .failure(.daemonUnavailable)),
+            notificationCenter: CompositionNotificationCenter(),
+            delegateInstaller: CompositionDelegateInstaller(),
+            loginService: CompositionLoginService(),
+            application: CompositionApplication(),
+            telemetryService: telemetryService
+        )
+
+        await composition.refreshSettingsStatus()
+        XCTAssertEqual(composition.telemetryStatus, .enabled(.config))
+        await composition.setTelemetryEnabledFromUserAction(false)
+        XCTAssertEqual(composition.telemetryStatus, .disabled(.config))
+        var mutationCount = await telemetryService.setCount()
+        XCTAssertEqual(mutationCount, 1)
+
+        await telemetryService.replaceStatus(.disabled(.environment))
+        await composition.refreshSettingsStatus()
+        await composition.setTelemetryEnabledFromUserAction(true)
+        XCTAssertEqual(composition.telemetryStatus, .disabled(.environment))
+        mutationCount = await telemetryService.setCount()
+        XCTAssertEqual(mutationCount, 1)
+    }
+
     func testRemovingMenuExtraStopsStoreAndTerminatesWithoutChangingLoginRegistration() async {
         let client = CompositionReviewClient(snapshotResult: .failure(.daemonUnavailable))
         let loginService = CompositionLoginService()
@@ -348,7 +374,8 @@ final class ApprovalAppCompositionTests: XCTestCase {
         notificationCenter: any ApprovalNotificationCenter,
         delegateInstaller: CompositionDelegateInstaller,
         loginService: CompositionLoginService,
-        application: CompositionApplication
+        application: CompositionApplication,
+        telemetryService: any ApprovalTelemetryServicing = CompositionTelemetryService()
     ) -> ApprovalAppComposition {
         ApprovalAppComposition(
             client: client,
@@ -357,6 +384,7 @@ final class ApprovalAppCompositionTests: XCTestCase {
             notificationDelegateInstaller: delegateInstaller,
             loginService: loginService,
             application: application,
+            telemetryService: telemetryService,
             sleeper: CompositionSleeper()
         )
     }
@@ -525,6 +553,29 @@ private final class CompositionLoginService: ApprovalLoginItemServicing {
         currentStatus = .notRegistered
     }
     func openLoginItemsSettings() { openSettingsCount += 1 }
+}
+
+private actor CompositionTelemetryService: ApprovalTelemetryServicing {
+    private var currentStatus: ApprovalTelemetryStatus
+    private var mutationCount = 0
+
+    init(status: ApprovalTelemetryStatus = .enabled(.config)) {
+        currentStatus = status
+    }
+
+    func status() -> ApprovalTelemetryStatus { currentStatus }
+
+    func setEnabled(_ enabled: Bool) -> ApprovalTelemetryStatus {
+        mutationCount += 1
+        currentStatus = enabled ? .enabled(.config) : .disabled(.config)
+        return currentStatus
+    }
+
+    func replaceStatus(_ status: ApprovalTelemetryStatus) {
+        currentStatus = status
+    }
+
+    func setCount() -> Int { mutationCount }
 }
 
 @MainActor

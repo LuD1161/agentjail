@@ -57,8 +57,13 @@ struct ApprovalSettingsView: View {
             }
 
             Section("Anonymous usage metrics") {
+                Toggle("Share anonymous usage metrics", isOn: telemetryEnabled)
+                    .disabled(!composition.telemetryStatus.canChange)
+                Text(telemetryDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text("Setup metrics contain only fixed stage and outcome values plus app version, OS, and architecture. They never include traffic, hosts, paths, commands, or error text.")
-                Text("Review: agentjail telemetry view\nOpt out: agentjail telemetry disable")
+                Text("Review queued events: agentjail telemetry view")
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
             }
@@ -88,6 +93,17 @@ struct ApprovalSettingsView: View {
         )
     }
 
+    private var telemetryEnabled: Binding<Bool> {
+        Binding(
+            get: { composition.telemetryStatus.isEnabled },
+            set: { enabled in
+                Task {
+                    await composition.setTelemetryEnabledFromUserAction(enabled)
+                }
+            }
+        )
+    }
+
     private var notificationDetail: String {
         switch composition.notificationAuthorization {
         case .authorized:
@@ -111,6 +127,27 @@ struct ApprovalSettingsView: View {
             "macOS could not find a login-item registration for this app installation."
         case .unknown:
             "macOS returned an unrecognized launch-at-login status."
+        }
+    }
+
+    private var telemetryDetail: String {
+        switch composition.telemetryStatus {
+        case .unknown:
+            "Checking the local telemetry setting…"
+        case .enabled(.config):
+            "Enabled in AgentJail settings. You can turn it off here at any time."
+        case .disabled(.config):
+            "Disabled in AgentJail settings. No new usage events will be sent."
+        case .enabled(.environment), .disabled(.environment):
+            "Controlled by AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS in this environment."
+        case .enabled(.continuousIntegration), .disabled(.continuousIntegration):
+            "Disabled automatically in continuous integration."
+        case .enabled(.unknown), .disabled(.unknown):
+            "Controlled by a setting this app does not recognize. Use the AgentJail CLI to change it."
+        case .updating:
+            "Saving your choice…"
+        case .unavailable:
+            "The bundled AgentJail CLI could not read this setting."
         }
     }
 }

@@ -13,12 +13,14 @@ final class ApprovalAppComposition: ObservableObject {
     @Published private(set) var setupRouteGeneration: UInt64 = 0
     @Published private(set) var notificationAuthorization: ApprovalNotificationAuthorization = .notDetermined
     @Published private(set) var loginStatus: ApprovalLoginItemStatus = .notRegistered
+    @Published private(set) var telemetryStatus: ApprovalTelemetryStatus = .unknown
     @Published private(set) var settingsError: String?
 
     private let notificationCoordinator: ApprovalNotificationCoordinator
     private let notificationDelegateInstaller: any ApprovalNotificationDelegateInstalling
     private let loginService: any ApprovalLoginItemServicing
     private let application: any ApprovalApplicationControlling
+    private let telemetryService: any ApprovalTelemetryServicing
     private let clock: any ApprovalClock
     private var notificationDelegate: ApprovalNotificationDelegate?
     private var stateObservation: AnyCancellable?
@@ -37,6 +39,7 @@ final class ApprovalAppComposition: ObservableObject {
         loginService: any ApprovalLoginItemServicing,
         application: any ApprovalApplicationControlling,
         setupCoordinator: AgentJailSetupCoordinator? = nil,
+        telemetryService: any ApprovalTelemetryServicing = BundledAgentJailTelemetryService(),
         clock: any ApprovalClock = SystemApprovalClock(),
         sleeper: any ApprovalSleeping = TaskApprovalSleeper()
     ) {
@@ -51,6 +54,7 @@ final class ApprovalAppComposition: ObservableObject {
         self.notificationDelegateInstaller = notificationDelegateInstaller
         self.loginService = loginService
         self.application = application
+        self.telemetryService = telemetryService
 
         notificationCoordinator.reviewRouteHandler = { [weak self] route in
             self?.receiveReviewRoute(route)
@@ -172,6 +176,7 @@ final class ApprovalAppComposition: ObservableObject {
     func refreshSettingsStatus() async {
         notificationAuthorization = await notificationCoordinator.notificationAuthorizationStatus()
         loginStatus = loginService.status()
+        telemetryStatus = await telemetryService.status()
     }
 
     func enableNotificationsFromUserAction() async {
@@ -194,6 +199,18 @@ final class ApprovalAppComposition: ObservableObject {
 
     func openLoginItemsSettings() {
         loginService.openLoginItemsSettings()
+    }
+
+    func setTelemetryEnabledFromUserAction(_ enabled: Bool) async {
+        guard telemetryStatus.canChange else { return }
+        telemetryStatus = .updating(telemetryStatus.isEnabled)
+        let updated = await telemetryService.setEnabled(enabled)
+        telemetryStatus = updated
+        if updated == .unavailable {
+            settingsError = "Unable to update anonymous usage metrics. Try again from the AgentJail CLI."
+        } else {
+            settingsError = nil
+        }
     }
 
     private func handleNotificationResponse(_ response: ApprovalNotificationResponse) async {

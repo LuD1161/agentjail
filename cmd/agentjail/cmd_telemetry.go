@@ -30,7 +30,20 @@ func telemetryActionCommand(use, short, long string) *cobra.Command {
 	}
 }
 
-var telemetryStatusCmd = telemetryActionCommand("status", "Show telemetry consent and identifier", "Show whether telemetry is enabled, which setting selected that state, and the random installation ID attached to queued events.")
+var telemetryStatusJSON bool
+var telemetryStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show telemetry consent and identifier",
+	Long:  "Show whether telemetry is enabled, which setting selected that state, and the random installation ID attached to queued events.",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runArgs := []string{"status"}
+		if telemetryStatusJSON {
+			runArgs = append(runArgs, "json")
+		}
+		os.Exit(runTelemetry(runArgs))
+	},
+}
 var telemetryEnableCmd = telemetryActionCommand("enable", "Enable privacy-preserving usage statistics", "Persist consent to send privacy-preserving usage statistics for this installation.")
 var telemetryDisableCmd = telemetryActionCommand("disable", "Disable usage statistics", "Persist an opt-out so new usage events are not sent.")
 var telemetryViewCmd = telemetryActionCommand("view", "Inspect locally queued telemetry events", "Print the complete local telemetry spool as JSON so you can review what would be sent.")
@@ -45,6 +58,7 @@ var telemetryMacOSSetupCmd = &cobra.Command{
 }
 
 func init() {
+	telemetryStatusCmd.Flags().BoolVar(&telemetryStatusJSON, "json", false, "print machine-readable status without the anonymous ID")
 	telemetryCmd.AddCommand(telemetryStatusCmd, telemetryEnableCmd, telemetryDisableCmd, telemetryViewCmd, telemetryResetCmd, telemetryMacOSSetupCmd)
 	rootCmd.AddCommand(telemetryCmd)
 }

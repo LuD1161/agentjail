@@ -29,6 +29,19 @@ func runTelemetryWith(p telemetry.Paths, getenv func(string) string, args []stri
 	case "status":
 		c, _ := telemetry.LoadConsent(p)
 		on, src := telemetry.Resolve(c, getenv)
+		if len(args) == 2 && args[1] == "json" {
+			status := struct {
+				Enabled bool   `json:"enabled"`
+				Source  string `json:"source"`
+			}{Enabled: on, Source: src}
+			if err := json.NewEncoder(out).Encode(status); err != nil {
+				return 1
+			}
+			return 0
+		}
+		if len(args) != 1 {
+			return 2
+		}
 		state := "disabled"
 		if on {
 			state = "enabled"

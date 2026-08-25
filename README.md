@@ -966,6 +966,10 @@ agentjail telemetry view      # see what's queued
 agentjail telemetry disable   # opt out (or: AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS=false)
 ```
 
+On macOS, the same control is available in **AgentJail Settings → Anonymous
+usage metrics**. The app shows when an environment or CI override controls the
+effective setting.
+
 Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.md).
 
 ---
