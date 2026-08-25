@@ -300,7 +300,8 @@ jobs:
             "$APP/Contents/Resources/bin/agentjail" \
             "$APP/Contents/Resources/bin/agentjail-hook" \
             "$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension/Contents/MacOS/com.blinkerlm.agentjail.extension"; do
-            lipo -verify_arch arm64 x86_64 "$binary"
+            echo "$(lipo -archs "$binary")  $binary"
+            lipo "$binary" -verify_arch arm64 x86_64
           done
           "$APP/Contents/Resources/bin/agentjail" version
 
