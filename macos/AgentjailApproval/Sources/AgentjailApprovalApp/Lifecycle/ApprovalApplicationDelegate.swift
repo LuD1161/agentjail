@@ -10,6 +10,7 @@ final class ApprovalApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         composition.start()
+        composition.presentSetupIfNeeded()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

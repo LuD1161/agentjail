@@ -4,6 +4,7 @@ import SwiftUI
 enum ApprovalAppSceneID {
     static let review = "approval-review"
     static let settings = "approval-settings"
+    static let setup = "agentjail-setup"
 }
 
 struct ApprovalPanelHostView: View {
@@ -27,6 +28,7 @@ struct ApprovalPanelHostView: View {
             onApprove: composition.approve,
             onDeny: composition.deny,
             onRetry: composition.refreshFromMenuOpening,
+            onOpenAgentJail: composition.requestSetup,
             onSettings: composition.requestSettings,
             onQuit: composition.quit,
             onFocusConsumed: { request in
@@ -56,9 +58,35 @@ struct ApprovalMenuBarLabelHost: View {
         ApprovalMenuBarLabelView(presentation: ApprovalMenuLabelPresentation(state: store.state))
             .background(ReviewRouteBridge(composition: composition))
             .background(SettingsRouteBridge(composition: composition))
+            .background(SetupRouteBridge(composition: composition))
             .onAppear {
                 composition.start()
             }
+    }
+}
+
+private struct SetupRouteBridge: View {
+    @ObservedObject private var composition: ApprovalAppComposition
+    @Environment(\.openWindow) private var openWindow
+    @State private var openedGeneration: UInt64 = 0
+
+    init(composition: ApprovalAppComposition) {
+        _composition = ObservedObject(wrappedValue: composition)
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear { openIfNeeded(composition.setupRouteGeneration) }
+            .onChange(of: composition.setupRouteGeneration) { generation in
+                openIfNeeded(generation)
+            }
+    }
+
+    private func openIfNeeded(_ generation: UInt64) {
+        guard generation > openedGeneration else { return }
+        openedGeneration = generation
+        openWindow(id: ApprovalAppSceneID.setup)
     }
 }
 

@@ -105,7 +105,7 @@ func NewEnvEvent(distinctID, version, goos, goarch, installMethod string) Event 
 	p["os"] = goos
 	p["arch"] = goarch
 	if installMethod != "" {
-		p["install_method"] = installMethod // "curl" | "brew" | "" (omitted)
+		p["install_method"] = installMethod // "app" | "curl" | "brew" | "" (omitted)
 	}
 	ev := Event{Event: "session_start", Properties: p, Set: personSet(version, goos, goarch)}
 	if installMethod != "" {
@@ -207,7 +207,7 @@ func NewFeedbackEvent(distinctID, version, goos, message, contact string) Event 
 }
 
 // NewInstallEvent: fired immediately after a successful agentjail install.
-// installMethod is an enum: "curl" | "brew" | "" (unknown). agents is the
+// installMethod is an enum: "app" | "curl" | "brew" | "" (unknown). agents is the
 // list of agent enum IDs that were wired (e.g. ["claude-code", "cursor"]).
 // agentsDetected is the count of agents found on the machine (may be larger
 // than len(agents) when some were not selected). isFreshInstall is true when
@@ -218,7 +218,7 @@ func NewInstallEvent(distinctID, version, goos, goarch, installMethod string, ag
 	p["os"] = goos
 	p["arch"] = goarch
 	if installMethod != "" {
-		p["install_method"] = installMethod // "curl" | "brew"
+		p["install_method"] = installMethod // "app" | "curl" | "brew"
 	}
 	if len(agents) > 0 {
 		p["agents"] = agents

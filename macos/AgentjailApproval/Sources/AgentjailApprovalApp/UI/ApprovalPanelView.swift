@@ -6,6 +6,7 @@ struct ApprovalPanelView: View {
     let onApprove: (ReviewID) -> Void
     let onDeny: (ReviewID) -> Void
     let onRetry: () -> Void
+    let onOpenAgentJail: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
     let onFocusConsumed: (ReviewFocusRequest) -> Void
@@ -20,6 +21,7 @@ struct ApprovalPanelView: View {
         onApprove: @escaping (ReviewID) -> Void,
         onDeny: @escaping (ReviewID) -> Void,
         onRetry: @escaping () -> Void,
+        onOpenAgentJail: @escaping () -> Void,
         onSettings: @escaping () -> Void,
         onQuit: @escaping () -> Void,
         onFocusConsumed: @escaping (ReviewFocusRequest) -> Void = { _ in }
@@ -28,6 +30,7 @@ struct ApprovalPanelView: View {
         self.onApprove = onApprove
         self.onDeny = onDeny
         self.onRetry = onRetry
+        self.onOpenAgentJail = onOpenAgentJail
         self.onSettings = onSettings
         self.onQuit = onQuit
         self.onFocusConsumed = onFocusConsumed
@@ -132,6 +135,11 @@ struct ApprovalPanelView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
+            Button(action: onOpenAgentJail) {
+                Label("AgentJail", systemImage: "shield")
+            }
+            .accessibilityHint("Opens AgentJail setup and health status.")
+
             Button(action: onSettings) {
                 Label("Settings", systemImage: "gearshape")
             }

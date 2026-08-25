@@ -5,10 +5,12 @@ import Foundation
 @MainActor
 final class ApprovalAppComposition: ObservableObject {
     let store: ApprovalStore
+    let setupCoordinator: AgentJailSetupCoordinator
 
     @Published private(set) var reviewRoute: ApprovalNotificationReviewRoute?
     @Published private(set) var focusRequest: ReviewFocusRequest?
     @Published private(set) var settingsRouteGeneration: UInt64 = 0
+    @Published private(set) var setupRouteGeneration: UInt64 = 0
     @Published private(set) var notificationAuthorization: ApprovalNotificationAuthorization = .notDetermined
     @Published private(set) var loginStatus: ApprovalLoginItemStatus = .notRegistered
     @Published private(set) var settingsError: String?
@@ -34,10 +36,12 @@ final class ApprovalAppComposition: ObservableObject {
         notificationDelegateInstaller: any ApprovalNotificationDelegateInstalling,
         loginService: any ApprovalLoginItemServicing,
         application: any ApprovalApplicationControlling,
+        setupCoordinator: AgentJailSetupCoordinator = AgentJailSetupCoordinator(),
         clock: any ApprovalClock = SystemApprovalClock(),
         sleeper: any ApprovalSleeping = TaskApprovalSleeper()
     ) {
         self.clock = clock
+        self.setupCoordinator = setupCoordinator
         self.store = ApprovalStore(client: client, clock: clock, sleeper: sleeper)
         self.notificationCoordinator = ApprovalNotificationCoordinator(
             center: notificationCenter,
@@ -133,6 +137,21 @@ final class ApprovalAppComposition: ObservableObject {
 
     func requestSettings() {
         settingsRouteGeneration &+= 1
+    }
+
+    func requestSetup() {
+        application.activate()
+        setupRouteGeneration &+= 1
+    }
+
+    func presentSetupIfNeeded() {
+        Task { [weak self] in
+            guard let self else { return }
+            let health = await setupCoordinator.refresh()
+            if !health.isReady {
+                requestSetup()
+            }
+        }
     }
 
     func dispatchReviewRoute(_ route: ApprovalNotificationReviewRoute, openWindow: @escaping @MainActor () -> Void) async {

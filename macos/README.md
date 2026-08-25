@@ -13,7 +13,7 @@ AgentJail.app/
     ├── MacOS/
     │   └── AgentJail
     ├── Resources/
-    │   ├── AgentJail.png
+    │   ├── AgentJail.icns
     │   └── bin/
     │       ├── agentjail
     │       └── agentjail-hook
@@ -27,6 +27,12 @@ The SwiftUI executable owns setup, status, review presentation, and the fixed
 Network Extension command surface. The daemon remains the policy and audit
 authority. The extension performs per-process transparent network enforcement.
 The bundled Go binaries remain the terminal and automation interface.
+
+On first launch, the app checks that it is running from `/Applications`, shows
+the exact local components and Apple approval that setup will request, installs
+the bundled CLI/daemon/hooks with one explicit click, then activates and verifies
+the Network Extension. A process-local CA is created only for protected sessions;
+setup never installs a system-wide root certificate.
 
 ## Local universal build
 

@@ -40,6 +40,14 @@ struct AgentJailApp: App {
             )
         }
 
+        Window("AgentJail", id: ApprovalAppSceneID.setup) {
+            AgentJailSetupView(
+                coordinator: applicationDelegate.composition.setupCoordinator,
+                onOpenSettings: applicationDelegate.composition.requestSettings
+            )
+        }
+        .defaultSize(width: 700, height: 640)
+
         Settings {
             ApprovalSettingsView(composition: applicationDelegate.composition)
         }

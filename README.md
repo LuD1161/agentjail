@@ -195,7 +195,12 @@ You may genuinely want this service - but only after you've made an explicit dec
 
 ## Install
 
-**macOS / Linux (one-liner):**
+**macOS (native app):** Download `AgentJail.dmg`, drag `AgentJail.app` to
+Applications, and click **Install AgentJail**. The app explains and verifies the
+CLI, daemon, hooks, and one-time Apple Network Extension approval before it
+reports the machine protected.
+
+**Linux, or a CLI-only macOS install:**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```

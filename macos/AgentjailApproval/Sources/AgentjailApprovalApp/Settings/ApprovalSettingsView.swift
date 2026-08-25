@@ -56,6 +56,13 @@ struct ApprovalSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Anonymous usage metrics") {
+                Text("Setup metrics contain only fixed stage and outcome values plus app version, OS, and architecture. They never include traffic, hosts, paths, commands, or error text.")
+                Text("Review: agentjail telemetry view\nOpt out: agentjail telemetry disable")
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+            }
+
             if let settingsError = composition.settingsError {
                 Section {
                     Text(settingsError)
@@ -64,7 +71,7 @@ struct ApprovalSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 420)
+        .frame(width: 520, height: 520)
         .task {
             await composition.refreshSettingsStatus()
         }

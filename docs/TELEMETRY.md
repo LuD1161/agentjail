@@ -61,7 +61,7 @@ version); `$set_once` is locked on first occurrence (e.g. how you originally ins
 | `agentjail_version` | `$set` | all events | Your current version |
 | `os` | `$set` | install, uninstall, heartbeat, session_start, update | `"darwin"` / `"linux"` |
 | `arch` | `$set` | install, uninstall, session_start, update | `"arm64"` / `"amd64"` |
-| `install_method` | `$set_once` | install, session_start | `"curl"` / `"brew"` (locked at first occurrence) |
+| `install_method` | `$set_once` | install, session_start | `"app"` / `"curl"` / `"brew"` (locked at first occurrence) |
 | `first_installed_version` | `$set_once` | install | The version of your first install |
 
 The event types are grouped below. **Lifecycle events** (`install`, `uninstall`,
@@ -75,7 +75,7 @@ delivered by the daemon (see [How it's delivered](#how-its-delivered)).
 |---|---|---|
 | `os` | `"darwin"` / `"linux"` | |
 | `arch` | `"arm64"` / `"amd64"` | |
-| `install_method` | `"curl"` / `"brew"` | Optional; how agentjail was installed; omitted if unknown |
+| `install_method` | `"app"` / `"curl"` / `"brew"` | Optional; how agentjail was installed; omitted if unknown |
 | `agents` | `["claude-code","cursor"]` | Optional; the agent enums whose hooks were wired |
 | `agents_detected` | `3` | How many supported agents were found on the machine (a count) |
 | `is_fresh_install` | `true` / `false` | `true` on first-ever install; `false` on binary/daemon refreshes |
@@ -103,7 +103,7 @@ emit this; the optional `agents` field distinguishes them.
 |---|---|---|
 | `os` | `"darwin"` / `"linux"` | |
 | `arch` | `"arm64"` / `"amd64"` | |
-| `install_method` | `"curl"` / `"brew"` | Optional; omitted if unknown |
+| `install_method` | `"app"` / `"curl"` / `"brew"` | Optional; omitted if unknown |
 
 ### `feature_used` — emitted when you run a CLI command
 | Property | Example | Notes |
