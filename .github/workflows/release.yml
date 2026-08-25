@@ -148,6 +148,143 @@ jobs:
           path: agentjail-*-${{ matrix.platform }}.tar.gz
           if-no-files-found: error
 
+  macos-app:
+    name: build notarized macOS app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: cmd/agentjail/ui/frontend/.bun-version
+
+      - name: build web UI and verify attributions
+        run: |
+          make ui
+          ./scripts/gen-third-party-licenses.sh
+          git diff --exit-code -- THIRD_PARTY_LICENSES
+
+      - name: import Developer ID identity and profiles
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_APP_PROVISION_PROFILE: ${{ secrets.APPLE_APP_PROVISION_PROFILE }}
+          APPLE_EXTENSION_PROVISION_PROFILE: ${{ secrets.APPLE_EXTENSION_PROVISION_PROFILE }}
+        run: |
+          set -eu
+          for required in APPLE_CERTIFICATE_P12 APPLE_CERTIFICATE_PASSWORD APPLE_APP_PROVISION_PROFILE APPLE_EXTENSION_PROVISION_PROFILE; do
+            eval "value=\${$required:-}"
+            if [ -z "$value" ]; then
+              echo "missing required release secret: $required" >&2
+              exit 1
+            fi
+          done
+          KEYCHAIN="$RUNNER_TEMP/agentjail-release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 -d > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          mkdir -p "$RUNNER_TEMP/profiles"
+          printf '%s' "$APPLE_APP_PROVISION_PROFILE" | base64 -d \
+            > "$RUNNER_TEMP/profiles/com.blinkerlm.agentjail.app.provisionprofile"
+          printf '%s' "$APPLE_EXTENSION_PROVISION_PROFILE" | base64 -d \
+            > "$RUNNER_TEMP/profiles/com.blinkerlm.agentjail.app.extension.provisionprofile"
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          echo "RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: configure notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+          if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_ID_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "APPLE_ID, APPLE_ID_PASSWORD, and APPLE_TEAM_ID are required" >&2
+            exit 1
+          fi
+          xcrun notarytool store-credentials agentjail-ci-notary \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+      - name: build, sign, notarize, and staple app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
+          SELFUPDATE_SIGNING_PUB_KEY: RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ
+          PROFILE_DIR: ${{ runner.temp }}/profiles
+          SIGNING_MODE: developer-id
+          NOTARY_PROFILE: agentjail-ci-notary
+          NOTARIZE: '1'
+          MACOS_APP_VERSION: ${{ github.ref_name }}
+          MACOS_BUILD_NUMBER: ${{ github.run_number }}
+        run: make macos-app
+
+      - name: package, notarize, and verify DMG
+        env:
+          NOTARY_PROFILE: agentjail-ci-notary
+          NOTARIZE: '1'
+        run: |
+          ./scripts/package-macos-dmg.sh
+          xcrun stapler validate build/AgentJail.dmg
+          hdiutil verify build/AgentJail.dmg
+
+      - name: remove temporary signing keychain
+        if: always()
+        run: |
+          if [ -n "${RELEASE_KEYCHAIN:-}" ] && [ -f "$RELEASE_KEYCHAIN" ]; then
+            security delete-keychain "$RELEASE_KEYCHAIN"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentjail-macos-app
+          path: build/AgentJail.dmg
+          if-no-files-found: error
+
+  macos-app-verify:
+    name: verify notarized macOS DMG
+    needs: macos-app
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: agentjail-macos-app
+          path: dist/
+
+      - name: verify transported app
+        run: |
+          set -eu
+          hdiutil verify dist/AgentJail.dmg
+          MOUNT="$RUNNER_TEMP/agentjail-dmg"
+          mkdir -p "$MOUNT"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" dist/AgentJail.dmg
+          trap 'hdiutil detach "$MOUNT"' EXIT
+          APP="$MOUNT/AgentJail.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          xcrun stapler validate "$APP"
+          spctl -a -vvv -t exec "$APP"
+          for binary in \
+            "$APP/Contents/MacOS/AgentJail" \
+            "$APP/Contents/Resources/bin/agentjail" \
+            "$APP/Contents/Resources/bin/agentjail-hook" \
+            "$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension/Contents/MacOS/com.blinkerlm.agentjail.app.extension"; do
+            lipo -verify_arch arm64 x86_64 "$binary"
+          done
+          "$APP/Contents/Resources/bin/agentjail" version
+
   # Source-of-truth gate for the "no notarization needed at launch" decision
   # (docs/adr/0005-macos-gatekeeper-distribution.md). Each darwin artifact is
   # extracted exactly as the curl|sh / brew transport does (curl + tar — neither
@@ -196,7 +333,7 @@ jobs:
 
   release:
     name: create GitHub release
-    needs: [build, gatekeeper-verify]
+    needs: [build, gatekeeper-verify, macos-app-verify]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -212,7 +349,7 @@ jobs:
       - name: compute SHA256SUMS
         run: |
           cd dist
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum *.tar.gz AgentJail.dmg > SHA256SUMS
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
 
@@ -252,6 +389,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           files: |
             dist/*.tar.gz
+            dist/AgentJail.dmg
             dist/SHA256SUMS
             dist/SHA256SUMS.minisig
             LICENSE

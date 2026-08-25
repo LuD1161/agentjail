@@ -51,6 +51,10 @@ builder injects one application version and build number into the app and
 extension, signs nested code before the container, and verifies every signature
 and architecture before publishing the output path. Override build metadata with
 `MACOS_APP_VERSION=X.Y.Z` and `MACOS_BUILD_NUMBER=N`.
+The tag workflow injects the telemetry backend and self-update signature keys via
+`POSTHOG_KEY` and `SELFUPDATE_SIGNING_PUB_KEY`; local builds may omit both.
+`LICENSE`, `NOTICE`, and `THIRD_PARTY_LICENSES` are included under
+`Contents/Resources` in every bundle.
 
 An ad-hoc build is for local development only. It is not a distributable claim
 and should not replace an activated Developer ID build on a test or customer Mac.

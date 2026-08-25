@@ -140,10 +140,17 @@ build_cli_arch() {
   local arch_root="$work_root/cli-$swift_arch"
   go_arch="$(go_arch_for "$swift_arch")"
   "$mkdir_binary" -p -- "$arch_root"
+  local ldflags="-s -w -X github.com/LuD1161/agentjail/internal/buildinfo.Version=v$app_version"
+  if [[ -n "${POSTHOG_KEY:-}" ]]; then
+    ldflags="$ldflags -X github.com/LuD1161/agentjail/internal/telemetry.apiKey=$POSTHOG_KEY"
+  fi
+  if [[ -n "${SELFUPDATE_SIGNING_PUB_KEY:-}" ]]; then
+    ldflags="$ldflags -X github.com/LuD1161/agentjail/internal/selfupdate.SigningPubKey=$SELFUPDATE_SIGNING_PUB_KEY"
+  fi
   for binary in agentjail agentjail-hook; do
     env CGO_ENABLED=0 GOOS=darwin GOARCH="$go_arch" \
       go build -trimpath \
-        -ldflags "-s -w -X github.com/LuD1161/agentjail/internal/buildinfo.Version=v$app_version" \
+        -ldflags "$ldflags" \
         -o "$arch_root/$binary" "$repo_root/cmd/$binary"
   done
 }
@@ -277,6 +284,9 @@ require_file "$repo_root/macos/AgentJail/AgentJail.entitlements"
 require_file "$repo_root/macos/AgentjailExtension/Info.plist"
 require_file "$repo_root/macos/AgentjailExtension/AgentjailExtension.entitlements"
 require_file "$repo_root/assets/social/avatar-jail-1024.png"
+require_file "$repo_root/LICENSE"
+require_file "$repo_root/NOTICE"
+require_file "$repo_root/THIRD_PARTY_LICENSES"
 
 if [[ "${1:-}" == "--verify-only" ]]; then
   (( $# == 2 )) || fail "usage: $0 --verify-only /path/to/AgentJail.app"
@@ -315,6 +325,9 @@ stage_extension="$stage_app/Contents/Library/SystemExtensions/$extension_id.syst
   "$stage_extension/Contents/MacOS"
 "$cp_binary" "$repo_root/macos/AgentJail/Info.plist" "$stage_app/Contents/Info.plist"
 build_app_icon "$repo_root/assets/social/avatar-jail-1024.png" "$stage_app/Contents/Resources/AgentJail.icns"
+for attribution in LICENSE NOTICE THIRD_PARTY_LICENSES; do
+  "$cp_binary" "$repo_root/$attribution" "$stage_app/Contents/Resources/$attribution"
+done
 "$cp_binary" "$repo_root/macos/AgentjailExtension/Info.plist" "$stage_extension/Contents/Info.plist"
 "$cp_binary" "$approval_root/AgentjailApproval.app/Contents/MacOS/AgentjailApproval" "$stage_app/Contents/MacOS/AgentJail"
 "$lipo_binary" -create \
