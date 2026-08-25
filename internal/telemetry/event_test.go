@@ -19,6 +19,29 @@ func TestEvents_CarryInsertIDAndDistinct(t *testing.T) {
 	}
 }
 
+func TestNewMacOSSetupEventUsesOnlyFixedFields(t *testing.T) {
+	e, ok := NewMacOSSetupEvent("anon-1", "1.7.0", MacOSSetupExtension, MacOSSetupOutcomeSucceeded)
+	if !ok {
+		t.Fatal("valid setup event was rejected")
+	}
+	if e.Event != "macos_setup" || e.Properties["stage"] != "extension" || e.Properties["outcome"] != "succeeded" {
+		t.Fatalf("unexpected event: %#v", e)
+	}
+	for key := range e.Properties {
+		switch key {
+		case "distinct_id", "$insert_id", "agentjail_version", "stage", "outcome":
+		default:
+			t.Fatalf("unexpected setup property %q", key)
+		}
+	}
+	if _, ok := NewMacOSSetupEvent("anon-1", "1.7.0", MacOSSetupStage("free-form"), MacOSSetupOutcomeFailed); ok {
+		t.Fatal("unknown stage must be rejected")
+	}
+	if _, ok := NewMacOSSetupEvent("anon-1", "1.7.0", MacOSSetupApproval, MacOSSetupOutcomeSucceeded); ok {
+		t.Fatal("invalid stage/outcome combination must be rejected")
+	}
+}
+
 func TestNewPolicyConfigEvent_FieldsAndNoCustomNames(t *testing.T) {
 	e := NewPolicyConfigEvent("anon", "0.1.0", 3, []string{"command_policy/no-sudo"})
 	if e.Event != "policy_config" || e.Properties["custom_rule_count"] != 3 {

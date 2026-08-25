@@ -62,3 +62,29 @@ func TestRunTelemetry_ViewPrintsJSON(t *testing.T) {
 		t.Fatalf("view did not print spooled event: %q", out.String())
 	}
 }
+
+func TestRunTelemetry_MacOSSetupRecordsOnlyValidEnums(t *testing.T) {
+	p := telemetry.Paths{Base: t.TempDir()}
+	getenv := func(string) string { return "" }
+	var out bytes.Buffer
+	if code := runTelemetryWith(p, getenv, []string{"macos-setup", "extension", "succeeded"}, &out); code != 0 {
+		t.Fatalf("record valid setup event: code=%d output=%q", code, out.String())
+	}
+	events, err := telemetry.NewSpool(p, 100, 1<<20).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Event != "macos_setup" {
+		t.Fatalf("events=%#v", events)
+	}
+	if code := runTelemetryWith(p, getenv, []string{"macos-setup", "arbitrary", "failed"}, &out); code != 0 {
+		t.Fatalf("invalid enum must fail soft, got code %d", code)
+	}
+	events, err = telemetry.NewSpool(p, 100, 1<<20).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("invalid event was recorded: %#v", events)
+	}
+}

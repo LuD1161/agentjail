@@ -14,6 +14,63 @@ type Event struct {
 	SetOnce    map[string]interface{} `json:"$set_once,omitempty"`
 }
 
+// MacOSSetupStage is a fixed step in the native app setup funnel.
+type MacOSSetupStage string
+
+const (
+	MacOSSetupStarted      MacOSSetupStage = "started"
+	MacOSSetupComponents   MacOSSetupStage = "components"
+	MacOSSetupExtension    MacOSSetupStage = "extension"
+	MacOSSetupApproval     MacOSSetupStage = "approval"
+	MacOSSetupVerification MacOSSetupStage = "verification"
+)
+
+// MacOSSetupOutcome is a fixed result for one setup stage.
+type MacOSSetupOutcome string
+
+const (
+	MacOSSetupOutcomeStarted   MacOSSetupOutcome = "started"
+	MacOSSetupOutcomeSucceeded MacOSSetupOutcome = "succeeded"
+	MacOSSetupOutcomeFailed    MacOSSetupOutcome = "failed"
+	MacOSSetupOutcomeRequired  MacOSSetupOutcome = "required"
+)
+
+func (s MacOSSetupStage) valid() bool {
+	switch s {
+	case MacOSSetupStarted, MacOSSetupComponents, MacOSSetupExtension, MacOSSetupApproval, MacOSSetupVerification:
+		return true
+	default:
+		return false
+	}
+}
+
+func (o MacOSSetupOutcome) valid() bool {
+	switch o {
+	case MacOSSetupOutcomeStarted, MacOSSetupOutcomeSucceeded, MacOSSetupOutcomeFailed, MacOSSetupOutcomeRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func validMacOSSetupMeasurement(stage MacOSSetupStage, outcome MacOSSetupOutcome) bool {
+	if !stage.valid() || !outcome.valid() {
+		return false
+	}
+	switch stage {
+	case MacOSSetupStarted:
+		return outcome == MacOSSetupOutcomeStarted
+	case MacOSSetupComponents, MacOSSetupExtension:
+		return outcome == MacOSSetupOutcomeStarted || outcome == MacOSSetupOutcomeSucceeded || outcome == MacOSSetupOutcomeFailed
+	case MacOSSetupApproval:
+		return outcome == MacOSSetupOutcomeRequired
+	case MacOSSetupVerification:
+		return outcome == MacOSSetupOutcomeSucceeded || outcome == MacOSSetupOutcomeFailed
+	default:
+		return false
+	}
+}
+
 func base(distinctID, version string) map[string]interface{} {
 	if version == "" {
 		if len(commit) >= 7 {
@@ -65,6 +122,18 @@ func NewFeatureEvent(distinctID, version, command string, agents []string) Event
 		p["agents"] = agents
 	}
 	return Event{Event: "feature_used", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}
+}
+
+// NewMacOSSetupEvent records only the fixed setup funnel step and result.
+// See ADR 0141-unified-macos-app.
+func NewMacOSSetupEvent(distinctID, version string, stage MacOSSetupStage, outcome MacOSSetupOutcome) (Event, bool) {
+	if !validMacOSSetupMeasurement(stage, outcome) {
+		return Event{}, false
+	}
+	p := base(distinctID, version)
+	p["stage"] = string(stage)
+	p["outcome"] = string(outcome)
+	return Event{Event: "macos_setup", Properties: p, Set: map[string]interface{}{"agentjail_version": version}}, true
 }
 
 // NewDecisionRollup: aggregated decision counts for one window. ruleCounts keys

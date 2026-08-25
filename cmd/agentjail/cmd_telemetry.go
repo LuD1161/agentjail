@@ -35,8 +35,16 @@ var telemetryEnableCmd = telemetryActionCommand("enable", "Enable privacy-preser
 var telemetryDisableCmd = telemetryActionCommand("disable", "Disable usage statistics", "Persist an opt-out so new usage events are not sent.")
 var telemetryViewCmd = telemetryActionCommand("view", "Inspect locally queued telemetry events", "Print the complete local telemetry spool as JSON so you can review what would be sent.")
 var telemetryResetCmd = telemetryActionCommand("reset", "Replace the random ID and clear queued events", "Delete all locally queued telemetry events and replace the random installation ID. This cannot be undone.")
+var telemetryMacOSSetupCmd = &cobra.Command{
+	Use:    "macos-setup <stage> <outcome>",
+	Hidden: true,
+	Args:   cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		os.Exit(runTelemetry([]string{cmd.Name(), args[0], args[1]}))
+	},
+}
 
 func init() {
-	telemetryCmd.AddCommand(telemetryStatusCmd, telemetryEnableCmd, telemetryDisableCmd, telemetryViewCmd, telemetryResetCmd)
+	telemetryCmd.AddCommand(telemetryStatusCmd, telemetryEnableCmd, telemetryDisableCmd, telemetryViewCmd, telemetryResetCmd, telemetryMacOSSetupCmd)
 	rootCmd.AddCommand(telemetryCmd)
 }

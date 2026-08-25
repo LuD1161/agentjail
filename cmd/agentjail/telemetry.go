@@ -56,6 +56,20 @@ func runTelemetryWith(p telemetry.Paths, getenv func(string) string, args []stri
 		_ = telemetry.NewSpool(p, 1000, 512*1024).Truncate()
 		fmt.Fprintln(out, "telemetry reset (new anonymous id, spool cleared)")
 		return 0
+	case "macos-setup":
+		if len(args) != 3 {
+			return 2
+		}
+		// Setup analytics are best-effort: disabled telemetry, invalid enums,
+		// and spool errors must never change the product flow.
+		telemetry.RecordMacOSSetup(
+			p,
+			getenv,
+			buildinfo.Version,
+			telemetry.MacOSSetupStage(args[1]),
+			telemetry.MacOSSetupOutcome(args[2]),
+		)
+		return 0
 	default:
 		fmt.Fprintf(out, "usage: agentjail telemetry [status|enable|disable|view|reset]\n")
 		return 2

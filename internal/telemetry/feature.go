@@ -14,3 +14,19 @@ func RecordFeature(p Paths, getenv func(string) string, version, command string,
 	}
 	_ = NewSpool(p, spoolMaxEvents, spoolMaxBytes).Append(NewFeatureEvent(c.AnonymousID, version, command, agents))
 }
+
+// RecordMacOSSetup spools one bounded native-app setup event when telemetry is enabled.
+func RecordMacOSSetup(p Paths, getenv func(string) string, version string, stage MacOSSetupStage, outcome MacOSSetupOutcome) bool {
+	c, err := LoadConsent(p)
+	if err != nil {
+		return false
+	}
+	if on, _ := Resolve(c, getenv); !on {
+		return false
+	}
+	event, ok := NewMacOSSetupEvent(c.AnonymousID, version, stage, outcome)
+	if !ok {
+		return false
+	}
+	return NewSpool(p, spoolMaxEvents, spoolMaxBytes).Append(event) == nil
+}

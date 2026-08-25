@@ -111,6 +111,17 @@ emit this; the optional `agents` field distinguishes them.
 | `command` | `"install"`, `"logs"`, `"policy"`, `"other"` | A fixed enum. Unknown commands collapse to `"other"` — your arguments are **never** recorded |
 | `agents` | `["claude","codex"]` | Optional; a fixed enum of supported agent names |
 
+### `macos_setup` — emitted while you explicitly run setup in the macOS app
+
+This measures where setup succeeds or needs improvement. The hidden app-to-CLI
+bridge accepts only the enums below; it cannot attach command output, paths,
+hostnames, extension errors, or other free-form data.
+
+| Property | Values | Notes |
+|---|---|---|
+| `stage` | `started`, `components`, `extension`, `approval`, `verification` | Fixed setup step |
+| `outcome` | `started`, `succeeded`, `failed`, `required` | Fixed result |
+
 ### `decision_rollup` — aggregated policy decisions for a window (not per-decision)
 | Property | Example | Notes |
 |---|---|---|
