@@ -85,6 +85,14 @@ the public `openSettings` action starts at macOS 14 in the verified SDK, macOS
 This refinement was verified on 2026-08-15 with Xcode 26.6, Swift 6.3.3, and
 the macOS 26.5 SDK using strict macOS 13 type-check probes.
 
+GitHub-hosted native-app jobs use `macos-15` with
+`/Applications/Xcode_16.4.app/Contents/Developer`, and fail in a toolchain
+preflight unless `-swift-version 6` is supported. The previous `macos-14`
+default selected Xcode 15.4 and failed before compilation despite a valid local
+build. GitHub's official
+[`macos-15` runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)
+listed Xcode 16.4 as the default and was verified on 2026-08-25.
+
 V1 is directly distributed, uses hardened runtime, and must be Developer ID
 signed and notarized before a public build. It has no App Sandbox in v1. A
 sandboxed or Mac App Store version requires a future ADR and an XPC/IPC redesign;

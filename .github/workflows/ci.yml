@@ -102,10 +102,17 @@ jobs:
 
   macos-app:
     name: macOS native app
-    runs-on: macos-14
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: verify Swift 6 toolchain
+        run: |
+          xcrun swiftc --version
+          xcrun swiftc -swift-version 6 -version
 
       - name: native app tests
         run: ./scripts/test-macos-approval.sh

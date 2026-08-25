@@ -160,9 +160,16 @@ jobs:
 
   macos-app:
     name: build notarized macOS app
-    runs-on: macos-14
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+
+      - name: verify Swift 6 release toolchain
+        run: |
+          xcrun swiftc --version
+          xcrun swiftc -swift-version 6 -version
 
       - uses: actions/setup-go@v5
         with:

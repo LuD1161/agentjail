@@ -158,6 +158,8 @@ resolve_toolchain() {
       selected_developer_dir="$candidate"
       swiftc_binary="$candidate/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
       macos_sdk="$candidate/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+      "$swiftc_binary" -swift-version 6 -version >/dev/null 2>&1 \
+        || fail "Swift 6 is required; selected toolchain does not support -swift-version 6: $candidate"
       return
     fi
   done
@@ -170,6 +172,8 @@ resolve_toolchain() {
   selected_developer_dir="$candidate"
   [[ -x "$swiftc_binary" ]] || fail "Swift toolchain is not executable: $swiftc_binary"
   [[ -d "$macos_sdk" ]] || fail "macOS SDK is not available: $macos_sdk"
+  "$swiftc_binary" -swift-version 6 -version >/dev/null 2>&1 \
+    || fail "Swift 6 is required; selected toolchain does not support -swift-version 6: $candidate"
 }
 
 verify_app() {

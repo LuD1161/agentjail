@@ -52,7 +52,9 @@ The default local artifacts are
 `build/macos-approval/AgentjailApproval.app` and
 `build/macos-approval/AgentjailApproval.dmg`. The scripts prefer an explicit
 `DEVELOPER_DIR`, then `/Applications/Xcode.app/Contents/Developer`, and finally
-the active Command Line Tools developer directory. They compile the manifest's
+the active Command Line Tools developer directory. The selected compiler must
+support Swift language mode 6; packaging fails before compilation otherwise.
+They compile the manifest's
 fixed Core and executable source sets with `swiftc`: this avoids treating a
 restricted host's SwiftPM manifest sandbox as a packaging dependency while
 still rejecting package dependencies, plugins, resources, unsafe flags, target
