@@ -3,7 +3,7 @@
 package shieldapp
 
 // Failure-path coverage for startTunnelDarwin (AGE-149 T1.7). Standing up the
-// real AgentjailTunnel.app + system extension needs root and an approved
+// real AgentJail.app + system extension needs an approved
 // sysext, so these tests exercise the extracted pure-logic units instead:
 // cleanup step ordering, the socket-register retry/timeout helper, the
 // signal-drain arm/stop pair, and the fail-open fallback dispatch that fires
@@ -332,7 +332,7 @@ func TestArmSignalDrainStopIsClean(t *testing.T) {
 // startTunnelDarwin itself, not just an extracted helper: AGENTJAIL_TUNNEL_APP
 // points at a path that cannot exist, so the very first SYSEXT step fails.
 func TestStartTunnelDarwinFailsOpenWhenAppMissing(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist", "AgentjailTunnel")
+	missing := filepath.Join(t.TempDir(), "does-not-exist", "AgentJail")
 	t.Setenv("AGENTJAIL_TUNNEL_APP", missing)
 
 	var mu sync.Mutex
@@ -359,7 +359,7 @@ func TestStartTunnelDarwinFailsOpenWhenAppMissing(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !fallbackCalled {
-		t.Fatal("fallback was not invoked for a missing AgentjailTunnel app - the tunnel-as-a-whole fail-open contract is broken")
+		t.Fatal("fallback was not invoked for a missing AgentJail app - the tunnel-as-a-whole fail-open contract is broken")
 	}
 
 	if ev, ok := emitter.find(audit.TunnelExtensionStarted); !ok {

@@ -47,7 +47,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         scn_finish
         exit
     fi
-    if [ -x /Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel ]; then
+    if [ -x /Applications/AgentJail.app/Contents/MacOS/AgentJail ]; then
         scn_ok "containing tunnel app remains installed in /Applications"
     else
         scn_fail "containing tunnel app remains installed in /Applications"

@@ -1,7 +1,19 @@
+import Foundation
 import SwiftUI
 
 @main
-struct AgentjailApprovalApp: App {
+@MainActor
+enum AgentJailEntrypoint {
+    static func main() {
+        let arguments = CommandLine.arguments
+        if AgentJailTunnelCommand.handles(arguments: arguments) {
+            AgentJailTunnelCommand.run(arguments: arguments)
+        }
+        AgentJailApp.main()
+    }
+}
+
+struct AgentJailApp: App {
     @NSApplicationDelegateAdaptor(ApprovalApplicationDelegate.self) private var applicationDelegate
     @State private var isMenuBarExtraInserted = true
 
@@ -32,7 +44,7 @@ struct AgentjailApprovalApp: App {
             ApprovalSettingsView(composition: applicationDelegate.composition)
         }
 
-        Window("AgentJail Approval Settings", id: ApprovalAppSceneID.settings) {
+        Window("AgentJail Settings", id: ApprovalAppSceneID.settings) {
             ApprovalSettingsView(composition: applicationDelegate.composition)
         }
     }

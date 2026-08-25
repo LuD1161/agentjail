@@ -455,7 +455,7 @@ private extension PanelPresentation {
         case .starting:
             ApprovalEmptyPresentation(
                 title: "Preparing approvals",
-                detail: "AgentJail Approval is starting.",
+                detail: "AgentJail is starting.",
                 systemImage: "shield"
             )
         case .connecting:
@@ -485,7 +485,7 @@ private extension PanelPresentation {
         case .unsupportedProtocol:
             ApprovalEmptyPresentation(
                 title: "Update required",
-                detail: "Update AgentJail Approval or the daemon before reviewing requests.",
+                detail: "Update AgentJail or the daemon before reviewing requests.",
                 systemImage: "exclamationmark.triangle"
             )
         }

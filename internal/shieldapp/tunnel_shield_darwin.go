@@ -29,16 +29,17 @@ import (
 	"github.com/LuD1161/agentjail/internal/tunnel"
 )
 
-// tunnelAppDefaultPath is where `AgentjailTunnel install` puts the host app
-// bundle (see macos/AgentjailTunnel and macos/README.md). Overridable via the
+// tunnelAppDefaultPath is the command surface inside the unified macOS app.
+// Overridable via the
 // AGENTJAIL_TUNNEL_APP env var for local dev / CI, where the app may not be
 // installed to /Applications.
-const tunnelAppDefaultPath = "/Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel"
+// See ADR 0141-unified-macos-app.
+const tunnelAppDefaultPath = "/Applications/AgentJail.app/Contents/MacOS/AgentJail"
 
 // tunnelSessionSockPath is the unix socket the AgentjailExtension sysext
 // listens on for the register/unregister session protocol (see
 // macos/AgentjailExtension/Provider.swift's sessionSockPath and
-// macos/AgentjailTunnel/main.swift's sessionIPC). Both sides agree on this
+// AgentJailTunnelCommand.swift's sessionIPC). Both sides agree on this
 // literal path - it is unrelated to proxyctl's control socket, which is the
 // agentjail-secrets/netproxy control plane used elsewhere in this package.
 const tunnelSessionSockPath = "/tmp/agentjail.sock"
@@ -59,7 +60,7 @@ var (
 	tunnelAgentAddr6  = dnsvip.AgentV6().String() + "/128"
 )
 
-// resolveTunnelAppPath resolves the AgentjailTunnel.app helper binary:
+// resolveTunnelAppPath resolves the AgentJail.app command binary:
 // AGENTJAIL_TUNNEL_APP overrides for local dev/CI; otherwise the standard
 // /Applications install path.
 func resolveTunnelAppPath() string {
@@ -94,7 +95,7 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 }
 
 // startTunnelDarwin drives the sanctioned macOS path for --tunnel: the
-// NETransparentProxyProvider system extension via the AgentjailTunnel.app
+// NETransparentProxyProvider system extension via the AgentJail.app
 // host app, replacing the utun/tunneld dial used by the Linux transparent
 // tunnel (tunnel_shield_linux.go's startTunnel).
 //
@@ -118,7 +119,7 @@ func loadOrGenTunnelCA() (*x509.Certificate, crypto.PrivateKey, []byte, error) {
 // terminate the launch. MITM setup remains independently fail-open to opaque
 // relay. See ADR 0136-tunnel-golden-image.
 //
-//  1. SYSEXT   - resolve + `install` the AgentjailTunnel.app (idempotent).
+//  1. SYSEXT   - resolve + `install-extension` in AgentJail.app (idempotent).
 //  2. GATEWAY  - generate WireGuard keys, start an in-process tunnel.Gateway
 //     (WireGuard-over-UDP netstack, NOT the promiscuous forward stack used by
 //     Linux's --tunnel path) + a dnsvip.Server wired to the gateway's own
@@ -162,14 +163,14 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		fallback()
 	}
 
-	// --- 1. SYSEXT: ensure the AgentjailTunnel host app + system extension
-	// are active. `install` is idempotent - safe to call on every launch.
+	// --- 1. SYSEXT: ensure the AgentJail app + system extension are active.
+	// `install-extension` is idempotent - safe to call on every launch.
 	if _, statErr := os.Stat(appPath); statErr != nil {
-		fail("app_not_found", "AgentjailTunnel app not found at %s (set AGENTJAIL_TUNNEL_APP, or build/install it - see macos/README.md): %v", appPath, statErr)
+		fail("app_not_found", "AgentJail app not found at %s (set AGENTJAIL_TUNNEL_APP, or build/install it - see macos/README.md): %v", appPath, statErr)
 		return
 	}
-	if out, err := exec.Command(appPath, "install").CombinedOutput(); err != nil {
-		fail("install_failed", "%s install failed: %v: %s", appPath, err, string(out))
+	if out, err := exec.Command(appPath, "install-extension").CombinedOutput(); err != nil {
+		fail("install_failed", "%s install-extension failed: %v: %s", appPath, err, string(out))
 		return
 	}
 	if err := stopTunnelAppAndWait(appPath, tunnelSessionSockPath, 30*time.Second, 300*time.Millisecond); err != nil {

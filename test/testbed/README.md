@@ -379,13 +379,13 @@ in the guest:
 ```sh
 tart run golden-macos-mitm
 # Copy while preserving the bundle, signatures, permissions, and xattrs to:
-#   /Applications/AgentjailTunnel.app
-/Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel install
+#   /Applications/AgentJail.app
+/Applications/AgentJail.app/Contents/MacOS/AgentJail install-extension
 ```
 
 Approve only through **System Settings → General → Login Items & Extensions →
 Network Extensions**. Do not automate or bypass this. Keep the containing app at
-`/Applications/AgentjailTunnel.app`: Apple packages and manages the system
+`/Applications/AgentJail.app`: Apple packages and manages the system
 extension through that app, and deleting it can remove the extension.
 
 The current image was rebuilt and headlessly clone-validated on 2026-08-15:

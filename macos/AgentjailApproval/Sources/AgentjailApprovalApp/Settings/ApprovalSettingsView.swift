@@ -31,14 +31,14 @@ struct ApprovalSettingsView: View {
                     }
                 }
                 if composition.notificationAuthorization == .denied {
-                    Text("To change this choice, open System Settings > Notifications > AgentJail Approval.")
+                    Text("To change this choice, open System Settings > Notifications > AgentJail.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
             Section("Launch at login") {
-                Toggle("Launch AgentJail Approval at login", isOn: loginItemEnabled)
+                Toggle("Launch AgentJail at login", isOn: loginItemEnabled)
                 Text(loginDetail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -51,7 +51,7 @@ struct ApprovalSettingsView: View {
 
             Section("Approval scope") {
                 Text("Approve for future sessions adds the displayed host to the verified project policy. The current session is unchanged.")
-                Text("This companion communicates only with the local AgentJail daemon. It does not store the control token or read AgentJail databases.")
+                Text("The app communicates only with the local AgentJail daemon. It does not store the control token or read AgentJail databases.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -95,11 +95,11 @@ struct ApprovalSettingsView: View {
     private var loginDetail: String {
         switch composition.loginStatus {
         case .enabled:
-            "AgentJail Approval is enabled to launch at login."
+            "AgentJail is enabled to launch at login."
         case .notRegistered:
-            "AgentJail Approval is not configured to launch at login."
+            "AgentJail is not configured to launch at login."
         case .requiresApproval:
-            "macOS requires your approval before AgentJail Approval can launch at login."
+            "macOS requires your approval before AgentJail can launch at login."
         case .notFound:
             "macOS could not find a login-item registration for this app installation."
         case .unknown:

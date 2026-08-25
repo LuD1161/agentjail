@@ -1,13 +1,13 @@
 # macOS tunnel build, notarization, and golden-image runbook
 
-Use this runbook whenever `AgentjailTunnel.app` or its Network Extension is
+Use this runbook whenever `AgentJail.app` or its Network Extension is
 built, replaced, or baked into `golden-macos-mitm`. It covers the custom
 `swiftc` build used by this repository; there is no Xcode archive or App Store
 submission in this workflow.
 
 ## Invariants
 
-- Keep the app at `/Applications/AgentjailTunnel.app` in the guest.
+- Keep the app at `/Applications/AgentJail.app` in the guest.
 - The app ID is `com.blinkerlm.agentjail.app`.
 - The extension ID is `com.blinkerlm.agentjail.app.extension`.
 - The app and extension use Team ID `Q98Z3744J2`.
@@ -31,7 +31,7 @@ submission in this workflow.
 Before building, record only non-secret metadata:
 
 ```sh
-APP=/Applications/AgentjailTunnel.app
+APP=/Applications/AgentJail.app
 EXT="$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension"
 
 defaults read "$APP/Contents/Info" CFBundleShortVersionString
@@ -41,20 +41,17 @@ codesign -dvvvv "$EXT" 2>&1 | grep -E '^(Identifier|CDHash|TeamIdentifier|Author
 systemextensionsctl list | grep -F com.blinkerlm.agentjail.app.extension
 ```
 
-Do not assume a repository `build/AgentjailTunnel.app` matches the installed and
+Do not assume a repository `build/AgentJail.app` matches the installed and
 activated artifact. Compare IDs, versions, Team ID, entitlements, profile UUIDs,
 and CDHashes.
 
-## 2. Increment both bundle versions
+## 2. Set one app and extension version
 
 An updated extension must have a higher version than the activated extension.
-Increment both `CFBundleVersion` and `CFBundleShortVersionString` in:
-
-- `macos/AgentjailTunnel/Info.plist`
-- `macos/AgentjailExtension/Info.plist`
-
-Keep app and extension versions equal. macOS may reuse an installed extension
-whose version is unchanged even if its executable changed.
+Set `MACOS_APP_VERSION=X.Y.Z` and a monotonically increasing
+`MACOS_BUILD_NUMBER=N` for the release build. The builder injects both values
+into the staged app and extension plists and rejects drift. macOS may reuse an
+installed extension whose version is unchanged even if its executable changed.
 
 No Apple Developer website update is required for a build-number change. The
 website-side identifiers, capabilities, and provisioning profiles are tied to
@@ -65,7 +62,13 @@ the Team ID, bundle IDs, and entitlements, not each local build number.
 The canonical path is:
 
 ```sh
-PROFILE_DIR=/absolute/path/to/private/profiles NOTARIZE=1 make macos-app
+PROFILE_DIR=/absolute/path/to/private/profiles \
+SIGNING_MODE=developer-id \
+NOTARY_PROFILE=agentjail-notary \
+NOTARIZE=1 \
+MACOS_APP_VERSION=X.Y.Z \
+MACOS_BUILD_NUMBER=N \
+make macos-app
 ```
 
 `scripts/build-macos-app.sh` must perform this order:
@@ -84,7 +87,7 @@ the final bundle before creating the submission ZIP.
 Verify before submission:
 
 ```sh
-APP=build/AgentjailTunnel.app
+APP=build/AgentJail.app
 EXT="$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension"
 
 plutil -lint "$APP/Contents/Info.plist"
@@ -117,13 +120,13 @@ REST API. This repository uses `notarytool`.
 Create the ZIP without changing the signed app:
 
 ```sh
-ditto -c -k --keepParent build/AgentjailTunnel.app build/AgentjailTunnel.zip
+ditto -c -k --keepParent build/AgentJail.app build/AgentJail.zip
 ```
 
 Prefer an App Store Connect API key:
 
 ```sh
-xcrun notarytool submit build/AgentjailTunnel.zip \
+xcrun notarytool submit build/AgentJail.zip \
   --key /private/path/to/AuthKey.p8 \
   --key-id "$ASC_KEY_ID" \
   --issuer "$ASC_ISSUER_ID" \
@@ -138,7 +141,7 @@ xcrun notarytool store-credentials agentjail-notary \
   --key-id "$ASC_KEY_ID" \
   --issuer "$ASC_ISSUER_ID"
 
-xcrun notarytool submit build/AgentjailTunnel.zip \
+xcrun notarytool submit build/AgentJail.zip \
   --keychain-profile agentjail-notary \
   --wait
 ```
@@ -166,10 +169,10 @@ notary authentication arguments containing a password.
 ## 5. Staple and assess
 
 ```sh
-xcrun stapler staple build/AgentjailTunnel.app
-xcrun stapler validate build/AgentjailTunnel.app
-codesign --verify --deep --strict build/AgentjailTunnel.app
-spctl -a -vvv -t exec build/AgentjailTunnel.app
+xcrun stapler staple build/AgentJail.app
+xcrun stapler validate build/AgentJail.app
+codesign --verify --deep --strict build/AgentJail.app
+spctl -a -vvv -t exec build/AgentJail.app
 ```
 
 Required Gatekeeper result:
@@ -192,13 +195,13 @@ the golden VM.
    preserves bundle structure, executable permissions, xattrs, profiles, and
    signatures.
 5. Validate `codesign`, `stapler`, `spctl`, IDs, versions, Team ID, and CDHashes
-   inside the guest before replacing `/Applications/AgentjailTunnel.app`.
+   inside the guest before replacing `/Applications/AgentJail.app`.
 6. Keep the previous app recoverably outside `/Applications` until activation is
    proven.
 7. Run:
 
 ```sh
-/Applications/AgentjailTunnel.app/Contents/MacOS/AgentjailTunnel install
+/Applications/AgentJail.app/Contents/MacOS/AgentJail install-extension
 ```
 
 macOS may reuse the existing consent when Team ID and extension bundle ID are

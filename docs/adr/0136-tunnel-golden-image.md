@@ -27,7 +27,9 @@ so no CA should persist in a golden disk.
 
 Maintain one stopped Tart image, `golden-macos-mitm`, as the macOS testbed base.
 It contains the approved `com.blinkerlm.agentjail.app.extension` and its exact
-containing app at `/Applications/AgentjailTunnel.app`; it contains no MITM CA.
+containing app at `/Applications/AgentJail.app`; it contains no MITM CA. The
+artifact identity changed under ADR 0141-unified-macos-app, so the golden must be
+rebuilt before it can provide release evidence for the unified application.
 The installed extension remains inert until AgentJail starts a tunnel session,
 so non-tunnel workflows may clone the same disk without enabling interception.
 

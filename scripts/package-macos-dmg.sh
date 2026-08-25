@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 #
-# package-macos-dmg.sh - package build/AgentjailTunnel.app into a
-# drag-install DMG (build/AgentjailTunnel.dmg).
+# package-macos-dmg.sh - package build/AgentJail.app into a
+# drag-install DMG (build/AgentJail.dmg).
 #
 # Packages whatever .app is already at APP_PATH (does not re-sign it).
 # NOTARIZE=0 (default): package only - use for a local ad-hoc app.
-# NOTARIZE=1: also notarize + staple the DMG (needs APPLE_ID, TEAM_ID,
-# APP_PASSWORD in the environment; source the repo-root .env first). The
+# NOTARIZE=1: also notarize + staple the DMG (using NOTARY_PROFILE or an
+# App Store Connect API key). The
 # app inside must already be Developer-ID signed + notarized.
 #
 # Usage:
 #   scripts/package-macos-dmg.sh
-#   NOTARIZE=1 scripts/package-macos-dmg.sh          # after sourcing .env
-#   APP_PATH=/other/AgentjailTunnel.app DMG_PATH=/tmp/out.dmg scripts/package-macos-dmg.sh
+#   NOTARY_PROFILE=agentjail-notary NOTARIZE=1 scripts/package-macos-dmg.sh
+#   APP_PATH=/other/AgentJail.app DMG_PATH=/tmp/out.dmg scripts/package-macos-dmg.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$REPO_ROOT/build"
 
-APP_PATH="${APP_PATH:-$BUILD/AgentjailTunnel.app}"
-DMG_PATH="${DMG_PATH:-$BUILD/AgentjailTunnel.dmg}"
-VOLNAME="${VOLNAME:-AgentjailTunnel}"
+APP_PATH="${APP_PATH:-$BUILD/AgentJail.app}"
+DMG_PATH="${DMG_PATH:-$BUILD/AgentJail.dmg}"
+VOLNAME="${VOLNAME:-AgentJail}"
 NOTARIZE="${NOTARIZE:-0}"
 
 if [ ! -d "$APP_PATH" ]; then
@@ -49,20 +49,23 @@ echo "==> verifying $DMG_PATH"
 hdiutil verify "$DMG_PATH"
 
 if [ "$NOTARIZE" = "1" ]; then
-    echo "==> notarizing DMG (needs APPLE_ID, TEAM_ID, APP_PASSWORD in env)"
-    : "${APPLE_ID:?APPLE_ID not set - source .env or export it, or run with NOTARIZE=0}"
-    : "${APP_PASSWORD:?APP_PASSWORD not set - source .env or export it, or run with NOTARIZE=0}"
-    : "${TEAM_ID:?TEAM_ID not set - source .env or export it, or run with NOTARIZE=0}"
-    xcrun notarytool submit "$DMG_PATH" \
-        --apple-id "$APPLE_ID" \
-        --team-id "$TEAM_ID" \
-        --password "$APP_PASSWORD" \
-        --wait
+    auth=()
+    if [ -n "${NOTARY_PROFILE:-}" ]; then
+        auth=(--keychain-profile "$NOTARY_PROFILE")
+    elif [ -n "${ASC_KEY:-}" ] && [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ]; then
+        [ -f "$ASC_KEY" ] || { echo "error: ASC_KEY not found: $ASC_KEY" >&2; exit 1; }
+        auth=(--key "$ASC_KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+    else
+        echo "error: NOTARIZE=1 requires NOTARY_PROFILE or ASC_KEY + ASC_KEY_ID + ASC_ISSUER_ID" >&2
+        exit 1
+    fi
+    echo "==> notarizing DMG"
+    xcrun notarytool submit "$DMG_PATH" "${auth[@]}" --wait
     xcrun stapler staple "$DMG_PATH"
     xcrun stapler validate "$DMG_PATH"
     echo "==> DMG notarized + stapled"
 else
-    echo "    Distributable DMG: re-run with NOTARIZE=1 (creds in env) to notarize + staple."
+    echo "    Local DMG only: re-run with NOTARIZE=1 after the app is Developer ID signed and notarized."
 fi
 
 echo "==> done: $DMG_PATH"

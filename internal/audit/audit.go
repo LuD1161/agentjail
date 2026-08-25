@@ -111,7 +111,7 @@ const (
 	// 0091-monitor-mode-tools.
 	EnforcementModeChanged = "enforcement.mode_changed"
 	// Darwin NE-transparent-proxy tunnel lifecycle (AGE-149). Started/Stopped
-	// bracket the AgentjailTunnel.app + system extension being driven up and
+	// bracket the AgentJail.app + system extension being driven up and
 	// torn down; SessionRegistered/SessionUnregistered bracket this shield's
 	// own PID being (un)registered with the extension's ancestor-match filter.
 	// Detail carries mode/mitm/app_path and, on failure, failure_reason - fixed

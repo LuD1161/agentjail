@@ -31,6 +31,7 @@ cmd/agentjail/ui/static/dist/*
 
 # dev-install build output
 /build/
+/macos/AgentjailApproval/.build/
 
 # Build artifacts (root-level binaries from `go build .`)
 /agentjail

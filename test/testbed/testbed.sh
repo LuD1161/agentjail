@@ -252,8 +252,8 @@ capture_guest_metadata() {
         fi
         if [ "$(uname -s)" = Darwin ]; then
             systemextensionsctl list
-            codesign -dv --verbose=4 /Applications/AgentjailTunnel.app 2>&1
-            codesign -d --entitlements :- /Applications/AgentjailTunnel.app 2>/dev/null
+            codesign -dv --verbose=4 /Applications/AgentJail.app 2>&1
+            codesign -d --entitlements :- /Applications/AgentJail.app 2>/dev/null
         fi
     ' >"$output"
     chmod 0600 "$output"

@@ -4,7 +4,7 @@
 # Reuses the host/path allow-deny shapes in test/tunnel-e2e/scenarios.sh and
 # adds the strict release probes for port/protocol and direct no-proxy bypass.
 # It drives them through the macOS CLI tunnel path
-# (`agentjail-shield --tunnel`, backed by AgentjailTunnel.app + the
+# (`agentjail-shield --tunnel`, backed by AgentJail.app + the
 # NETransparentProxyProvider system extension - see macos/README.md).
 #
 # The system extension requires one-time interactive user approval, which

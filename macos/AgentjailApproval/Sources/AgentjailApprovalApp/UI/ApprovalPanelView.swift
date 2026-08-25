@@ -135,14 +135,14 @@ struct ApprovalPanelView: View {
             Button(action: onSettings) {
                 Label("Settings", systemImage: "gearshape")
             }
-            .accessibilityHint("Opens AgentJail Approval settings.")
+            .accessibilityHint("Opens AgentJail settings.")
 
             Spacer()
 
             Button(action: onQuit) {
                 Text("Quit")
             }
-            .accessibilityLabel("Quit AgentJail Approval")
+            .accessibilityLabel("Quit AgentJail")
             .accessibilityHint("Stops this menu-bar app. The AgentJail daemon remains authoritative.")
         }
         .padding(12)

@@ -1,172 +1,350 @@
 #!/usr/bin/env bash
-#
-# build-macos-app.sh - build, assemble, and sign build/AgentjailTunnel.app
-# from source. Idempotent: safe to re-run, each step overwrites its own
-# outputs.
-#
-# Mirrors macos/README.md - keep the two in sync, this script is the
-# executable form of that doc.
-#
-# Usage:
-#   NOTARIZE=0 ./scripts/build-macos-app.sh    # build + ad-hoc sign only (default, offline-safe)
-#   NOTARIZE=1 ./scripts/build-macos-app.sh    # build + Developer ID sign + notarize
-#
-# NOTARIZE=1 needs .env at the repo root with APPLE_ID, APP_PASSWORD,
-# TEAM_ID (an app-specific password, not the Apple ID password), plus a
-# Developer ID Application certificate in the login keychain. Never echo
-# these values - they are sourced into the environment only.
-#
-# Does NOT copy the built app to /Applications or install the system
-# extension - both require interactive user approval. See macos/README.md
-# Step 7 for the manual install step after this script finishes.
+# Build, assemble, sign, and optionally notarize the unified AgentJail.app.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+readonly build_root="$repo_root/build"
+readonly app_path="$build_root/AgentJail.app"
+readonly app_id="com.blinkerlm.agentjail.app"
+readonly extension_id="$app_id.extension"
+readonly team_id="${TEAM_ID:-Q98Z3744J2}"
+readonly minimum_system_version="13.0"
+readonly signing_mode="${SIGNING_MODE:-adhoc}"
+readonly notarize="${NOTARIZE:-0}"
+readonly identity="${APPLE_SIGNING_IDENTITY:-Developer ID Application: Aseem Shrey ($team_id)}"
 
-BUILD="$REPO_ROOT/build"
-APP="$BUILD/AgentjailTunnel.app"
-EXT_ID="com.blinkerlm.agentjail.app.extension"
-EXT="$APP/Contents/Library/SystemExtensions/$EXT_ID.systemextension"
-TEAM_ID="Q98Z3744J2"
-IDENTITY="Developer ID Application: Aseem Shrey ($TEAM_ID)"
-NOTARIZE="${NOTARIZE:-0}"
+readonly codesign_binary="/usr/bin/codesign"
+readonly lipo_binary="/usr/bin/lipo"
+readonly plutil_binary="/usr/bin/plutil"
+readonly plist_buddy="/usr/libexec/PlistBuddy"
+readonly security_binary="/usr/bin/security"
+readonly xcrun_binary="/usr/bin/xcrun"
+readonly ditto_binary="/usr/bin/ditto"
+readonly iconutil_binary="/usr/bin/iconutil"
+readonly sips_binary="/usr/bin/sips"
+readonly mkdir_binary="/bin/mkdir"
+readonly cp_binary="/bin/cp"
+readonly rm_binary="/bin/rm"
+readonly mv_binary="/bin/mv"
 
-echo "==> Step 1: building the Go cgo c-archive"
-mkdir -p "$BUILD"
-CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-    go build -buildmode=c-archive \
-    -o "$BUILD/libagentjail_tunnel.a" \
-    ./internal/tunnel/cbridge/
+fail() {
+  printf 'build-macos-app: %s\n' "$*" >&2
+  exit 1
+}
 
-echo "==> Step 2: compiling the extension (NETransparentProxyProvider)"
-mkdir -p "$BUILD/AgentjailExtension"
-swiftc \
-    -target arm64-apple-macos13.0 \
-    -module-name AgentjailExtension \
-    -import-objc-header macos/AgentjailExtension/BridgingHeader.h \
-    -I "$BUILD/" \
-    -L "$BUILD/" -lagentjail_tunnel -lbsm \
-    -framework NetworkExtension \
-    -framework Foundation \
-    -o "$BUILD/AgentjailExtension/$EXT_ID" \
-    macos/AgentjailExtension/main.swift macos/AgentjailExtension/Provider.swift
+require_file() {
+  [[ -f "$1" ]] || fail "missing required file: $1"
+}
 
-echo "==> Step 3: compiling the host app"
-swiftc \
-    -target arm64-apple-macos13.0 \
-    -framework AppKit \
-    -framework NetworkExtension \
-    -framework SystemExtensions \
-    -framework Foundation \
-    -o "$BUILD/AgentjailTunnel" \
-    macos/AgentjailTunnel/main.swift
+require_executable() {
+  [[ -x "$1" ]] || fail "missing required executable: $1"
+}
 
-echo "==> Step 4: assembling $APP"
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
-mkdir -p "$EXT/Contents/MacOS"
+plist_value() {
+  "$plist_buddy" -c "Print :$2" "$1" 2>/dev/null
+}
 
-cp macos/AgentjailTunnel/Info.plist  "$APP/Contents/Info.plist"
-cp "$BUILD/AgentjailTunnel"          "$APP/Contents/MacOS/AgentjailTunnel"
+require_plist_value() {
+  local actual
+  actual="$(plist_value "$1" "$2")" || fail "missing $2 in $1"
+  [[ "$actual" == "$3" ]] || fail "$2 must be $3 in $1, got $actual"
+}
 
-cp macos/AgentjailExtension/Info.plist  "$EXT/Contents/Info.plist"
-cp "$BUILD/AgentjailExtension/$EXT_ID"  "$EXT/Contents/MacOS/$EXT_ID"
+resolve_version() {
+  local raw_version
+  raw_version="${MACOS_APP_VERSION:-$(git -C "$repo_root" describe --tags --abbrev=0 2>/dev/null || printf '0.1.0')}"
+  app_version="${raw_version#v}"
+  [[ "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "MACOS_APP_VERSION must be X.Y.Z, got $app_version"
+  app_build="${MACOS_BUILD_NUMBER:-$(git -C "$repo_root" rev-list --count HEAD)}"
+  [[ "$app_build" =~ ^[1-9][0-9]*$ ]] || fail "MACOS_BUILD_NUMBER must be a positive integer, got $app_build"
+}
 
-plutil -lint "$APP/Contents/Info.plist"
-plutil -lint "$EXT/Contents/Info.plist"
+resolve_toolchain() {
+  developer_dir="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+  if [[ ! -d "$developer_dir" ]]; then
+    developer_dir="$(/usr/bin/xcode-select -p)"
+  fi
+  swiftc_binary="$(DEVELOPER_DIR="$developer_dir" "$xcrun_binary" --sdk macosx --find swiftc)"
+  macos_sdk="$(DEVELOPER_DIR="$developer_dir" "$xcrun_binary" --sdk macosx --show-sdk-path)"
+  require_executable "$swiftc_binary"
+  [[ -d "$macos_sdk" ]] || fail "macOS SDK not found: $macos_sdk"
+}
 
-if [ "$NOTARIZE" = "1" ]; then
-    # NetworkExtension is a restricted entitlement: a Developer ID app that
-    # carries it is killed by AMFI (-413 "No matching profile found") on any
-    # clean Mac unless a matching Developer ID provisioning profile is embedded
-    # BEFORE signing. Notarization alone is not sufficient. See ADR
-    # 0086-macos-provisioning-profiles.
-    PROFILE_DIR="${PROFILE_DIR:-$REPO_ROOT/.secrets/profiles}"
-    APP_PROFILE="$PROFILE_DIR/com.blinkerlm.agentjail.app.provisionprofile"
-    EXT_PROFILE="$PROFILE_DIR/$EXT_ID.provisionprofile"
-    for p in "$APP_PROFILE" "$EXT_PROFILE"; do
-        [ -f "$p" ] || { echo "error: provisioning profile missing: $p" >&2
-            echo "  regenerate with scripts/asc-make-profiles (needs .secrets/asc.p8 + ASC_* in .env)" >&2
-            exit 1; }
-    done
-    echo "==> Step 4b: embedding Developer ID provisioning profiles"
-    cp "$APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
-    cp "$EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
+validate_work_root() {
+  [[ "$1" == "$build_root"/.macos-product.* ]] || fail "unsafe work root: $1"
+  [[ -d "$1" && ! -L "$1" ]] || fail "work root is not a real directory: $1"
+}
 
-    echo "==> Step 5: signing inner-to-outer with Developer ID ($IDENTITY)"
-    codesign --force --timestamp --options runtime \
-        --entitlements macos/AgentjailExtension/AgentjailExtension.entitlements \
-        --sign "$IDENTITY" \
-        "$EXT"
-
-    codesign --force --timestamp --options runtime \
-        --entitlements macos/AgentjailTunnel/AgentjailTunnel.entitlements \
-        --sign "$IDENTITY" \
-        "$APP"
-
-    echo "==> Step 6: notarizing (set NOTARIZE=0 to skip)"
-    CREDENTIAL_FILE="${CREDENTIAL_FILE:-$REPO_ROOT/.env}"
-    ASC_KEY="${ASC_KEY:-$REPO_ROOT/.secrets/asc.p8}"
-    if [ -f "$CREDENTIAL_FILE" ]; then
-        # shellcheck disable=SC1090
-        source "$CREDENTIAL_FILE"
+cleanup() {
+  local status=$?
+  if [[ ${completed:-0} -eq 1 ]]; then
+    validate_work_root "$work_root"
+    "$rm_binary" -rf -- "$work_root"
+    if [[ -n "${approval_root:-}" && -d "$approval_root" && "$approval_root" == /private/tmp/agentjail-macos-approval-unified.* ]]; then
+      "$rm_binary" -rf -- "$approval_root"
     fi
-    : "${TEAM_ID:?TEAM_ID not set - add it to .env or export it, or run with NOTARIZE=0}"
+  else
+    printf 'build-macos-app: preserved failed work at %s\n' "${work_root:-not-created}" >&2
+    [[ -z "${approval_root:-}" ]] || printf 'build-macos-app: preserved approval build at %s\n' "$approval_root" >&2
+  fi
+  exit "$status"
+}
 
-    ZIP="$BUILD/AgentjailTunnel.zip"
-    rm -f "$ZIP"
-    ditto -c -k --keepParent "$APP" "$ZIP"
+go_arch_for() {
+  case "$1" in
+    arm64) printf 'arm64\n' ;;
+    x86_64) printf 'amd64\n' ;;
+    *) fail "unsupported macOS architecture: $1" ;;
+  esac
+}
 
-    if [ -f "$ASC_KEY" ] && [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ]; then
-        NOTARY_AUTH=(--key "$ASC_KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
-        echo "    auth: App Store Connect API key"
-    else
-        : "${APPLE_ID:?APPLE_ID not set - add it to .env or export it, or run with NOTARIZE=0}"
-        : "${APP_PASSWORD:?APP_PASSWORD not set - add it to .env or export it, or run with NOTARIZE=0}"
-        NOTARY_AUTH=(--apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD")
-        echo "    auth: Apple ID app-specific password"
-    fi
+build_extension_arch() {
+  local swift_arch=$1
+  local go_arch
+  local arch_root="$work_root/extension-$swift_arch"
+  go_arch="$(go_arch_for "$swift_arch")"
+  "$mkdir_binary" -p -- "$arch_root"
 
-    submitted=0
-    for delay in 0 5 15 30; do
-        [ "$delay" -eq 0 ] || sleep "$delay"
-        submit_output="$(xcrun notarytool submit "$ZIP" "${NOTARY_AUTH[@]}" --wait 2>&1)" && submit_rc=0 || submit_rc=$?
-        printf '%s\n' "$submit_output"
-        if [ "$submit_rc" -eq 0 ]; then
-            submitted=1
-            break
-        fi
-        if grep -qE 'Submission ID received|^[[:space:]]*id:' <<<"$submit_output"; then
-            echo "error: notarization created a submission but did not succeed; inspect that submission before retrying" >&2
-            exit "$submit_rc"
-        fi
-        echo "warning: notary service failed before creating a submission; bounded retry follows" >&2
-    done
-    [ "$submitted" -eq 1 ] || { echo "error: notary service did not accept the archive" >&2; exit 1; }
+  env \
+    MACOSX_DEPLOYMENT_TARGET="$minimum_system_version" \
+    CGO_ENABLED=1 GOOS=darwin GOARCH="$go_arch" \
+    CGO_CFLAGS="-arch $swift_arch -mmacosx-version-min=$minimum_system_version" \
+    CGO_LDFLAGS="-arch $swift_arch -mmacosx-version-min=$minimum_system_version" \
+    go build -trimpath -buildmode=c-archive \
+      -o "$arch_root/libagentjail_tunnel.a" \
+      "$repo_root/internal/tunnel/cbridge/"
 
-    unset APP_PASSWORD ASC_KEY_ID ASC_ISSUER_ID NOTARY_AUTH
+  env \
+    DEVELOPER_DIR="$developer_dir" \
+    SDKROOT="$macos_sdk" \
+    TMPDIR="$work_root/tmp-$swift_arch" \
+    CLANG_MODULE_CACHE_PATH="$work_root/clang-modules-$swift_arch" \
+    SWIFT_MODULE_CACHE_PATH="$work_root/swift-modules-$swift_arch" \
+    "$swiftc_binary" \
+      -sdk "$macos_sdk" \
+      -target "$swift_arch-apple-macosx$minimum_system_version" \
+      -O -whole-module-optimization \
+      -module-name AgentjailExtension \
+      -import-objc-header "$repo_root/macos/AgentjailExtension/BridgingHeader.h" \
+      -I "$arch_root" -L "$arch_root" -lagentjail_tunnel -lbsm \
+      -framework NetworkExtension -framework Foundation \
+      -o "$arch_root/$extension_id" \
+      "$repo_root/macos/AgentjailExtension/main.swift" \
+      "$repo_root/macos/AgentjailExtension/Provider.swift"
+}
 
-    xcrun stapler staple "$APP"
+build_cli_arch() {
+  local swift_arch=$1
+  local go_arch
+  local arch_root="$work_root/cli-$swift_arch"
+  go_arch="$(go_arch_for "$swift_arch")"
+  "$mkdir_binary" -p -- "$arch_root"
+  for binary in agentjail agentjail-hook; do
+    env CGO_ENABLED=0 GOOS=darwin GOARCH="$go_arch" \
+      go build -trimpath \
+        -ldflags "-s -w -X github.com/LuD1161/agentjail/internal/buildinfo.Version=v$app_version" \
+        -o "$arch_root/$binary" "$repo_root/cmd/$binary"
+  done
+}
 
-    echo "==> assessing Gatekeeper policy"
-    spctl -a -vv -t exec "$APP" || true
-else
-    echo "==> Step 5: ad-hoc signing (NOTARIZE=0, local-only, no Developer ID)"
-    codesign -s - --force --options runtime \
-        --entitlements macos/AgentjailExtension/AgentjailExtension.entitlements \
-        "$EXT"
+build_app_icon() {
+  local source=$1
+  local destination=$2
+  local iconset="$work_root/AgentJail.iconset"
+  "$mkdir_binary" -p -- "$iconset"
+  local name pixels
+  while read -r name pixels; do
+    "$sips_binary" -z "$pixels" "$pixels" "$source" --out "$iconset/$name.png" >/dev/null
+  done <<'SIZES'
+icon_16x16 16
+icon_16x16@2x 32
+icon_32x32 32
+icon_32x32@2x 64
+icon_128x128 128
+icon_128x128@2x 256
+icon_256x256 256
+icon_256x256@2x 512
+icon_512x512 512
+icon_512x512@2x 1024
+SIZES
+  "$iconutil_binary" -c icns "$iconset" -o "$destination"
+}
 
-    codesign -s - --force --options runtime \
-        --entitlements macos/AgentjailTunnel/AgentjailTunnel.entitlements \
-        "$APP"
+verify_profile() {
+  local profile=$1
+  local expected_id=$2
+  local decoded="$work_root/$(basename "$profile").plist"
+  "$security_binary" cms -D -i "$profile" > "$decoded"
+  require_plist_value "$decoded" "TeamIdentifier:0" "$team_id"
+  require_plist_value "$decoded" "ProvisionsAllDevices" "true"
+  require_plist_value "$decoded" "Entitlements:application-identifier" "$team_id.$expected_id"
+  require_plist_value "$decoded" "Entitlements:com.apple.developer.networking.networkextension:0" "app-proxy-provider-systemextension"
+}
 
-    echo "==> Step 6: notarization skipped (NOTARIZE=0)"
+sign_bundle() {
+  local app=$1
+  local extension="$app/Contents/Library/SystemExtensions/$extension_id.systemextension"
+  local cli_root="$app/Contents/Resources/bin"
+  local sign_args=()
+
+  case "$signing_mode" in
+    adhoc)
+      [[ "$notarize" == "0" ]] || fail "NOTARIZE=1 requires SIGNING_MODE=developer-id"
+      sign_args=(--sign - --timestamp=none)
+      ;;
+    developer-id)
+      sign_args=(--sign "$identity" --timestamp)
+      local profile_dir="${PROFILE_DIR:-$repo_root/.secrets/profiles}"
+      local app_profile="$profile_dir/$app_id.provisionprofile"
+      local extension_profile="$profile_dir/$extension_id.provisionprofile"
+      require_file "$app_profile"
+      require_file "$extension_profile"
+      verify_profile "$app_profile" "$app_id"
+      verify_profile "$extension_profile" "$extension_id"
+      "$cp_binary" "$app_profile" "$app/Contents/embedded.provisionprofile"
+      "$cp_binary" "$extension_profile" "$extension/Contents/embedded.provisionprofile"
+      ;;
+    *) fail "SIGNING_MODE must be adhoc or developer-id" ;;
+  esac
+
+  for binary in "$cli_root/agentjail" "$cli_root/agentjail-hook"; do
+    "$codesign_binary" --force --options runtime "${sign_args[@]}" "$binary"
+  done
+  "$codesign_binary" --force --options runtime \
+    --entitlements "$repo_root/macos/AgentjailExtension/AgentjailExtension.entitlements" \
+    "${sign_args[@]}" "$extension"
+  "$codesign_binary" --force --options runtime \
+    --entitlements "$repo_root/macos/AgentJail/AgentJail.entitlements" \
+    "${sign_args[@]}" "$app"
+}
+
+verify_bundle() {
+  local app=$1
+  local extension="$app/Contents/Library/SystemExtensions/$extension_id.systemextension"
+  "$plutil_binary" -lint "$app/Contents/Info.plist" "$extension/Contents/Info.plist" >/dev/null
+  require_plist_value "$app/Contents/Info.plist" CFBundleIdentifier "$app_id"
+  require_plist_value "$app/Contents/Info.plist" CFBundleExecutable AgentJail
+  require_plist_value "$extension/Contents/Info.plist" CFBundleIdentifier "$extension_id"
+  require_plist_value "$app/Contents/Info.plist" CFBundleShortVersionString "$app_version"
+  require_plist_value "$extension/Contents/Info.plist" CFBundleShortVersionString "$app_version"
+  require_plist_value "$app/Contents/Info.plist" CFBundleVersion "$app_build"
+  require_plist_value "$extension/Contents/Info.plist" CFBundleVersion "$app_build"
+
+  for binary in \
+    "$app/Contents/MacOS/AgentJail" \
+    "$extension/Contents/MacOS/$extension_id" \
+    "$app/Contents/Resources/bin/agentjail" \
+    "$app/Contents/Resources/bin/agentjail-hook"; do
+    local architectures
+    architectures="$("$lipo_binary" -archs "$binary")"
+    [[ "$architectures" == "arm64 x86_64" || "$architectures" == "x86_64 arm64" ]] \
+      || fail "expected universal binary, got '$architectures': $binary"
+    "$codesign_binary" --verify --strict --verbose=2 "$binary"
+  done
+  "$codesign_binary" --verify --strict --verbose=2 "$extension"
+  "$codesign_binary" --verify --strict --verbose=2 "$app"
+  "$codesign_binary" --verify --deep --strict --verbose=2 "$app"
+}
+
+notarize_bundle() {
+  local app=$1
+  local archive="$work_root/AgentJail-notarization.zip"
+  local auth=()
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    auth=(--keychain-profile "$NOTARY_PROFILE")
+  elif [[ -n "${ASC_KEY:-}" && -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" ]]; then
+    require_file "$ASC_KEY"
+    auth=(--key "$ASC_KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+  else
+    fail "NOTARIZE=1 requires NOTARY_PROFILE or ASC_KEY + ASC_KEY_ID + ASC_ISSUER_ID"
+  fi
+  "$ditto_binary" -c -k --keepParent "$app" "$archive"
+  "$xcrun_binary" notarytool submit "$archive" "${auth[@]}" --wait
+  "$xcrun_binary" stapler staple "$app"
+  "$xcrun_binary" stapler validate "$app"
+  /usr/sbin/spctl -a -vvv -t exec "$app"
+}
+
+for executable in \
+  "$codesign_binary" "$lipo_binary" "$plutil_binary" "$plist_buddy" \
+  "$security_binary" "$xcrun_binary" "$ditto_binary" "$mkdir_binary" \
+  "$iconutil_binary" "$sips_binary" "$cp_binary" "$rm_binary" "$mv_binary"; do
+  require_executable "$executable"
+done
+require_file "$repo_root/macos/AgentJail/Info.plist"
+require_file "$repo_root/macos/AgentJail/AgentJail.entitlements"
+require_file "$repo_root/macos/AgentjailExtension/Info.plist"
+require_file "$repo_root/macos/AgentjailExtension/AgentjailExtension.entitlements"
+require_file "$repo_root/assets/social/avatar-jail-1024.png"
+
+if [[ "${1:-}" == "--verify-only" ]]; then
+  (( $# == 2 )) || fail "usage: $0 --verify-only /path/to/AgentJail.app"
+  app_version="$(plist_value "$2/Contents/Info.plist" CFBundleShortVersionString)" \
+    || fail "could not read app version from $2"
+  app_build="$(plist_value "$2/Contents/Info.plist" CFBundleVersion)" \
+    || fail "could not read app build from $2"
+  verify_bundle "$2"
+  printf 'build-macos-app: verified %s\n' "$2"
+  exit 0
+fi
+(( $# == 0 )) || fail "usage: $0 [--verify-only /path/to/AgentJail.app]"
+
+"$mkdir_binary" -p -- "$build_root"
+[[ ! -L "$build_root" ]] || fail "build root must not be a symlink"
+work_root="$(mktemp -d "$build_root/.macos-product.XXXXXXXX")"
+approval_root="$(mktemp -d /private/tmp/agentjail-macos-approval-unified.XXXXXXXX)"
+completed=0
+trap cleanup EXIT
+resolve_version
+resolve_toolchain
+printf 'build-macos-app: version=%s build=%s signing=%s\n' "$app_version" "$app_build" "$signing_mode"
+
+APPROVAL_ARTIFACT_ROOT="$approval_root" "$repo_root/scripts/build-macos-approval-app.sh"
+for architecture in arm64 x86_64; do
+  "$mkdir_binary" -p -- "$work_root/tmp-$architecture"
+  build_extension_arch "$architecture"
+  build_cli_arch "$architecture"
+done
+
+stage_app="$work_root/AgentJail.app"
+stage_extension="$stage_app/Contents/Library/SystemExtensions/$extension_id.systemextension"
+"$mkdir_binary" -p -- \
+  "$stage_app/Contents/MacOS" \
+  "$stage_app/Contents/Resources/bin" \
+  "$stage_extension/Contents/MacOS"
+"$cp_binary" "$repo_root/macos/AgentJail/Info.plist" "$stage_app/Contents/Info.plist"
+build_app_icon "$repo_root/assets/social/avatar-jail-1024.png" "$stage_app/Contents/Resources/AgentJail.icns"
+"$cp_binary" "$repo_root/macos/AgentjailExtension/Info.plist" "$stage_extension/Contents/Info.plist"
+"$cp_binary" "$approval_root/AgentjailApproval.app/Contents/MacOS/AgentjailApproval" "$stage_app/Contents/MacOS/AgentJail"
+"$lipo_binary" -create \
+  "$work_root/extension-arm64/$extension_id" \
+  "$work_root/extension-x86_64/$extension_id" \
+  -output "$stage_extension/Contents/MacOS/$extension_id"
+for binary in agentjail agentjail-hook; do
+  "$lipo_binary" -create \
+    "$work_root/cli-arm64/$binary" "$work_root/cli-x86_64/$binary" \
+    -output "$stage_app/Contents/Resources/bin/$binary"
+done
+for plist in "$stage_app/Contents/Info.plist" "$stage_extension/Contents/Info.plist"; do
+  "$plist_buddy" -c "Set :CFBundleShortVersionString $app_version" "$plist"
+  "$plist_buddy" -c "Set :CFBundleVersion $app_build" "$plist"
+done
+
+sign_bundle "$stage_app"
+verify_bundle "$stage_app"
+if [[ "$notarize" == "1" ]]; then
+  notarize_bundle "$stage_app"
+  verify_bundle "$stage_app"
 fi
 
-echo "==> verifying signature"
-codesign --verify --verbose=2 "$APP" || true
-
-echo "==> done: $APP"
-echo "    Manual next step (needs user approval, not scripted):"
-echo "      $APP/Contents/MacOS/AgentjailTunnel install"
+if [[ -e "$app_path" || -L "$app_path" ]]; then
+  [[ "$app_path" == "$build_root/AgentJail.app" && ! -L "$app_path" ]] || fail "unsafe app output path: $app_path"
+  "$rm_binary" -rf -- "$app_path"
+fi
+"$mv_binary" "$stage_app" "$app_path"
+completed=1
+printf 'build-macos-app: app=%s\n' "$app_path"
+if [[ "$signing_mode" == "adhoc" ]]; then
+  printf 'build-macos-app: local-only ad-hoc build; use SIGNING_MODE=developer-id NOTARIZE=1 for distribution\n'
+fi
