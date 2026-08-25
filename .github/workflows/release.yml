@@ -425,7 +425,7 @@ jobs:
     name: update Homebrew tap
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ !contains(env.RELEASE_VERSION, '-alpha') && !contains(env.RELEASE_VERSION, '-beta') && !contains(env.RELEASE_VERSION, '-rc') }}
+    if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
     steps:
       - uses: actions/download-artifact@v4
         with:
