@@ -8,8 +8,8 @@ submission in this workflow.
 ## Invariants
 
 - Keep the app at `/Applications/AgentJail.app` in the guest.
-- The app ID is `com.blinkerlm.agentjail.app`.
-- The extension ID is `com.blinkerlm.agentjail.app.extension`.
+- The app ID is `com.blinkerlm.agentjail`.
+- The extension ID is `com.blinkerlm.agentjail.extension`.
 - The app and extension use Team ID `Q98Z3744J2`.
 - Embed the matching Developer ID provisioning profile in each bundle before
   signing. Both profiles use `ProvisionsAllDevices=true`; Tart guests do not
@@ -32,13 +32,13 @@ Before building, record only non-secret metadata:
 
 ```sh
 APP=/Applications/AgentJail.app
-EXT="$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension"
+EXT="$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension"
 
 defaults read "$APP/Contents/Info" CFBundleShortVersionString
 defaults read "$APP/Contents/Info" CFBundleVersion
 codesign -dvvvv "$APP" 2>&1 | grep -E '^(Identifier|CDHash|TeamIdentifier|Authority)='
 codesign -dvvvv "$EXT" 2>&1 | grep -E '^(Identifier|CDHash|TeamIdentifier|Authority)='
-systemextensionsctl list | grep -F com.blinkerlm.agentjail.app.extension
+systemextensionsctl list | grep -F com.blinkerlm.agentjail.extension
 ```
 
 Do not assume a repository `build/AgentJail.app` matches the installed and
@@ -88,7 +88,7 @@ Verify before submission:
 
 ```sh
 APP=build/AgentJail.app
-EXT="$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension"
+EXT="$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension"
 
 plutil -lint "$APP/Contents/Info.plist"
 plutil -lint "$EXT/Contents/Info.plist"
@@ -214,7 +214,7 @@ Do not attempt to bypass or automate the approval.
 Verify the new version, not merely any matching line:
 
 ```sh
-systemextensionsctl list | grep -F com.blinkerlm.agentjail.app.extension
+systemextensionsctl list | grep -F com.blinkerlm.agentjail.extension
 ```
 
 Required state for the new version is `[activated enabled]`. The old version may

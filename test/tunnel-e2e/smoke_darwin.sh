@@ -27,7 +27,7 @@ case "${1:-}" in
 esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EXT_ID="com.blinkerlm.agentjail.app.extension"
+EXT_ID="com.blinkerlm.agentjail.extension"
 NETWORK_DB="$HOME/.agentjail/network.db"
 RESULT_PATH="${TUNNEL_SMOKE_RESULT:-}"
 

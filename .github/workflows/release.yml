@@ -197,9 +197,9 @@ jobs:
             -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           mkdir -p "$RUNNER_TEMP/profiles"
           printf '%s' "$APPLE_APP_PROVISION_PROFILE" | base64 -d \
-            > "$RUNNER_TEMP/profiles/com.blinkerlm.agentjail.app.provisionprofile"
+            > "$RUNNER_TEMP/profiles/com.blinkerlm.agentjail.provisionprofile"
           printf '%s' "$APPLE_EXTENSION_PROVISION_PROFILE" | base64 -d \
-            > "$RUNNER_TEMP/profiles/com.blinkerlm.agentjail.app.extension.provisionprofile"
+            > "$RUNNER_TEMP/profiles/com.blinkerlm.agentjail.extension.provisionprofile"
           rm -f "$RUNNER_TEMP/certificate.p12"
           echo "RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
@@ -280,7 +280,7 @@ jobs:
             "$APP/Contents/MacOS/AgentJail" \
             "$APP/Contents/Resources/bin/agentjail" \
             "$APP/Contents/Resources/bin/agentjail-hook" \
-            "$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension/Contents/MacOS/com.blinkerlm.agentjail.app.extension"; do
+            "$APP/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension/Contents/MacOS/com.blinkerlm.agentjail.extension"; do
             lipo -verify_arch arm64 x86_64 "$binary"
           done
           "$APP/Contents/Resources/bin/agentjail" version

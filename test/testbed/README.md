@@ -392,10 +392,10 @@ The current image was rebuilt and headlessly clone-validated on 2026-08-15:
 
 | Field | Baked value |
 |---|---|
-| App | `com.blinkerlm.agentjail.app`, version `0.0.6` build `6` |
+| App | `com.blinkerlm.agentjail`, version set by the release build |
 | App CDHash | `c2dc61054cd2dfb8f06a3b6f399c805d0ca5e683` |
 | App executable SHA-256 | `f8c8593571660acb46045756c5520dac12b7d786db979f661239e5a3b7007f4c` |
-| Extension | `com.blinkerlm.agentjail.app.extension`, version `0.0.6` build `6` |
+| Extension | `com.blinkerlm.agentjail.extension`, version set by the release build |
 | Extension CDHash | `b54dbeece72d5b83cfd6f4364f1b4d4998a25351` |
 | Extension executable SHA-256 | `d57160d10a9b9063930eef73e40305a97757c7adeb6bc948ae83b538c8e9267a` |
 | Signing team | `Q98Z3744J2` |
@@ -421,7 +421,7 @@ skipped because the minimal clone did not have Claude installed.
 ```sh
 systemextensionsctl list
 # Required exact state:
-# com.blinkerlm.agentjail.app.extension ... [activated enabled]
+# com.blinkerlm.agentjail.extension ... [activated enabled]
 test/tunnel-e2e/smoke_darwin.sh --strict
 ```
 

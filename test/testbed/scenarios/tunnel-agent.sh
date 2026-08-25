@@ -36,7 +36,7 @@ command -v codex >/dev/null 2>&1 && scn_ok "Codex CLI installed" || { scn_fail "
 [ -x "$CODEX_SHIM" ] && scn_ok "Codex PATH shim installed" || { scn_fail "Codex PATH shim installed"; scn_finish; exit; }
 command -v sqlite3 >/dev/null 2>&1 || { scn_fail "sqlite3 installed"; scn_finish; exit; }
 if [ "$(uname -s)" = "Darwin" ]; then
-    EXT_ID="com.blinkerlm.agentjail.app.extension"
+    EXT_ID="com.blinkerlm.agentjail.extension"
     EXT_LINES="$(systemextensionsctl list 2>&1 | grep -F "$EXT_ID" || true)"
     EXT_LINE="$(grep -i '\[activated enabled\]' <<<"$EXT_LINES" | tail -1)"
     if [ -n "$EXT_LINE" ]; then

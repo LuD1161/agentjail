@@ -24,8 +24,8 @@ before activation. Those security boundaries do not require separate top-level
 applications.
 
 The existing individual Apple Developer membership has working Developer ID
-profiles for `com.blinkerlm.agentjail.app` and
-`com.blinkerlm.agentjail.app.extension`. Both profiles provision all devices. A
+profiles for `com.blinkerlm.agentjail` and
+`com.blinkerlm.agentjail.extension`. Both profiles provision all devices. A
 clean-machine test proved that a Developer ID signed, notarized, and stapled build
 can be installed outside the Mac App Store and activated after the normal macOS
 approval flow.
@@ -33,10 +33,10 @@ approval flow.
 ## Decision
 
 Ship one customer-facing `/Applications/AgentJail.app` on macOS. The bundle owns
-the existing containing-app identifier `com.blinkerlm.agentjail.app` and contains:
+the provisioned containing-app identifier `com.blinkerlm.agentjail` and contains:
 
 - the SwiftUI menu-bar, setup, status, and review application;
-- `Contents/Library/SystemExtensions/com.blinkerlm.agentjail.app.extension.systemextension`;
+- `Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension`;
 - universal `agentjail` and `agentjail-hook` payloads under
   `Contents/Resources/bin/`.
 
@@ -81,6 +81,9 @@ security/audit evidence remains distinct from anonymous product telemetry.
 - The old `AgentjailTunnel.app` and approval-only DMG are migration inputs, not
   public products. Release docs, scripts, tests, and golden images must converge on
   `AgentJail.app`.
+- Prototype builds used the unprovisioned `.app` bundle-ID segment. The first
+  private release moves to the Developer ID profile identities and therefore
+  requires one fresh, explicit Network Extension approval on upgraded test Macs.
 - Public macOS distribution requires Developer ID signing, matching restricted
   entitlement profiles, notarization, stapling, and clean-machine verification.
   Ad-hoc builds remain explicitly local-only.

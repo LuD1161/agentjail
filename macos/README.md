@@ -18,9 +18,9 @@ AgentJail.app/
     │       ├── agentjail
     │       └── agentjail-hook
     └── Library/SystemExtensions/
-        └── com.blinkerlm.agentjail.app.extension.systemextension/
+        └── com.blinkerlm.agentjail.extension.systemextension/
             └── Contents/MacOS/
-                └── com.blinkerlm.agentjail.app.extension
+                └── com.blinkerlm.agentjail.extension
 ```
 
 The SwiftUI executable owns setup, status, review presentation, and the fixed
@@ -77,8 +77,8 @@ make macos-app
 
 The profile directory must contain:
 
-- `com.blinkerlm.agentjail.app.provisionprofile`
-- `com.blinkerlm.agentjail.app.extension.provisionprofile`
+- `com.blinkerlm.agentjail.provisionprofile`
+- `com.blinkerlm.agentjail.extension.provisionprofile`
 
 The build refuses profiles whose Team ID, application identifier,
 `ProvisionsAllDevices`, or Network Extension entitlement does not match the

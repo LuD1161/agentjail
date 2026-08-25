@@ -32,8 +32,8 @@ import Network
 import NetworkExtension
 import os.log
 
-private let log = OSLog(subsystem: "com.blinkerlm.agentjail.app.extension", category: "proxy")
-private let parentBundleID = "com.blinkerlm.agentjail.app"
+private let log = OSLog(subsystem: "com.blinkerlm.agentjail.extension", category: "proxy")
+private let parentBundleID = "com.blinkerlm.agentjail"
 private let providerStateLock = NSLock()
 private var activeSessionGeneration = ""
 private var activeSessionReady = false

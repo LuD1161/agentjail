@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>AgentJail.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.blinkerlm.agentjail.app</string>
+	<string>com.blinkerlm.agentjail</string>
 	<key>CFBundleName</key>
 	<string>AgentJail</string>
 	<key>CFBundlePackageType</key>

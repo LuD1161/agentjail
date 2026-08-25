@@ -2,7 +2,7 @@
 // system extension and manage its transparent-proxy configuration.
 // configuration into NETransparentProxyManager.  The extension does the
 // per-process filtering itself by walking each flow's audit-token chain
-// back to `com.blinkerlm.agentjail.app`, so we don't need NEAppRule /
+// back to `com.blinkerlm.agentjail`, so we don't need NEAppRule /
 // matchTools here (which on macOS require an MDM-pushed appmapping
 // payload).
 //
@@ -18,8 +18,8 @@ import Foundation
 @preconcurrency import NetworkExtension
 @preconcurrency import SystemExtensions
 
-let extBundleID = "com.blinkerlm.agentjail.app.extension"
-let parentBundleID = "com.blinkerlm.agentjail.app"
+let extBundleID = "com.blinkerlm.agentjail.extension"
+let parentBundleID = "com.blinkerlm.agentjail"
 let proxyProfileName = "agentjail"
 
 // Routine setup progress is noise during a normal `agentjail run`, so

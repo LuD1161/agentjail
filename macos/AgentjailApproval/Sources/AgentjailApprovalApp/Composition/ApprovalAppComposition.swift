@@ -36,12 +36,12 @@ final class ApprovalAppComposition: ObservableObject {
         notificationDelegateInstaller: any ApprovalNotificationDelegateInstalling,
         loginService: any ApprovalLoginItemServicing,
         application: any ApprovalApplicationControlling,
-        setupCoordinator: AgentJailSetupCoordinator = AgentJailSetupCoordinator(),
+        setupCoordinator: AgentJailSetupCoordinator? = nil,
         clock: any ApprovalClock = SystemApprovalClock(),
         sleeper: any ApprovalSleeping = TaskApprovalSleeper()
     ) {
         self.clock = clock
-        self.setupCoordinator = setupCoordinator
+        self.setupCoordinator = setupCoordinator ?? AgentJailSetupCoordinator()
         self.store = ApprovalStore(client: client, clock: clock, sleeper: sleeper)
         self.notificationCoordinator = ApprovalNotificationCoordinator(
             center: notificationCenter,

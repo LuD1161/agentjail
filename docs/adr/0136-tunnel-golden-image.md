@@ -26,14 +26,15 @@ so no CA should persist in a golden disk.
 ## Decision
 
 Maintain one stopped Tart image, `golden-macos-mitm`, as the macOS testbed base.
-It contains the approved `com.blinkerlm.agentjail.app.extension` and its exact
+It contains the approved `com.blinkerlm.agentjail.extension` and its exact
 containing app at `/Applications/AgentJail.app`; it contains no MITM CA. The
 artifact identity changed under ADR 0141-unified-macos-app, so the golden must be
 rebuilt before it can provide release evidence for the unified application.
 The installed extension remains inert until AgentJail starts a tunnel session,
 so non-tunnel workflows may clone the same disk without enabling interception.
 
-The image rebuilt and clone-validated on 2026-08-15 uses app version 0.0.6 build 6,
+The legacy image rebuilt and clone-validated on 2026-08-15 uses app version
+0.0.6 build 6,
 signed by Team `Q98Z3744J2`; app bundle ID
 `com.blinkerlm.agentjail.app`, app CDHash
 `c2dc61054cd2dfb8f06a3b6f399c805d0ca5e683`, extension bundle ID
@@ -43,7 +44,9 @@ notarized, stapled, and accepted by Gatekeeper. Its embedded Developer ID
 profiles have `ProvisionsAllDevices=true`, so the Tart hardware identifier does not
 need Apple Developer device registration. The signed app and extension entitlement
 is `app-proxy-provider-systemextension` and the app carries the system-extension
-install entitlement.
+install entitlement. Those `.app` prototype identifiers do not match the
+distribution profiles selected by ADR 0141-unified-macos-app, so this image is
+not release evidence and must be rebuilt with the provisioned identities.
 
 All Tart workflows select `golden-macos-mitm`. A strict tunnel smoke run distinguishes an
 activated extension, a missing or inactive extension, executed scenarios, and

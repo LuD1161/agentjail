@@ -6,7 +6,7 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly build_root="$repo_root/build"
 readonly app_path="$build_root/AgentJail.app"
-readonly app_id="com.blinkerlm.agentjail.app"
+readonly app_id="com.blinkerlm.agentjail"
 readonly extension_id="$app_id.extension"
 readonly team_id="${TEAM_ID:-Q98Z3744J2}"
 readonly minimum_system_version="13.0"
@@ -19,6 +19,7 @@ readonly lipo_binary="/usr/bin/lipo"
 readonly plutil_binary="/usr/bin/plutil"
 readonly plist_buddy="/usr/libexec/PlistBuddy"
 readonly security_binary="/usr/bin/security"
+readonly date_binary="/bin/date"
 readonly xcrun_binary="/usr/bin/xcrun"
 readonly ditto_binary="/usr/bin/ditto"
 readonly iconutil_binary="/usr/bin/iconutil"
@@ -49,6 +50,16 @@ require_plist_value() {
   local actual
   actual="$(plist_value "$1" "$2")" || fail "missing $2 in $1"
   [[ "$actual" == "$3" ]] || fail "$2 must be $3 in $1, got $actual"
+}
+
+require_plist_array_value() {
+  local values value
+  values="$(plist_value "$1" "$2")" || fail "missing $2 in $1"
+  while IFS= read -r value; do
+    value="${value#"${value%%[![:space:]]*}"}"
+    [[ "$value" == "$3" ]] && return
+  done <<< "$values"
+  fail "$2 must contain $3 in $1"
 }
 
 resolve_version() {
@@ -182,11 +193,18 @@ verify_profile() {
   local profile=$1
   local expected_id=$2
   local decoded="$work_root/$(basename "$profile").plist"
+  local expiration expiration_epoch current_epoch
   "$security_binary" cms -D -i "$profile" > "$decoded"
   require_plist_value "$decoded" "TeamIdentifier:0" "$team_id"
   require_plist_value "$decoded" "ProvisionsAllDevices" "true"
-  require_plist_value "$decoded" "Entitlements:application-identifier" "$team_id.$expected_id"
-  require_plist_value "$decoded" "Entitlements:com.apple.developer.networking.networkextension:0" "app-proxy-provider-systemextension"
+  require_plist_value "$decoded" "Entitlements:com.apple.application-identifier" "$team_id.$expected_id"
+  require_plist_array_value "$decoded" "Entitlements:com.apple.developer.networking.networkextension" "app-proxy-provider-systemextension"
+  expiration="$("$plutil_binary" -extract ExpirationDate raw "$decoded")" \
+    || fail "missing ExpirationDate in $decoded"
+  expiration_epoch="$("$date_binary" -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expiration" '+%s')" \
+    || fail "invalid ExpirationDate in $decoded"
+  current_epoch="$("$date_binary" -u '+%s')"
+  (( expiration_epoch > current_epoch )) || fail "provisioning profile expired: $profile"
 }
 
 sign_bundle() {
