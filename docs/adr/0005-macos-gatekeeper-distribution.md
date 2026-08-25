@@ -1,6 +1,8 @@
 # 0005 — macOS distribution: rely on quarantine-free transport, defer notarization
 
-Status: Accepted
+Status: Superseded by [ADR 0141-unified-macos-app](0141-unified-macos-app.md).
+Public macOS application distribution now requires Developer ID signing,
+notarization, stapling, and Gatekeeper verification.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR 0133-macos-menu-review: macOS menu review companion
 
-- **Status:** Accepted
+- **Status:** Accepted; application-boundary decision superseded by [ADR 0141-unified-macos-app](0141-unified-macos-app.md)
 - **Date:** 2026-08-15
 - **Related:** ADR 0047-daemon-grant-server, ADR 0067-control-plane-token-auth,
   ADR 0069-daemon-control-token, ADR 0118-codex-approval-broker,
