@@ -100,6 +100,19 @@ jobs:
       - name: hook smoke
         run: bash cmd/agentjail-hook/test/smoke.sh
 
+  macos-app:
+    name: macOS native app
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: native app tests
+        run: ./scripts/test-macos-approval.sh
+
+      - name: terminal installer tests
+        run: make install-macos-app-test
+
   e2e:
     name: e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -8,7 +8,9 @@
 #   AGENTJAIL_VERSION     — pin to a specific tag (default: latest)
 #   AGENTJAIL_HOME        — installation root (default: $HOME/.agentjail)
 #   AGENTJAIL_DRY_RUN     — set to 1 to skip actual install; verify download+checksum only
-#   LOCAL_TARBALL          — path to a local tarball; skips network fetch (for testing)
+#   AGENTJAIL_NO_LAUNCH_APP — set to 1 to install macOS app without launching it
+#   LOCAL_TARBALL         — local CLI tarball; skips network fetch (for testing)
+#   LOCAL_MACOS_DMG       — local unified app DMG; skips network fetch (for testing)
 #
 # POSIX sh — no bash-isms; passes shellcheck.
 set -eu
@@ -33,6 +35,15 @@ case "$OS" in
     darwin|linux) : ;;
     *) echo "agentjail installer: unsupported OS: $OS" >&2; exit 2 ;;
 esac
+
+if [ -n "${LOCAL_TARBALL:-}" ] && [ -n "${LOCAL_MACOS_DMG:-}" ]; then
+    echo "agentjail installer: set only one of LOCAL_TARBALL or LOCAL_MACOS_DMG." >&2
+    exit 2
+fi
+if [ "$OS" != "darwin" ] && [ -n "${LOCAL_MACOS_DMG:-}" ]; then
+    echo "agentjail installer: LOCAL_MACOS_DMG is supported only on macOS." >&2
+    exit 2
+fi
 
 PLATFORM="${OS}-${ARCH}"
 printf '\n📦  agentjail installer  ·  %s\n\n' "${PLATFORM}"
@@ -115,7 +126,7 @@ spin() {
 
 # --- Resolve latest version if needed ---
 
-if [ "${LOCAL_TARBALL:-}" = "" ] && [ "$VERSION" = "latest" ]; then
+if [ "${LOCAL_TARBALL:-}" = "" ] && [ "${LOCAL_MACOS_DMG:-}" = "" ] && [ "$VERSION" = "latest" ]; then
     echo "    resolving latest release…"
     LATEST_JSON=$(curl -fsSL "https://releases.agentjail.io/v1/latest")
     VERSION=$(printf '%s' "$LATEST_JSON" \
@@ -162,12 +173,50 @@ fi
 # --- Set up temp dir with cleanup trap ---
 
 TMP=$(mktemp -d)
-# shellcheck disable=SC2064
-trap "rm -rf '$TMP'" EXIT
+MOUNT_POINT=""
+STAGED_APP=""
+BACKUP_APP=""
+FINAL_APP=""
+APP_REPLACEMENT_STARTED=0
+
+cleanup() {
+    status=$?
+    if [ -n "$MOUNT_POINT" ]; then
+        hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+    fi
+    if [ "$status" -ne 0 ] && [ "$APP_REPLACEMENT_STARTED" = "1" ]; then
+        if [ -d "$FINAL_APP" ] && [ ! -L "$FINAL_APP" ]; then
+            STAGED_APP="${FINAL_APP}.failed.$$"
+            mv "$FINAL_APP" "$STAGED_APP" >/dev/null 2>&1 || STAGED_APP=""
+        fi
+        if [ -d "$BACKUP_APP" ] && [ ! -e "$FINAL_APP" ]; then
+            mv "$BACKUP_APP" "$FINAL_APP" >/dev/null 2>&1 || true
+        fi
+    fi
+    if [ -n "$STAGED_APP" ] && [ -d "$STAGED_APP" ] && [ ! -L "$STAGED_APP" ]; then
+        rm -rf -- "$STAGED_APP"
+    fi
+    rm -rf -- "$TMP"
+    exit "$status"
+}
+trap cleanup EXIT
 
 TARBALL="agentjail-${VERSION}-${PLATFORM}.tar.gz"
+ARTIFACT="$TARBALL"
+INSTALL_MACOS_APP=0
 
-if [ -n "${LOCAL_TARBALL:-}" ]; then
+if [ "$OS" = "darwin" ] && [ -z "${LOCAL_TARBALL:-}" ]; then
+    ARTIFACT="AgentJail.dmg"
+    INSTALL_MACOS_APP=1
+fi
+
+if [ "$INSTALL_MACOS_APP" = "1" ] && [ -n "${LOCAL_MACOS_DMG:-}" ]; then
+    echo "using local macOS app: ${LOCAL_MACOS_DMG}"
+    cp "$LOCAL_MACOS_DMG" "$TMP/$ARTIFACT"
+    (cd "$(dirname "$LOCAL_MACOS_DMG")" && sha256 "$(basename "$LOCAL_MACOS_DMG")") \
+        | sed "s|$(basename "$LOCAL_MACOS_DMG")|$ARTIFACT|" \
+        > "$TMP/SHA256SUMS"
+elif [ -n "${LOCAL_TARBALL:-}" ]; then
     # Testing path: use a local tarball instead of fetching from GitHub.
     echo "using local tarball: ${LOCAL_TARBALL}"
     cp "$LOCAL_TARBALL" "$TMP/$TARBALL"
@@ -179,20 +228,20 @@ if [ -n "${LOCAL_TARBALL:-}" ]; then
 else
     URL_BASE="https://releases.agentjail.io/download/${VERSION}"
 
-    spin "downloading ${TARBALL}" \
-        curl -fsSL -o "$TMP/$TARBALL" "${URL_BASE}/${TARBALL}"
+    spin "downloading ${ARTIFACT}" \
+        curl -fsSL -o "$TMP/$ARTIFACT" "${URL_BASE}/${ARTIFACT}"
     curl -fsSL -o "$TMP/SHA256SUMS" "${URL_BASE}/SHA256SUMS"
 fi
 
 # --- Verify SHA256 ---
 
-EXPECTED=$(grep "  ${TARBALL}$" "$TMP/SHA256SUMS" | awk '{print $1}')
+EXPECTED=$(grep "  ${ARTIFACT}$" "$TMP/SHA256SUMS" | awk '{print $1}')
 if [ -z "$EXPECTED" ]; then
-    echo "agentjail installer: no SHA256 entry for '${TARBALL}' in checksum manifest." >&2
+    echo "agentjail installer: no SHA256 entry for '${ARTIFACT}' in checksum manifest." >&2
     exit 4
 fi
 
-ACTUAL=$(sha256 "$TMP/$TARBALL" | awk '{print $1}')
+ACTUAL=$(sha256 "$TMP/$ARTIFACT" | awk '{print $1}')
 if [ "$ACTUAL" != "$EXPECTED" ]; then
     echo "agentjail installer: SHA256 mismatch!" >&2
     echo "  expected: $EXPECTED" >&2
@@ -201,16 +250,82 @@ if [ "$ACTUAL" != "$EXPECTED" ]; then
 fi
 echo "🔐  checksum verified"
 
-# --- Extract ---
+# --- Verify and stage payload ---
 
-tar -xzf "$TMP/$TARBALL" -C "$TMP"
+PAYLOAD_DIR="$TMP"
+if [ "$INSTALL_MACOS_APP" = "1" ]; then
+    hdiutil verify "$TMP/$ARTIFACT" >/dev/null
+    MOUNT_POINT="$TMP/mount"
+    mkdir -p "$MOUNT_POINT"
+    hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_POINT" "$TMP/$ARTIFACT" >/dev/null
+    SOURCE_APP="$MOUNT_POINT/AgentJail.app"
+    [ -d "$SOURCE_APP" ] || {
+        echo "agentjail installer: AgentJail.app is missing from the DMG." >&2
+        exit 7
+    }
+    [ "$(plutil -extract CFBundleIdentifier raw "$SOURCE_APP/Contents/Info.plist")" = "com.blinkerlm.agentjail" ] || {
+        echo "agentjail installer: unexpected macOS app identity." >&2
+        exit 7
+    }
+    codesign --verify --deep --strict "$SOURCE_APP"
+    spctl -a -t exec "$SOURCE_APP"
+    PAYLOAD_DIR="$SOURCE_APP/Contents/Resources/bin"
+    [ -x "$PAYLOAD_DIR/agentjail" ] && [ -x "$PAYLOAD_DIR/agentjail-hook" ] || {
+        echo "agentjail installer: bundled CLI payload is incomplete." >&2
+        exit 7
+    }
+else
+    tar -xzf "$TMP/$TARBALL" -C "$TMP"
+fi
 
 if [ "$DRY_RUN" = "1" ]; then
-    echo "[dry-run] would install to ${INSTALL_DIR}"
-    echo "[dry-run] extracted files:"
-    ls "$TMP"
+    echo "[dry-run] would install CLI to ${INSTALL_DIR}"
+    if [ "$INSTALL_MACOS_APP" = "1" ]; then
+        echo "[dry-run] would install AgentJail.app to /Applications"
+    fi
+    echo "[dry-run] verified payload:"
+    ls "$PAYLOAD_DIR"
     echo "[dry-run] done — no changes made."
     exit 0
+fi
+
+if [ "$INSTALL_MACOS_APP" = "1" ]; then
+    APPLICATIONS_DIR="/Applications"
+    if [ -n "${AGENTJAIL_TEST_APPLICATIONS_DIR:-}" ]; then
+        [ -n "${LOCAL_MACOS_DMG:-}" ] || {
+            echo "agentjail installer: AGENTJAIL_TEST_APPLICATIONS_DIR requires LOCAL_MACOS_DMG." >&2
+            exit 7
+        }
+        APPLICATIONS_DIR="$AGENTJAIL_TEST_APPLICATIONS_DIR"
+    fi
+    [ -d "$APPLICATIONS_DIR" ] && [ ! -L "$APPLICATIONS_DIR" ] || {
+        echo "agentjail installer: application directory is unavailable: $APPLICATIONS_DIR" >&2
+        exit 7
+    }
+    FINAL_APP="$APPLICATIONS_DIR/AgentJail.app"
+    STAGED_APP="$APPLICATIONS_DIR/.AgentJail.app.install.$$"
+    BACKUP_APP="$APPLICATIONS_DIR/.AgentJail.app.backup.$$"
+    [ ! -e "$STAGED_APP" ] && [ ! -e "$BACKUP_APP" ] || {
+        echo "agentjail installer: temporary application path already exists." >&2
+        exit 7
+    }
+    ditto "$SOURCE_APP" "$STAGED_APP"
+    codesign --verify --deep --strict "$STAGED_APP"
+    spctl -a -t exec "$STAGED_APP"
+    if [ -e "$FINAL_APP" ]; then
+        [ -d "$FINAL_APP" ] && [ ! -L "$FINAL_APP" ] || {
+            echo "agentjail installer: refusing to replace a non-application path: $FINAL_APP" >&2
+            exit 7
+        }
+        mv "$FINAL_APP" "$BACKUP_APP"
+    fi
+    APP_REPLACEMENT_STARTED=1
+    mv "$STAGED_APP" "$FINAL_APP"
+    STAGED_APP=""
+    codesign --verify --deep --strict "$FINAL_APP"
+    spctl -a -t exec "$FINAL_APP"
+    PAYLOAD_DIR="$FINAL_APP/Contents/Resources/bin"
+    echo "✅  installed AgentJail.app  →  ${FINAL_APP}"
 fi
 
 # --- Install binaries ---
@@ -228,7 +343,7 @@ fi
 mkdir -p "$INSTALL_DIR"
 INSTALLED=""
 for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
-    if [ -f "$TMP/$bin" ]; then
+    if [ -f "$PAYLOAD_DIR/$bin" ]; then
         # Install atomically: stage into a temp file in the SAME dir, then
         # rename over the target. A plain `cp` rewrites the existing inode in
         # place — on a re-install macOS still holds a cached code signature
@@ -237,7 +352,7 @@ for bin in agentjail agentjail-hook agentjail-daemon agentjail-shield agentjail-
         # A rename swaps in a fresh inode, so the signature validates cleanly
         # and it is safe even while the old daemon binary is still running.
         tmp_bin="$INSTALL_DIR/.$bin.tmp.$$"
-        cp "$TMP/$bin" "$tmp_bin"
+        cp "$PAYLOAD_DIR/$bin" "$tmp_bin"
         chmod 0755 "$tmp_bin"
         mv -f "$tmp_bin" "$INSTALL_DIR/$bin"
         INSTALLED="${INSTALLED} $bin"
@@ -348,6 +463,18 @@ add_to_path() {
 
 write_env_file
 add_to_path
+
+if [ "$INSTALL_MACOS_APP" = "1" ] && [ "${AGENTJAIL_NO_LAUNCH_APP:-0}" != "1" ]; then
+    open "$FINAL_APP" || echo "⚠️  AgentJail.app was installed but could not be opened automatically." >&2
+fi
+
+if [ "$INSTALL_MACOS_APP" = "1" ]; then
+    if [ -d "$BACKUP_APP" ]; then
+        rm -rf -- "$BACKUP_APP"
+    fi
+    BACKUP_APP=""
+    APP_REPLACEMENT_STARTED=0
+fi
 
 printf '\n🎉  agentjail %s installed — the hook is active now.\n' "${VERSION}"
 printf '    (enforcement uses an absolute path; PATH below is only for the `agentjail` CLI)\n'

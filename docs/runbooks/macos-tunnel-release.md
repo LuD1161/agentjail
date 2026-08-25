@@ -186,6 +186,22 @@ An old notarization ticket does not transfer to a rebuilt executable. A result
 of `source=Unnotarized Developer ID` means do not copy or install that build in
 the golden VM.
 
+Package, notarize, and staple the immutable app in its DMG, then exercise the
+same verification path used by the terminal installer:
+
+```sh
+NOTARY_PROFILE=agentjail-notary NOTARIZE=1 make macos-dmg
+xcrun stapler validate build/AgentJail.dmg
+hdiutil verify build/AgentJail.dmg
+AGENTJAIL_DRY_RUN=1 AGENTJAIL_VERSION=X.Y.Z \
+  LOCAL_MACOS_DMG=build/AgentJail.dmg sh install.sh
+```
+
+The installer must verify the checksum, disk image, app identity, nested code
+signature, and Gatekeeper result before it writes either the app or bundled CLI.
+An upgrade stages and verifies the replacement before moving the existing app;
+a failed post-copy assessment restores the previous app.
+
 ## 6. Replace the app in the GUI golden VM
 
 1. Confirm the sole persistent image is the stopped `golden-macos-mitm` golden.

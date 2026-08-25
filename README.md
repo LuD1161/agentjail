@@ -22,7 +22,9 @@ Catches the accidental foot-gun **before it fires** - no changes to how you use 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
-or 
+On macOS this installs and opens the notarized native app; on Linux it installs
+the CLI. Or use Homebrew:
+
 ```
 brew install LuD1161/tap/agentjail
 ```
@@ -195,15 +197,20 @@ You may genuinely want this service - but only after you've made an explicit dec
 
 ## Install
 
-**macOS (native app):** Download `AgentJail.dmg`, drag `AgentJail.app` to
-Applications, and click **Install AgentJail**. The app explains and verifies the
-CLI, daemon, hooks, and one-time Apple Network Extension approval before it
-reports the machine protected.
+**macOS (native app):** [Download `AgentJail.dmg`](https://github.com/LuD1161/agentjail/releases/latest/download/AgentJail.dmg),
+drag `AgentJail.app` to Applications, and click **Install AgentJail**. The app
+explains and verifies the CLI, daemon, hooks, and one-time Apple Network
+Extension approval before it reports the machine protected.
 
-**Linux, or a CLI-only macOS install:**
+**macOS terminal installer or Linux CLI:**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
+
+On macOS the terminal installer checksum-verifies the same notarized DMG,
+Gatekeeper-assesses it, installs `AgentJail.app` atomically, installs its bundled
+CLI, starts the daemon, wires detected agent hooks, and opens onboarding. Linux
+downloads only the platform CLI tarball.
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 
@@ -434,7 +441,9 @@ done
 
 Requires Go 1.22+.
 
-**macOS Gatekeeper:** the `curl | sh` and `brew` paths are Gatekeeper-clean. If you download a release tarball through a browser: `xattr -d com.apple.quarantine ~/.agentjail/bin/agentjail`
+**macOS Gatekeeper:** the app and DMG are Developer ID signed, notarized, and
+stapled. The terminal installer refuses an app that fails its checksum, code
+signature, or Gatekeeper assessment.
 
 </details>
 

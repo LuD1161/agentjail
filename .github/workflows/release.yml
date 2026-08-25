@@ -259,6 +259,8 @@ jobs:
     needs: macos-app
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: agentjail-macos-app
@@ -285,10 +287,16 @@ jobs:
           done
           "$APP/Contents/Resources/bin/agentjail" version
 
-  # Source-of-truth gate for the "no notarization needed at launch" decision
-  # (docs/adr/0005-macos-gatekeeper-distribution.md). Each darwin artifact is
-  # extracted exactly as the curl|sh / brew transport does (curl + tar — neither
-  # sets com.apple.quarantine) and verify.sh asserts the binary is quarantine-free
+      - name: verify terminal installer against transported DMG
+        env:
+          AGENTJAIL_DRY_RUN: '1'
+          AGENTJAIL_VERSION: ${{ github.ref_name }}
+          LOCAL_MACOS_DMG: ${{ github.workspace }}/dist/AgentJail.dmg
+        run: sh install.sh
+
+  # Source-of-truth gate for the standalone CLI and Homebrew artifacts. Each
+  # darwin tarball is extracted with the non-browser transport (curl + tar,
+  # neither sets com.apple.quarantine), and verify.sh asserts it is quarantine-free
   # AND actually executes. Each arch runs on its NATIVE runner so the execution
   # check is real: macos-14 = arm64 (AMFI-strict), macos-13 = x86_64.
   gatekeeper-verify:

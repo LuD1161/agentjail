@@ -1,4 +1,4 @@
-.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release testbed-harness-test chaos tunnel-lib macos-app macos-approval-app macos-approval-dmg
+.PHONY: help build adr-check dev-install dev-deploy shim vet test test-all opa-test smoke ssh-git-e2e e2e clean ui ui-deps licenses licenses-check sign dist-tarball e2e-release testbed-harness-test install-macos-app-test chaos tunnel-lib macos-app macos-approval-app macos-approval-dmg
 
 BIN ?= bin/agentjail
 
@@ -104,6 +104,9 @@ e2e-release: ## RELEASE GATE: clean VM -> selected real agent -> policy enforcem
 testbed-harness-test: ## deterministic testbed resource admission and lifecycle cleanup tests
 	bash test/testbed/resource-check-test.sh
 	bash test/testbed/reportlib-test.sh
+
+install-macos-app-test: ## deterministic unified macOS curl installer and rollback tests
+	bash test/install-macos-app.sh
 
 # Cadence: run locally before pushing to main, and before a major release. NOT
 # every PR, NOT minor/patch, NOT in CI -- a local gate like e2e-release, not a
