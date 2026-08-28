@@ -1,17 +1,19 @@
-import ServiceManagement
 import SwiftUI
 
 struct AgentJailSetupView: View {
     @ObservedObject private var coordinator: AgentJailSetupCoordinator
+    let onOpenExtensionSettings: () -> Void
     let onOpenSettings: () -> Void
     let onOpenMCPInventory: () -> Void
 
     init(
         coordinator: AgentJailSetupCoordinator,
+        onOpenExtensionSettings: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onOpenMCPInventory: @escaping () -> Void
     ) {
         _coordinator = ObservedObject(wrappedValue: coordinator)
+        self.onOpenExtensionSettings = onOpenExtensionSettings
         self.onOpenSettings = onOpenSettings
         self.onOpenMCPInventory = onOpenMCPInventory
     }
@@ -149,9 +151,7 @@ struct AgentJailSetupView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         case .awaitingApproval:
-            Button("Open Login Items & Extensions") {
-                SMAppService.openSystemSettingsLoginItems()
-            }
+            Button("Open Login Items & Extensions", action: onOpenExtensionSettings)
             .buttonStyle(.borderedProminent)
         case .failed:
             HStack {

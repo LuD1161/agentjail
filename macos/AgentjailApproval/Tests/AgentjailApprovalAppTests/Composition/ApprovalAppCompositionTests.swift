@@ -189,6 +189,46 @@ final class ApprovalAppCompositionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(loginService.statusCount, 3)
     }
 
+    func testReturningFromExtensionSettingsRefreshesAndRestoresSetupOnce() async {
+        let loginService = CompositionLoginService()
+        let application = CompositionApplication()
+        let client = CompositionReviewClient(snapshotResults: [
+            .failure(.daemonUnavailable),
+            .failure(.daemonUnavailable),
+        ])
+        let setupCoordinator = AgentJailSetupCoordinator(
+            runner: CompositionSetupRunner(),
+            inspector: CompositionSetupInspector(
+                AgentJailSetupHealth(appInApplications: true, cliInstalled: true, daemonReachable: true, tunnelProfile: .absent)
+            ),
+            sleeper: CompositionSetupSleeper()
+        )
+        let composition = makeComposition(
+            client: client,
+            notificationCenter: CompositionNotificationCenter(),
+            delegateInstaller: CompositionDelegateInstaller(),
+            loginService: loginService,
+            application: application,
+            setupCoordinator: setupCoordinator
+        )
+        composition.start()
+        await eventually { client.fetchCount == 1 }
+
+        composition.openExtensionApprovalSettings()
+        XCTAssertEqual(loginService.openSettingsCount, 1)
+        XCTAssertEqual(composition.setupRouteGeneration, 0)
+
+        composition.applicationDidBecomeActive()
+        await eventually { composition.setupCoordinator.phase == .readyToInstall }
+        XCTAssertEqual(composition.setupRouteGeneration, 1)
+        XCTAssertEqual(application.activationCount, 1)
+
+        composition.applicationDidBecomeActive()
+        XCTAssertEqual(composition.setupRouteGeneration, 1)
+        XCTAssertEqual(application.activationCount, 1)
+        composition.stop()
+    }
+
     func testTelemetryMutationUsesTypedServiceAndHonorsExternalOverrides() async {
         let telemetryService = CompositionTelemetryService(status: .enabled(.config))
         let composition = makeComposition(
@@ -375,6 +415,7 @@ final class ApprovalAppCompositionTests: XCTestCase {
         delegateInstaller: CompositionDelegateInstaller,
         loginService: CompositionLoginService,
         application: CompositionApplication,
+        setupCoordinator: AgentJailSetupCoordinator? = nil,
         telemetryService: any ApprovalTelemetryServicing = CompositionTelemetryService()
     ) -> ApprovalAppComposition {
         ApprovalAppComposition(
@@ -384,6 +425,7 @@ final class ApprovalAppCompositionTests: XCTestCase {
             notificationDelegateInstaller: delegateInstaller,
             loginService: loginService,
             application: application,
+            setupCoordinator: setupCoordinator,
             telemetryService: telemetryService,
             sleeper: CompositionSleeper()
         )
@@ -597,6 +639,29 @@ private struct CompositionSleeper: ApprovalSleeping {
     func sleep(seconds: Int) async throws {
         try await Task.sleep(nanoseconds: 3_600_000_000_000)
     }
+}
+
+private actor CompositionSetupRunner: AgentJailSetupCommandRunning {
+    func run(
+        _ command: AgentJailSetupCommand,
+        signal: @escaping @Sendable (AgentJailSetupSignal) -> Void
+    ) async -> AgentJailSetupCommandResult {
+        AgentJailSetupCommandResult(launched: false, exitCode: 1)
+    }
+}
+
+private actor CompositionSetupInspector: AgentJailSetupHealthInspecting {
+    private let health: AgentJailSetupHealth
+
+    init(_ health: AgentJailSetupHealth) {
+        self.health = health
+    }
+
+    func inspect() async -> AgentJailSetupHealth { health }
+}
+
+private struct CompositionSetupSleeper: AgentJailSetupSleeping {
+    func pause() async { await Task.yield() }
 }
 
 @MainActor

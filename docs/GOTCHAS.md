@@ -1217,6 +1217,17 @@ failure evidence.
 - **Rule:** when the command root owns error presentation, test both the exit
   result and the user-visible error text at the command boundary.
 
+## 93. External settings need a return route
+
+The macOS setup flow correctly opened Apple's Network Extension settings and
+unit tests proved every coordinator transition, but the app forgot that the
+user had left onboarding. System Settings covered the setup window, and the
+status-bar app gave no automatic route back to the result.
+
+- **Rule:** every handoff to an external settings app must record a one-shot
+  return route that refreshes state and restores the originating window when
+  the app becomes active again. See AGE-295.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

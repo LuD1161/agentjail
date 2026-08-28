@@ -32,6 +32,7 @@ final class ApprovalAppComposition: ObservableObject {
     private var hasStarted = false
     private var hasTerminated = false
     private var openedReviewRouteGeneration: UInt64?
+    private var restoresSetupAfterExternalSettings = false
 
     init(
         client: any ReviewControlling,
@@ -109,6 +110,10 @@ final class ApprovalAppComposition: ObservableObject {
     func applicationDidBecomeActive() {
         guard hasStarted else { return }
         store.applicationDidBecomeActive()
+        guard restoresSetupAfterExternalSettings else { return }
+        restoresSetupAfterExternalSettings = false
+        setupCoordinator.retry()
+        requestSetup()
     }
 
     func menuBarExtraInsertionChanged(_ inserted: Bool) {
@@ -207,6 +212,11 @@ final class ApprovalAppComposition: ObservableObject {
     }
 
     func openLoginItemsSettings() {
+        loginService.openLoginItemsSettings()
+    }
+
+    func openExtensionApprovalSettings() {
+        restoresSetupAfterExternalSettings = true
         loginService.openLoginItemsSettings()
     }
 

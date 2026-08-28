@@ -43,6 +43,7 @@ struct AgentJailApp: App {
         Window("AgentJail", id: ApprovalAppSceneID.setup) {
             AgentJailSetupView(
                 coordinator: applicationDelegate.composition.setupCoordinator,
+                onOpenExtensionSettings: applicationDelegate.composition.openExtensionApprovalSettings,
                 onOpenSettings: applicationDelegate.composition.requestSettings,
                 onOpenMCPInventory: applicationDelegate.composition.requestMCPInventory
             )

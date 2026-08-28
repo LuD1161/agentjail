@@ -11,6 +11,12 @@
   redacted targets, configuration issues, and duplicate names without writing
   config, launching servers, contacting endpoints, or changing policy.
 
+### Fixed
+
+- **macOS setup return path**: returning from Network Extension approval in
+  System Settings refreshes and raises the setup window so the user sees the
+  resulting ready, waiting, or retry state instead of losing onboarding.
+
 ## v1.6.0 - 2026-08-16
 
 ![v1.6.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.6.0-summary.svg)
