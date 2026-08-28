@@ -6,11 +6,13 @@ import Foundation
 final class ApprovalAppComposition: ObservableObject {
     let store: ApprovalStore
     let setupCoordinator: AgentJailSetupCoordinator
+    let mcpInventoryStore: MCPInventoryStore
 
     @Published private(set) var reviewRoute: ApprovalNotificationReviewRoute?
     @Published private(set) var focusRequest: ReviewFocusRequest?
     @Published private(set) var settingsRouteGeneration: UInt64 = 0
     @Published private(set) var setupRouteGeneration: UInt64 = 0
+    @Published private(set) var mcpInventoryRouteGeneration: UInt64 = 0
     @Published private(set) var notificationAuthorization: ApprovalNotificationAuthorization = .notDetermined
     @Published private(set) var loginStatus: ApprovalLoginItemStatus = .notRegistered
     @Published private(set) var telemetryStatus: ApprovalTelemetryStatus = .unknown
@@ -39,12 +41,14 @@ final class ApprovalAppComposition: ObservableObject {
         loginService: any ApprovalLoginItemServicing,
         application: any ApprovalApplicationControlling,
         setupCoordinator: AgentJailSetupCoordinator? = nil,
+        mcpInventoryStore: MCPInventoryStore? = nil,
         telemetryService: any ApprovalTelemetryServicing = BundledAgentJailTelemetryService(),
         clock: any ApprovalClock = SystemApprovalClock(),
         sleeper: any ApprovalSleeping = TaskApprovalSleeper()
     ) {
         self.clock = clock
         self.setupCoordinator = setupCoordinator ?? AgentJailSetupCoordinator()
+        self.mcpInventoryStore = mcpInventoryStore ?? MCPInventoryStore()
         self.store = ApprovalStore(client: client, clock: clock, sleeper: sleeper)
         self.notificationCoordinator = ApprovalNotificationCoordinator(
             center: notificationCenter,
@@ -146,6 +150,11 @@ final class ApprovalAppComposition: ObservableObject {
     func requestSetup() {
         application.activate()
         setupRouteGeneration &+= 1
+    }
+
+    func requestMCPInventory() {
+        application.activate()
+        mcpInventoryRouteGeneration &+= 1
     }
 
     func presentSetupIfNeeded() {

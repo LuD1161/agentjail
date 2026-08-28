@@ -16,6 +16,14 @@ write policy files, retain the control token, or provide a path for Codex
 command approvals. Its tunnel command surface accepts only fixed verbs used by
 `agentjail-shield`; it is not an arbitrary shell interface.
 
+The native MCP inventory is a separate read-only presentation path. Versioned
+Core adapters read only `~/.claude.json`, `~/.codex/config.toml`, and
+`~/.cursor/mcp.json`, then return typed records whose commands and origins are
+already redacted. The inventory has no process runner, network client,
+configuration writer, database, policy, or telemetry dependency. Malformed
+entries remain visible as fixed configuration issues and never prevent other
+clients from loading. See ADR 0142-readonly-mcp-inventory.
+
 Notifications are off until enabled from Settings. Their content is generic;
 Review opens the supplemental review window and refreshes the daemon snapshot
 before focusing a request, while Deny revalidates through the daemon. Launch at

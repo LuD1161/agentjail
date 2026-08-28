@@ -7,6 +7,7 @@ struct ApprovalPanelView: View {
     let onDeny: (ReviewID) -> Void
     let onRetry: () -> Void
     let onOpenAgentJail: () -> Void
+    let onMCPInventory: () -> Void
     let onSettings: () -> Void
     let onQuit: () -> Void
     let onFocusConsumed: (ReviewFocusRequest) -> Void
@@ -22,6 +23,7 @@ struct ApprovalPanelView: View {
         onDeny: @escaping (ReviewID) -> Void,
         onRetry: @escaping () -> Void,
         onOpenAgentJail: @escaping () -> Void,
+        onMCPInventory: @escaping () -> Void,
         onSettings: @escaping () -> Void,
         onQuit: @escaping () -> Void,
         onFocusConsumed: @escaping (ReviewFocusRequest) -> Void = { _ in }
@@ -31,6 +33,7 @@ struct ApprovalPanelView: View {
         self.onDeny = onDeny
         self.onRetry = onRetry
         self.onOpenAgentJail = onOpenAgentJail
+        self.onMCPInventory = onMCPInventory
         self.onSettings = onSettings
         self.onQuit = onQuit
         self.onFocusConsumed = onFocusConsumed
@@ -144,6 +147,11 @@ struct ApprovalPanelView: View {
                 Label("Settings", systemImage: "gearshape")
             }
             .accessibilityHint("Opens AgentJail settings.")
+
+            Button(action: onMCPInventory) {
+                Label("MCPs", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+            .accessibilityHint("Opens the read-only MCP inventory.")
 
             Spacer()
 

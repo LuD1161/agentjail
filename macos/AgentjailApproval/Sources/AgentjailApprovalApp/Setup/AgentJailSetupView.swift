@@ -4,10 +4,16 @@ import SwiftUI
 struct AgentJailSetupView: View {
     @ObservedObject private var coordinator: AgentJailSetupCoordinator
     let onOpenSettings: () -> Void
+    let onOpenMCPInventory: () -> Void
 
-    init(coordinator: AgentJailSetupCoordinator, onOpenSettings: @escaping () -> Void) {
+    init(
+        coordinator: AgentJailSetupCoordinator,
+        onOpenSettings: @escaping () -> Void,
+        onOpenMCPInventory: @escaping () -> Void
+    ) {
         _coordinator = ObservedObject(wrappedValue: coordinator)
         self.onOpenSettings = onOpenSettings
+        self.onOpenMCPInventory = onOpenMCPInventory
     }
 
     var body: some View {
@@ -16,6 +22,7 @@ struct AgentJailSetupView: View {
                 hero
                 setupExplanation
                 setupStatus
+                mcpInventory
                 privacyNote
             }
             .padding(28)
@@ -25,6 +32,24 @@ struct AgentJailSetupView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             _ = await coordinator.refresh()
+        }
+    }
+
+    private var mcpInventory: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Know which MCP servers are connected")
+                    .font(.callout.weight(.semibold))
+                Text("Review a redacted, read-only inventory for Claude Code, Codex, and Cursor. Discovery never launches an MCP server or changes its configuration.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open MCP inventory", action: onOpenMCPInventory)
+                    .buttonStyle(.link)
+            }
         }
     }
 

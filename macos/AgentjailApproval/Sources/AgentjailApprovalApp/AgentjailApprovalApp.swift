@@ -43,10 +43,16 @@ struct AgentJailApp: App {
         Window("AgentJail", id: ApprovalAppSceneID.setup) {
             AgentJailSetupView(
                 coordinator: applicationDelegate.composition.setupCoordinator,
-                onOpenSettings: applicationDelegate.composition.requestSettings
+                onOpenSettings: applicationDelegate.composition.requestSettings,
+                onOpenMCPInventory: applicationDelegate.composition.requestMCPInventory
             )
         }
         .defaultSize(width: 700, height: 640)
+
+        Window("AgentJail MCP Inventory", id: ApprovalAppSceneID.mcpInventory) {
+            MCPInventoryView(store: applicationDelegate.composition.mcpInventoryStore)
+        }
+        .defaultSize(width: 760, height: 620)
 
         Settings {
             ApprovalSettingsView(composition: applicationDelegate.composition)

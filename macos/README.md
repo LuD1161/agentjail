@@ -28,6 +28,14 @@ Network Extension command surface. The daemon remains the policy and audit
 authority. The extension performs per-process transparent network enforcement.
 The bundled Go binaries remain the terminal and automation interface.
 
+The app's MCP inventory uses versioned, read-only adapters for the global Claude
+Code, Codex, and Cursor configuration files. It retains only redacted display
+records, reports malformed entries without stopping discovery, and marks names
+configured in multiple clients. Inventory refresh has no process, network,
+configuration-write, policy, database, or telemetry capability. Project-local
+files and runtime activity are explicitly outside Phase 1 coverage. See
+[ADR 0142-readonly-mcp-inventory](../docs/adr/0142-readonly-mcp-inventory.md).
+
 On first launch, the app checks that it is running from `/Applications`, shows
 the exact local components and Apple approval that setup will request, installs
 the bundled CLI/daemon/hooks with one explicit click, then activates and verifies
@@ -136,7 +144,7 @@ substitute for the clean downloaded-customer flow.
 | Path | Responsibility |
 |---|---|
 | `AgentJail/` | containing-app plist and entitlements |
-| `AgentjailApproval/` | SwiftUI app, daemon review client, settings, and tests |
+| `AgentjailApproval/` | SwiftUI app, daemon review client, read-only MCP inventory, settings, and tests |
 | `AgentjailApproval/Sources/AgentjailApprovalApp/Tunnel/` | fixed extension command surface |
 | `AgentjailExtension/` | `NETransparentProxyProvider` implementation and metadata |
 | `scripts/build-macos-app.sh` | universal assembly, signing, verification, notarization |

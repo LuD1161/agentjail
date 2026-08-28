@@ -212,6 +212,13 @@ Gatekeeper-assesses it, installs `AgentJail.app` atomically, installs its bundle
 CLI, starts the daemon, wires detected agent hooks, and opens onboarding. Linux
 downloads only the platform CLI tarball.
 
+The macOS app also includes an **observe-only MCP inventory** for the global
+Claude Code, Codex, and Cursor configurations. It shows client, local or remote
+kind, redacted command or origin, configuration issues, and duplicate names. A
+refresh reads configuration files only: it never launches an MCP server, changes
+configuration or policy, or claims visibility into project-local files or live
+traffic.
+
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 
 Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards.

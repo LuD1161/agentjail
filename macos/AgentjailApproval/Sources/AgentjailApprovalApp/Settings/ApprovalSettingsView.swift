@@ -56,6 +56,13 @@ struct ApprovalSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("MCP inventory") {
+                Text("Observe-only discovery reads global Claude Code, Codex, and Cursor MCP configuration without launching servers or changing files.")
+                Button("Open MCP inventory") {
+                    composition.requestMCPInventory()
+                }
+            }
+
             Section("Anonymous usage metrics") {
                 Toggle("Share anonymous usage metrics", isOn: telemetryEnabled)
                     .disabled(!composition.telemetryStatus.canChange)
