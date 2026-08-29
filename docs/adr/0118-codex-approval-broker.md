@@ -21,6 +21,11 @@ create a prompt, and `--ignore-rules` executes the rewrite without a
 `PermissionRequest`. The latter means an input rewrite alone can never prove
 user intent.
 
+Codex CLI `0.150.1` was live-tested on 2026-08-28 and re-runs `PreToolUse` for
+the rewritten broker command before execpolicy. Treating that callback as a new
+tool call invalidated the original challenge and denied the broker, after which
+Codex retried the original request and created an approval loop.
+
 The 2026-07-31 matrix also verified the CLI boundary for noninteractive mode:
 `-a never` is a top-level Codex option and must precede the `exec` subcommand.
 The `exec` parser does not accept `-a`; an invalid invocation exits before any
@@ -75,6 +80,13 @@ working directory, and recorded Codex ancestry, then record a fresh
 process-start boundary and defer its decision to Codex. Prompt observation is
 not authorization by itself: redemption still requires the post-prompt fresh
 process chain.
+
+When Codex re-runs `PreToolUse` for the exact broker argv, the daemon permits
+only an existing pending challenge whose operation, session, turn, working
+directory, and kernel-verified Codex process match. This transport callback does
+not advance the tool-call epoch. Unknown, stale, already-observed, malformed, or
+mismatched broker invocations deny before execpolicy; the subsequent matching
+`PermissionRequest` remains the only prompt-observation transition.
 
 The broker may redeem only an armed challenge. The daemon verifies the
 same-UID peer, active session, unchanged epoch, one-use state, expiry, and a

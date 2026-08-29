@@ -599,10 +599,17 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		if req.Agent == "codex" && req.HookEvent == "PreToolUse" && s.approvals != nil {
-			s.approvals.BeginToolCall(approvalexec.SessionID(req.SessionID))
+		if req.Agent == "codex" && req.HookEvent == "PreToolUse" {
 			if command, _ := req.ToolInput["command"].(string); command != "" {
-				if _, broker := approvalexec.ParseBrokerCommand(command); broker {
+				if invocation, broker := approvalexec.ParseBrokerCommand(command); broker {
+					if s.pendingBrokerPreTool(req, invocation, verifiedCodexPID, time.Now()) {
+						_ = enc.Encode(policyeval.Response{
+							ID: req.ID, Action: "allow", PolicyAction: "allow",
+							EffectiveAction: "allow", Adapter: "codex",
+							Reason: "pending AgentJail approval broker transport",
+						})
+						continue
+					}
 					_ = enc.Encode(policyeval.Response{
 						ID: req.ID, Action: "deny", PolicyAction: "deny",
 						EffectiveAction: "deny", Adapter: "codex",
@@ -610,6 +617,9 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					})
 					continue
 				}
+			}
+			if s.approvals != nil {
+				s.approvals.BeginToolCall(approvalexec.SessionID(req.SessionID))
 			}
 		}
 
@@ -979,6 +989,16 @@ func (s *server) handleApprovalPrompt(
 		DeferToNativePermission: true,
 		Reason:                  "AgentJail requires native Codex approval",
 	})
+}
+
+func (s *server) pendingBrokerPreTool(req policyeval.Request, invocation approvalexec.BrokerInvocation, verifiedCodexPID int, now time.Time) bool {
+	if s.approvals == nil || verifiedCodexPID <= 0 {
+		return false
+	}
+	meta, err := s.approvals.Inspect(invocation.ChallengeID, now)
+	return err == nil && meta.State == approvalexec.StatePending &&
+		meta.Operation == invocation.Operation && meta.SessionID == approvalexec.SessionID(req.SessionID) &&
+		meta.TurnID == approvalexec.TurnID(req.TurnID) && meta.CWD == req.CWD && meta.AgentPID == verifiedCodexPID
 }
 
 func (s *server) handleApprovalRedeem(

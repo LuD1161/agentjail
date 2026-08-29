@@ -155,8 +155,8 @@ func NewManager(random io.Reader, pendingTTL, observedTTL time.Duration) *Manage
 	}
 }
 
-// BeginToolCall advances the session epoch. A rewritten broker invocation does
-// not trigger a second PreToolUse; every later tool call invalidates it.
+// BeginToolCall advances the session epoch. Managed broker transport is not a
+// new tool call; every later original tool call invalidates the challenge.
 func (m *Manager) BeginToolCall(sessionID SessionID) uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
