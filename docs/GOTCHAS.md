@@ -1229,6 +1229,19 @@ detach and the observed mount state disagree.
   tri-state mount check proves it absent. Active and indeterminate both retain
   the exact validated root and fail closed.
 
+## 93. Rewritten input can cross the same hook twice
+
+Codex 0.146 applied the rewritten approval broker before execpolicy without a
+second `PreToolUse`, while Codex 0.150.1 sent that exact broker input through
+the hook again. The daemon classified it as a direct invocation, invalidated
+the pending epoch, and Codex retried the original command into an approval loop.
+Unit tests for rewrite shape, prompt observation, and redemption all stayed green.
+
+- **Rule:** versioned compatibility tests must pin callback ordering, not only
+  payload schemas. Permit repeated managed transport only when it matches live
+  pending state and does not advance the original operation's epoch. See ADR
+  0118-codex-approval-broker and AGE-297.
+
 ---
 
 ## Testing gotchas
