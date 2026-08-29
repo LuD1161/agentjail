@@ -2,12 +2,15 @@ package agents
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+
+	"github.com/LuD1161/agentjail/internal/agentguidance"
 )
 
 // defaultLookPath is the package-level fallback for env.LookPath when it is nil.
@@ -81,6 +84,9 @@ func installCodex(env Env, showTrustInstruction bool) error {
 	if err := codexEnsureFeaturesHooks(env); err != nil {
 		return fmt.Errorf("install codex: config.toml: %w", err)
 	}
+	if err := (Codex{}).ReconcileGuidance(env); err != nil {
+		return fmt.Errorf("install codex: AGENTS.md: %w", err)
+	}
 
 	// Step 3 — trust cannot be persisted; explicit installs show the manual
 	// instruction while launch-time reassertion stays quiet.
@@ -95,27 +101,44 @@ func installCodex(env Env, showTrustInstruction bool) error {
 // managed approval rule. It leaves features.hooks and trust state untouched.
 func (Codex) Uninstall(env Env) error {
 	hooksPath := filepath.Join(env.Home, ".codex", "hooks.json")
+	guidanceErr := removeCodexGuidance(env)
 
 	existing, err := os.ReadFile(hooksPath)
 	if os.IsNotExist(err) {
-		return removeCodexExecPolicy(env)
+		return errors.Join(removeCodexExecPolicy(env), guidanceErr)
 	}
 	if err != nil {
-		return fmt.Errorf("uninstall codex: read hooks.json: %w", err)
+		return errors.Join(fmt.Errorf("uninstall codex: read hooks.json: %w", err), guidanceErr)
 	}
 
 	updated, changed, err := codexRemoveHookEntry(existing, env.HookBin)
 	if err != nil {
-		return fmt.Errorf("uninstall codex: parse hooks.json: %w", err)
+		return errors.Join(fmt.Errorf("uninstall codex: parse hooks.json: %w", err), guidanceErr)
 	}
 	if !changed {
-		return removeCodexExecPolicy(env)
+		return errors.Join(removeCodexExecPolicy(env), guidanceErr)
 	}
 
 	if err := writeFileAtomic(hooksPath, updated, 0o600); err != nil {
-		return err
+		return errors.Join(err, guidanceErr)
 	}
-	return removeCodexExecPolicy(env)
+	return errors.Join(removeCodexExecPolicy(env), guidanceErr)
+}
+
+// ReconcileGuidance refreshes AgentJail's owned block in Codex's global
+// instruction file.
+func (Codex) ReconcileGuidance(env Env) error {
+	_, err := agentguidance.Reconcile(filepath.Join(env.Home, ".codex", "AGENTS.md"))
+	return err
+}
+
+func removeCodexGuidance(env Env) error {
+	path := filepath.Join(env.Home, ".codex", "AGENTS.md")
+	_, err := agentguidance.Remove(path)
+	if err != nil {
+		return fmt.Errorf("remove AgentJail guidance from %s: %w", path, err)
+	}
+	return nil
 }
 
 // Status reports managed-rule and hooks.json presence, features.hooks

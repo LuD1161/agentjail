@@ -47,6 +47,17 @@ func disableSignatureVerification(t *testing.T) {
 	home := t.TempDir()
 	updateHomeDirFn = func() (string, error) { return home, nil }
 	t.Cleanup(func() { updateHomeDirFn = savedHome })
+
+	savedGuidance := updateReconcileGuidanceFn
+	updateReconcileGuidanceFn = func(string) error { return nil }
+	t.Cleanup(func() { updateReconcileGuidanceFn = savedGuidance })
+}
+
+func setUpdateGuidanceReconciler(t *testing.T, reconcile func(string) error) {
+	t.Helper()
+	saved := updateReconcileGuidanceFn
+	updateReconcileGuidanceFn = reconcile
+	t.Cleanup(func() { updateReconcileGuidanceFn = saved })
 }
 
 func setUpdateRestartDaemon(t *testing.T, restart func(string) error) {
@@ -132,6 +143,23 @@ func configureFakeUpdate(t *testing.T, bins []string) string {
 	updateURLBaseFn = func(string) string { return assetServer.URL }
 	t.Cleanup(func() { updateURLBaseFn = savedURLBase })
 	return installDir
+}
+
+func TestPerformUpdateReconcilesGuidanceWithUpdatedBinary(t *testing.T) {
+	installDir := configureFakeUpdate(t, []string{"agentjail", "agentjail-hook"})
+	var got string
+	setUpdateGuidanceReconciler(t, func(path string) error {
+		got = path
+		return nil
+	})
+
+	if code := performUpdate(installDir, "linux", "amd64", false); code != 0 {
+		t.Fatalf("performUpdate() = %d, want 0", code)
+	}
+	want := filepath.Join(installDir, "agentjail")
+	if got != want {
+		t.Fatalf("guidance binary = %q, want %q", got, want)
+	}
 }
 
 // makeFakeTarball creates a minimal .tar.gz in destDir containing the given

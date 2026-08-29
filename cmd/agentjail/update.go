@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/agentguidance"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/grantctl"
@@ -56,6 +57,7 @@ var updateEnsureRoleSymlinksFn = selfupdate.EnsureRoleSymlinks
 var updateAttestDaemonFn = attestDaemonVersion
 var updateDaemonSocketPathFn = daemonSocketPath
 var updateAuditFn = emitUpdateAudit
+var updateReconcileGuidanceFn = agentguidance.RunReconciler
 
 const (
 	updateActivationTimeout      = 5 * time.Second
@@ -137,6 +139,13 @@ func runUpdate(args []string) int {
 				if err := cmd.Run(); err != nil {
 					fmt.Fprintf(os.Stderr, "agentjail update: brew upgrade failed: %v\n", err)
 					return 1
+				}
+				guidanceCLI, _ := selfupdate.ResolveExecutablePath()
+				if guidanceCLI == "" {
+					guidanceCLI = exePath
+				}
+				if err := updateReconcileGuidanceFn(guidanceCLI); err != nil {
+					fmt.Fprintf(os.Stderr, "  warning: could not refresh agent guidance: %v\n", err)
 				}
 				// Emit telemetry for brew upgrade path (best-effort).
 				if tp, err := telemetry.DefaultPaths(); err == nil {
@@ -427,6 +436,9 @@ func performUpdate(installDir, goos, goarch string, force bool) int {
 			return rollbackFailedUpdate(installDir, backupDir, backups, latest, goos, err, daemonRollback(home, current, goos, plistPath))
 		}
 		fmt.Println("🔄  daemon restarted and attested")
+	}
+	if err := updateReconcileGuidanceFn(filepath.Join(installDir, cliBinaryName)); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not refresh agent guidance: %v\n", err)
 	}
 
 	fmt.Printf("✅  updated %d binaries  %s → %s\n", installed, current, latest)

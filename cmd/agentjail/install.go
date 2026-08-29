@@ -1,36 +1,47 @@
 // install.go — agentjail install/uninstall/status subcommands.
 //
 // What `agentjail install` does on macOS and Linux:
+//
 //  1. Copies agentjail-hook binary to ~/.agentjail/bin/agentjail-hook (0755).
+//
 //  2. Copies the agentjail (multicall) binary to ~/.agentjail/bin/agentjail
 //     (0755), then ensures agentjail-daemon, agentjail-shield,
 //     agentjail-netproxy, and agentjail-secrets are relative symlinks to it
 //     (see selfupdate.EnsureRoleSymlinks in internal/selfupdate/rolesymlinks.go) — these four names are
 //     never real files on disk.
+//
 //  3. Copies core .rego rules to ~/.agentjail/rules/ (idempotent).
+//
 //  4. Writes ~/.agentjail/policy.yaml from agentpolicy/default_policy.yaml
 //     if the file does not already exist (never overwrites user customisations).
+//
 //  5. Installs the daemon service definition:
 //     - macOS: the launchd plist at ~/Library/LaunchAgents/com.agentjail.daemon.plist
 //     with ProgramArguments patched to ~/.agentjail/bin/agentjail-daemon.
 //     - Linux: the systemd --user unit at
 //     ~/.config/systemd/user/agentjail-daemon.service with ExecStart patched
 //     to ~/.agentjail/bin/agentjail-daemon and Restart=always.
+//
 //  6. (Re)starts the daemon: launchctl unload/load on macOS, `systemctl --user
 //     enable --now` + `restart` on Linux. When no systemd user session is
 //     reachable (e.g. a bare container with no login session), the unit is
 //     still written and manual start instructions are printed instead of
 //     failing the install.
+//
 //  7. Detects which agents are present on the machine (claude-code, codex, cursor)
 //     and which of them already have the agentjail hook wired.
+//
 //  8. If every detected agent is already protected, a regular run is just a
 //     binary + daemon refresh (steps 1-6 above). Explicit --all still
 //     reconciles every detected adapter's owned hook entries.
+//
 //  9. Otherwise presents an interactive multi-select picker (already-protected
 //     agents are marked) or falls back to non-interactive selection.
 //
-// 10. Dispatches agent.Install(env) for each selected agent.
-// 11. Prints a summary and exits non-zero if any selected install failed.
+//  10. Dispatches agent.Install(env) for each selected agent. Claude Code and
+//     Codex also reconcile AgentJail's fenced global-guidance block.
+//
+//  11. Prints a summary and exits non-zero if any selected install failed.
 //
 // Use `agentjail install --for <agent>` for single-agent back-compat.
 // Use `agentjail install --all` to reconcile every detected agent, or `--yes`
@@ -39,8 +50,9 @@
 // back-compat: Linux is a fully supported install target (ADR 0051).
 //
 // What `agentjail uninstall` does (no --for):
-//  1. Calls agent.Uninstall(env) for every agent in the registry. Failures are
-//     collected but do not abort other agents (Uninstall is idempotent).
+//  1. Calls agent.Uninstall(env) for every agent in the registry, removing each
+//     owned hook and global-guidance block. Failures are collected but do not
+//     abort other agents (Uninstall is idempotent).
 //  2. On macOS: unloads the launchd daemon and removes the plist. On Linux:
 //     stops/disables the systemd --user unit and removes the unit file.
 //  3. Removes the four role symlinks (agentjail-daemon, agentjail-shield,
@@ -280,6 +292,10 @@ func runInstallCmd(args []string) {
 	// Explicit --all still reconciles every adapter's owned hook entries.
 	state := computeInstallState(detected, func(a agents.Agent) agents.Status { return a.Status(env) })
 	if shouldSkipInstalledAgents(state, all) {
+		if err := reconcileInstalledAgentGuidance(home); err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: refresh agent guidance: %v", err)))
+			os.Exit(1)
+		}
 		v := buildinfo.Version
 		if v == "" {
 			v = "dev"
@@ -1149,9 +1165,9 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 	var lines []string
 	for _, ar := range r.Agents {
 		if ar.Err != nil {
-			lines = append(lines, u.KeyValue(ar.Name, "", u.Badge("fail", "FAILED to unhook: "+ar.Err.Error())))
+			lines = append(lines, u.KeyValue(ar.Name, "", u.Badge("fail", "FAILED to remove hook/guidance: "+ar.Err.Error())))
 		} else {
-			lines = append(lines, u.KeyValue(ar.Name, "", u.Badge("ok", "unhooked")))
+			lines = append(lines, u.KeyValue(ar.Name, "", u.Badge("ok", "hook and owned guidance removed")))
 		}
 	}
 

@@ -1112,9 +1112,9 @@ func TestPrintUninstallSummaryAllOK(t *testing.T) {
 			t.Errorf("printUninstallSummary: output missing agent name %q\ngot:\n%s", name, out)
 		}
 	}
-	// Each agent row should say "unhooked".
-	if strings.Count(out, "unhooked") < 3 {
-		t.Errorf("printUninstallSummary: expected at least 3 'unhooked' occurrences\ngot:\n%s", out)
+	// Each agent row should confirm hook and owned-guidance cleanup.
+	if strings.Count(out, "hook and owned guidance removed") < 3 {
+		t.Errorf("printUninstallSummary: expected at least 3 integration cleanup confirmations\ngot:\n%s", out)
 	}
 	// Daemon row.
 	if !strings.Contains(out, "daemon") {
@@ -1137,8 +1137,8 @@ func TestPrintUninstallSummaryAllOK(t *testing.T) {
 	}
 }
 
-// TestPrintUninstallSummaryAgentFailure verifies that a failed agent unhook
-// renders "FAILED to unhook" and sets HardFailed semantics in the output.
+// TestPrintUninstallSummaryAgentFailure verifies that a failed agent cleanup
+// identifies both owned surfaces and sets HardFailed semantics in the output.
 func TestPrintUninstallSummaryAgentFailure(t *testing.T) {
 	r := UninstallResult{
 		Agents: []UninstallAgentResult{
@@ -1154,8 +1154,8 @@ func TestPrintUninstallSummaryAgentFailure(t *testing.T) {
 	if !strings.Contains(out, "Claude Code") {
 		t.Errorf("printUninstallSummary: output missing 'Claude Code'\ngot:\n%s", out)
 	}
-	if !strings.Contains(out, "FAILED to unhook") {
-		t.Errorf("printUninstallSummary: output missing 'FAILED to unhook'\ngot:\n%s", out)
+	if !strings.Contains(out, "FAILED to remove hook/guidance") {
+		t.Errorf("printUninstallSummary: output missing transparent integration failure\ngot:\n%s", out)
 	}
 	if !strings.Contains(out, "some steps failed") {
 		t.Errorf("printUninstallSummary: output missing 'some steps failed' final line\ngot:\n%s", out)

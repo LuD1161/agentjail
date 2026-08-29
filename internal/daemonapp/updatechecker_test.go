@@ -232,6 +232,25 @@ func TestUpdateCheckerReassertsConsentedPathShim(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckerReconcilesGuidanceWithUpdatedBinary(t *testing.T) {
+	installDir := t.TempDir()
+	var got string
+	uc := &UpdateChecker{
+		InstallDir: installDir,
+		GuidanceReconciler: func(path string) error {
+			got = path
+			return nil
+		},
+	}
+	if err := uc.reconcileGuidance(); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(installDir, "agentjail")
+	if got != want {
+		t.Fatalf("guidance binary = %q, want %q", got, want)
+	}
+}
+
 func TestUpdateChecker_AutoUpdate_SkipsBrew(t *testing.T) {
 	origKey := selfupdate.SigningPubKey
 	selfupdate.SigningPubKey = "RWQfakekeyfortest"

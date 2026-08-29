@@ -2,10 +2,13 @@ package agents
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/LuD1161/agentjail/internal/agentguidance"
 )
 
 // ClaudeCode is the agent implementation for Anthropic's Claude Code.
@@ -57,15 +60,18 @@ func (ClaudeCode) Install(env Env) error {
 		updated, statusLineChanged = claudeMergeStatusLineEntry(updated, env.CLIBin)
 	}
 
-	if !hookChanged && !statusLineChanged {
-		// Already installed — nothing to do.
-		return nil
+	if hookChanged || statusLineChanged {
+		if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+			return fmt.Errorf("install claude-code: mkdir %s: %w", filepath.Dir(settingsPath), err)
+		}
+		if err := writeFileAtomic(settingsPath, updated, 0o600); err != nil {
+			return err
+		}
 	}
-
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
-		return fmt.Errorf("install claude-code: mkdir %s: %w", filepath.Dir(settingsPath), err)
+	if err := (ClaudeCode{}).ReconcileGuidance(env); err != nil {
+		return fmt.Errorf("install claude-code: CLAUDE.md: %w", err)
 	}
-	return writeFileAtomic(settingsPath, updated, 0o600)
+	return nil
 }
 
 // Uninstall removes the agentjail hook entry for env.HookBin and the agentjail
@@ -77,23 +83,39 @@ func (ClaudeCode) Install(env Env) error {
 // statusLine invoking a binary uninstall just deleted (ADR 0063).
 func (ClaudeCode) Uninstall(env Env) error {
 	settingsPath := filepath.Join(env.Home, ".claude", "settings.json")
+	guidanceErr := removeClaudeGuidance(env)
 
 	existing, err := os.ReadFile(settingsPath)
 	if os.IsNotExist(err) {
-		return nil
+		return guidanceErr
 	}
 	if err != nil {
-		return fmt.Errorf("uninstall claude-code: read settings.json: %w", err)
+		return errors.Join(fmt.Errorf("uninstall claude-code: read settings.json: %w", err), guidanceErr)
 	}
 
 	updated := claudeRemoveHookEntry(existing, env.HookBin)
 	updated, _ = claudeRemoveStatusLineEntry(updated)
 	if string(updated) == string(existing) {
-		// Nothing changed — neither entry was present.
-		return nil
+		return guidanceErr
 	}
 
-	return writeFileAtomic(settingsPath, updated, 0o600)
+	return errors.Join(writeFileAtomic(settingsPath, updated, 0o600), guidanceErr)
+}
+
+// ReconcileGuidance refreshes AgentJail's owned block in Claude Code's global
+// instruction file.
+func (ClaudeCode) ReconcileGuidance(env Env) error {
+	_, err := agentguidance.Reconcile(filepath.Join(env.Home, ".claude", "CLAUDE.md"))
+	return err
+}
+
+func removeClaudeGuidance(env Env) error {
+	path := filepath.Join(env.Home, ".claude", "CLAUDE.md")
+	_, err := agentguidance.Remove(path)
+	if err != nil {
+		return fmt.Errorf("remove AgentJail guidance from %s: %w", path, err)
+	}
+	return nil
 }
 
 // Status reports whether the agentjail hook entry for env.HookBin is present
