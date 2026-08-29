@@ -16,6 +16,20 @@ import (
 	"github.com/LuD1161/agentjail/internal/proxyctl"
 )
 
+func shortPrivateRuntimeDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "aj-connector-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		_ = os.RemoveAll(dir)
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestLinuxGuestSocketRoutesOnlyConfiguredConnectorAndCleansUp(t *testing.T) {
 	proxy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -38,10 +52,7 @@ func TestLinuxGuestSocketRoutesOnlyConfiguredConnectorAndCleansUp(t *testing.T) 
 		_, _ = io.Copy(conn, conn)
 	}()
 
-	runtimeDir := t.TempDir()
-	if err := os.Chmod(runtimeDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	runtimeDir := shortPrivateRuntimeDir(t)
 	bridge, err := newLinuxConnectorBridge(LinuxContainerConfig{
 		SessionID: "session-a", Token: "token-a", RuntimeDir: runtimeDir,
 	}, "chrome-cdp", proxy.Addr().String(), time.Second)
@@ -116,10 +127,7 @@ func TestLinuxGuestSocketRejectsSymlinkedRuntimeDir(t *testing.T) {
 }
 
 func TestLinuxGuestSocketCannotReuseWrongConnectorPath(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := shortPrivateRuntimeDir(t)
 	config := LinuxContainerConfig{SessionID: "session-a", Token: "token-a", RuntimeDir: dir}
 	bridge, err := newLinuxConnectorBridge(config, "chrome-cdp", "127.0.0.1:1", time.Second)
 	if err != nil {
