@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v1.7.0** | Aug 29, 2026 | Claude Code and Codex learn the governed host-access path through an AgentJail-owned instruction block. Exact session-bound runtime grants and configured connector diagnostics establish the next capability boundary, production MCP forwarding remains fail closed, and Codex 0.150.1 command approvals no longer loop on the rewritten broker callback. |
 | **v1.6.0** | Aug 16, 2026 | Generic credentials use arbitrary IDs, labels, tags, and explicit environment or file delivery. macOS gains the native allow-once host proxy, while the release gate now proves real Codex credential, approval, proxy, and strict tunnel paths with no required SKIPs. The CLI release still does not install the macOS Network Extension. |
 | **v1.5.0** | Aug 6, 2026 | Opted-in PATH shims now launch through the transparent tunnel, macOS shielded sessions start and link the local UI, and routine startup stays compact while private session logs retain diagnostics. Linux Landlock config-file grants are corrected. |
 | **v1.4.1** | Aug 6, 2026 | Cost reports recover oversized transcripts and price current models, cache TTLs, long contexts, forks, and model changes accurately. The terminal dashboard adds complete token breakdowns and color controls, while Git SSH gets more consistent session-agent bootstrap and cleaner remote-aware identity selection. |
