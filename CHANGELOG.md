@@ -4,6 +4,88 @@
 
 ## Unreleased
 
+## v1.7.0 - 2026-08-29
+
+![v1.7.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.7.0-summary.svg)
+
+## TL;DR
+
+- **Show Claude Code and Codex the governed host-access path** through one
+  AgentJail-owned global instruction block, without teaching either agent to
+  route MCP or credential operations around their normal approval flows.
+- **Model runtime authority as an exact session-bound grant** with typed
+  lifecycle, scope, expiry, policy epoch, activation, and audit semantics for
+  commands, files, network access, MCP calls, and credentials.
+- **Describe and diagnose configured host connectors** while keeping production
+  MCP forwarding fail closed until native approval evidence and a grant-aware
+  data plane can bind the route to the grant lifecycle.
+- **Restore Codex 0.150.1 native command approval** when Codex sends the rewritten
+  AgentJail broker through `PreToolUse` a second time.
+
+### Added
+
+- **Managed Claude Code and Codex guidance**: install and update reconcile one
+  fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block points
+  required host file and CLI access to `agentjail proxy --help`, while MCP and
+  credentials stay on their existing governed paths.
+- **Typed runtime-grant lifecycle**: grants bind the principal, session, action,
+  canonical resource, scope, policy epoch, and timestamps across requested,
+  approved, active, denied, consumed, expired, revoked, and activation-failed
+  states.
+- **Configured host-connector foundation**: trusted global policy can define
+  typed connectors such as loopback Chrome CDP, with fixed readiness probes and
+  rejection of duplicate, non-loopback, invalid, or project-overlay definitions.
+- **Runtime-grant diagnostics**: `agentjail doctor` reports grant,
+  authorization, activation, transport, and upstream capability separately,
+  without exposing destinations, capabilities, or approval evidence.
+
+### Changed
+
+- **Approval and activation are separate**: authority is usable only after any
+  required connector bridge and readiness probe succeed.
+- **Guidance follows the installed release**: manual, Homebrew, and daemon
+  updates invoke the newly installed CLI to refresh owned instructions. A
+  guidance failure warns without rolling back otherwise healthy, attested
+  binaries.
+- **Uninstall owns its cleanup result**: Claude Code and Codex uninstall remove
+  only AgentJail's fenced block or exact pre-release two-line form. Malformed
+  fences and cleanup failures identify the path, return non-zero, and prevent a
+  false success summary.
+- **Lifecycle transitions carry audit evidence**: authorizing approval and
+  activation records must be durable before authority is exposed; terminal and
+  non-authorizing transitions retain best-effort evidence.
+
+### Fixed
+
+- **Codex 0.150.1 approval loops**: an exact pending broker callback no longer
+  advances the original tool-call epoch. Unknown, stale, observed, malformed,
+  or mismatched broker invocations still deny before execution.
+- **Exact grant expiry**: session and network authority deny at the expiry
+  boundary rather than remaining usable for one additional instant.
+- **Approval-audit deadlock**: netproxy reserves pending approval, emits durable
+  audit outside its mutex, and exposes authority only after audit succeeds.
+- **Connector lifecycle races**: activation is serialized with revocation,
+  launch capabilities are session-bound, and broker routes are revoked before
+  session cleanup.
+- **Unsafe Linux connector roots**: symlinked, incorrectly owned, or incorrectly
+  permissioned runtime roots and sockets are rejected.
+
+### Security
+
+- **Policy denies still win**: a runtime grant may satisfy an eligible `ask`; it
+  cannot override an explicit or locked deny.
+- **Authority is exact and non-transferable**: grants are constrained by agent,
+  principal, session, action, canonical resource and arguments, policy epoch,
+  scope, expiry, and one-use state.
+- **Host connectors are configuration-bound**: guests name a trusted connector
+  ID rather than choosing a host or port, and guest loopback is never treated as
+  host loopback.
+- **Launch capabilities remain opaque**: connector capabilities are ephemeral,
+  excluded from persistence and generic errors, and revoked during teardown.
+- **Guidance is discovery, not enforcement**: coding-agent hooks, command and
+  MCP policy, credential controls, network policy, and OS-native sandboxing
+  remain the security boundary.
+
 ## v1.6.0 - 2026-08-16
 
 ![v1.6.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.6.0-summary.svg)

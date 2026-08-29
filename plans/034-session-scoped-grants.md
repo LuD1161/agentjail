@@ -1,9 +1,9 @@
 # Session-scoped capability grants
 
-Status: PARTIAL — safe foundations implemented; native MCP approval and a
-grant-aware connector data plane remain release blockers  
-Owner: unassigned  
-Started: 2026-08-19  
+Status: PARTIAL - safe foundations implemented; native MCP approval and a
+grant-aware connector data plane remain production blockers
+Owner: unassigned
+Started: 2026-08-19
 Linear migration: parent draft is currently represented by AGE-93; lifecycle
 work was drafted in AGE-57. Treat this file as the source of truth until the
 remaining issues can be created in Linear.
