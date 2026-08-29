@@ -4,11 +4,11 @@
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/reportlib.sh"
 
-AJ="$(command -v agentjail)"
+AJ="$HOME/.agentjail/bin/agentjail"
 
 scn_init "runtime-grants" "runtime grant diagnostics and isolation capability evidence"
 
-doctor="$($AJ doctor 2>&1 || true)"
+doctor="$($AJ --no-color doctor 2>&1 || true)"
 if grep -q 'Runtime grant.*no live runtime grant' <<<"$doctor"; then
     scn_ok "doctor keeps authorization, activation, and reachability separate without a live grant"
 else
