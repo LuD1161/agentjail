@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-12
 - **Deciders:** agentjail-core
-- **Related:** AGE-174, [ADR 0118-codex-approval-broker](0118-codex-approval-broker.md), [ADR 0119-command-approval-transport](0119-command-approval-transport.md)
+- **Related:** AGE-174, AGE-297, [ADR 0118-codex-approval-broker](0118-codex-approval-broker.md), [ADR 0119-command-approval-transport](0119-command-approval-transport.md)
 
 ## Context
 
@@ -65,6 +65,21 @@ completed states. They store only session identifiers, short hashes of the targe
 and cwd, and structured outcomes; proofs, argv, environment contents, and credential
 values are excluded.
 
+Claude Code and Codex installations add one fenced AgentJail-owned block to their
+global Markdown instruction file. The block identifies the active safety sandbox,
+directs required host file or CLI access to `agentjail proxy --help`, and explicitly
+keeps MCP and credential operations on their normal governed paths. Install and
+update replace only the bytes between the unique fences. Uninstall removes only that
+block and its owned separator. Existing content, modes, and symlinks are preserved;
+unmatched, duplicated, or reversed fences fail without mutating the document.
+The exact two-line unmarked form used during the AGE-297 rollout is migrated on
+install and removed on uninstall, so pre-release guidance does not become orphaned.
+
+Updates execute a hidden reconciliation command from the newly installed CLI rather
+than embedding guidance in the old updater. This applies the destination release's
+wording for both manual and daemon auto-updates. Reconciliation failure is reported
+but does not roll back otherwise healthy, attested binaries.
+
 The basename/category policy is an accidental-footgun guardrail. It does not defend
 against renamed malicious binaries, an approved malicious program, or an allowed
 tool that starts helpers. The cwd check constrains only the starting directory; the
@@ -83,3 +98,7 @@ Configuration files and OS keychains may work, while environment-only credential
 and interactive programs do not. Output is buffered rather than streamed. macOS,
 persistent approvals, arbitrary environment forwarding, credential injection, and
 fresh child-sandbox construction remain deferred.
+
+Global guidance improves discovery but is not an enforcement boundary. Coding-agent
+hooks remain installed and enforced by default; the instruction block does not
+replace command, MCP, credential, network, or OS-native policy.

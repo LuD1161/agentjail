@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/agentguidance"
 	"github.com/LuD1161/agentjail/internal/notify"
 	"github.com/LuD1161/agentjail/internal/pathshim"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
@@ -52,6 +53,8 @@ type UpdateChecker struct {
 	PlistPath  string // path to launchd plist
 	GOOS       string
 	GOARCH     string
+
+	GuidanceReconciler func(string) error
 }
 
 // Run starts the update-check loop with jittered initial delay, then 6h interval.
@@ -277,12 +280,23 @@ func (uc *UpdateChecker) performAutoUpdate(ctx context.Context, latest string) {
 	} else {
 		shimRestored = result.Restored
 	}
+	if err := uc.reconcileGuidance(); err != nil {
+		slog.Warn("auto-update: could not refresh agent guidance", "err", err)
+	}
 
 	slog.Info("auto-update: binaries swapped, exiting for restart", "version", latest, "swapped", swappedCount, "path_shim_restored", shimRestored)
 
 	// 8. Exit — the supervisor restarts the new daemon. Both platforms must
 	// restart a clean exit(0) or this strands the daemon (ADR 0070).
 	osExitFn(0)
+}
+
+func (uc *UpdateChecker) reconcileGuidance() error {
+	reconcile := uc.GuidanceReconciler
+	if reconcile == nil {
+		reconcile = agentguidance.RunReconciler
+	}
+	return reconcile(filepath.Join(uc.InstallDir, "agentjail"))
 }
 
 func (uc *UpdateChecker) reassertPathShim() (pathshim.Result, error) {

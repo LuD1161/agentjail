@@ -202,7 +202,7 @@ curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh |
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 
-Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards.
+Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards. For installed Claude Code and Codex hooks, AgentJail also owns one fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block tells the agent how to request bounded host access without routing MCP or credential operations around their normal approval paths. Install and update refresh only that block; other instructions, file modes, and instruction-file symlinks are preserved.
 
 Cursor shell, file-read, and MCP events are normalized into the same policy
 contract as Claude Code and Codex. Cursor cannot prompt interactively for a
@@ -566,7 +566,7 @@ agentjail uninstall --for claude-code # just unhook one agent
 agentjail uninstall --for vscode     # just remove one IDE wrapper
 ```
 
-Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. AgentJail's Claude Code and Cursor CLI status lines are removed too — and if agentjail wrapped a status line you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md), [ADR 0113](./docs/adr/0113-cursor-status-line.md)).
+Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, every agent hook, and AgentJail's fenced global-guidance blocks. The exact unmarked two-line guidance used by pre-release builds is removed too. AgentJail's Claude Code and Cursor CLI status lines are removed — and if agentjail wrapped a status line you already had, that original command is restored verbatim. A hook or guidance cleanup failure names the affected agent and path, makes uninstall exit non-zero, and prevents the summary from claiming full removal ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md), [ADR 0113](./docs/adr/0113-cursor-status-line.md)).
 
 > **`policy.yaml` is deleted.** Reinstalling writes a **fresh default**, where `mcp.allowed: []` denies every MCP server. If you have customised your MCP allowlist or `network.allowed_hosts`, back it up first:
 > ```sh

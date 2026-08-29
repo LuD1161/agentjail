@@ -26,7 +26,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		ui.SetNoColor(noColorOutput)
 		// Mirror main.go: record feature usage for every command except telemetry.
-		if !strings.HasPrefix(cmd.CommandPath(), "agentjail telemetry") && cmd.Name() != "approval-exec" && cmd.Name() != "credential-mcp" {
+		if !strings.HasPrefix(cmd.CommandPath(), "agentjail telemetry") && cmd.Name() != "approval-exec" && cmd.Name() != "credential-mcp" && cmd.Name() != "_reconcile-guidance" {
 			recordFeatureUsed(cmd.Name())
 			// Start the throttled update check + heartbeat asynchronously.
 			// Never adds latency; all network/file errors are silently discarded.
