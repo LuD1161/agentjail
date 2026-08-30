@@ -21,17 +21,31 @@ struct ApprovalMenuBarLabelView: View {
 
     @ViewBuilder
     private var menuBarAppIcon: some View {
-        if let iconURL = Bundle.main.url(forResource: "AgentJail", withExtension: "icns"),
-           let icon = NSImage(contentsOf: iconURL) {
+        if let icon = renderedMenuBarIcon {
             Image(nsImage: icon)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .frame(width: 18, height: 18)
                 .accessibilityHidden(true)
         } else {
             Image(systemName: "shield.lefthalf.filled")
                 .accessibilityHidden(true)
         }
+    }
+
+    private var renderedMenuBarIcon: NSImage? {
+        guard let iconURL = Bundle.main.url(forResource: "AgentJail", withExtension: "icns"),
+              let sourceIcon = NSImage(contentsOf: iconURL) else {
+            return nil
+        }
+        let icon = NSImage(size: NSSize(width: 18, height: 18))
+        icon.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        sourceIcon.draw(
+            in: NSRect(x: 0, y: 0, width: 18, height: 18),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        icon.unlockFocus()
+        icon.isTemplate = false
+        return icon
     }
 }
