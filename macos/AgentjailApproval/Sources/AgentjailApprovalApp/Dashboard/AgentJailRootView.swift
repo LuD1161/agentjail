@@ -213,7 +213,15 @@ private struct DashboardOverviewView: View {
 
     private func tokenCard(_ snapshot: DashboardSnapshotV1) -> some View {
         DashboardCard(title: "Tokens over time", subtitle: snapshot.tokenCoverage.joined(separator: ", "), icon: "waveform.path.ecg") {
-            if snapshot.tokens.isEmpty {
+            if snapshot.tokenStatus == .loading && snapshot.tokens.isEmpty {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading local token usage…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 130)
+            } else if snapshot.tokens.isEmpty {
                 DashboardEmptyState(title: "No token usage yet", icon: "chart.line.downtrend.xyaxis", detail: "Usage appears after supported agent transcripts are available.")
                     .frame(height: 130)
             } else {
@@ -225,6 +233,14 @@ private struct DashboardOverviewView: View {
                 }
                 .chartXAxis(.hidden)
                 .frame(height: 130)
+                .overlay(alignment: .topTrailing) {
+                    if snapshot.tokenStatus == .loading {
+                        Label("Updating", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Updating token usage")
+                    }
+                }
             }
         }
     }
