@@ -22,13 +22,10 @@ struct AgentJailRootView: View {
             VStack(spacing: 0) {
                 brand
                 List(selection: $composition.selectedTab) {
-                    Section("Workspace") {
-                        sidebarItem("Overview", icon: "chart.xyaxis.line", tab: .overview)
-                        sidebarItem("MCP inventory", icon: "point.3.connected.trianglepath.dotted", tab: .mcp)
-                    }
-                    Section("AgentJail") {
-                        sidebarItem("Settings", icon: "gearshape", tab: .settings)
-                    }
+                    sidebarItem("Overview", icon: "chart.xyaxis.line", tab: .overview)
+                    sidebarItem("MCP inventory", icon: "point.3.connected.trianglepath.dotted", tab: .mcp)
+                    Divider()
+                    sidebarItem("Settings", icon: "gearshape", tab: .settings)
                 }
                 .listStyle(.sidebar)
                 sidebarStatus
@@ -48,10 +45,7 @@ struct AgentJailRootView: View {
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 11))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("AgentJail").font(.headline)
-                Text("Local security").font(.caption2).foregroundStyle(.secondary)
-            }
+            Text("AgentJail").font(.headline)
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -125,7 +119,15 @@ private struct DashboardOverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 AgentJailPageHeader(eyebrow: "Local security", title: "Overview", detail: "Protection activity from the last 35 days") {
-                    Button { Task { await refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    Button { Task { await refresh() } } label: {
+                        if dashboard.isRefreshing {
+                            Label("Refreshing", systemImage: "arrow.triangle.2.circlepath")
+                        } else {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .dashboardRefreshFocusStyle()
                         .disabled(dashboard.isRefreshing)
                 }
                 if !setup.health.isReady { setupCard }
@@ -413,6 +415,17 @@ private struct DashboardOverviewView: View {
     private func activityColor(_ count: Int64, maximum: Int64) -> Color {
         guard count > 0 else { return Color.secondary.opacity(0.1) }
         return Color.green.opacity(0.25 + 0.75 * Double(count) / Double(maximum))
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func dashboardRefreshFocusStyle() -> some View {
+        if #available(macOS 14.0, *) {
+            focusEffectDisabled()
+        } else {
+            self
+        }
     }
 }
 
