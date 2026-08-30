@@ -58,6 +58,12 @@ aggregates, daily activity, and supported local transcript token totals. It
 projects project basenames rather than full paths and never returns commands,
 tool input, traffic, or credentials.
 
+Dashboard projection separates fast audit and session data from transcript
+aggregation. The daemon returns the fast projection immediately and exposes a
+typed token loading state while one background collector refreshes a five-minute
+cache. The app renders available activity, polls that state with a bounded,
+cancellation-aware task, and preserves cached token points during refresh.
+
 The app treats its bundled CLI as the source of truth for local component
 compatibility. Health compares the installed executable with the bundled bytes,
 not only a human-readable version or a legacy health request, before calling the
@@ -103,6 +109,8 @@ security/audit evidence remains distinct from anonymous product telemetry.
   monitoring; the app labels monitoring as off rather than claiming protection.
 - Dashboard token coverage is explicit: local Claude Code, Codex, and OpenCode
   transcript readers are supported; Cursor usage is not inferred.
+- Slow transcript readers cannot make the audit and session dashboard
+  unavailable; token loading is progressive and single-flight.
 - The approval Swift package becomes the containing application rather than a
   standalone companion; its daemon-controlled review model remains unchanged.
 - The old `AgentjailTunnel.app` and approval-only DMG are migration inputs, not

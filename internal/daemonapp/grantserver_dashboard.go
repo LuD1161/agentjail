@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -22,14 +23,56 @@ type dashboardSnapshotProjector interface {
 type localDashboardProjector struct {
 	store          store.EventStore
 	activeSessions *activeTracker
-	collectTokens  func(time.Time) ([]costanalytics.SessionCost, []error)
+	tokenCache     *dashboardTokenCache
 }
 
 func newLocalDashboardProjector(eventStore store.EventStore, activeSessions *activeTracker) dashboardSnapshotProjector {
 	if eventStore == nil {
 		return nil
 	}
-	return &localDashboardProjector{store: eventStore, activeSessions: activeSessions, collectTokens: costanalytics.CollectAll}
+	return &localDashboardProjector{
+		store: eventStore, activeSessions: activeSessions,
+		tokenCache: newDashboardTokenCache(costanalytics.CollectAll),
+	}
+}
+
+const dashboardTokenCacheTTL = 5 * time.Minute
+
+type dashboardTokenCache struct {
+	mu         sync.Mutex
+	collect    func(time.Time) ([]costanalytics.SessionCost, []error)
+	points     []grantctl.DashboardTokenDayV1
+	loadedAt   time.Time
+	refreshing bool
+}
+
+func newDashboardTokenCache(collect func(time.Time) ([]costanalytics.SessionCost, []error)) *dashboardTokenCache {
+	return &dashboardTokenCache{collect: collect}
+}
+
+func (c *dashboardTokenCache) snapshot(since, now time.Time) ([]grantctl.DashboardTokenDayV1, grantctl.DashboardTokenStatus) {
+	c.mu.Lock()
+	if !c.refreshing && (c.loadedAt.IsZero() || now.Sub(c.loadedAt) >= dashboardTokenCacheTTL) {
+		c.refreshing = true
+		go c.refresh(since, now)
+	}
+	points := append(make([]grantctl.DashboardTokenDayV1, 0, len(c.points)), c.points...)
+	status := grantctl.DashboardTokensReady
+	if c.refreshing {
+		status = grantctl.DashboardTokensLoading
+	}
+	c.mu.Unlock()
+	return points, status
+}
+
+func (c *dashboardTokenCache) refresh(since, now time.Time) {
+	costs, _ := c.collect(since)
+	points := aggregateDashboardTokens(costs, since, now)
+	c.mu.Lock()
+	c.points = points
+	c.loadedAt = now
+	c.refreshing = false
+	c.mu.Unlock()
 }
 
 func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now time.Time) (grantctl.DashboardSnapshotV1, error) {
@@ -58,7 +101,6 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 		TotalSessions: stats.Sessions, ActiveSessions: len(active),
 		RecentSessions: make([]grantctl.DashboardSessionV1, 0, len(sessions)),
 		Activity:       make([]grantctl.DashboardDayV1, 0, len(stats.Daily)),
-		Tokens:         []grantctl.DashboardTokenDayV1{},
 		TokenCoverage:  []string{"Claude Code", "Codex", "OpenCode"},
 	}
 	for _, session := range sessions {
@@ -79,33 +121,36 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 		snapshot.Activity = append(snapshot.Activity, grantctl.DashboardDayV1{Day: day.Day, Count: day.Count})
 	}
 
-	if p.collectTokens != nil {
-		costs, _ := p.collectTokens(since)
-		byDay := make(map[string]*grantctl.DashboardTokenDayV1)
-		for _, cost := range costs {
-			if cost.StartedAt.Before(since) || cost.StartedAt.After(now) {
-				continue
-			}
-			day := cost.StartedAt.UTC().Format("2006-01-02")
-			point := byDay[day]
-			if point == nil {
-				point = &grantctl.DashboardTokenDayV1{Day: day}
-				byDay[day] = point
-			}
-			point.InputTokens += cost.InputTokens
-			point.OutputTokens += cost.OutputTokens
-			point.CacheTokens += cost.CacheRead + cost.CacheWrite
-		}
-		days := make([]string, 0, len(byDay))
-		for day := range byDay {
-			days = append(days, day)
-		}
-		sort.Strings(days)
-		for _, day := range days {
-			snapshot.Tokens = append(snapshot.Tokens, *byDay[day])
-		}
-	}
+	snapshot.Tokens, snapshot.TokenStatus = p.tokenCache.snapshot(since, now)
 	return snapshot, nil
+}
+
+func aggregateDashboardTokens(costs []costanalytics.SessionCost, since, now time.Time) []grantctl.DashboardTokenDayV1 {
+	byDay := make(map[string]*grantctl.DashboardTokenDayV1)
+	for _, cost := range costs {
+		if cost.StartedAt.Before(since) || cost.StartedAt.After(now) {
+			continue
+		}
+		day := cost.StartedAt.UTC().Format("2006-01-02")
+		point := byDay[day]
+		if point == nil {
+			point = &grantctl.DashboardTokenDayV1{Day: day}
+			byDay[day] = point
+		}
+		point.InputTokens += cost.InputTokens
+		point.OutputTokens += cost.OutputTokens
+		point.CacheTokens += cost.CacheRead + cost.CacheWrite
+	}
+	days := make([]string, 0, len(byDay))
+	for day := range byDay {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	points := make([]grantctl.DashboardTokenDayV1, 0, len(days))
+	for _, day := range days {
+		points = append(points, *byDay[day])
+	}
+	return points
 }
 
 func dashboardProjectName(cwd string) string {

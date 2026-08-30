@@ -1272,6 +1272,17 @@ repeated clicks and repeated daemon restarts even though every command succeeded
   single-flight and poll authoritative health for a bounded interval. A command's
   exit status proves handoff, not service readiness. See ADR 0141-unified-macos-app.
 
+## 98. One slow projection can blank an otherwise healthy dashboard
+
+The dashboard synchronously scanned local token transcripts before returning
+audit and session totals. The scan took longer than the app's request timeout,
+so a healthy daemon appeared unavailable even though every individual data path
+and unit test passed.
+
+- **Rule:** isolate slow optional projections behind a typed loading state and a
+  bounded single-flight cache; return independently available data immediately.
+  See ADR 0141-unified-macos-app.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

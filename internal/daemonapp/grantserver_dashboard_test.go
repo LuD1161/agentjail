@@ -32,11 +32,15 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	}
 	active := newActiveTracker(root)
 	active.update("session-1", os.Getpid(), "/Users/private/work/agentjail")
+	started := make(chan struct{})
+	release := make(chan struct{})
 	projector := &localDashboardProjector{
 		store: eventStore, activeSessions: active,
-		collectTokens: func(time.Time) ([]costanalytics.SessionCost, []error) {
+		tokenCache: newDashboardTokenCache(func(time.Time) ([]costanalytics.SessionCost, []error) {
+			close(started)
+			<-release
 			return []costanalytics.SessionCost{{StartedAt: now, InputTokens: 10, OutputTokens: 5, CacheRead: 2}}, nil
-		},
+		}),
 	}
 
 	snapshot, err := projector.DashboardSnapshot(context.Background(), now.Add(time.Hour))
@@ -55,8 +59,21 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	if snapshot.RecentSessions[0].Active != true {
 		t.Fatal("tracked session must be active")
 	}
-	if len(snapshot.Tokens) != 1 || snapshot.Tokens[0].InputTokens != 10 || snapshot.Tokens[0].CacheTokens != 2 {
-		t.Fatalf("unexpected tokens: %+v", snapshot.Tokens)
+	if snapshot.TokenStatus != grantctl.DashboardTokensLoading || len(snapshot.Tokens) != 0 {
+		t.Fatalf("initial token state = %q %+v, want non-blocking loading", snapshot.TokenStatus, snapshot.Tokens)
+	}
+	<-started
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for snapshot.TokenStatus == grantctl.DashboardTokensLoading && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		snapshot, err = projector.DashboardSnapshot(context.Background(), now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snapshot.TokenStatus != grantctl.DashboardTokensReady || len(snapshot.Tokens) != 1 || snapshot.Tokens[0].InputTokens != 10 || snapshot.Tokens[0].CacheTokens != 2 {
+		t.Fatalf("ready tokens: status=%q points=%+v", snapshot.TokenStatus, snapshot.Tokens)
 	}
 }
 
