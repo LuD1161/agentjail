@@ -164,10 +164,25 @@ private struct DashboardOverviewView: View {
 
     private var emptyDashboard: some View {
         DashboardEmptyState(
-            title: dashboard.unavailable ? "Dashboard unavailable" : "Loading local activity",
-            icon: dashboard.unavailable ? "exclamationmark.triangle" : "hourglass",
-            detail: dashboard.unavailable ? "Start or retry the local daemon, then refresh." : "Reading the local AgentJail daemon."
+            title: emptyDashboardTitle,
+            icon: emptyDashboardIcon,
+            detail: emptyDashboardDetail
         ).frame(maxWidth: .infinity, minHeight: 280)
+    }
+
+    private var emptyDashboardTitle: String {
+        if !setup.health.isReady { return "Activity starts after setup" }
+        return dashboard.unavailable ? "Dashboard unavailable" : "Loading local activity"
+    }
+
+    private var emptyDashboardIcon: String {
+        if !setup.health.isReady { return "chart.xyaxis.line" }
+        return dashboard.unavailable ? "exclamationmark.triangle" : "hourglass"
+    }
+
+    private var emptyDashboardDetail: String {
+        if !setup.health.isReady { return "Finish setup above, then AgentJail will show audited sessions, calls, and token usage here." }
+        return dashboard.unavailable ? "Start or retry the local daemon, then refresh." : "Reading the local AgentJail daemon."
     }
 
     private var setupTitle: String {
