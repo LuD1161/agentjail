@@ -21,7 +21,8 @@ let package = Package(
         .target(name: "AgentjailApprovalCore"),
         .executableTarget(
             name: "AgentjailApprovalApp",
-            dependencies: ["AgentjailApprovalCore"]
+            dependencies: ["AgentjailApprovalCore"],
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "AgentjailApprovalCoreTests",

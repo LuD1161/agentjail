@@ -1,4 +1,5 @@
 import AgentjailApprovalCore
+import AppKit
 import SwiftUI
 
 enum AgentJailTab: Hashable {
@@ -260,20 +261,29 @@ private struct DashboardOverviewView: View {
         let agent: String
 
         var body: some View {
-            ZStack {
-                RoundedRectangle(cornerRadius: 5).fill(color.opacity(0.16))
-                Text(mark).font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(color)
+            Group {
+                if let imageName, let image = AgentBrandMark.load(imageName) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                } else {
+                    Text("<>")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.purple)
+                }
             }
             .frame(width: 25, height: 25)
             .accessibilityHidden(true)
         }
 
-        private var mark: String {
-            switch agent { case "claude-code": "C"; case "codex": "✦"; case "opencode": "<>"; default: "•" }
+        private var imageName: String? {
+            switch agent { case "claude-code": "agent-claude"; case "codex": "agent-codex"; default: nil }
         }
 
-        private var color: Color {
-            switch agent { case "claude-code": .orange; case "codex": .blue; case "opencode": .purple; default: .secondary }
+        private static func load(_ name: String) -> NSImage? {
+            guard let url = Bundle.module.url(forResource: name, withExtension: "svg") else { return nil }
+            return NSImage(contentsOf: url)
         }
     }
 
