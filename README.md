@@ -252,6 +252,10 @@ files or live traffic. **Discover tools** remains a confirmed manual retry backe
 by `agentjail mcp tool discover --json`: it requests paginated `tools/list`
 metadata from configured servers, never invokes a tool, persists only sanitized
 server/tool identifiers, and reports authentication or reachability per server.
+For stdio servers, the daemon resolves configured executables without invoking a
+login shell, including standard Homebrew and user toolchain locations that are
+normally absent from launchd's minimal `PATH`. `agentjail mcp scan --json`
+redacts argument, environment, header, URL credential, and private path values.
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 

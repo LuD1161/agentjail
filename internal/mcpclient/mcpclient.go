@@ -109,7 +109,11 @@ type scanResult struct {
 }
 
 func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error) {
-	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	command, err := resolveConfiguredCommand(cfg.Command)
+	if err != nil {
+		return nil, fmt.Errorf("mcpclient: resolve %q: %w", cfg.Command, err)
+	}
+	cmd := exec.CommandContext(ctx, command, cfg.Args...)
 
 	// Security: strip sensitive environment variables before spawning MCP
 	// server processes.  Discovery runs outside the agent sandbox, so we
@@ -600,7 +604,7 @@ func ListAllTools(ctx context.Context, servers []MCPServerConfig) map[string]Ser
 		wg.Add(1)
 		go func(s MCPServerConfig) {
 			defer wg.Done()
-			perCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			perCtx, cancel := context.WithTimeout(ctx, discoveryTimeout(s))
 			defer cancel()
 
 			tools, err := ListTools(perCtx, s)
@@ -635,4 +639,11 @@ func ListAllTools(ctx context.Context, servers []MCPServerConfig) map[string]Ser
 		out[k] = ServerToolResult{Tools: v.Tools, Status: v.Status}
 	}
 	return out
+}
+
+func discoveryTimeout(server MCPServerConfig) time.Duration {
+	if server.Type == "" || server.Type == "stdio" {
+		return 15 * time.Second
+	}
+	return 5 * time.Second
 }

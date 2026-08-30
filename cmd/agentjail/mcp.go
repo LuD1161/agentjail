@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -375,13 +376,60 @@ func runMCPScan(args []string) int {
 	result := mcpclient.FullScan(home, st)
 
 	if jsonMode {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(result)
-		return 0
+		return renderMCPScanJSON(os.Stdout, os.Stderr, result)
 	}
 
 	return renderMCPScan(os.Stdout, result)
+}
+
+func renderMCPScanJSON(out, errOut io.Writer, result *mcpclient.ScanResult) int {
+	safe := *result
+	safe.Configured = make([]mcpclient.MCPServerEntry, 0, len(result.Configured))
+	for _, entry := range result.Configured {
+		entry.Config = redactMCPServerConfig(entry.Config)
+		if filepath.IsAbs(entry.Package) {
+			entry.Package = filepath.Base(entry.Package)
+		}
+		safe.Configured = append(safe.Configured, entry)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(&safe); err != nil {
+		fmt.Fprintln(errOut, "agentjail mcp scan: json encode failed")
+		return 1
+	}
+	return 0
+}
+
+func redactMCPServerConfig(config mcpclient.MCPServerConfig) mcpclient.MCPServerConfig {
+	safe := config
+	if filepath.IsAbs(safe.Command) {
+		safe.Command = filepath.Base(safe.Command)
+	}
+	safe.Args = make([]string, len(config.Args))
+	for index := range safe.Args {
+		safe.Args[index] = "[REDACTED]"
+	}
+	safe.Env = redactMCPValues(config.Env)
+	safe.Headers = redactMCPValues(config.Headers)
+	if parsed, err := url.Parse(config.URL); err == nil && parsed.Scheme != "" {
+		parsed.User = nil
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		safe.URL = parsed.String()
+	}
+	return safe
+}
+
+func redactMCPValues(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	safe := make(map[string]string, len(values))
+	for key := range values {
+		safe[key] = "[REDACTED]"
+	}
+	return safe
 }
 
 // renderMCPScan prints the scan result in a human-readable format.

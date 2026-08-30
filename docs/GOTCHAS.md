@@ -1329,6 +1329,27 @@ runner tests were green.
   global flags, and its test must include the exact argument vector used by the
   product wrapper. See ADR 0143-explicit-mcp-enumeration.
 
+## 101. A launchd daemon does not inherit your terminal PATH
+
+MCP discovery worked in terminal-oriented tests but marked every bare `npx`
+server unreachable after installation. The daemon was launched with a minimal
+environment that omitted Homebrew and user toolchain directories.
+
+- **Rule:** resolve configured executables directly against a shared, bounded
+  platform search contract; never source a login shell to manufacture daemon
+  state. See ADR 0146-mcp-command-resolution.
+
+## 102. Machine-readable inventory can bypass display redaction
+
+The human MCP scan renderer printed metadata only, while `mcp scan --json`
+serialized the internal connection struct and exposed configured argument,
+environment, header, and URL credential values. Tests covered parsing and the
+human report but never asserted the public JSON boundary.
+
+- **Rule:** every machine-readable command must project an explicit safe wire
+  type or sanitized copy, and its test must seed the same secret into every
+  supported configuration channel. See ADR 0146-mcp-command-resolution.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its
