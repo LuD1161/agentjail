@@ -214,10 +214,11 @@ Overview reads a bounded snapshot from the authenticated local daemon. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,
 and token usage over time from supported local Claude Code, Codex, and OpenCode
 transcripts. Session rows include the agent identity, live or recent status,
-elapsed time, and the number of audited calls. Session and audit activity appears immediately while slower local
-transcript aggregation loads progressively in the token card. Its vertical axis
+elapsed time, and the number of audited calls. Session and audit activity appears
+immediately while slower local transcript aggregation loads progressively in the
+token card. Its vertical axis
 automatically uses tokens, thousands, millions, or billions for the visible
-usage range, and hovering a day shows its compact daily total. The app receives
+usage range, and hovering a day shows its compact daily total.
 The dashboard also shows each supported agent's token share with a compact
 breakdown. Token counts are parsed locally from those agents' transcripts;
 Gryph is used only for offline model-name resolution and pricing estimates.
@@ -242,7 +243,10 @@ duplicate names. When AgentJail has already audited tools from a server, the
 table shows an expandable count and the observed tool names. Servers without
 local audit history are labeled **Not observed**. Refresh never launches an MCP
 server, changes configuration or policy, or claims visibility into project-local
-files or live traffic.
+files or live traffic. **Discover tools** is a separate, confirmed action backed
+by `agentjail mcp tool discover --json`: it requests paginated `tools/list`
+metadata from configured servers, never invokes a tool, persists only sanitized
+server/tool identifiers, and reports authentication or reachability per server.
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 

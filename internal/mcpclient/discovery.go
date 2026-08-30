@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // MCPServerEntry combines a server config with provenance metadata.
@@ -33,6 +35,11 @@ func DiscoverServersWithConfig(home string, projectDirs ...string) []MCPServerEn
 			seen[e.Name] = e
 		}
 	}
+	for _, e := range codexServers(home) {
+		if _, exists := seen[e.Name]; !exists {
+			seen[e.Name] = e
+		}
+	}
 	for _, e := range claudePluginServers(home) {
 		if _, exists := seen[e.Name]; !exists {
 			seen[e.Name] = e
@@ -54,6 +61,88 @@ func DiscoverServersWithConfig(home string, projectDirs ...string) []MCPServerEn
 		return entries[i].Name < entries[j].Name
 	})
 	return entries
+}
+
+type codexConfigTOML struct {
+	MCPServers map[string]codexServerTOML `toml:"mcp_servers"`
+}
+
+type codexServerTOML struct {
+	Command           string            `toml:"command"`
+	Args              []string          `toml:"args"`
+	Env               map[string]string `toml:"env"`
+	URL               string            `toml:"url"`
+	BearerTokenEnvVar string            `toml:"bearer_token_env_var"`
+	HTTPHeaders       map[string]string `toml:"http_headers"`
+	EnvHTTPHeaders    map[string]string `toml:"env_http_headers"`
+	Enabled           *bool             `toml:"enabled"`
+}
+
+func codexServers(home string) []MCPServerEntry {
+	data, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		return nil
+	}
+	var document codexConfigTOML
+	if err := toml.Unmarshal(data, &document); err != nil {
+		return nil
+	}
+	entries := make([]MCPServerEntry, 0, len(document.MCPServers))
+	for name, server := range document.MCPServers {
+		if server.Enabled != nil && !*server.Enabled {
+			continue
+		}
+		config := MCPServerConfig{
+			Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
+			Env: copyStringMap(server.Env), URL: server.URL, Headers: codexHTTPHeaders(server),
+		}
+		switch {
+		case config.Command != "":
+			config.Type = "stdio"
+		case config.URL != "":
+			config.Type = "http"
+		default:
+			continue
+		}
+		entries = append(entries, MCPServerEntry{
+			Name: name, Source: "codex", Scope: "global", Trust: "user-installed",
+			Package: config.Command, Config: config,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries
+}
+
+func codexHTTPHeaders(server codexServerTOML) map[string]string {
+	headers := copyStringMap(server.HTTPHeaders)
+	for header, environmentName := range server.EnvHTTPHeaders {
+		if value := os.Getenv(environmentName); value != "" {
+			if headers == nil {
+				headers = make(map[string]string)
+			}
+			headers[header] = value
+		}
+	}
+	if environmentName := strings.TrimSpace(server.BearerTokenEnvVar); environmentName != "" {
+		if value := os.Getenv(environmentName); value != "" {
+			if headers == nil {
+				headers = make(map[string]string)
+			}
+			headers["Authorization"] = "Bearer " + value
+		}
+	}
+	return headers
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
 }
 
 // --------------------------------------------------------------------------

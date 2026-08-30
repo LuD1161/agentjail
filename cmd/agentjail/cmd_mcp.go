@@ -8,6 +8,7 @@
 //	agentjail mcp scan [--json]
 //	agentjail mcp where <server> [--json]
 //	agentjail mcp tool list [server] [--json]
+//	agentjail mcp tool discover [--json]
 //	agentjail mcp tool allow <server> <tool> [--project <dir>]
 //	agentjail mcp tool block <server> <tool> [--project <dir>]
 //	agentjail mcp tool ask   <server> <tool> [--project <dir>]
@@ -116,6 +117,19 @@ var mcpToolListCmd = &cobra.Command{
 	},
 }
 
+var mcpToolDiscoverCmd = &cobra.Command{
+	Use:                "discover",
+	Short:              "Ask configured MCP servers to enumerate their tools",
+	Long:               "Explicitly starts configured local MCP servers and contacts configured remote endpoints, requests tools/list only, and persists the returned tool names. No tool is invoked.",
+	DisableFlagParsing: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		if helpRequested(cmd, args) {
+			return
+		}
+		os.Exit(runMCPToolDiscover(args))
+	},
+}
+
 // mcpToolProjectFlag holds the value of --project for the tool subcommands.
 var mcpToolProjectFlag string
 
@@ -164,7 +178,7 @@ func init() {
 		cmd.Flags().StringVar(&mcpToolProjectFlag, "project", "", "apply policy only to project directory PATH (default: global)")
 	}
 
-	mcpToolCmd.AddCommand(mcpToolListCmd, mcpToolAllowCmd, mcpToolBlockCmd, mcpToolAskCmd, mcpToolClearCmd)
+	mcpToolCmd.AddCommand(mcpToolListCmd, mcpToolDiscoverCmd, mcpToolAllowCmd, mcpToolBlockCmd, mcpToolAskCmd, mcpToolClearCmd)
 	mcpCmd.AddCommand(mcpAllowCmd, mcpBlockCmd, mcpListCmd, mcpScanCmd, mcpWhereCmd, mcpToolsCmd, mcpToolCmd)
 	rootCmd.AddCommand(mcpCmd)
 }

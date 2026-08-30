@@ -124,6 +124,53 @@ func DashboardSnapshot(sockPath, ctlToken string, timeout time.Duration) (Dashbo
 	return *resp.DashboardSnapshot, nil
 }
 
+// DiscoverMCPTools requests an explicit, authenticated tools/list pass.
+func DiscoverMCPTools(sockPath, ctlToken string, timeout time.Duration) (MCPToolsDiscoveryV1, error) {
+	resp, err := roundTripSlow(sockPath, Request{
+		Type:            ReqMCPToolsDiscover,
+		CtlToken:        ctlToken,
+		ProtocolVersion: MCPDiscoveryProtocolVersion,
+	}, timeout, timeout)
+	if err != nil {
+		return MCPToolsDiscoveryV1{}, err
+	}
+	if !resp.OK {
+		return MCPToolsDiscoveryV1{}, fmt.Errorf("MCP tool discovery refused: %s", resp.Error)
+	}
+	if resp.MCPToolsDiscovery == nil || resp.MCPToolsDiscovery.ProtocolVersion != MCPDiscoveryProtocolVersion {
+		return MCPToolsDiscoveryV1{}, fmt.Errorf("unsupported or missing MCP discovery protocol version")
+	}
+	if err := validateMCPToolsDiscoveryV1(*resp.MCPToolsDiscovery); err != nil {
+		return MCPToolsDiscoveryV1{}, fmt.Errorf("invalid MCP tool discovery: %w", err)
+	}
+	return *resp.MCPToolsDiscovery, nil
+}
+
+func validateMCPToolsDiscoveryV1(discovery MCPToolsDiscoveryV1) error {
+	if discovery.ProtocolVersion != MCPDiscoveryProtocolVersion {
+		return fmt.Errorf("unsupported MCP discovery protocol version")
+	}
+	if discovery.Servers == nil || len(discovery.Servers) > 64 {
+		return fmt.Errorf("MCP discovery exceeds server limit")
+	}
+	for _, server := range discovery.Servers {
+		if server.Server == "" || len(server.Server) > MaxDashboardLabelBytes || server.Tools == nil || len(server.Tools) > 128 {
+			return fmt.Errorf("invalid MCP discovery server")
+		}
+		switch server.Status {
+		case MCPDiscoveryConnected, MCPDiscoveryAuthRequired, MCPDiscoveryUnreachable, MCPDiscoveryTimeout:
+		default:
+			return fmt.Errorf("invalid MCP discovery status")
+		}
+		for _, tool := range server.Tools {
+			if tool == "" || len(tool) > MaxDashboardLabelBytes {
+				return fmt.Errorf("invalid MCP discovery tool")
+			}
+		}
+	}
+	return nil
+}
+
 func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenAgents == nil || snapshot.TokenCoverage == nil {
 		return fmt.Errorf("dashboard arrays are required")

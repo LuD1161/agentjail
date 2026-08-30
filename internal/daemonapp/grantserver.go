@@ -69,6 +69,7 @@ type grantServer struct {
 	registry  *grantctl.Registry
 	reviews   reviewSnapshotProjector
 	dashboard dashboardSnapshotProjector
+	mcpTools  mcpToolDiscoveryService
 	emitter   audit.Emitter
 	// durableAudit is true only when emitter is backed by a real, writable
 	// store (never audit.NopEmitter). grant_approve is refused (fail closed)
@@ -266,6 +267,9 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	case grantctl.ReqDashboardSnapshot:
 		_ = conn.SetDeadline(time.Now().Add(ctlDashboardDeadline))
 		gs.reply(conn, dashboardSnapshotResponse(gs.dashboard, req.ProtocolVersion, now))
+	case grantctl.ReqMCPToolsDiscover:
+		_ = conn.SetDeadline(time.Now().Add(45 * time.Second))
+		gs.reply(conn, mcpToolsDiscoveryResponse(gs.mcpTools, req.ProtocolVersion, now))
 
 	case grantctl.ReqGrantApprove:
 		if req.GrantID == "" {

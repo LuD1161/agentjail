@@ -20,7 +20,7 @@ The daemon never consumed that TTL when approving the project overlay.
 Use one canonical Cobra hierarchy for each user concept:
 
 - `grant list|history|approve|deny`
-- `mcp tool list|allow|block|ask|clear`
+- `mcp tool list|discover|allow|block|ask|clear`
 - `sessions [flags]`
 - `telemetry status|enable|disable|view|reset`
 - `trust add|remove|list`

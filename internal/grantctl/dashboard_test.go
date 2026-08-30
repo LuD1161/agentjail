@@ -42,3 +42,25 @@ func TestValidateDashboardSnapshotRejectsMalformedAndOversizedData(t *testing.T)
 		t.Fatal("empty MCP tool name accepted")
 	}
 }
+
+func TestValidateMCPToolsDiscoveryRejectsUnknownStatusAndMalformedTools(t *testing.T) {
+	valid := MCPToolsDiscoveryV1{
+		ProtocolVersion: MCPDiscoveryProtocolVersion,
+		Servers: []MCPServerToolsDiscoveryV1{{
+			Server: "linear", Status: MCPDiscoveryConnected, Tools: []string{"get_issue"},
+		}},
+	}
+	if err := validateMCPToolsDiscoveryV1(valid); err != nil {
+		t.Fatalf("valid discovery: %v", err)
+	}
+	invalidStatus := valid
+	invalidStatus.Servers = []MCPServerToolsDiscoveryV1{{Server: "linear", Status: "unknown", Tools: []string{}}}
+	if err := validateMCPToolsDiscoveryV1(invalidStatus); err == nil {
+		t.Fatal("unknown discovery status accepted")
+	}
+	invalidTool := valid
+	invalidTool.Servers = []MCPServerToolsDiscoveryV1{{Server: "linear", Status: MCPDiscoveryConnected, Tools: []string{""}}}
+	if err := validateMCPToolsDiscoveryV1(invalidTool); err == nil {
+		t.Fatal("empty discovery tool accepted")
+	}
+}

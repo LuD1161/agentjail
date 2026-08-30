@@ -81,8 +81,10 @@ it is sorted, limited to 64 servers and 128 tools per server, and contains only
 sanitized server and tool identifiers. The app labels this data as observed
 history. Missing history is **Not observed**, not an empty server declaration.
 Reading this projection does not execute configured commands or contact remote
-MCP endpoints. Complete live `tools/list` discovery remains an explicit later
-capability because stdio discovery starts third-party processes.
+MCP endpoints. Complete live `tools/list` discovery is the separate, explicit
+capability in [ADR 0143-explicit-mcp-enumeration](0143-explicit-mcp-enumeration.md),
+because stdio discovery starts third-party processes and remote discovery
+contacts configured endpoints.
 
 ## Consequences
 
@@ -100,3 +102,5 @@ capability because stdio discovery starts third-party processes.
   than a home-directory crawl.
 - Previously audited tool names make the inventory more useful without changing
   Phase 1's no-process-launch and no-network-contact guarantee.
+- Explicit enumeration does not weaken that guarantee: it is a separately
+  labeled CLI action, while opening and refreshing this inventory remain passive.

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"os"
 	"os/exec"
 	"sort"
@@ -41,6 +42,10 @@ var ErrAuthRequired = errors.New("mcpclient: authentication required")
 
 // ErrTimeout is returned when a server does not respond within the deadline.
 var ErrTimeout = errors.New("mcpclient: server timed out")
+
+const maxToolListPages = 128
+
+const mcpProtocolVersion = "2025-06-18"
 
 // sensitiveEnvVars is the set of environment variable names stripped before
 // spawning MCP server processes during discovery.
@@ -175,7 +180,7 @@ func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error
 		Method:  "initialize",
 		ID:      1,
 		Params: map[string]any{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{},
 			"clientInfo": map[string]string{
 				"name":    "agentjail",
@@ -202,24 +207,34 @@ func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error
 		return nil, fmt.Errorf("mcpclient: write initialized notification: %w", err)
 	}
 
-	// Step 3: send tools/list
-	toolsReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "tools/list",
-		ID:      2,
-		Params:  map[string]any{},
+	tools := make([]ToolInfo, 0)
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for page := 0; page < maxToolListPages; page++ {
+		requestID := 2 + page
+		toolsReq := jsonRPCRequest{JSONRPC: "2.0", Method: "tools/list", ID: requestID, Params: toolListParams(cursor)}
+		if err := writeJSONLine(stdin, toolsReq); err != nil {
+			return nil, fmt.Errorf("mcpclient: write tools/list: %w", err)
+		}
+		resp, err := readResponseFromCh(ctx, lineCh, requestID)
+		if err != nil {
+			return nil, fmt.Errorf("mcpclient: tools/list response: %w", err)
+		}
+		pageTools, nextCursor, err := parseToolsPage(resp)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, pageTools...)
+		if nextCursor == "" {
+			return tools, nil
+		}
+		if _, repeated := seenCursors[nextCursor]; repeated {
+			return nil, fmt.Errorf("mcpclient: tools/list repeated cursor")
+		}
+		seenCursors[nextCursor] = struct{}{}
+		cursor = nextCursor
 	}
-	if err := writeJSONLine(stdin, toolsReq); err != nil {
-		return nil, fmt.Errorf("mcpclient: write tools/list: %w", err)
-	}
-
-	// Read tools/list response.
-	resp, err := readResponseFromCh(ctx, lineCh, 2)
-	if err != nil {
-		return nil, fmt.Errorf("mcpclient: tools/list response: %w", err)
-	}
-
-	return parseToolsResult(resp)
+	return nil, fmt.Errorf("mcpclient: tools/list exceeded page limit")
 }
 
 // --------------------------------------------------------------------------
@@ -228,6 +243,8 @@ func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error
 
 func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
+	var sessionID string
+	protocolVersion := mcpProtocolVersion
 
 	// Helper to POST a JSON-RPC request and read the response body.
 	doRequest := func(req jsonRPCRequest) (json.RawMessage, error) {
@@ -240,6 +257,13 @@ func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error)
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "application/json, text/event-stream")
+		if sessionID != "" {
+			httpReq.Header.Set("Mcp-Session-Id", sessionID)
+		}
+		if req.Method != "initialize" {
+			httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
+		}
 		for k, v := range cfg.Headers {
 			httpReq.Header.Set(k, v)
 		}
@@ -256,13 +280,22 @@ func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error)
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			return nil, ErrAuthRequired
 		}
+		if resp.StatusCode == http.StatusAccepted && req.ID == nil {
+			return json.RawMessage(`{}`), nil
+		}
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("mcpclient: HTTP %d", resp.StatusCode)
+		}
+		if value := resp.Header.Get("Mcp-Session-Id"); value != "" {
+			sessionID = value
 		}
 
 		data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB max
 		if err != nil {
 			return nil, err
+		}
+		if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			return parseSSEJSONRPC(data)
 		}
 		return json.RawMessage(data), nil
 	}
@@ -273,7 +306,7 @@ func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error)
 		Method:  "initialize",
 		ID:      1,
 		Params: map[string]any{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{},
 			"clientInfo": map[string]string{
 				"name":    "agentjail",
@@ -281,8 +314,12 @@ func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error)
 			},
 		},
 	}
-	if _, err := doRequest(initReq); err != nil {
+	initResponse, err := doRequest(initReq)
+	if err != nil {
 		return nil, fmt.Errorf("mcpclient: HTTP initialize: %w", err)
+	}
+	if negotiated := initializeProtocolVersion(initResponse); negotiated != "" {
+		protocolVersion = negotiated
 	}
 
 	// Step 2: notifications/initialized (fire and forget).
@@ -293,19 +330,83 @@ func listToolsHTTP(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error)
 	}
 	_, _ = doRequest(notif) // best effort
 
-	// Step 3: tools/list
-	toolsReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		Method:  "tools/list",
-		ID:      2,
-		Params:  map[string]any{},
+	tools := make([]ToolInfo, 0)
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for page := 0; page < maxToolListPages; page++ {
+		toolsReq := jsonRPCRequest{JSONRPC: "2.0", Method: "tools/list", ID: 2 + page, Params: toolListParams(cursor)}
+		resp, err := doRequest(toolsReq)
+		if err != nil {
+			return nil, fmt.Errorf("mcpclient: HTTP tools/list: %w", err)
+		}
+		pageTools, nextCursor, err := parseToolsPage(resp)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, pageTools...)
+		if nextCursor == "" {
+			return tools, nil
+		}
+		if _, repeated := seenCursors[nextCursor]; repeated {
+			return nil, fmt.Errorf("mcpclient: tools/list repeated cursor")
+		}
+		seenCursors[nextCursor] = struct{}{}
+		cursor = nextCursor
 	}
-	resp, err := doRequest(toolsReq)
-	if err != nil {
-		return nil, fmt.Errorf("mcpclient: HTTP tools/list: %w", err)
-	}
+	return nil, fmt.Errorf("mcpclient: tools/list exceeded page limit")
+}
 
-	return parseToolsResult(resp)
+func initializeProtocolVersion(raw json.RawMessage) string {
+	var envelope struct {
+		Result struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return ""
+	}
+	return envelope.Result.ProtocolVersion
+}
+
+func parseSSEJSONRPC(data []byte) (json.RawMessage, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 64*1024), 10<<20)
+	var eventData strings.Builder
+	flush := func() (json.RawMessage, bool) {
+		if eventData.Len() == 0 {
+			return nil, false
+		}
+		payload := strings.TrimSpace(eventData.String())
+		eventData.Reset()
+		if !json.Valid([]byte(payload)) {
+			return nil, false
+		}
+		return json.RawMessage(payload), true
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if payload, ok := flush(); ok {
+				return payload, nil
+			}
+			continue
+		}
+		key, value, found := strings.Cut(line, ":")
+		if !found || textproto.TrimString(key) != "data" {
+			continue
+		}
+		if eventData.Len() > 0 {
+			eventData.WriteByte('\n')
+		}
+		eventData.WriteString(strings.TrimPrefix(value, " "))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("mcpclient: read SSE response: %w", err)
+	}
+	if payload, ok := flush(); ok {
+		return payload, nil
+	}
+	return nil, fmt.Errorf("mcpclient: SSE response contained no JSON-RPC message")
 }
 
 // --------------------------------------------------------------------------
@@ -387,18 +488,26 @@ func readResponseFromCh(ctx context.Context, lineCh <-chan scanResult, wantID in
 	}
 }
 
-// parseToolsResult extracts []ToolInfo from a tools/list JSON-RPC response.
-func parseToolsResult(raw json.RawMessage) ([]ToolInfo, error) {
+func toolListParams(cursor string) map[string]string {
+	if cursor == "" {
+		return map[string]string{}
+	}
+	return map[string]string{"cursor": cursor}
+}
+
+// parseToolsPage extracts one tools/list page and its optional continuation.
+func parseToolsPage(raw json.RawMessage) ([]ToolInfo, string, error) {
 	var envelope struct {
 		Result struct {
 			Tools []struct {
 				Name        string `json:"name"`
 				Description string `json:"description"`
 			} `json:"tools"`
+			NextCursor string `json:"nextCursor"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("mcpclient: parse tools: %w", err)
+		return nil, "", fmt.Errorf("mcpclient: parse tools: %w", err)
 	}
 
 	tools := make([]ToolInfo, 0, len(envelope.Result.Tools))
@@ -408,7 +517,7 @@ func parseToolsResult(raw json.RawMessage) ([]ToolInfo, error) {
 			Description: t.Description,
 		})
 	}
-	return tools, nil
+	return tools, envelope.Result.NextCursor, nil
 }
 
 // --------------------------------------------------------------------------

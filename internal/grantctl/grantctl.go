@@ -57,6 +57,9 @@ const (
 	ReqReviewSnapshot RequestType = "review_snapshot"
 	// ReqDashboardSnapshot returns the bounded, read-only overview projection.
 	ReqDashboardSnapshot RequestType = "dashboard_snapshot"
+	// ReqMCPToolsDiscover explicitly connects to configured MCP servers and
+	// requests their tool catalogs. Control-socket only; CtlToken required.
+	ReqMCPToolsDiscover RequestType = "mcp_tools_discover"
 	// ReqDaemonReload asks the daemon to reload policy.yaml and recompile the
 	// Rego bundle in place -- what SIGHUP does, but with a response so the
 	// caller learns whether the rules actually compiled.
@@ -121,6 +124,7 @@ type Response struct {
 	Grants            []GrantInfo          `json:"grants,omitempty"`
 	ReviewSnapshot    *ReviewSnapshotV1    `json:"review_snapshot,omitempty"`
 	DashboardSnapshot *DashboardSnapshotV1 `json:"dashboard_snapshot,omitempty"`
+	MCPToolsDiscovery *MCPToolsDiscoveryV1 `json:"mcp_tools_discovery,omitempty"`
 }
 
 // GrantInfo describes one pending grant request, suitable for display to a
@@ -149,6 +153,9 @@ const ReviewProtocolVersion ProtocolVersion = 1
 
 // DashboardProtocolVersion is the only overview protocol version supported.
 const DashboardProtocolVersion ProtocolVersion = 1
+
+// MCPDiscoveryProtocolVersion is the explicit tool-enumeration wire version.
+const MCPDiscoveryProtocolVersion ProtocolVersion = 1
 
 type DashboardTokenStatus string
 
@@ -211,6 +218,29 @@ type DashboardTokenAgentV1 struct {
 type DashboardMCPToolsV1 struct {
 	Server string   `json:"server"`
 	Tools  []string `json:"tools"`
+}
+
+type MCPDiscoveryStatus string
+
+const (
+	MCPDiscoveryConnected    MCPDiscoveryStatus = "connected"
+	MCPDiscoveryAuthRequired MCPDiscoveryStatus = "auth_required"
+	MCPDiscoveryUnreachable  MCPDiscoveryStatus = "unreachable"
+	MCPDiscoveryTimeout      MCPDiscoveryStatus = "timeout"
+)
+
+// MCPToolsDiscoveryV1 is the bounded result of an explicit tools/list pass.
+// Unlike DashboardMCPToolsV1, producing it may launch configured stdio servers
+// and contact configured remote endpoints. See ADR 0143-explicit-mcp-enumeration.
+type MCPToolsDiscoveryV1 struct {
+	ProtocolVersion ProtocolVersion             `json:"protocol_version"`
+	Servers         []MCPServerToolsDiscoveryV1 `json:"servers"`
+}
+
+type MCPServerToolsDiscoveryV1 struct {
+	Server string             `json:"server"`
+	Status MCPDiscoveryStatus `json:"status"`
+	Tools  []string           `json:"tools"`
 }
 
 // ReviewKind identifies the authority being reviewed.

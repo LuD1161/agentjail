@@ -5,6 +5,7 @@ import SwiftUI
 struct MCPInventoryView: View {
     @ObservedObject private var store: MCPInventoryStore
     @State private var clientFilter = "all"
+    @State private var showsDiscoveryConfirmation = false
 
     init(store: MCPInventoryStore) {
         _store = ObservedObject(wrappedValue: store)
@@ -18,12 +19,25 @@ struct MCPInventoryView: View {
                     title: "MCP inventory",
                     detail: "Configured servers across Claude Code, Codex, and Cursor"
                 ) {
-                    Button {
-                        Task { await store.refresh() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
+                    HStack(spacing: 8) {
+                        Button {
+                            showsDiscoveryConfirmation = true
+                        } label: {
+                            if store.isDiscoveringTools {
+                                Label("Discovering", systemImage: "arrow.triangle.2.circlepath")
+                            } else {
+                                Label("Discover tools", systemImage: "sparkle.magnifyingglass")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(store.isDiscoveringTools)
+                        Button {
+                            Task { await store.refresh() }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(store.isRefreshing || store.isDiscoveringTools)
                     }
-                    .disabled(store.isRefreshing)
                 }
                 summary
                 observeOnlyNotice
@@ -38,6 +52,12 @@ struct MCPInventoryView: View {
         .task {
             await store.refresh()
         }
+        .alert("Discover tools from every configured MCP server?", isPresented: $showsDiscoveryConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Discover tools") { Task { await store.discoverTools() } }
+        } message: {
+            Text("AgentJail will temporarily start configured local MCP server commands and contact configured remote endpoints using their configured credentials. It requests tool metadata only and never invokes a tool.")
+        }
     }
 
     private var observeOnlyNotice: some View {
@@ -47,7 +67,7 @@ struct MCPInventoryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Observe only")
                         .font(.headline)
-                    Text("Discovery reads configuration metadata and tool names already observed in AgentJail's audit history. It never modifies files, launches MCP servers, proxies calls, or changes policy.")
+                    Text("Normal refresh reads configuration metadata and local audit history only. It never modifies files, launches MCP servers, contacts endpoints, or changes policy.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -113,12 +133,20 @@ struct MCPInventoryView: View {
                     .frame(width: 330)
                 }
                 MCPTableHeader()
+                if let summary = store.discoverySummary {
+                    Label(summary, systemImage: summary.hasPrefix("Found") ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 6)
+                }
                 VStack(spacing: 0) {
                     ForEach(filteredItems) { item in
                         MCPInventoryRow(
                             item: item,
                             observedTools: store.observedTools(for: item.name),
-                            toolDataUnavailable: store.toolDataUnavailable
+                            toolDataUnavailable: store.toolDataUnavailable,
+                            discoveryStatus: store.discoveryStatus(for: item.name)
                         )
                     }
                 }
@@ -143,7 +171,7 @@ struct MCPInventoryView: View {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("Tool names come from local AgentJail audit history. “Not observed” means this install has not audited a tool for that server; AgentJail does not start servers merely to enumerate them. Project-local MCP files remain outside this phase.")
+            Text("Refresh remains observe-only. Discover tools is an explicit tools/list pass that may start local server commands and contact remote endpoints. Project-local MCP files remain outside this phase.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -156,6 +184,7 @@ private struct MCPInventoryRow: View {
     let item: MCPInventoryItem
     let observedTools: [String]
     let toolDataUnavailable: Bool
+    let discoveryStatus: MCPToolDiscoveryStatus?
     @State private var isExpanded = false
 
     var body: some View {
@@ -228,10 +257,10 @@ private struct MCPInventoryRow: View {
                 .foregroundStyle(.secondary)
                 .help("The local AgentJail daemon could not provide observed tool data.")
         } else if observedTools.isEmpty {
-            Text("Not observed")
+            Text(emptyToolStatus)
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .help("No tool from this server has been recorded in local AgentJail audit history.")
+                .foregroundStyle(emptyToolStatusColor)
+                .help(emptyToolStatusHelp)
         } else {
             Button {
                 withAnimation(.easeInOut(duration: 0.16)) { isExpanded.toggle() }
@@ -249,6 +278,33 @@ private struct MCPInventoryRow: View {
             .help(isExpanded ? "Hide observed tools" : "Show observed tools")
             .accessibilityLabel("\(observedTools.count) observed tools")
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        }
+    }
+
+    private var emptyToolStatus: String {
+        switch discoveryStatus {
+        case .connected: "0 tools"
+        case .authRequired: "Sign in required"
+        case .unreachable: "Unreachable"
+        case .timeout: "Timed out"
+        case nil: "Not discovered"
+        }
+    }
+
+    private var emptyToolStatusColor: Color {
+        switch discoveryStatus {
+        case .authRequired, .unreachable, .timeout: .orange
+        default: .secondary
+        }
+    }
+
+    private var emptyToolStatusHelp: String {
+        switch discoveryStatus {
+        case .connected: "The server responded to tools/list with an empty catalog."
+        case .authRequired: "The server requires authentication before it can enumerate tools."
+        case .unreachable: "AgentJail could not connect to this configured MCP server."
+        case .timeout: "The server did not finish tool discovery within the time limit."
+        case nil: "Choose Discover tools to enumerate this server, or wait for an audited tool call."
         }
     }
 

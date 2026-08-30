@@ -24,8 +24,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/ctlauth"
+	"github.com/LuD1161/agentjail/internal/grantctl"
 	"github.com/LuD1161/agentjail/internal/mcpclient"
 	"github.com/LuD1161/agentjail/internal/policyctl"
 	"github.com/LuD1161/agentjail/internal/store"
@@ -696,6 +699,10 @@ func runMCPToolsOutput(args []string, out, errOut io.Writer) int {
 	}
 
 	auditTools := mcpclient.AuditToolsFromStore(st)
+	var discoveredTools []store.DiscoveredTool
+	if st != nil {
+		discoveredTools, _ = st.ListDiscoveredTools(context.Background(), "")
+	}
 
 	serverTools := make(map[string]map[string]bool)
 	addTool := func(server, tool string) {
@@ -708,6 +715,9 @@ func runMCPToolsOutput(args []string, out, errOut io.Writer) int {
 		for _, t := range tools {
 			addTool(server, t)
 		}
+	}
+	for _, discovered := range discoveredTools {
+		addTool(discovered.Server, discovered.Tool)
 	}
 	for server, scfg := range cfg.MCP.Servers {
 		for _, t := range scfg.AllowedTools {
@@ -851,6 +861,81 @@ func renderMCPToolsJSON(out, errOut io.Writer, servers []string, serverTools map
 	if err := enc.Encode(result); err != nil {
 		fmt.Fprintf(errOut, "agentjail mcp tool list: json encode: %v\n", err)
 		return 1
+	}
+	return 0
+}
+
+const mcpToolDiscoveryTimeout = 50 * time.Second
+
+type mcpToolDiscoveryDependencies struct {
+	loadToken func() (string, error)
+	discover  func(string, string, time.Duration) (grantctl.MCPToolsDiscoveryV1, error)
+}
+
+func defaultMCPToolDiscoveryDependencies() mcpToolDiscoveryDependencies {
+	return mcpToolDiscoveryDependencies{
+		loadToken: ctlauth.Load,
+		discover:  grantctl.DiscoverMCPTools,
+	}
+}
+
+func runMCPToolDiscover(args []string) int {
+	return runMCPToolDiscoverOutput(args, os.Stdout, os.Stderr, defaultMCPToolDiscoveryDependencies())
+}
+
+func runMCPToolDiscoverOutput(args []string, out, errOut io.Writer, dependencies mcpToolDiscoveryDependencies) int {
+	jsonMode := false
+	for _, argument := range args {
+		switch argument {
+		case "--json":
+			jsonMode = true
+		case "help", "-h", "--help":
+			fmt.Fprintln(out, "usage: agentjail mcp tool discover [--json]")
+			fmt.Fprintln(out, "Connects to configured servers and requests tools/list; it never invokes a tool.")
+			return 0
+		default:
+			fmt.Fprintf(errOut, "agentjail mcp tool discover: unknown argument %q\n", argument)
+			return 2
+		}
+	}
+
+	if dependencies.loadToken == nil || dependencies.discover == nil {
+		fmt.Fprintln(errOut, "agentjail mcp tool discover: discovery unavailable")
+		return 1
+	}
+	token, err := dependencies.loadToken()
+	if err != nil {
+		fmt.Fprintln(errOut, "agentjail mcp tool discover: control authority unavailable")
+		fmt.Fprintln(errOut, "  Run this command outside a shielded agent session.")
+		return 1
+	}
+	discovery, err := dependencies.discover(grantctl.ControlSocketPath(), token, mcpToolDiscoveryTimeout)
+	if err != nil {
+		fmt.Fprintln(errOut, "agentjail mcp tool discover: discovery could not complete")
+		return 1
+	}
+
+	if jsonMode {
+		encoder := json.NewEncoder(out)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(discovery); err != nil {
+			fmt.Fprintln(errOut, "agentjail mcp tool discover: json encode failed")
+			return 1
+		}
+		return 0
+	}
+
+	u := ui.New(out)
+	for _, server := range discovery.Servers {
+		heading := fmt.Sprintf("%s · %s", server.Server, server.Status)
+		fmt.Fprintln(out, u.Section(heading))
+		if len(server.Tools) == 0 {
+			fmt.Fprintln(out, "  no tools returned")
+			continue
+		}
+		for _, tool := range server.Tools {
+			fmt.Fprintln(out, "  "+tool)
+		}
 	}
 	return 0
 }
@@ -1164,6 +1249,8 @@ func printMCPUsage(w io.Writer) {
 		{"tool list", "List all MCP tools per server with policy status"},
 		{"tool list <server>", "List tools for a specific server"},
 		{"tool list --json", "Machine-readable tool listing"},
+		{"tool discover", "Explicitly enumerate configured servers with tools/list"},
+		{"tool discover --json", "Versioned machine-readable live discovery"},
 		{"tool allow <server> <tool>", "Allow a specific tool on a server"},
 		{"tool block <server> <tool>", "Block a specific tool on a server"},
 		{"tool ask <server> <tool>", "Require confirmation for a specific tool"},
@@ -1183,6 +1270,7 @@ func printMCPUsage(w io.Writer) {
 		"agentjail mcp allow claude-mem",
 		"agentjail mcp block my-payment-bot",
 		"agentjail mcp list",
+		"agentjail mcp tool discover --json",
 		"agentjail mcp tool list linear-server",
 		"agentjail mcp tool block linear-server save_issue",
 		"agentjail mcp tool ask filesystem write_file --project /path/to/project",
@@ -1196,6 +1284,7 @@ func printMCPUsage(w io.Writer) {
 		"Server names must be exact (no wildcards). Glob metacharacters (*?[]{}!) are rejected.",
 		"After each change, agentjail-daemon is signaled to reload policy (SIGHUP).",
 		"If the daemon is not running, the change takes effect on the next daemon start.",
+		"Tool discovery may start configured local servers and contact configured remote endpoints; it never invokes a tool.",
 		"Denial message: run 'agentjail mcp allow <server>' to grant access.",
 	}
 	for _, n := range notes {
