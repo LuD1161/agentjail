@@ -199,13 +199,11 @@ private struct DashboardOverviewView: View {
     }
 
     private func activityCard(_ snapshot: DashboardSnapshotV1) -> some View {
-        DashboardCard(title: "Audited activity", subtitle: "Calls per day", icon: "square.grid.3x3.fill") {
+        let total = snapshot.activity.reduce(Int64(0)) { $0 + $1.count }
+        return DashboardCard(title: "Audited activity", subtitle: "\(total.formatted()) activities in the last 35 days", icon: "square.grid.3x3.fill") {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 7), spacing: 5) {
                 ForEach(activityCells(snapshot)) { point in
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(activityColor(point.count, maximum: point.maximum))
-                        .aspectRatio(1, contentMode: .fit)
-                        .help("\(point.day): \(point.count) audited calls")
+                    ActivityCellView(point: point)
                 }
             }
         }
@@ -392,6 +390,38 @@ private struct DashboardOverviewView: View {
 }
 
 private struct ActivityCell: Identifiable { let day: String; let count: Int64; let maximum: Int64; var id: String { day } }
+
+private struct ActivityCellView: View {
+    let point: ActivityCell
+    @State private var hovering = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(activityColor)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if hovering {
+                    Text("\(point.day) · \(point.count.formatted()) audited")
+                        .font(.caption2.weight(.medium))
+                        .fixedSize()
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 5)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                        .shadow(radius: 4)
+                        .zIndex(2)
+                }
+            }
+            .onHover { hovering = $0 }
+            .help("\(point.day): \(point.count.formatted()) audited activities")
+            .accessibilityLabel("\(point.day), \(point.count.formatted()) audited activities")
+    }
+
+    private var activityColor: Color {
+        guard point.count > 0 else { return Color.green.opacity(0.08) }
+        let intensity = Double(point.count) / Double(max(point.maximum, 1))
+        return Color.green.opacity(0.18 + 0.82 * intensity)
+    }
+}
 
 private struct DashboardEmptyState: View {
     let title: String; let icon: String; let detail: String
