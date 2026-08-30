@@ -58,6 +58,12 @@ aggregates, daily activity, and supported local transcript token totals. It
 projects project basenames rather than full paths and never returns commands,
 tool input, traffic, or credentials.
 
+The app treats its bundled CLI as the source of truth for local component
+compatibility. Health compares the installed executable with the bundled bytes,
+not only a human-readable version or a legacy health request, before calling the
+daemon current. This makes same-version development builds and partially updated
+installations repairable through the normal local-component action.
+
 Both macOS installation routes consume the same signed artifact. The website DMG
 and `curl | sh` installer verify and install the same Developer ID signed,
 notarized, and stapled application, expose the bundled CLI in the user's executable
