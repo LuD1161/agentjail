@@ -213,7 +213,8 @@ The same AgentJail app mark is used in the Dock, sidebar, and menu bar.
 Overview reads a bounded snapshot from the authenticated local daemon. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,
 and token usage over time from supported local Claude Code, Codex, and OpenCode
-transcripts. Session and audit activity appears immediately while slower local
+transcripts. Session rows include the agent identity, live or recent status,
+elapsed time, and the number of audited calls. Session and audit activity appears immediately while slower local
 transcript aggregation loads progressively in the token card. Its vertical axis
 automatically uses tokens, thousands, millions, or billions for the visible
 usage range, and hovering a day shows its compact daily total. The app receives

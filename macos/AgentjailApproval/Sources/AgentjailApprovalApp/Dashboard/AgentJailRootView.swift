@@ -290,58 +290,19 @@ private struct DashboardOverviewView: View {
         .accessibilityLabel("Token usage by agent")
     }
 
-    private struct AgentBrandMark: View {
-        let agent: String
-        @Environment(\.colorScheme) private var colorScheme
-
-        var body: some View {
-            Group {
-                if let imageName, let image = AgentBrandMark.load(imageName) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                } else {
-                    Text("<>")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.purple)
-                }
-            }
-            .frame(width: 25, height: 25)
-            .accessibilityHidden(true)
-        }
-
-        private var imageName: String? {
-            switch agent {
-            case "claude-code": "agent-claude"
-            case "codex": colorScheme == .dark ? "agent-codex-light" : "agent-codex"
-            default: nil
-            }
-        }
-
-        private static func load(_ name: String) -> NSImage? {
-            guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
-            return NSImage(contentsOf: url)
-        }
-    }
-
     private func sessionsCard(_ snapshot: DashboardSnapshotV1) -> some View {
-        DashboardCard(title: "Agent sessions", subtitle: "Active now and recently audited", icon: "terminal.fill") {
+        let visibleAuditedCalls = snapshot.recentSessions.reduce(0) { $0 + $1.auditedCalls }
+        return DashboardCard(
+            title: "Agent sessions",
+            subtitle: "\(snapshot.activeSessions) active · \(visibleAuditedCalls.formatted()) calls in recent sessions",
+            icon: "terminal.fill"
+        ) {
             if snapshot.recentSessions.isEmpty {
                 Text("No audited agent sessions yet.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
             } else {
                 VStack(spacing: 0) {
                     ForEach(snapshot.recentSessions) { session in
-                        HStack(spacing: 12) {
-                            Circle().fill(session.active ? Color.green : Color.secondary.opacity(0.3)).frame(width: 8, height: 8)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(session.project).font(.headline)
-                                Text(session.agent).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text("\(session.auditedCalls) calls").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 10)
+                        DashboardSessionRow(session: session, generatedAtUnixMs: snapshot.generatedAtUnixMs)
                         if session.id != snapshot.recentSessions.last?.id { Divider() }
                     }
                 }
@@ -446,6 +407,135 @@ private struct DashboardOverviewView: View {
     private func activityColor(_ count: Int64, maximum: Int64) -> Color {
         guard count > 0 else { return Color.secondary.opacity(0.1) }
         return Color.green.opacity(0.25 + 0.75 * Double(count) / Double(maximum))
+    }
+}
+
+private struct AgentBrandMark: View {
+    let agent: String
+    var size: CGFloat = 25
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if let imageName, let image = AgentBrandMark.load(imageName) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Text("<>")
+                    .font(.system(size: max(size * 0.42, 9), weight: .bold, design: .monospaced))
+                    .foregroundStyle(.purple)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+
+    private var imageName: String? {
+        switch agent {
+        case "claude-code": "agent-claude"
+        case "codex": colorScheme == .dark ? "agent-codex-light" : "agent-codex"
+        default: nil
+        }
+    }
+
+    private static func load(_ name: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
+        return NSImage(contentsOf: url)
+    }
+}
+
+private struct DashboardSessionRow: View {
+    let session: DashboardSession
+    let generatedAtUnixMs: Int64
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11)
+                    .fill(agentColor.opacity(0.12))
+                AgentBrandMark(agent: session.agent, size: 24)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(session.project)
+                    .font(.headline)
+                    .lineLimit(1)
+                HStack(spacing: 7) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(session.active ? Color.green : Color.secondary.opacity(0.55))
+                            .frame(width: 7, height: 7)
+                        Text(session.active ? "Live" : "Recent")
+                    }
+                    .foregroundStyle(session.active ? Color.green : Color.secondary)
+                    Text("·").foregroundStyle(.tertiary)
+                    Text(agentDisplayName)
+                    Text("·").foregroundStyle(.tertiary)
+                    Label(timingText, systemImage: "clock")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: 18)
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(session.auditedCalls.formatted())
+                    .font(.title3.bold())
+                    .monospacedDigit()
+                Text("audited calls")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 13)
+        .background(
+            session.active ? Color.green.opacity(0.035) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(session.project), \(agentDisplayName), \(session.active ? "active" : "recent") session")
+        .accessibilityValue("\(session.auditedCalls.formatted()) audited calls, \(timingText)")
+    }
+
+    private var agentDisplayName: String {
+        switch session.agent {
+        case "claude-code": "Claude Code"
+        case "codex": "Codex"
+        case "opencode": "OpenCode"
+        default: session.agent
+        }
+    }
+
+    private var agentColor: Color {
+        switch session.agent {
+        case "claude-code": .orange
+        case "codex": .mint
+        case "opencode": .purple
+        default: .blue
+        }
+    }
+
+    private var timingText: String {
+        let endUnixMs = session.active ? generatedAtUnixMs : (session.endedAtUnixMs ?? generatedAtUnixMs)
+        let duration = compactDuration(milliseconds: max(endUnixMs - session.startedAtUnixMs, 0))
+        if session.active { return "Running \(duration)" }
+        guard let endedAtUnixMs = session.endedAtUnixMs else { return "Ran \(duration)" }
+        let endedAt = Date(timeIntervalSince1970: Double(endedAtUnixMs) / 1_000)
+        return "Ran \(duration) · ended \(endedAt.formatted(.relative(presentation: .numeric)))"
+    }
+
+    private func compactDuration(milliseconds: Int64) -> String {
+        let totalMinutes = max(milliseconds / 60_000, 0)
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h" }
+        return totalMinutes > 0 ? "\(totalMinutes)m" : "<1m"
     }
 }
 
