@@ -72,9 +72,12 @@ covered by attribution generation.
 - Users can pre-populate tool catalogs without waiting for calls to happen.
 - The CLI is the stable product surface; the native app does not duplicate the
   control-socket protocol or MCP transport implementation.
-- Live discovery is intentionally more invasive than Refresh and is labeled as
-  such. A configured third-party stdio command runs with its declared config,
-  and a configured remote endpoint receives a metadata request.
+- Live discovery is intentionally more invasive than Refresh. The explicit CLI
+  command remains the manual retry surface; installation invokes it
+  automatically as specified by
+  [ADR 0145-install-mcp-discovery](0145-install-mcp-discovery.md). A configured
+  third-party stdio command runs with its declared config, and a configured
+  remote endpoint receives a metadata request.
 - Authentication-required and unreachable servers remain visible instead of
   making the whole pass fail.
 - Tool descriptions and schemas are not persisted. The policy and UI need exact

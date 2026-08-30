@@ -21,16 +21,18 @@
 //     reachable (e.g. a bare container with no login session), the unit is
 //     still written and manual start instructions are printed instead of
 //     failing the install.
-//  7. Detects which agents are present on the machine (claude-code, codex, cursor)
+//  7. Enumerates configured MCP tool catalogs through the authenticated daemon.
+//     Per-server authentication or reachability failures do not fail install.
+//  8. Detects which agents are present on the machine (claude-code, codex, cursor)
 //     and which of them already have the agentjail hook wired.
-//  8. If every detected agent is already protected, a regular run is just a
+//  9. If every detected agent is already protected, a regular run is just a
 //     binary + daemon refresh (steps 1-6 above). Explicit --all still
 //     reconciles every detected adapter's owned hook entries.
-//  9. Otherwise presents an interactive multi-select picker (already-protected
+//  10. Otherwise presents an interactive multi-select picker (already-protected
 //     agents are marked) or falls back to non-interactive selection.
 //
-// 10. Dispatches agent.Install(env) for each selected agent.
-// 11. Prints a summary and exits non-zero if any selected install failed.
+// 11. Dispatches agent.Install(env) for each selected agent.
+// 12. Prints a summary and exits non-zero if any selected install failed.
 //
 // Use `agentjail install --for <agent>` for single-agent back-compat.
 // Use `agentjail install --all` to reconcile every detected agent, or `--yes`
@@ -242,7 +244,7 @@ func runInstallCmd(args []string) {
 			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: unknown agent %q (supported: claude-code, codex, cursor, vscode, cursor-ide)", forAgent)))
 			os.Exit(2)
 		}
-		if err := installDaemonPreamble(home, os.Stdout, mcpSeed); err != nil {
+		if err := installDaemonWithMCPDiscovery(home, os.Stdout, mcpSeed); err != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: daemon preamble: %v", err)))
 			os.Exit(1)
 		}
@@ -268,7 +270,7 @@ func runInstallCmd(args []string) {
 	}
 
 	// Discovery flow.
-	if err := installDaemonPreamble(home, os.Stdout, mcpSeed); err != nil {
+	if err := installDaemonWithMCPDiscovery(home, os.Stdout, mcpSeed); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: daemon preamble: %v", err)))
 		os.Exit(1)
 	}
