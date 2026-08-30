@@ -349,6 +349,8 @@ stage_app="$work_root/$product_name.app"
 "$cp_binary" "$app_resources/agent-codex.svg" "$stage_app/Contents/Resources/agent-codex.svg"
 "$cp_binary" "$app_resources/agent-cursor.svg" "$stage_app/Contents/Resources/agent-cursor.svg"
 "$cp_binary" "$app_resources/server-linear.svg" "$stage_app/Contents/Resources/server-linear.svg"
+"$cp_binary" "$app_resources/server-chrome.svg" "$stage_app/Contents/Resources/server-chrome.svg"
+"$cp_binary" "$app_resources/server-context7.ico" "$stage_app/Contents/Resources/server-context7.ico"
 
 "$plutil_binary" -lint "$stage_app/Contents/Info.plist" >/dev/null
 require_plist_value "$stage_app/Contents/Info.plist" CFBundleExecutable "$product_name"

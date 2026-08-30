@@ -225,6 +225,8 @@ private struct MCPBrandMark: View {
     static func server(named name: String) -> MCPBrandMark {
         switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "linear": MCPBrandMark(asset: "server-linear", fallback: "L", tint: .white)
+        case "chrome-devtools": MCPBrandMark(asset: "server-chrome", fallback: "C", tint: .blue)
+        case "context7": MCPBrandMark(asset: "server-context7", fallback: "7", tint: .purple)
         default: MCPBrandMark(asset: nil, fallback: String(name.prefix(1)).uppercased(), tint: .blue)
         }
     }
@@ -252,7 +254,9 @@ private struct MCPBrandMark: View {
     }
 
     private static func load(_ name: String) -> NSImage? {
-        guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
+        let svg = Bundle.main.url(forResource: name, withExtension: "svg")
+        let ico = Bundle.main.url(forResource: name, withExtension: "ico")
+        guard let url = svg ?? ico else { return nil }
         return NSImage(contentsOf: url)
     }
 }
