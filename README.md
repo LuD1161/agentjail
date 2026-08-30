@@ -215,8 +215,9 @@ active and recent agent sessions, audited-call totals, a 35-day activity grid,
 and token usage over time from supported local Claude Code, Codex, and OpenCode
 transcripts. Session rows include the agent identity, live or recent status,
 elapsed time, and the number of audited calls. Session and audit activity appears
-immediately while slower local transcript aggregation loads progressively in the
-token card. Its vertical axis
+immediately. Token aggregates are cached locally by the daemon, so the last good
+35-day chart also appears immediately after a restart while the current and
+previous day refresh in the background. Its vertical axis
 automatically uses tokens, thousands, millions, or billions for the visible
 usage range, and hovering a day shows its compact daily total.
 The dashboard also shows each supported agent's token share with a compact
