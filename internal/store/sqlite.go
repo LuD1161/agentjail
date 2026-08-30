@@ -325,6 +325,7 @@ func (s *sqliteStore) ComputeStats(ctx context.Context, since time.Time) (StatsR
 	decidedDays := make(map[string]struct{}, len(decDays))
 	for i, d := range decDays {
 		decidedDays[d.Day] = struct{}{}
+		rep.Daily = append(rep.Daily, DailyCount{Day: d.Day, Count: d.Count})
 		if i == 0 {
 			rep.FirstDay = d.Day
 		}

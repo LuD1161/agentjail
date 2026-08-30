@@ -1,0 +1,151 @@
+package daemonapp
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/LuD1161/agentjail/internal/costanalytics"
+	"github.com/LuD1161/agentjail/internal/grantctl"
+	"github.com/LuD1161/agentjail/internal/procutil"
+	"github.com/LuD1161/agentjail/internal/store"
+)
+
+type dashboardSnapshotProjector interface {
+	DashboardSnapshot(context.Context, time.Time) (grantctl.DashboardSnapshotV1, error)
+}
+
+type localDashboardProjector struct {
+	store          store.EventStore
+	activeSessions *activeTracker
+	collectTokens  func(time.Time) ([]costanalytics.SessionCost, []error)
+}
+
+func newLocalDashboardProjector(eventStore store.EventStore, activeSessions *activeTracker) dashboardSnapshotProjector {
+	if eventStore == nil {
+		return nil
+	}
+	return &localDashboardProjector{store: eventStore, activeSessions: activeSessions, collectTokens: costanalytics.CollectAll}
+}
+
+func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now time.Time) (grantctl.DashboardSnapshotV1, error) {
+	since := now.AddDate(0, 0, -34)
+	stats, err := p.store.ComputeStats(ctx, since)
+	if err != nil {
+		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("compute dashboard stats: %w", err)
+	}
+	sessions, err := p.store.ListSessionsFiltered(ctx, store.SessionFilter{Since: 35 * 24 * time.Hour, Limit: grantctl.MaxDashboardSessions})
+	if err != nil {
+		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list dashboard sessions: %w", err)
+	}
+
+	active := make(map[string]struct{})
+	if p.activeSessions != nil {
+		for _, entry := range p.activeSessions.list() {
+			if procutil.Alive(entry.PID) {
+				active[entry.SessionID] = struct{}{}
+			}
+		}
+	}
+	snapshot := grantctl.DashboardSnapshotV1{
+		ProtocolVersion:   grantctl.DashboardProtocolVersion,
+		GeneratedAtUnixMs: grantctl.UnixMilliseconds(now.UnixMilli()),
+		TotalCalls:        stats.Total, AllowedCalls: stats.Allow, DeniedCalls: stats.Deny, AskedCalls: stats.Ask,
+		TotalSessions: stats.Sessions, ActiveSessions: len(active),
+		RecentSessions: make([]grantctl.DashboardSessionV1, 0, len(sessions)),
+		Activity:       make([]grantctl.DashboardDayV1, 0, len(stats.Daily)),
+		Tokens:         []grantctl.DashboardTokenDayV1{},
+		TokenCoverage:  []string{"Claude Code", "Codex", "OpenCode"},
+	}
+	for _, session := range sessions {
+		_, isActive := active[session.SessionID]
+		projected := grantctl.DashboardSessionV1{
+			SessionID:       boundedDashboardLabel(session.SessionID, grantctl.MaxDashboardSessionIDBytes),
+			Agent:           boundedDashboardLabel(session.Agent, grantctl.MaxDashboardLabelBytes),
+			Project:         dashboardProjectName(session.CWD),
+			StartedAtUnixMs: grantctl.UnixMilliseconds(session.StartTs.UnixMilli()),
+			AuditedCalls:    session.DecisionCount, Active: isActive,
+		}
+		if !session.EndTs.IsZero() {
+			projected.EndedAtUnixMs = grantctl.UnixMilliseconds(session.EndTs.UnixMilli())
+		}
+		snapshot.RecentSessions = append(snapshot.RecentSessions, projected)
+	}
+	for _, day := range stats.Daily {
+		snapshot.Activity = append(snapshot.Activity, grantctl.DashboardDayV1{Day: day.Day, Count: day.Count})
+	}
+
+	if p.collectTokens != nil {
+		costs, _ := p.collectTokens(since)
+		byDay := make(map[string]*grantctl.DashboardTokenDayV1)
+		for _, cost := range costs {
+			if cost.StartedAt.Before(since) || cost.StartedAt.After(now) {
+				continue
+			}
+			day := cost.StartedAt.UTC().Format("2006-01-02")
+			point := byDay[day]
+			if point == nil {
+				point = &grantctl.DashboardTokenDayV1{Day: day}
+				byDay[day] = point
+			}
+			point.InputTokens += cost.InputTokens
+			point.OutputTokens += cost.OutputTokens
+			point.CacheTokens += cost.CacheRead + cost.CacheWrite
+		}
+		days := make([]string, 0, len(byDay))
+		for day := range byDay {
+			days = append(days, day)
+		}
+		sort.Strings(days)
+		for _, day := range days {
+			snapshot.Tokens = append(snapshot.Tokens, *byDay[day])
+		}
+	}
+	return snapshot, nil
+}
+
+func dashboardProjectName(cwd string) string {
+	if cwd == "" {
+		return "Unknown project"
+	}
+	name := filepath.Base(filepath.Clean(cwd))
+	if name == "." || name == string(filepath.Separator) {
+		return "Unknown project"
+	}
+	return boundedDashboardLabel(name, grantctl.MaxDashboardLabelBytes)
+}
+
+func boundedDashboardLabel(value string, limit int) string {
+	if value == "" {
+		return "Unknown"
+	}
+	value = strings.ToValidUTF8(value, "�")
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit]
+}
+
+func dashboardSnapshotResponse(projector dashboardSnapshotProjector, version grantctl.ProtocolVersion, now time.Time) grantctl.Response {
+	if version == 0 {
+		return grantctl.Response{OK: false, Error: "dashboard_snapshot requires protocol_version"}
+	}
+	if version != grantctl.DashboardProtocolVersion {
+		return grantctl.Response{OK: false, Error: fmt.Sprintf("unsupported dashboard protocol version %d", version)}
+	}
+	if projector == nil {
+		return grantctl.Response{OK: false, Error: "dashboard snapshot unavailable"}
+	}
+	snapshot, err := projector.DashboardSnapshot(context.Background(), now)
+	if err != nil {
+		return grantctl.Response{OK: false, Error: "dashboard snapshot unavailable"}
+	}
+	return grantctl.Response{OK: true, DashboardSnapshot: &snapshot}
+}

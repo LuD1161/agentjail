@@ -63,12 +63,13 @@ var errGrantUnbound = errors.New("grant is unbound - no session PID matched; can
 // handleGrantRequest, called inline from the daemon's agent-reachable
 // handleConn when a grant_request message arrives on daemon.sock.
 type grantServer struct {
-	ctlLn    *net.UnixListener
-	lock     *os.File
-	sockPath string
-	registry *grantctl.Registry
-	reviews  reviewSnapshotProjector
-	emitter  audit.Emitter
+	ctlLn     *net.UnixListener
+	lock      *os.File
+	sockPath  string
+	registry  *grantctl.Registry
+	reviews   reviewSnapshotProjector
+	dashboard dashboardSnapshotProjector
+	emitter   audit.Emitter
 	// durableAudit is true only when emitter is backed by a real, writable
 	// store (never audit.NopEmitter). grant_approve is refused (fail closed)
 	// when this is false -- a live policy change must never be applied
@@ -223,6 +224,9 @@ func peerUIDAllowed(peerUID, daemonUID int, uidErr error) bool {
 // governs, rather than both sides racing to time out first (ADR 0066).
 const ctlReloadDeadline = 15 * time.Second
 
+// Token transcript aggregation is bounded but may exceed the fast control verbs.
+const ctlDashboardDeadline = 12 * time.Second
+
 // handleCtlConn reads one control request off the privileged grant control
 // socket and writes one response. Dispatches grant_list, grant_approve,
 // grant_deny, and daemon_reload; anything else is rejected.
@@ -259,6 +263,9 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 		gs.reply(conn, grantctl.Response{OK: true, Grants: gs.registry.ListPending(now)})
 	case grantctl.ReqReviewSnapshot:
 		gs.reply(conn, reviewSnapshotResponse(gs.reviews, req.ProtocolVersion, now))
+	case grantctl.ReqDashboardSnapshot:
+		_ = conn.SetDeadline(time.Now().Add(ctlDashboardDeadline))
+		gs.reply(conn, dashboardSnapshotResponse(gs.dashboard, req.ProtocolVersion, now))
 
 	case grantctl.ReqGrantApprove:
 		if req.GrantID == "" {

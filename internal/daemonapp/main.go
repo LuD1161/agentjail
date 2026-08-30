@@ -1681,6 +1681,7 @@ func Run(args []string) int {
 		if gerr != nil {
 			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
 		} else {
+			gs.dashboard = newLocalDashboardProjector(srv.eventStore, srv.activeSessions)
 			srv.grantSrv = gs
 			go srv.grantSrv.serveCtl(ctx)
 			go srv.grantSrv.startReaper(ctx, 60*time.Second)

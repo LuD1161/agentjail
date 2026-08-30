@@ -106,6 +106,52 @@ func ReviewSnapshot(sockPath, ctlToken string, timeout time.Duration) (ReviewSna
 	return *resp.ReviewSnapshot, nil
 }
 
+// DashboardSnapshot returns the bounded v1 overview projection.
+func DashboardSnapshot(sockPath, ctlToken string, timeout time.Duration) (DashboardSnapshotV1, error) {
+	resp, err := roundTrip(sockPath, Request{Type: ReqDashboardSnapshot, CtlToken: ctlToken, ProtocolVersion: DashboardProtocolVersion}, timeout)
+	if err != nil {
+		return DashboardSnapshotV1{}, err
+	}
+	if !resp.OK {
+		return DashboardSnapshotV1{}, fmt.Errorf("dashboard snapshot refused: %s", resp.Error)
+	}
+	if resp.DashboardSnapshot == nil || resp.DashboardSnapshot.ProtocolVersion != DashboardProtocolVersion {
+		return DashboardSnapshotV1{}, fmt.Errorf("unsupported or missing dashboard protocol version")
+	}
+	if err := validateDashboardSnapshotV1(*resp.DashboardSnapshot); err != nil {
+		return DashboardSnapshotV1{}, fmt.Errorf("invalid dashboard snapshot: %w", err)
+	}
+	return *resp.DashboardSnapshot, nil
+}
+
+func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
+	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenCoverage == nil {
+		return fmt.Errorf("dashboard arrays are required")
+	}
+	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays {
+		return fmt.Errorf("dashboard projection exceeds item limits")
+	}
+	if snapshot.ActiveSessions < 0 || snapshot.TotalCalls < 0 || snapshot.TotalSessions < 0 {
+		return fmt.Errorf("dashboard counts cannot be negative")
+	}
+	for _, session := range snapshot.RecentSessions {
+		if session.SessionID == "" || len(session.SessionID) > MaxDashboardSessionIDBytes || len(session.Agent) > MaxDashboardLabelBytes || len(session.Project) > MaxDashboardLabelBytes || session.AuditedCalls < 0 {
+			return fmt.Errorf("invalid dashboard session")
+		}
+	}
+	for _, day := range snapshot.Activity {
+		if len(day.Day) != len("2006-01-02") || day.Count < 0 {
+			return fmt.Errorf("invalid dashboard activity point")
+		}
+	}
+	for _, day := range snapshot.Tokens {
+		if len(day.Day) != len("2006-01-02") || day.InputTokens < 0 || day.OutputTokens < 0 || day.CacheTokens < 0 {
+			return fmt.Errorf("invalid dashboard token point")
+		}
+	}
+	return nil
+}
+
 func validateReviewSnapshotV1(snapshot ReviewSnapshotV1) error {
 	if snapshot.Reviews == nil {
 		return fmt.Errorf("reviews is required")

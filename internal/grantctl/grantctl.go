@@ -55,6 +55,8 @@ const (
 	// ReqReviewSnapshot returns the bounded v1 projection used by the macOS
 	// approval companion. Control-socket only; CtlToken required.
 	ReqReviewSnapshot RequestType = "review_snapshot"
+	// ReqDashboardSnapshot returns the bounded, read-only overview projection.
+	ReqDashboardSnapshot RequestType = "dashboard_snapshot"
 	// ReqDaemonReload asks the daemon to reload policy.yaml and recompile the
 	// Rego bundle in place -- what SIGHUP does, but with a response so the
 	// caller learns whether the rules actually compiled.
@@ -113,11 +115,12 @@ type Request struct {
 
 // Response is the control-plane response envelope (JSON on the socket).
 type Response struct {
-	OK             bool              `json:"ok"`
-	Error          string            `json:"error,omitempty"`
-	GrantID        string            `json:"grant_id,omitempty"`
-	Grants         []GrantInfo       `json:"grants,omitempty"`
-	ReviewSnapshot *ReviewSnapshotV1 `json:"review_snapshot,omitempty"`
+	OK                bool                 `json:"ok"`
+	Error             string               `json:"error,omitempty"`
+	GrantID           string               `json:"grant_id,omitempty"`
+	Grants            []GrantInfo          `json:"grants,omitempty"`
+	ReviewSnapshot    *ReviewSnapshotV1    `json:"review_snapshot,omitempty"`
+	DashboardSnapshot *DashboardSnapshotV1 `json:"dashboard_snapshot,omitempty"`
 }
 
 // GrantInfo describes one pending grant request, suitable for display to a
@@ -143,6 +146,48 @@ type ProtocolVersion uint32
 // ReviewProtocolVersion is the only menu-review protocol version supported by
 // this package.
 const ReviewProtocolVersion ProtocolVersion = 1
+
+// DashboardProtocolVersion is the only overview protocol version supported.
+const DashboardProtocolVersion ProtocolVersion = 1
+
+// DashboardSnapshotV1 is a bounded, server-generated view of local activity.
+// It intentionally contains no commands, full paths, tool input, or secrets.
+type DashboardSnapshotV1 struct {
+	ProtocolVersion   ProtocolVersion       `json:"protocol_version"`
+	GeneratedAtUnixMs UnixMilliseconds      `json:"generated_at_unix_ms"`
+	TotalCalls        int64                 `json:"total_calls"`
+	AllowedCalls      int64                 `json:"allowed_calls"`
+	DeniedCalls       int64                 `json:"denied_calls"`
+	AskedCalls        int64                 `json:"asked_calls"`
+	TotalSessions     int64                 `json:"total_sessions"`
+	ActiveSessions    int                   `json:"active_sessions"`
+	RecentSessions    []DashboardSessionV1  `json:"recent_sessions"`
+	Activity          []DashboardDayV1      `json:"activity"`
+	Tokens            []DashboardTokenDayV1 `json:"tokens"`
+	TokenCoverage     []string              `json:"token_coverage"`
+}
+
+type DashboardSessionV1 struct {
+	SessionID       string           `json:"session_id"`
+	Agent           string           `json:"agent"`
+	Project         string           `json:"project"`
+	StartedAtUnixMs UnixMilliseconds `json:"started_at_unix_ms"`
+	EndedAtUnixMs   UnixMilliseconds `json:"ended_at_unix_ms,omitempty"`
+	AuditedCalls    int              `json:"audited_calls"`
+	Active          bool             `json:"active"`
+}
+
+type DashboardDayV1 struct {
+	Day   string `json:"day"`
+	Count int64  `json:"count"`
+}
+
+type DashboardTokenDayV1 struct {
+	Day          string `json:"day"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+	CacheTokens  int64  `json:"cache_tokens"`
+}
 
 // ReviewKind identifies the authority being reviewed.
 type ReviewKind string
@@ -240,10 +285,14 @@ const MaxControlMsgBytes = 64 * 1024
 // MaxControlMsgBytes. Authority fields exceeding their limit are omitted and
 // made deny-only. See ADR 0133-macos-menu-review.
 const (
-	MaxReviewHostBytes        = 255
-	MaxReviewProjectPathBytes = 2048
-	MaxReviewReasonBytes      = 256
-	MaxReviewSnapshotItems    = 3
+	MaxReviewHostBytes         = 255
+	MaxReviewProjectPathBytes  = 2048
+	MaxReviewReasonBytes       = 256
+	MaxReviewSnapshotItems     = 3
+	MaxDashboardSessions       = 12
+	MaxDashboardDays           = 35
+	MaxDashboardSessionIDBytes = 128
+	MaxDashboardLabelBytes     = 128
 )
 
 // MaxReasonLen bounds the agent-supplied --reason string in a grant request.

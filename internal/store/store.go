@@ -174,6 +174,7 @@ type EventStore interface {
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)
 	ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error)
+	ComputeStats(ctx context.Context, since time.Time) (StatsReport, error)
 	Cleanup(ctx context.Context, maxAge time.Duration) error
 	UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error
 	UpsertDiscoveredSkill(ctx context.Context, name, source string) error
@@ -228,6 +229,13 @@ type StatsReport struct {
 	BySurface    []LabeledCount `json:"by_surface"`    // audit_log event_type counts (per-surface)
 	Latency      LatencyStats   `json:"latency"`       // over elapsed_us, microseconds
 	CoverageGaps []string       `json:"coverage_gaps"` // days shield activated but zero decisions (AGE-212 signal)
+	Daily        []DailyCount   `json:"daily"`         // chronological audited-call counts by UTC day
+}
+
+// DailyCount is one bounded activity point for local dashboard rendering.
+type DailyCount struct {
+	Day   string `json:"day"`
+	Count int64  `json:"count"`
 }
 
 // LabeledCount is one ranked (label, count) row in a StatsReport breakdown.
