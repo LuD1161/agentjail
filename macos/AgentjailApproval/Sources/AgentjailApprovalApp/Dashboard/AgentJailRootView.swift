@@ -140,7 +140,6 @@ private struct DashboardOverviewView: View {
                             tokenCard(snapshot)
                         }
                     }
-                    if !snapshot.tokenAgents.isEmpty { tokenAgentCard(snapshot) }
                     sessionsCard(snapshot)
                 } else { emptyDashboard }
             }
@@ -230,10 +229,31 @@ private struct DashboardOverviewView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .accessibilityLabel("Updating token usage")
+                        }
                     }
+                if !snapshot.tokenAgents.isEmpty { tokenAgentLegend(snapshot) }
+            }
+        }
+    }
+
+    private func tokenAgentLegend(_ snapshot: DashboardSnapshotV1) -> some View {
+        let total = max(snapshot.tokenAgents.reduce(Int64(0)) { $0 + $1.totalTokens }, 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("By agent").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 14) {
+                ForEach(snapshot.tokenAgents) { agent in
+                    Label {
+                        Text("\(agentDisplayName(agent.agent)) \(Int((Double(agent.totalTokens) / Double(total) * 100).rounded()))%")
+                            .font(.caption.monospacedDigit())
+                    } icon: {
+                        Image(systemName: agentIcon(agent.agent)).foregroundStyle(agentColor(agent.agent))
+                    }
+                    .help("\(agentDisplayName(agent.agent)): \(TokenChartScale.fitting(maximum: total).label(for: Double(agent.totalTokens))) tokens")
                 }
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Token usage by agent")
     }
 
     private func sessionsCard(_ snapshot: DashboardSnapshotV1) -> some View {
@@ -417,7 +437,7 @@ private struct ActivityCellView: View {
     }
 
     private var activityColor: Color {
-        guard point.count > 0 else { return Color.green.opacity(0.08) }
+        guard point.count > 0 else { return Color.secondary.opacity(0.12) }
         let intensity = Double(point.count) / Double(max(point.maximum, 1))
         return Color.green.opacity(0.18 + 0.82 * intensity)
     }
