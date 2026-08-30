@@ -229,8 +229,8 @@ private struct DashboardOverviewView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .accessibilityLabel("Updating token usage")
-                        }
                     }
+                }
                 if !snapshot.tokenAgents.isEmpty { tokenAgentLegend(snapshot) }
             }
         }
@@ -275,35 +275,6 @@ private struct DashboardOverviewView: View {
                         .padding(.vertical, 10)
                         if session.id != snapshot.recentSessions.last?.id { Divider() }
                     }
-                }
-            }
-        }
-    }
-
-    private func tokenAgentCard(_ snapshot: DashboardSnapshotV1) -> some View {
-        let total = max(snapshot.tokenAgents.reduce(Int64(0)) { $0 + $1.totalTokens }, 1)
-        return DashboardCard(title: "Token usage by agent", subtitle: "Share of observed tokens", icon: "person.3.fill") {
-            VStack(spacing: 12) {
-                ForEach(snapshot.tokenAgents) { agent in
-                    HStack(spacing: 10) {
-                        Image(systemName: agentIcon(agent.agent))
-                            .foregroundStyle(agentColor(agent.agent))
-                            .frame(width: 22)
-                            .accessibilityHidden(true)
-                        Text(agentDisplayName(agent.agent)).font(.callout.weight(.medium))
-                        Spacer()
-                        Text(TokenChartScale.fitting(maximum: total).label(for: Double(agent.totalTokens)))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Text("\(Int((Double(agent.totalTokens) / Double(total) * 100).rounded()))%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 38, alignment: .trailing)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(agentDisplayName(agent.agent)): \(TokenChartScale.fitting(maximum: total).label(for: Double(agent.totalTokens))) tokens")
-                    ProgressView(value: Double(agent.totalTokens), total: Double(total))
-                        .tint(agentColor(agent.agent))
                 }
             }
         }
