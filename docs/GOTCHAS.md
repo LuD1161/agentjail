@@ -1250,6 +1250,17 @@ looked correct, so view tests stayed green while launch produced two dashboards.
   `WindowGroup` for documents or workflows that intentionally support multiple
   instances. See ADR 0141-unified-macos-app.
 
+## 96. Apple's OK button is not extension approval
+
+The extension request correctly emitted an approval callback, but the app waited
+for that callback before changing its setup card. Apple's notice could cover the
+window first, and its prominent **OK** button merely dismissed the notice, leaving
+an indeterminate spinner behind a successful unit-tested coordinator.
+
+- **Rule:** enter a durable, actionable approval state before submitting an
+  Apple-controlled request, and keep the exact manual path visible after the
+  system dialog disappears. See ADR 0141-unified-macos-app.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

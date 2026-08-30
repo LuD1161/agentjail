@@ -162,7 +162,9 @@ class ExtDelegate: NSObject, OSSystemExtensionRequestDelegate {
         exit(1)
     }
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
-        print("waiting for user approval in System Settings > Login Items & Extensions...")
+        FileHandle.standardError.write(
+            Data("waiting for user approval in System Settings > Login Items & Extensions...\n".utf8)
+        )
     }
     func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties, withExtension new: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
         return .replace

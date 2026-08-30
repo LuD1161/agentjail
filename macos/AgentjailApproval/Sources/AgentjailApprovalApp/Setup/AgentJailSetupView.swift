@@ -147,7 +147,9 @@ struct AgentJailSetupView: View {
                 Button("Check again") { coordinator.retry() }
             }
         case .readyToInstall:
-            Button("Install AgentJail") { coordinator.beginSetup() }
+            Button(coordinator.health.localComponentsReady ? "Enable Network Monitoring" : "Install Local Components") {
+                coordinator.beginSetup()
+            }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         case .awaitingApproval:
@@ -194,7 +196,7 @@ struct AgentJailSetupView: View {
         switch coordinator.phase {
         case .checking: "Checking"
         case .moveToApplications: "Action needed"
-        case .readyToInstall: "Ready to install"
+        case .readyToInstall: coordinator.health.localComponentsReady ? "Network monitoring off" : "Ready to install"
         case .installingComponents: "Installing"
         case .enablingExtension: "Enabling network"
         case .awaitingApproval: "Approval needed"
@@ -211,7 +213,9 @@ struct AgentJailSetupView: View {
         case .moveToApplications:
             "Drag AgentJail into Applications, open that copy, then check again. macOS requires the Network Extension host to stay at a stable application path."
         case .readyToInstall:
-            "AgentJail is ready to install its user-level components and request the one-time Apple approval."
+            coordinator.health.localComponentsReady
+                ? "Network monitoring is optional. Enable it now or continue and turn it on later from Settings."
+                : "Install the user-level CLI, daemon, policy rules, and hooks first. Network monitoring is a separate optional step."
         case .installingComponents:
             "Installing the CLI, daemon, policy rules, and detected agent hooks in your user account."
         case .enablingExtension:
