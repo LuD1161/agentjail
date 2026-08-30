@@ -212,7 +212,9 @@ Overview reads a bounded snapshot from the authenticated local daemon. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,
 and token usage over time from supported local Claude Code, Codex, and OpenCode
 transcripts. Session and audit activity appears immediately while slower local
-transcript aggregation loads progressively in the token card. The app receives
+transcript aggregation loads progressively in the token card. Its vertical axis
+automatically uses tokens, thousands, millions, or billions for the visible
+usage range, and hovering a day shows its compact daily total. The app receives
 project basenames only—not full paths, commands,
 tool inputs, traffic, or credentials. Cursor token usage is not claimed until a
 versioned local source exists.

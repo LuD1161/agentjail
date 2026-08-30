@@ -1,5 +1,4 @@
 import AgentjailApprovalCore
-import Charts
 import SwiftUI
 
 enum AgentJailTab: Hashable {
@@ -225,14 +224,7 @@ private struct DashboardOverviewView: View {
                 DashboardEmptyState(title: "No token usage yet", icon: "chart.line.downtrend.xyaxis", detail: "Usage appears after supported agent transcripts are available.")
                     .frame(height: 130)
             } else {
-                Chart(snapshot.tokens) { point in
-                    AreaMark(x: .value("Day", point.day), y: .value("Tokens", point.totalTokens))
-                        .foregroundStyle(.blue.opacity(0.16))
-                    LineMark(x: .value("Day", point.day), y: .value("Tokens", point.totalTokens))
-                        .foregroundStyle(.blue).interpolationMethod(.catmullRom)
-                }
-                .chartXAxis(.hidden)
-                .frame(height: 130)
+                TokenUsageChart(points: snapshot.tokens)
                 .overlay(alignment: .topTrailing) {
                     if snapshot.tokenStatus == .loading {
                         Label("Updating", systemImage: "arrow.triangle.2.circlepath")
