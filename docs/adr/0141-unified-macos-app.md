@@ -72,8 +72,12 @@ mutated afterward. An Intel download is advertised only after the app, CLI, and
 extension have been built and exercised on Intel hardware.
 
 Network Extension activation remains an explicit Apple-controlled user decision.
-The application explains the effect before requesting activation and never
-automates or bypasses System Settings. AgentJail continues to create a fresh
+Local CLI, daemon, and hook installation completes independently; users may defer
+network monitoring and enable it later from Settings. The application requests
+activation only after an explicit network-monitoring action, changes to a durable
+approval-required state before Apple's notice appears, and keeps the exact System
+Settings path visible if that notice is dismissed with **OK**. It never automates
+or bypasses System Settings. AgentJail continues to create a fresh
 session CA and apply process-local trust; no persistent MITM CA is installed by the
 application or baked into a release image.
 
@@ -89,6 +93,8 @@ security/audit evidence remains distinct from anonymous product telemetry.
   release artifact while retaining separate least-authority processes.
 - The app remains reachable through Dock and Cmd-Tab while Apple-owned System
   Settings is handling Network Extension approval.
+- Users can use the local dashboard and MCP inventory before enabling network
+  monitoring; the app labels monitoring as off rather than claiming protection.
 - Dashboard token coverage is explicit: local Claude Code, Codex, and OpenCode
   transcript readers are supported; Cursor usage is not inferred.
 - The approval Swift package becomes the containing application rather than a

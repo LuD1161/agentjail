@@ -62,6 +62,10 @@ struct AgentJailSetupHealth: Equatable, Sendable {
     var isReady: Bool {
         appInApplications && cliInstalled && daemonReachable && tunnelProfile.isConfigured
     }
+
+    var localComponentsReady: Bool {
+        appInApplications && cliInstalled && daemonReachable
+    }
 }
 
 enum AgentJailSetupMeasurement: Equatable, Sendable {

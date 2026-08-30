@@ -18,7 +18,7 @@ final class AgentJailSetupCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .moveToApplications)
     }
 
-    func testSetupInstallsComponentsRequestsApprovalAndVerifiesHealth() async {
+    func testSetupSeparatesLocalComponentsFromNetworkApproval() async {
         let runner = SetupCommandRunner(approvalRequired: true)
         let inspector = SetupHealthInspector([
             health(cli: false, daemon: false, tunnel: .absent),
@@ -29,15 +29,41 @@ final class AgentJailSetupCoordinatorTests: XCTestCase {
         _ = await coordinator.refresh()
 
         coordinator.beginSetup()
+        await eventually { coordinator.phase == .readyToInstall && coordinator.health.localComponentsReady }
+
+        var commands = await runner.commands()
+        XCTAssertTrue(commands.contains(.installComponents))
+        XCTAssertFalse(commands.contains(.installExtension))
+
+        coordinator.beginSetup()
         await eventually { coordinator.phase == .ready }
         await eventually(runner: runner, contains: .record(.verificationSucceeded))
 
-        let commands = await runner.commands()
-        XCTAssertTrue(commands.contains(.installComponents))
+        commands = await runner.commands()
         XCTAssertTrue(commands.contains(.installExtension))
         XCTAssertTrue(commands.contains(.record(.approvalRequired)))
         XCTAssertTrue(commands.contains(.record(.verificationSucceeded)))
         XCTAssertEqual(coordinator.health.tunnelProfile, .disconnected)
+    }
+
+    func testApprovalInstructionsAppearBeforeSystemCallback() async {
+        let runner = BlockingExtensionRunner()
+        let coordinator = AgentJailSetupCoordinator(
+            runner: runner,
+            inspector: SetupHealthInspector([
+                health(cli: true, daemon: true, tunnel: .absent),
+                health(cli: true, daemon: true, tunnel: .disconnected),
+            ]),
+            sleeper: ImmediateSetupSleeper()
+        )
+        _ = await coordinator.refresh()
+
+        coordinator.beginSetup()
+        await eventually { coordinator.phase == .awaitingApproval }
+        await eventually(runner: runner)
+
+        await runner.finishExtension()
+        await eventually { coordinator.phase == .ready }
     }
 
     func testComponentFailureStopsBeforeExtensionAndRemainsRetryable() async {
@@ -84,6 +110,36 @@ final class AgentJailSetupCoordinatorTests: XCTestCase {
         }
         let found = (await runner.commands()).contains(command)
         XCTAssertTrue(found)
+    }
+
+    private func eventually(runner: BlockingExtensionRunner, timeout: Duration = .seconds(1)) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while !(await runner.extensionStarted()), clock.now < deadline {
+            await Task.yield()
+        }
+        let started = await runner.extensionStarted()
+        XCTAssertTrue(started)
+    }
+}
+
+private actor BlockingExtensionRunner: AgentJailSetupCommandRunning {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func run(_ command: AgentJailSetupCommand, signal: @escaping @Sendable (AgentJailSetupSignal) -> Void) async -> AgentJailSetupCommandResult {
+        if command == .installExtension {
+            started = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return AgentJailSetupCommandResult(launched: true, exitCode: 0)
+    }
+
+    func extensionStarted() -> Bool { started }
+
+    func finishExtension() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

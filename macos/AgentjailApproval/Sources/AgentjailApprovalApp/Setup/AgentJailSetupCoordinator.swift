@@ -54,7 +54,7 @@ final class AgentJailSetupCoordinator: ObservableObject {
     private func runSetup() async {
         record(.started)
 
-        if !health.cliInstalled || !health.daemonReachable {
+        if !health.localComponentsReady {
             phase = .installingComponents
             record(.componentsStarted)
             let result = await runner.run(.installComponents, signal: { _ in })
@@ -65,15 +65,19 @@ final class AgentJailSetupCoordinator: ObservableObject {
             }
             record(.componentsSucceeded)
             health = await inspector.inspect()
+            phase = phaseForHealth(health)
+            return
         }
 
         if !health.tunnelProfile.isConfigured {
             phase = .enablingExtension
             record(.extensionStarted)
+            // The Apple notice can be dismissed without approval, so the app
+            // must already expose the durable next step. See ADR 0141-unified-macos-app.
+            phase = .awaitingApproval
             let result = await runner.run(.installExtension) { [weak self] signal in
                 guard signal == .approvalRequired else { return }
                 Task { @MainActor [weak self] in
-                    self?.phase = .awaitingApproval
                     self?.record(.approvalRequired)
                 }
             }
