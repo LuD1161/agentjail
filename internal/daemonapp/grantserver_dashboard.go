@@ -42,6 +42,7 @@ type dashboardTokenCache struct {
 	mu         sync.Mutex
 	collect    func(time.Time) ([]costanalytics.SessionCost, []error)
 	points     []grantctl.DashboardTokenDayV1
+	agents     []grantctl.DashboardTokenAgentV1
 	loadedAt   time.Time
 	refreshing bool
 }
@@ -50,26 +51,28 @@ func newDashboardTokenCache(collect func(time.Time) ([]costanalytics.SessionCost
 	return &dashboardTokenCache{collect: collect}
 }
 
-func (c *dashboardTokenCache) snapshot(since, now time.Time) ([]grantctl.DashboardTokenDayV1, grantctl.DashboardTokenStatus) {
+func (c *dashboardTokenCache) snapshot(since, now time.Time) ([]grantctl.DashboardTokenDayV1, []grantctl.DashboardTokenAgentV1, grantctl.DashboardTokenStatus) {
 	c.mu.Lock()
 	if !c.refreshing && (c.loadedAt.IsZero() || now.Sub(c.loadedAt) >= dashboardTokenCacheTTL) {
 		c.refreshing = true
 		go c.refresh(since, now)
 	}
 	points := append(make([]grantctl.DashboardTokenDayV1, 0, len(c.points)), c.points...)
+	agents := append(make([]grantctl.DashboardTokenAgentV1, 0, len(c.agents)), c.agents...)
 	status := grantctl.DashboardTokensReady
 	if c.refreshing {
 		status = grantctl.DashboardTokensLoading
 	}
 	c.mu.Unlock()
-	return points, status
+	return points, agents, status
 }
 
 func (c *dashboardTokenCache) refresh(since, now time.Time) {
 	costs, _ := c.collect(since)
-	points := aggregateDashboardTokens(costs, since, now)
+	points, agents := aggregateDashboardTokens(costs, since, now)
 	c.mu.Lock()
 	c.points = points
+	c.agents = agents
 	c.loadedAt = now
 	c.refreshing = false
 	c.mu.Unlock()
@@ -102,6 +105,7 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 		RecentSessions: make([]grantctl.DashboardSessionV1, 0, len(sessions)),
 		Activity:       make([]grantctl.DashboardDayV1, 0, len(stats.Daily)),
 		TokenCoverage:  []string{"Claude Code", "Codex", "OpenCode"},
+		TokenAgents:    make([]grantctl.DashboardTokenAgentV1, 0),
 	}
 	for _, session := range sessions {
 		_, isActive := active[session.SessionID]
@@ -121,12 +125,13 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 		snapshot.Activity = append(snapshot.Activity, grantctl.DashboardDayV1{Day: day.Day, Count: day.Count})
 	}
 
-	snapshot.Tokens, snapshot.TokenStatus = p.tokenCache.snapshot(since, now)
+	snapshot.Tokens, snapshot.TokenAgents, snapshot.TokenStatus = p.tokenCache.snapshot(since, now)
 	return snapshot, nil
 }
 
-func aggregateDashboardTokens(costs []costanalytics.SessionCost, since, now time.Time) []grantctl.DashboardTokenDayV1 {
+func aggregateDashboardTokens(costs []costanalytics.SessionCost, since, now time.Time) ([]grantctl.DashboardTokenDayV1, []grantctl.DashboardTokenAgentV1) {
 	byDay := make(map[string]*grantctl.DashboardTokenDayV1)
+	byAgent := make(map[string]*grantctl.DashboardTokenAgentV1)
 	for _, cost := range costs {
 		if cost.StartedAt.Before(since) || cost.StartedAt.After(now) {
 			continue
@@ -140,6 +145,18 @@ func aggregateDashboardTokens(costs []costanalytics.SessionCost, since, now time
 		point.InputTokens += cost.InputTokens
 		point.OutputTokens += cost.OutputTokens
 		point.CacheTokens += cost.CacheRead + cost.CacheWrite
+		agent := string(cost.Agent)
+		if agent == "" {
+			agent = string(cost.Source)
+		}
+		agentPoint := byAgent[agent]
+		if agentPoint == nil {
+			agentPoint = &grantctl.DashboardTokenAgentV1{Agent: agent}
+			byAgent[agent] = agentPoint
+		}
+		agentPoint.InputTokens += cost.InputTokens
+		agentPoint.OutputTokens += cost.OutputTokens
+		agentPoint.CacheTokens += cost.CacheRead + cost.CacheWrite
 	}
 	days := make([]string, 0, len(byDay))
 	for day := range byDay {
@@ -150,7 +167,12 @@ func aggregateDashboardTokens(costs []costanalytics.SessionCost, since, now time
 	for _, day := range days {
 		points = append(points, *byDay[day])
 	}
-	return points
+	agents := make([]grantctl.DashboardTokenAgentV1, 0, len(byAgent))
+	for _, point := range byAgent {
+		agents = append(agents, *point)
+	}
+	sort.Slice(agents, func(i, j int) bool { return agents[i].Agent < agents[j].Agent })
+	return points, agents
 }
 
 func dashboardProjectName(cwd string) string {

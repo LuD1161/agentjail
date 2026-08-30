@@ -215,6 +215,8 @@ transcripts. Session and audit activity appears immediately while slower local
 transcript aggregation loads progressively in the token card. Its vertical axis
 automatically uses tokens, thousands, millions, or billions for the visible
 usage range, and hovering a day shows its compact daily total. The app receives
+The dashboard also shows each supported agent's token share with a compact
+breakdown. The app receives
 project basenames only—not full paths, commands,
 tool inputs, traffic, or credentials. Cursor token usage is not claimed until a
 versioned local source exists.

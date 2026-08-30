@@ -23,7 +23,7 @@ final class DashboardStoreTests: XCTestCase {
 
     private func snapshot(tokenStatus: DashboardTokenStatus, totalCalls: Int64) throws -> DashboardSnapshotV1 {
         let data = Data("""
-        {"protocol_version":1,"generated_at_unix_ms":1788020000000,"total_calls":\(totalCalls),"allowed_calls":7,"denied_calls":0,"asked_calls":0,"total_sessions":1,"active_sessions":0,"recent_sessions":[],"activity":[],"tokens":[],"token_coverage":["Claude Code","Codex","OpenCode"],"token_status":"\(tokenStatus.rawValue)"}
+        {"protocol_version":1,"generated_at_unix_ms":1788020000000,"total_calls":\(totalCalls),"allowed_calls":7,"denied_calls":0,"asked_calls":0,"total_sessions":1,"active_sessions":0,"recent_sessions":[],"activity":[],"tokens":[],"token_agents":[],"token_coverage":["Claude Code","Codex","OpenCode"],"token_status":"\(tokenStatus.rawValue)"}
         """.utf8)
         return try JSONDecoder().decode(DashboardSnapshotV1.self, from: data)
     }

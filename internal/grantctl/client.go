@@ -125,11 +125,16 @@ func DashboardSnapshot(sockPath, ctlToken string, timeout time.Duration) (Dashbo
 }
 
 func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
-	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenCoverage == nil {
+	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenAgents == nil || snapshot.TokenCoverage == nil {
 		return fmt.Errorf("dashboard arrays are required")
 	}
-	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays {
+	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 {
 		return fmt.Errorf("dashboard projection exceeds item limits")
+	}
+	for _, agent := range snapshot.TokenAgents {
+		if agent.Agent == "" || len(agent.Agent) > MaxDashboardLabelBytes || agent.InputTokens < 0 || agent.OutputTokens < 0 || agent.CacheTokens < 0 {
+			return fmt.Errorf("invalid dashboard token agent")
+		}
 	}
 	if snapshot.ActiveSessions < 0 || snapshot.TotalCalls < 0 || snapshot.TotalSessions < 0 {
 		return fmt.Errorf("dashboard counts cannot be negative")

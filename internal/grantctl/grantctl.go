@@ -160,19 +160,20 @@ const (
 // DashboardSnapshotV1 is a bounded, server-generated view of local activity.
 // It intentionally contains no commands, full paths, tool input, or secrets.
 type DashboardSnapshotV1 struct {
-	ProtocolVersion   ProtocolVersion       `json:"protocol_version"`
-	GeneratedAtUnixMs UnixMilliseconds      `json:"generated_at_unix_ms"`
-	TotalCalls        int64                 `json:"total_calls"`
-	AllowedCalls      int64                 `json:"allowed_calls"`
-	DeniedCalls       int64                 `json:"denied_calls"`
-	AskedCalls        int64                 `json:"asked_calls"`
-	TotalSessions     int64                 `json:"total_sessions"`
-	ActiveSessions    int                   `json:"active_sessions"`
-	RecentSessions    []DashboardSessionV1  `json:"recent_sessions"`
-	Activity          []DashboardDayV1      `json:"activity"`
-	Tokens            []DashboardTokenDayV1 `json:"tokens"`
-	TokenCoverage     []string              `json:"token_coverage"`
-	TokenStatus       DashboardTokenStatus  `json:"token_status"`
+	ProtocolVersion   ProtocolVersion         `json:"protocol_version"`
+	GeneratedAtUnixMs UnixMilliseconds        `json:"generated_at_unix_ms"`
+	TotalCalls        int64                   `json:"total_calls"`
+	AllowedCalls      int64                   `json:"allowed_calls"`
+	DeniedCalls       int64                   `json:"denied_calls"`
+	AskedCalls        int64                   `json:"asked_calls"`
+	TotalSessions     int64                   `json:"total_sessions"`
+	ActiveSessions    int                     `json:"active_sessions"`
+	RecentSessions    []DashboardSessionV1    `json:"recent_sessions"`
+	Activity          []DashboardDayV1        `json:"activity"`
+	Tokens            []DashboardTokenDayV1   `json:"tokens"`
+	TokenAgents       []DashboardTokenAgentV1 `json:"token_agents"`
+	TokenCoverage     []string                `json:"token_coverage"`
+	TokenStatus       DashboardTokenStatus    `json:"token_status"`
 }
 
 type DashboardSessionV1 struct {
@@ -192,6 +193,13 @@ type DashboardDayV1 struct {
 
 type DashboardTokenDayV1 struct {
 	Day          string `json:"day"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+	CacheTokens  int64  `json:"cache_tokens"`
+}
+
+type DashboardTokenAgentV1 struct {
+	Agent        string `json:"agent"`
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
 	CacheTokens  int64  `json:"cache_tokens"`

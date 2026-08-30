@@ -5,7 +5,7 @@ import "testing"
 func TestValidateDashboardSnapshotRejectsMalformedAndOversizedData(t *testing.T) {
 	valid := DashboardSnapshotV1{
 		ProtocolVersion: DashboardProtocolVersion,
-		RecentSessions:  []DashboardSessionV1{}, Activity: []DashboardDayV1{}, Tokens: []DashboardTokenDayV1{}, TokenCoverage: []string{},
+		RecentSessions:  []DashboardSessionV1{}, Activity: []DashboardDayV1{}, Tokens: []DashboardTokenDayV1{}, TokenAgents: []DashboardTokenAgentV1{}, TokenCoverage: []string{},
 		TokenStatus: DashboardTokensReady,
 	}
 	if err := validateDashboardSnapshotV1(valid); err != nil {

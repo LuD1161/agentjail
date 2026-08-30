@@ -13,6 +13,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
     public let recentSessions: [DashboardSession]
     public let activity: [DashboardDay]
     public let tokens: [DashboardTokenDay]
+    public let tokenAgents: [DashboardTokenAgent]
     public let tokenCoverage: [String]
     public let tokenStatus: DashboardTokenStatus
 
@@ -20,7 +21,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         case protocolVersion = "protocol_version", generatedAtUnixMs = "generated_at_unix_ms"
         case totalCalls = "total_calls", allowedCalls = "allowed_calls", deniedCalls = "denied_calls", askedCalls = "asked_calls"
         case totalSessions = "total_sessions", activeSessions = "active_sessions", recentSessions = "recent_sessions"
-        case activity, tokens, tokenCoverage = "token_coverage", tokenStatus = "token_status"
+        case activity, tokens, tokenAgents = "token_agents", tokenCoverage = "token_coverage", tokenStatus = "token_status"
     }
 
     public init(from decoder: Decoder) throws {
@@ -37,11 +38,12 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         recentSessions = try values.decode([DashboardSession].self, forKey: .recentSessions)
         activity = try values.decode([DashboardDay].self, forKey: .activity)
         tokens = try values.decode([DashboardTokenDay].self, forKey: .tokens)
+        tokenAgents = try values.decodeIfPresent([DashboardTokenAgent].self, forKey: .tokenAgents) ?? []
         tokenCoverage = try values.decode([String].self, forKey: .tokenCoverage)
         tokenStatus = try values.decodeIfPresent(DashboardTokenStatus.self, forKey: .tokenStatus) ?? .ready
         guard totalCalls >= 0, allowedCalls >= 0, deniedCalls >= 0, askedCalls >= 0,
               totalSessions >= 0, activeSessions >= 0, recentSessions.count <= 12,
-              activity.count <= 35, tokens.count <= 35,
+              activity.count <= 35, tokens.count <= 35, tokenAgents.count <= 8,
               tokenCoverage.allSatisfy({ $0.utf8.count <= 128 }) else {
             throw DashboardModelError.invalidProjection
         }
@@ -116,6 +118,26 @@ public struct DashboardTokenDay: Decodable, Identifiable, Equatable, Sendable {
         outputTokens = try values.decode(Int64.self, forKey: .outputTokens)
         cacheTokens = try values.decode(Int64.self, forKey: .cacheTokens)
         guard day.utf8.count == 10, inputTokens >= 0, outputTokens >= 0, cacheTokens >= 0 else { throw DashboardModelError.invalidProjection }
+    }
+}
+
+public struct DashboardTokenAgent: Decodable, Identifiable, Equatable, Sendable {
+    public let agent: String
+    public let inputTokens: Int64
+    public let outputTokens: Int64
+    public let cacheTokens: Int64
+    public var id: String { agent }
+    public var totalTokens: Int64 { inputTokens + outputTokens + cacheTokens }
+
+    enum CodingKeys: String, CodingKey { case agent, inputTokens = "input_tokens", outputTokens = "output_tokens", cacheTokens = "cache_tokens" }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try values.decode(String.self, forKey: .agent)
+        inputTokens = try values.decode(Int64.self, forKey: .inputTokens)
+        outputTokens = try values.decode(Int64.self, forKey: .outputTokens)
+        cacheTokens = try values.decode(Int64.self, forKey: .cacheTokens)
+        guard !agent.isEmpty, agent.utf8.count <= 128, inputTokens >= 0, outputTokens >= 0, cacheTokens >= 0 else { throw DashboardModelError.invalidProjection }
     }
 }
 

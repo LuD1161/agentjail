@@ -1309,6 +1309,15 @@ on the next, and the 403s looked like enforcement. Deny scenarios now grep for
 `template=<id>` in the eval log, so they cannot pass for the wrong reason, and
 generic reachability probes use a host with no rate limit.
 
+## 99. UTC projection keys must use the same calendar as the UI
+
+The daemon returned daily activity keyed by UTC (`YYYY-MM-DD`), while the Swift
+grid formatted UTC-midnight dates through the user's local timezone. Around a
+day boundary every cell missed despite non-zero totals and a green test suite.
+
+- **Rule:** when a wire projection owns a calendar, configure both date
+  arithmetic and formatting with that calendar's timezone. See AGE-293.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

@@ -140,6 +140,7 @@ private struct DashboardOverviewView: View {
                             tokenCard(snapshot)
                         }
                     }
+                    if !snapshot.tokenAgents.isEmpty { tokenAgentCard(snapshot) }
                     sessionsCard(snapshot)
                 } else { emptyDashboard }
             }
@@ -261,6 +262,47 @@ private struct DashboardOverviewView: View {
         }
     }
 
+    private func tokenAgentCard(_ snapshot: DashboardSnapshotV1) -> some View {
+        let total = max(snapshot.tokenAgents.reduce(Int64(0)) { $0 + $1.totalTokens }, 1)
+        return DashboardCard(title: "Token usage by agent", subtitle: "Share of observed tokens", icon: "person.3.fill") {
+            VStack(spacing: 12) {
+                ForEach(snapshot.tokenAgents) { agent in
+                    HStack(spacing: 10) {
+                        Image(systemName: agentIcon(agent.agent))
+                            .foregroundStyle(agentColor(agent.agent))
+                            .frame(width: 22)
+                            .accessibilityHidden(true)
+                        Text(agentDisplayName(agent.agent)).font(.callout.weight(.medium))
+                        Spacer()
+                        Text(TokenChartScale.fitting(maximum: total).label(for: Double(agent.totalTokens)))
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text("\(Int((Double(agent.totalTokens) / Double(total) * 100).rounded()))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 38, alignment: .trailing)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(agentDisplayName(agent.agent)): \(TokenChartScale.fitting(maximum: total).label(for: Double(agent.totalTokens))) tokens")
+                    ProgressView(value: Double(agent.totalTokens), total: Double(total))
+                        .tint(agentColor(agent.agent))
+                }
+            }
+        }
+    }
+
+    private func agentDisplayName(_ value: String) -> String {
+        switch value { case "claude-code": "Claude Code"; case "codex": "Codex"; case "opencode": "OpenCode"; default: value }
+    }
+
+    private func agentIcon(_ value: String) -> String {
+        switch value { case "claude-code": "bubble.left.and.bubble.right.fill"; case "codex": "sparkles"; case "opencode": "chevron.left.forwardslash.chevron.right"; default: "cpu" }
+    }
+
+    private func agentColor(_ value: String) -> Color {
+        switch value { case "claude-code": .orange; case "codex": .blue; case "opencode": .purple; default: .secondary }
+    }
+
     private var emptyDashboard: some View {
         AgentJailSurface {
             DashboardEmptyState(
@@ -332,8 +374,8 @@ private struct DashboardOverviewView: View {
     private func activityCells(_ snapshot: DashboardSnapshotV1) -> [ActivityCell] {
         let counts = Dictionary(uniqueKeysWithValues: snapshot.activity.map { ($0.day, $0.count) })
         let maximum = max(counts.values.max() ?? 0, 1)
-        let formatter = DateFormatter(); formatter.calendar = Calendar(identifier: .iso8601); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
         let calendar = Calendar(identifier: .iso8601)
+        let formatter = DateFormatter(); formatter.calendar = calendar; formatter.timeZone = calendar.timeZone; formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
         let today = calendar.startOfDay(for: Date())
         return (0..<35).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset - 34, to: today) else { return nil }

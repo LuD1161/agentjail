@@ -111,6 +111,8 @@ security/audit evidence remains distinct from anonymous product telemetry.
   transcript readers are supported; Cursor usage is not inferred.
 - Slow transcript readers cannot make the audit and session dashboard
   unavailable; token loading is progressive and single-flight.
+- Token totals include a bounded per-agent breakdown; chart units are chosen
+  from the visible range and hover inspection never changes the axis domain.
 - The approval Swift package becomes the containing application rather than a
   standalone companion; its daemon-controlled review model remains unchanged.
 - The old `AgentjailTunnel.app` and approval-only DMG are migration inputs, not

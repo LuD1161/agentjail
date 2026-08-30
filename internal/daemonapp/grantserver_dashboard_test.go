@@ -75,6 +75,9 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	if snapshot.TokenStatus != grantctl.DashboardTokensReady || len(snapshot.Tokens) != 1 || snapshot.Tokens[0].InputTokens != 10 || snapshot.Tokens[0].CacheTokens != 2 {
 		t.Fatalf("ready tokens: status=%q points=%+v", snapshot.TokenStatus, snapshot.Tokens)
 	}
+	if len(snapshot.TokenAgents) != 1 || snapshot.TokenAgents[0].Agent != "" || snapshot.TokenAgents[0].InputTokens != 10 {
+		t.Fatalf("agent token spread: %+v", snapshot.TokenAgents)
+	}
 }
 
 func TestDashboardSnapshotResponseRejectsMissingProjectorAndVersions(t *testing.T) {
