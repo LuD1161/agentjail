@@ -208,6 +208,7 @@ normal Dock and Cmd-Tab application with one window and a persistent sidebar for
 Overview card; when it sends you to System Settings, returning to AgentJail
 refreshes that card at the resulting ready, waiting, or retry state.
 The sidebar also keeps a **Star on GitHub** action available on every page.
+The same AgentJail app mark is used in the Dock, sidebar, and menu bar.
 
 Overview reads a bounded snapshot from the authenticated local daemon. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,
