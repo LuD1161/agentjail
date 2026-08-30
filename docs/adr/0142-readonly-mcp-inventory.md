@@ -74,6 +74,16 @@ does not claim complete traffic visibility. Project discovery, activity
 correlation, shadow policy, migration, and enforcement remain later AGE-295
 phases.
 
+The inventory may also display a bounded projection of MCP tool names that the
+existing AgentJail daemon has already persisted while auditing agent calls. This
+projection travels over the authenticated, versioned dashboard control socket;
+it is sorted, limited to 64 servers and 128 tools per server, and contains only
+sanitized server and tool identifiers. The app labels this data as observed
+history. Missing history is **Not observed**, not an empty server declaration.
+Reading this projection does not execute configured commands or contact remote
+MCP endpoints. Complete live `tools/list` discovery remains an explicit later
+capability because stdio discovery starts third-party processes.
+
 ## Consequences
 
 - The app can inventory Claude Code, Codex, and Cursor without becoming a policy
@@ -88,3 +98,5 @@ phases.
 - Global-only discovery is partial by design and visibly labeled. Expanding to
   project files requires an explicit, bounded project-source contract rather
   than a home-directory crawl.
+- Previously audited tool names make the inventory more useful without changing
+  Phase 1's no-process-launch and no-network-contact guarantee.

@@ -180,6 +180,7 @@ type EventStore interface {
 	UpsertDiscoveredSkill(ctx context.Context, name, source string) error
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
+	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	Emit(ctx context.Context, e audit.Event) error
 	ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error)
 	ListGrantAuditLog(ctx context.Context, limit int) ([]AuditLogEntry, error)

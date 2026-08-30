@@ -238,10 +238,11 @@ downloads only the platform CLI tarball.
 The macOS app also includes an **observe-only MCP inventory** for the global
 Claude Code, Codex, and Cursor configurations. Its compact table shows the
 server, configured agent, global scope, status, redacted command or origin, and
-duplicate names. Tool counts are intentionally not probed: discovery never
-launches an MCP server. A refresh reads configuration files only: it never changes
-configuration or policy, or claims visibility into project-local files or live
-traffic.
+duplicate names. When AgentJail has already audited tools from a server, the
+table shows an expandable count and the observed tool names. Servers without
+local audit history are labeled **Not observed**. Refresh never launches an MCP
+server, changes configuration or policy, or claims visibility into project-local
+files or live traffic.
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 

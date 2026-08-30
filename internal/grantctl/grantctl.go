@@ -172,6 +172,7 @@ type DashboardSnapshotV1 struct {
 	Activity          []DashboardDayV1        `json:"activity"`
 	Tokens            []DashboardTokenDayV1   `json:"tokens"`
 	TokenAgents       []DashboardTokenAgentV1 `json:"token_agents"`
+	MCPTools          []DashboardMCPToolsV1   `json:"mcp_tools"`
 	TokenCoverage     []string                `json:"token_coverage"`
 	TokenStatus       DashboardTokenStatus    `json:"token_status"`
 }
@@ -203,6 +204,13 @@ type DashboardTokenAgentV1 struct {
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
 	CacheTokens  int64  `json:"cache_tokens"`
+}
+
+// DashboardMCPToolsV1 is a bounded projection of tool names already observed
+// by AgentJail. It never triggers live MCP discovery.
+type DashboardMCPToolsV1 struct {
+	Server string   `json:"server"`
+	Tools  []string `json:"tools"`
 }
 
 // ReviewKind identifies the authority being reviewed.

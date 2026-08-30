@@ -19,7 +19,7 @@ struct MCPInventoryView: View {
                     detail: "Configured servers across Claude Code, Codex, and Cursor"
                 ) {
                     Button {
-                        store.refresh()
+                        Task { await store.refresh() }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
@@ -36,7 +36,7 @@ struct MCPInventoryView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
-            store.refresh()
+            await store.refresh()
         }
     }
 
@@ -47,7 +47,7 @@ struct MCPInventoryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Observe only")
                         .font(.headline)
-                    Text("Discovery reads configuration metadata only. It never modifies files, launches MCP servers, proxies calls, or changes policy.")
+                    Text("Discovery reads configuration metadata and tool names already observed in AgentJail's audit history. It never modifies files, launches MCP servers, proxies calls, or changes policy.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -114,7 +114,13 @@ struct MCPInventoryView: View {
                 }
                 MCPTableHeader()
                 VStack(spacing: 0) {
-                    ForEach(filteredItems) { item in MCPInventoryRow(item: item) }
+                    ForEach(filteredItems) { item in
+                        MCPInventoryRow(
+                            item: item,
+                            observedTools: store.observedTools(for: item.name),
+                            toolDataUnavailable: store.toolDataUnavailable
+                        )
+                    }
                 }
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
@@ -137,7 +143,7 @@ struct MCPInventoryView: View {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("Phase 1 covers the global configuration files shown above. Project-local MCP files and runtime activity are not observed yet, so this inventory is intentionally not presented as complete traffic visibility.")
+            Text("Tool names come from local AgentJail audit history. “Not observed” means this install has not audited a tool for that server; AgentJail does not start servers merely to enumerate them. Project-local MCP files remain outside this phase.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -148,41 +154,102 @@ struct MCPInventoryView: View {
 
 private struct MCPInventoryRow: View {
     let item: MCPInventoryItem
+    let observedTools: [String]
+    let toolDataUnavailable: Bool
+    @State private var isExpanded = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 9) {
-                MCPBrandMark.server(named: item.name, target: item.target)
-                VStack(alignment: .leading, spacing: 3) {
-                Text(item.name)
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-                if item.isDuplicate {
-                    Label("In \(item.duplicateCount) clients", systemImage: "square.on.square")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                HStack(spacing: 9) {
+                    MCPBrandMark.server(named: item.name, target: item.target)
+                    VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    if item.isDuplicate {
+                        Label("In \(item.duplicateCount) clients", systemImage: "square.on.square")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    Text(item.target)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
                 }
-                Text(item.target)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 7) {
+                    MCPBrandMark.agent(item.sourceClient)
+                    Text(item.sourceClient.displayName)
                 }
+                .frame(width: 112, alignment: .leading)
+                toolSummary.frame(width: 100, alignment: .leading)
+                Text("Global").frame(width: 108, alignment: .leading)
+                statusBadge.frame(width: 112, alignment: .trailing)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 7) {
-                MCPBrandMark.agent(item.sourceClient)
-                Text(item.sourceClient.displayName)
+
+            if isExpanded {
+                Divider().padding(.leading, 14)
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("Observed tools")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), alignment: .leading)], alignment: .leading, spacing: 7) {
+                        ForEach(observedTools, id: \.self) { tool in
+                            Text(tool)
+                                .font(.caption.monospaced())
+                                .lineLimit(1)
+                                .help(tool)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
+                }
+                .padding(.horizontal, 42)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.018))
             }
-            .frame(width: 112, alignment: .leading)
-            Text("—").frame(width: 54).help("Tool counts require connecting to the MCP server. This inventory remains read-only and never launches servers.")
-            Text("Global").frame(width: 108, alignment: .leading)
-            statusBadge.frame(width: 112, alignment: .trailing)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .bottom) { Divider().padding(.leading, 14) }
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var toolSummary: some View {
+        if toolDataUnavailable {
+            Text("Unavailable")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help("The local AgentJail daemon could not provide observed tool data.")
+        } else if observedTools.isEmpty {
+            Text("Not observed")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help("No tool from this server has been recorded in local AgentJail audit history.")
+        } else {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(observedTools.count.formatted())
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .help(isExpanded ? "Hide observed tools" : "Show observed tools")
+            .accessibilityLabel("\(observedTools.count) observed tools")
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        }
     }
 
     private var statusBadge: some View {
@@ -271,7 +338,7 @@ private struct MCPTableHeader: View {
         HStack(spacing: 12) {
             Text("SERVER").frame(maxWidth: .infinity, alignment: .leading)
             Text("AGENT").frame(width: 112, alignment: .leading)
-            Text("TOOLS").frame(width: 54, alignment: .leading)
+            Text("TOOLS").frame(width: 100, alignment: .leading)
             Text("SCOPE").frame(width: 108, alignment: .leading)
             Text("STATUS").frame(width: 112, alignment: .trailing)
         }

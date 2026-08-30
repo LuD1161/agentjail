@@ -9,6 +9,7 @@ final class DashboardControlClientTests: XCTestCase {
         let snapshot = try await DashboardControlClient(tokenLoader: DashboardTokenLoader(token: token), transport: transport).fetchDashboard()
         XCTAssertEqual(snapshot.totalCalls, 9)
         XCTAssertEqual(snapshot.tokenStatus, .loading)
+        XCTAssertEqual(snapshot.mcpTools.first?.tools, ["navigate_page", "take_snapshot"])
         let request = try transport.request()
         XCTAssertEqual(Set(request.keys), ["type", "ctl_token", "protocol_version"])
         XCTAssertEqual(request["type"] as? String, "dashboard_snapshot")
@@ -37,7 +38,7 @@ final class DashboardControlClientTests: XCTestCase {
 
     private func validFrame() -> Data {
         Data("""
-        {"ok":true,"dashboard_snapshot":{"protocol_version":1,"generated_at_unix_ms":1788020000000,"total_calls":9,"allowed_calls":7,"denied_calls":1,"asked_calls":1,"total_sessions":2,"active_sessions":1,"recent_sessions":[],"activity":[],"tokens":[],"token_agents":[],"token_coverage":["Claude Code","Codex"],"token_status":"loading"}}
+        {"ok":true,"dashboard_snapshot":{"protocol_version":1,"generated_at_unix_ms":1788020000000,"total_calls":9,"allowed_calls":7,"denied_calls":1,"asked_calls":1,"total_sessions":2,"active_sessions":1,"recent_sessions":[],"activity":[],"tokens":[],"token_agents":[],"mcp_tools":[{"server":"chrome-devtools","tools":["navigate_page","take_snapshot"]}],"token_coverage":["Claude Code","Codex"],"token_status":"loading"}}
         """.utf8) + Data([10])
     }
 }

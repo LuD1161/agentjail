@@ -128,7 +128,7 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenAgents == nil || snapshot.TokenCoverage == nil {
 		return fmt.Errorf("dashboard arrays are required")
 	}
-	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 {
+	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 || len(snapshot.MCPTools) > 64 {
 		return fmt.Errorf("dashboard projection exceeds item limits")
 	}
 	for _, agent := range snapshot.TokenAgents {
@@ -155,6 +155,16 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	for _, day := range snapshot.Tokens {
 		if len(day.Day) != len("2006-01-02") || day.InputTokens < 0 || day.OutputTokens < 0 || day.CacheTokens < 0 {
 			return fmt.Errorf("invalid dashboard token point")
+		}
+	}
+	for _, server := range snapshot.MCPTools {
+		if server.Server == "" || len(server.Server) > MaxDashboardLabelBytes || server.Tools == nil || len(server.Tools) > 128 {
+			return fmt.Errorf("invalid dashboard MCP tools")
+		}
+		for _, tool := range server.Tools {
+			if tool == "" || len(tool) > MaxDashboardLabelBytes {
+				return fmt.Errorf("invalid dashboard MCP tool")
+			}
 		}
 	}
 	return nil

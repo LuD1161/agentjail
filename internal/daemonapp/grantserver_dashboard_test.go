@@ -22,9 +22,13 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	for i, action := range []string{"allow", "deny", "ask"} {
+		toolName := "shell"
+		if i == 0 {
+			toolName = "mcp__linear__create_issue"
+		}
 		err := eventStore.RecordDecision(context.Background(), store.DecisionRecord{
 			Ts: now.Add(time.Duration(i) * time.Minute), SessionID: "session-1", Agent: "codex",
-			Action: action, CWD: "/Users/private/work/agentjail", ToolName: "shell",
+			Action: action, CWD: "/Users/private/work/agentjail", ToolName: toolName,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -32,6 +36,12 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	}
 	active := newActiveTracker(root)
 	active.update("session-1", os.Getpid(), "/Users/private/work/agentjail")
+	if err := eventStore.UpsertDiscoveredTool(context.Background(), "chrome-devtools", "navigate_page", "audit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := eventStore.UpsertDiscoveredTool(context.Background(), "chrome-devtools", "take_snapshot", "audit"); err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	projector := &localDashboardProjector{
@@ -77,6 +87,9 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	}
 	if len(snapshot.TokenAgents) != 1 || snapshot.TokenAgents[0].Agent != string(costanalytics.AgentCodex) || snapshot.TokenAgents[0].InputTokens != 10 {
 		t.Fatalf("agent token spread: %+v", snapshot.TokenAgents)
+	}
+	if len(snapshot.MCPTools) != 2 || snapshot.MCPTools[0].Server != "chrome-devtools" || len(snapshot.MCPTools[0].Tools) != 2 || snapshot.MCPTools[1].Server != "linear" || len(snapshot.MCPTools[1].Tools) != 1 || snapshot.MCPTools[1].Tools[0] != "create_issue" {
+		t.Fatalf("MCP tools: %+v", snapshot.MCPTools)
 	}
 }
 

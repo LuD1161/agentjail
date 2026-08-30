@@ -88,6 +88,14 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 	if err != nil {
 		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list dashboard sessions: %w", err)
 	}
+	discoveredTools, err := p.store.ListDiscoveredTools(ctx, "")
+	if err != nil {
+		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list dashboard MCP tools: %w", err)
+	}
+	auditedToolNames, err := p.store.ListDistinctMCPToolNames(ctx)
+	if err != nil {
+		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list audited dashboard MCP tools: %w", err)
+	}
 
 	active := make(map[string]struct{})
 	if p.activeSessions != nil {
@@ -104,6 +112,7 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 		TotalSessions: stats.Sessions, ActiveSessions: len(active),
 		RecentSessions: make([]grantctl.DashboardSessionV1, 0, len(sessions)),
 		Activity:       make([]grantctl.DashboardDayV1, 0, len(stats.Daily)),
+		MCPTools:       dashboardMCPTools(discoveredTools, auditedToolNames),
 		TokenCoverage:  []string{"Claude Code", "Codex", "OpenCode"},
 		TokenAgents:    make([]grantctl.DashboardTokenAgentV1, 0),
 	}
@@ -127,6 +136,56 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 
 	snapshot.Tokens, snapshot.TokenAgents, snapshot.TokenStatus = p.tokenCache.snapshot(since, now)
 	return snapshot, nil
+}
+
+func dashboardMCPTools(discovered []store.DiscoveredTool, auditedToolNames []string) []grantctl.DashboardMCPToolsV1 {
+	byServer := make(map[string]map[string]struct{})
+	for _, entry := range discovered {
+		addDashboardMCPTool(byServer, entry.Server, entry.Tool)
+	}
+	for _, name := range auditedToolNames {
+		rest, ok := strings.CutPrefix(name, "mcp__")
+		if !ok {
+			continue
+		}
+		server, tool, ok := strings.Cut(rest, "__")
+		if !ok {
+			continue
+		}
+		addDashboardMCPTool(byServer, server, tool)
+	}
+	servers := make([]string, 0, len(byServer))
+	for server := range byServer {
+		servers = append(servers, server)
+	}
+	sort.Strings(servers)
+	if len(servers) > 64 {
+		servers = servers[:64]
+	}
+	out := make([]grantctl.DashboardMCPToolsV1, 0, len(servers))
+	for _, server := range servers {
+		tools := make([]string, 0, len(byServer[server]))
+		for tool := range byServer[server] {
+			tools = append(tools, tool)
+		}
+		sort.Strings(tools)
+		out = append(out, grantctl.DashboardMCPToolsV1{Server: server, Tools: tools})
+	}
+	return out
+}
+
+func addDashboardMCPTool(byServer map[string]map[string]struct{}, rawServer, rawTool string) {
+	server := boundedDashboardLabel(rawServer, grantctl.MaxDashboardLabelBytes)
+	tool := boundedDashboardLabel(rawTool, grantctl.MaxDashboardLabelBytes)
+	if server == "" || tool == "" {
+		return
+	}
+	if byServer[server] == nil {
+		byServer[server] = make(map[string]struct{})
+	}
+	if len(byServer[server]) < 128 {
+		byServer[server][tool] = struct{}{}
+	}
 }
 
 func aggregateDashboardTokens(costs []costanalytics.SessionCost, since, now time.Time) ([]grantctl.DashboardTokenDayV1, []grantctl.DashboardTokenAgentV1) {
