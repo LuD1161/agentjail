@@ -259,6 +259,7 @@ private struct DashboardOverviewView: View {
 
     private struct AgentBrandMark: View {
         let agent: String
+        @Environment(\.colorScheme) private var colorScheme
 
         var body: some View {
             Group {
@@ -278,7 +279,11 @@ private struct DashboardOverviewView: View {
         }
 
         private var imageName: String? {
-            switch agent { case "claude-code": "agent-claude"; case "codex": "agent-codex"; default: nil }
+            switch agent {
+            case "claude-code": "agent-claude"
+            case "codex": colorScheme == .dark ? "agent-codex-light" : "agent-codex"
+            default: nil
+            }
         }
 
         private static func load(_ name: String) -> NSImage? {
