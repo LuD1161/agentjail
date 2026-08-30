@@ -348,7 +348,7 @@ for attribution in LICENSE NOTICE THIRD_PARTY_LICENSES; do
 done
 "$cp_binary" "$repo_root/macos/AgentjailExtension/Info.plist" "$stage_extension/Contents/Info.plist"
 "$cp_binary" "$approval_root/AgentjailApproval.app/Contents/MacOS/AgentjailApproval" "$stage_app/Contents/MacOS/AgentJail"
-for asset in agent-claude.svg agent-codex.svg agent-cursor.svg; do
+for asset in agent-claude.svg agent-codex.svg agent-cursor.svg server-linear.svg; do
   "$cp_binary" "$approval_root/AgentjailApproval.app/Contents/Resources/$asset" "$stage_app/Contents/Resources/$asset"
 done
 "$lipo_binary" -create \

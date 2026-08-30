@@ -1,4 +1,5 @@
 import AgentjailApprovalCore
+import AppKit
 import SwiftUI
 
 struct MCPInventoryView: View {
@@ -151,7 +152,7 @@ private struct MCPInventoryRow: View {
     var body: some View {
         HStack(spacing: 12) {
             HStack(spacing: 9) {
-                Image(systemName: sourceIcon).font(.callout).foregroundStyle(.blue).frame(width: 18)
+                MCPBrandMark.server(named: item.name)
                 VStack(alignment: .leading, spacing: 3) {
                 Text(item.name)
                     .font(.callout.weight(.semibold))
@@ -168,7 +169,11 @@ private struct MCPInventoryRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(item.sourceClient.displayName).frame(width: 112, alignment: .leading)
+            HStack(spacing: 7) {
+                MCPBrandMark.agent(item.sourceClient)
+                Text(item.sourceClient.displayName)
+            }
+            .frame(width: 112, alignment: .leading)
             Text("—").frame(width: 54).help("Tool counts require connecting to the MCP server. This inventory remains read-only and never launches servers.")
             Text("Global").frame(width: 108, alignment: .leading)
             statusBadge.frame(width: 112, alignment: .trailing)
@@ -203,6 +208,52 @@ private struct MCPInventoryRow: View {
         case .codex: "chevron.left.forwardslash.chevron.right"
         case .cursor: "cursorarrow"
         }
+    }
+}
+
+private struct MCPBrandMark: View {
+    private let asset: String?
+    private let fallback: String
+    private let tint: Color
+
+    private init(asset: String?, fallback: String, tint: Color) {
+        self.asset = asset
+        self.fallback = fallback
+        self.tint = tint
+    }
+
+    static func server(named name: String) -> MCPBrandMark {
+        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "linear": MCPBrandMark(asset: "server-linear", fallback: "L", tint: .white)
+        default: MCPBrandMark(asset: nil, fallback: String(name.prefix(1)).uppercased(), tint: .blue)
+        }
+    }
+
+    static func agent(_ client: MCPSourceClient) -> MCPBrandMark {
+        switch client {
+        case .claudeCode: MCPBrandMark(asset: "agent-claude", fallback: "C", tint: .orange)
+        case .codex: MCPBrandMark(asset: "agent-codex", fallback: "C", tint: .green)
+        case .cursor: MCPBrandMark(asset: "agent-cursor", fallback: "C", tint: .primary)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if let asset, let image = Self.load(asset) {
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
+            } else {
+                Text(fallback).font(.caption.weight(.bold)).foregroundStyle(tint)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .frame(width: 18, height: 18)
+        .accessibilityHidden(true)
+    }
+
+    private static func load(_ name: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
+        return NSImage(contentsOf: url)
     }
 }
 
