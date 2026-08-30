@@ -40,12 +40,13 @@ struct AgentJailRootView: View {
 
     private var brand: some View {
         HStack(spacing: 11) {
-            Image(systemName: "shield.lefthalf.filled")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 11))
-            Text("AgentJail").font(.headline)
+            AgentJailAppMark()
+            VStack(alignment: .leading, spacing: 1) {
+                Text("AgentJail").font(.headline)
+                Text("Open-source guardrails for agents")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -100,6 +101,22 @@ struct AgentJailRootView: View {
         case .settings:
             ApprovalSettingsView(composition: composition)
         }
+    }
+}
+
+private struct AgentJailAppMark: View {
+    var body: some View {
+        Group {
+            if let url = Bundle.main.url(forResource: "AgentJail", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
+                Image(nsImage: icon).resizable().interpolation(.high).scaledToFit()
+            } else {
+                Image(systemName: "shield.lefthalf.filled").foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 11))
+            }
+        }
+        .frame(width: 46, height: 46)
+        .accessibilityLabel("AgentJail")
     }
 }
 
