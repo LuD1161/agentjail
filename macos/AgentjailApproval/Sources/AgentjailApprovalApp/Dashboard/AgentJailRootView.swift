@@ -69,19 +69,31 @@ struct AgentJailRootView: View {
         AgentJailSurface(padding: 12) {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(setup.health.isReady ? Color.green : Color.orange)
+                    .fill(sidebarStatusColor)
                     .frame(width: 8, height: 8)
-                    .shadow(color: (setup.health.isReady ? Color.green : Color.orange).opacity(0.45), radius: 4)
+                    .shadow(color: sidebarStatusColor.opacity(0.45), radius: 4)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(setup.health.isReady ? "Protection ready" : "Setup required")
+                    Text(sidebarStatusTitle)
                         .font(.caption.weight(.semibold))
-                    Text(setup.health.isReady ? "Local services online" : "Finish on Overview")
+                    Text(sidebarStatusDetail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .padding(12)
+    }
+
+    private var sidebarStatusColor: Color {
+        setup.health.isReady ? .green : (setup.health.localComponentsReady ? .orange : .red)
+    }
+
+    private var sidebarStatusTitle: String {
+        setup.health.isReady ? "Protection ready" : (setup.health.localComponentsReady ? "Network monitoring off" : "Setup required")
+    }
+
+    private var sidebarStatusDetail: String {
+        setup.health.isReady ? "Local services online" : (setup.health.localComponentsReady ? "Enable anytime in Settings" : "Finish on Overview")
     }
 
     @ViewBuilder
@@ -146,20 +158,27 @@ private struct DashboardOverviewView: View {
     }
 
     private var setupCard: some View {
-        HStack(spacing: 14) {
+        HStack(alignment: .top, spacing: 14) {
             AgentJailIconTile(systemImage: setupIcon, color: setupColor)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(setupTitle).font(.headline)
-                    AgentJailStatusPill(title: "Setup required", color: setupColor)
+                    AgentJailStatusPill(title: setupStatusTitle, color: setupColor)
                 }
                 Text(setupDetail).font(.callout).foregroundStyle(.secondary)
+                if setup.phase == .awaitingApproval {
+                    Text("General → Login Items & Extensions → Network Extensions → AgentJail")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
             }
             Spacer()
             if setup.phase == .awaitingApproval {
                 Button("Open System Settings", action: composition.openExtensionApprovalSettings)
+                    .buttonStyle(.borderedProminent)
             } else if !setup.phase.isWorking {
-                Button(setup.phase == .readyToInstall ? "Install AgentJail" : "Try Again") {
+                Button(setupActionTitle) {
                     if setup.phase == .readyToInstall { setup.beginSetup() } else { setup.retry() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -245,24 +264,24 @@ private struct DashboardOverviewView: View {
     }
 
     private var emptyDashboardTitle: String {
-        if !setup.health.isReady { return "Activity starts after setup" }
+        if !setup.health.localComponentsReady { return "Activity starts after local setup" }
         return dashboard.unavailable ? "Dashboard unavailable" : "Loading local activity"
     }
 
     private var emptyDashboardIcon: String {
-        if !setup.health.isReady { return "chart.xyaxis.line" }
+        if !setup.health.localComponentsReady { return "chart.xyaxis.line" }
         return dashboard.unavailable ? "exclamationmark.triangle" : "hourglass"
     }
 
     private var emptyDashboardDetail: String {
-        if !setup.health.isReady { return "Finish setup above, then AgentJail will show audited sessions, calls, and token usage here." }
+        if !setup.health.localComponentsReady { return "Install the local CLI and daemon above, then AgentJail will show audited sessions, calls, and token usage here." }
         return dashboard.unavailable ? "Start or retry the local daemon, then refresh." : "Reading the local AgentJail daemon."
     }
 
     private var setupTitle: String {
         switch setup.phase {
-        case .readyToInstall: "Finish setting up AgentJail"
-        case .awaitingApproval: "Approve the Network Extension"
+        case .readyToInstall: setup.health.localComponentsReady ? "Network monitoring is off" : "Set up AgentJail"
+        case .awaitingApproval: "Network approval required"
         case .failed: "Setup needs attention"
         case .moveToApplications: "Move AgentJail to Applications"
         default: "Setting up AgentJail"
@@ -271,12 +290,26 @@ private struct DashboardOverviewView: View {
 
     private var setupDetail: String {
         switch setup.phase {
-        case .awaitingApproval: "AgentJail stays open while System Settings handles Apple’s one-time approval. Return here when finished."
+        case .awaitingApproval: "Click Open System Settings, enable AgentJail at the path below, then return here. Apple’s OK button only dismisses its notice."
         case .moveToApplications: "The Network Extension requires the app to run from /Applications."
-        case .readyToInstall: "Install the local CLI and daemon, then request macOS network approval."
+        case .readyToInstall: setup.health.localComponentsReady
+            ? "Optional. Enable traffic auditing now, or continue using AgentJail and turn it on later from Settings."
+            : "Install the local CLI, daemon, and hooks. Network monitoring is a separate optional step."
         case .failed: "No protection was weakened. Retry after reviewing the current status."
         default: "Checking the CLI, daemon, and Network Extension."
         }
+    }
+
+    private var setupActionTitle: String {
+        setup.phase == .readyToInstall
+            ? (setup.health.localComponentsReady ? "Enable Network Monitoring" : "Install Local Components")
+            : "Try Again"
+    }
+
+    private var setupStatusTitle: String {
+        if setup.phase == .awaitingApproval { return "Action required" }
+        if setup.health.localComponentsReady { return "Optional" }
+        return "Setup required"
     }
 
     private var setupIcon: String { setup.phase == .awaitingApproval ? "hand.raised.fill" : "shield.lefthalf.filled" }

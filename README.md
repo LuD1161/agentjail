@@ -198,9 +198,11 @@ You may genuinely want this service - but only after you've made an explicit dec
 ## Install
 
 **macOS (native app):** [Download `AgentJail.dmg`](https://github.com/LuD1161/agentjail/releases/latest/download/AgentJail.dmg),
-drag `AgentJail.app` to Applications, and click **Install AgentJail**. The app
-explains and verifies the CLI, daemon, hooks, and one-time Apple Network
-Extension approval before it reports the machine protected. AgentJail is a
+drag `AgentJail.app` to Applications, and install its local components. Network
+monitoring is a separate, optional step: enable it immediately or later from
+Settings. When enabled, the app explains the one-time Apple Network Extension
+approval and keeps the exact System Settings path visible even if Apple's notice
+is dismissed with **OK**. AgentJail is a
 normal Dock and Cmd-Tab application with one window and a persistent sidebar for
 **Overview**, **MCP inventory**, and **Settings**. Setup stays as a compact
 Overview card; when it sends you to System Settings, returning to AgentJail

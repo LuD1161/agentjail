@@ -3,9 +3,11 @@ import SwiftUI
 
 struct ApprovalSettingsView: View {
     @ObservedObject private var composition: ApprovalAppComposition
+    @ObservedObject private var setup: AgentJailSetupCoordinator
 
     init(composition: ApprovalAppComposition) {
         _composition = ObservedObject(wrappedValue: composition)
+        _setup = ObservedObject(wrappedValue: composition.setupCoordinator)
     }
 
     var body: some View {
@@ -18,6 +20,10 @@ struct ApprovalSettingsView: View {
                 ) { EmptyView() }
 
                 SettingsGroup(title: "General") {
+                    SettingsRow(icon: "network", color: setup.health.isReady ? .green : .orange, title: "Network monitoring", detail: networkMonitoringDetail) {
+                        networkMonitoringAction
+                    }
+                    Divider()
                     SettingsRow(icon: "server.rack", color: .blue, title: "Local daemon", detail: daemonDetail) {
                         Button("Retry") { composition.refreshFromMenuOpening() }
                     }
@@ -107,6 +113,25 @@ struct ApprovalSettingsView: View {
             actionStates: composition.store.actionStates,
             now: SystemApprovalClock().now()
         ).status.detail
+    }
+
+    private var networkMonitoringDetail: String {
+        if setup.health.isReady { return "Enabled. AgentJail can audit protected-session network traffic." }
+        if setup.phase == .awaitingApproval { return "Waiting for one-time approval in macOS System Settings." }
+        return "Off. AgentJail still audits supported tool calls; enable network monitoring whenever you are ready."
+    }
+
+    @ViewBuilder
+    private var networkMonitoringAction: some View {
+        if setup.health.isReady {
+            AgentJailStatusPill(title: "Enabled", color: .green)
+        } else if setup.phase == .awaitingApproval {
+            Button("Open System Settings", action: composition.openExtensionApprovalSettings)
+        } else if setup.health.localComponentsReady {
+            Button("Enable") { setup.beginSetup() }
+        } else {
+            Button("Set Up") { composition.requestSetup() }
+        }
     }
 
     private var loginItemEnabled: Binding<Bool> {
