@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MCPInventoryView: View {
     @ObservedObject private var store: MCPInventoryStore
+    @State private var clientFilter = "all"
 
     init(store: MCPInventoryStore) {
         _store = ObservedObject(wrappedValue: store)
@@ -98,17 +99,38 @@ struct MCPInventoryView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Configured servers")
-                    .font(.title3.bold())
-                Text("Names shared across clients remain separate so their source is always clear.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(store.snapshot.items) { item in
-                        MCPInventoryRow(item: item)
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Configured servers").font(.title3.bold())
+                        Text("Names shared across clients remain separate.").font(.caption).foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Picker("Client", selection: $clientFilter) {
+                        Text("All").tag("all")
+                        Label("Claude", systemImage: "c.circle").tag("claude")
+                        Label("Codex", systemImage: "sparkles").tag("codex")
+                        Label("Cursor", systemImage: "cursorarrow").tag("cursor")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 330)
                 }
-                .padding(.top, 10)
+                MCPTableHeader()
+                VStack(spacing: 0) {
+                    ForEach(filteredItems) { item in MCPInventoryRow(item: item) }
+                }
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                .overlay { RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+            }
+        }
+    }
+
+    private var filteredItems: [MCPInventoryItem] {
+        guard clientFilter != "all" else { return store.snapshot.items }
+        return store.snapshot.items.filter {
+            switch (clientFilter, $0.sourceClient) {
+            case ("claude", .claudeCode), ("codex", .codex), ("cursor", .cursor): true
+            default: false
             }
         }
     }
@@ -131,7 +153,9 @@ private struct MCPInventoryRow: View {
     let item: MCPInventoryItem
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 12) {
+            Image(systemName: sourceIcon).font(.title3).foregroundStyle(.blue).frame(width: 26)
+            VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(item.name)
                     .font(.headline)
@@ -145,7 +169,7 @@ private struct MCPInventoryRow: View {
                 statusBadge
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Label(item.sourceClient.displayName, systemImage: sourceIcon)
                 Text("•")
                     .accessibilityHidden(true)
@@ -177,8 +201,10 @@ private struct MCPInventoryRow: View {
             Text("Adapter \(item.adapterVersion)")
                 .font(.caption2.monospaced())
                 .foregroundStyle(.tertiary)
+            }
         }
-        .padding(16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         .overlay {
@@ -211,6 +237,23 @@ private struct MCPInventoryRow: View {
         case .codex: "chevron.left.forwardslash.chevron.right"
         case .cursor: "cursorarrow"
         }
+    }
+}
+
+private struct MCPTableHeader: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Color.clear.frame(width: 26)
+            Text("SERVER").frame(maxWidth: .infinity, alignment: .leading)
+            Text("CLIENT").frame(width: 120, alignment: .leading)
+            Text("TYPE").frame(width: 70, alignment: .leading)
+            Text("STATUS").frame(width: 90, alignment: .trailing)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
     }
 }
 
