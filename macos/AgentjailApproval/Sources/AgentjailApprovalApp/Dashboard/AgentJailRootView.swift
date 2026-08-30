@@ -28,6 +28,7 @@ struct AgentJailRootView: View {
                     sidebarItem("Settings", icon: "gearshape", tab: .settings)
                 }
                 .listStyle(.sidebar)
+                sidebarGitHubLink
                 sidebarStatus
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
@@ -58,6 +59,19 @@ struct AgentJailRootView: View {
         Label(title, systemImage: icon)
             .font(.callout.weight(.medium))
             .tag(tab)
+    }
+
+    private var sidebarGitHubLink: some View {
+        Link(destination: URL(string: "https://github.com/LuD1161/agentjail")!) {
+            Label("Star on GitHub", systemImage: "star")
+                .font(.callout.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+        .accessibilityHint("Opens AgentJail's GitHub repository in your default browser")
     }
 
     private var sidebarStatus: some View {
