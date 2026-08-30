@@ -374,7 +374,8 @@ private struct DashboardOverviewView: View {
     private func activityCells(_ snapshot: DashboardSnapshotV1) -> [ActivityCell] {
         let counts = Dictionary(uniqueKeysWithValues: snapshot.activity.map { ($0.day, $0.count) })
         let maximum = max(counts.values.max() ?? 0, 1)
-        let calendar = Calendar(identifier: .iso8601)
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let formatter = DateFormatter(); formatter.calendar = calendar; formatter.timeZone = calendar.timeZone; formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
         let today = calendar.startOfDay(for: Date())
         return (0..<35).compactMap { offset in
