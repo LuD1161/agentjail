@@ -83,7 +83,7 @@ struct ApprovalSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await composition.refreshSettingsStatus()
         }

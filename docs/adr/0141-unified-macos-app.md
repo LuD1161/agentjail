@@ -47,6 +47,16 @@ the terminal and automation surface. The application never reads the SQLite stor
 or edits policy files directly. Fixed application actions may execute the bundled
 CLI without a shell; arbitrary command execution is not an application API.
 
+The containing application is a normal foreground macOS app, not an
+`LSUIElement`-only accessory. Its single primary window has exactly three tabs:
+Overview, MCP, and Settings; the menu-bar review surface remains a supplemental
+entry point. Overview keeps onboarding in a compact status card and obtains a
+bounded, versioned, read-only dashboard projection over the authenticated daemon
+control socket. The daemon supplies active and recent sessions, audited-call
+aggregates, daily activity, and supported local transcript token totals. It
+projects project basenames rather than full paths and never returns commands,
+tool input, traffic, or credentials.
+
 Both macOS installation routes consume the same signed artifact. The website DMG
 and `curl | sh` installer verify and install the same Developer ID signed,
 notarized, and stapled application, expose the bundled CLI in the user's executable
@@ -76,6 +86,10 @@ security/audit evidence remains distinct from anonymous product telemetry.
 
 - macOS has one product name, application bundle, DMG, onboarding flow, and
   release artifact while retaining separate least-authority processes.
+- The app remains reachable through Dock and Cmd-Tab while Apple-owned System
+  Settings is handling Network Extension approval.
+- Dashboard token coverage is explicit: local Claude Code, Codex, and OpenCode
+  transcript readers are supported; Cursor usage is not inferred.
 - The approval Swift package becomes the containing application rather than a
   standalone companion; its daemon-controlled review model remains unchanged.
 - The old `AgentjailTunnel.app` and approval-only DMG are migration inputs, not

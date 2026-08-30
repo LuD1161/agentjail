@@ -40,28 +40,10 @@ struct AgentJailApp: App {
             )
         }
 
-        Window("AgentJail", id: ApprovalAppSceneID.setup) {
-            AgentJailSetupView(
-                coordinator: applicationDelegate.composition.setupCoordinator,
-                onOpenExtensionSettings: applicationDelegate.composition.openExtensionApprovalSettings,
-                onOpenSettings: applicationDelegate.composition.requestSettings,
-                onOpenMCPInventory: applicationDelegate.composition.requestMCPInventory
-            )
+        WindowGroup("AgentJail", id: ApprovalAppSceneID.main) {
+            AgentJailRootView(composition: applicationDelegate.composition)
         }
-        .defaultSize(width: 700, height: 640)
-
-        Window("AgentJail MCP Inventory", id: ApprovalAppSceneID.mcpInventory) {
-            MCPInventoryView(store: applicationDelegate.composition.mcpInventoryStore)
-        }
-        .defaultSize(width: 760, height: 620)
-
-        Settings {
-            ApprovalSettingsView(composition: applicationDelegate.composition)
-        }
-
-        Window("AgentJail Settings", id: ApprovalAppSceneID.settings) {
-            ApprovalSettingsView(composition: applicationDelegate.composition)
-        }
+        .defaultSize(width: 960, height: 720)
     }
 
     private var menuBarExtraInsertion: Binding<Bool> {

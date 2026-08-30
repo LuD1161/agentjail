@@ -1228,6 +1228,18 @@ status-bar app gave no automatic route back to the result.
   return route that refreshes state and restores the originating window when
   the app becomes active again. See AGE-295.
 
+## 94. A menu-bar app is not a recoverable onboarding window
+
+The setup coordinator and its return route were correct, but the containing app
+still declared `LSUIElement=true`. macOS therefore omitted AgentJail from Dock
+and Cmd-Tab exactly while System Settings covered its onboarding window. Unit
+tests could open the SwiftUI scene and never exercise that application-policy
+behavior.
+
+- **Rule:** an app that hands onboarding to another application must remain a
+  normal foreground app, and release verification must assert `LSUIElement=false`.
+  See ADR 0141-unified-macos-app.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

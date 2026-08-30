@@ -7,6 +7,9 @@ final class ApprovalAppComposition: ObservableObject {
     let store: ApprovalStore
     let setupCoordinator: AgentJailSetupCoordinator
     let mcpInventoryStore: MCPInventoryStore
+    let dashboardStore: DashboardStore
+
+    @Published var selectedTab: AgentJailTab = .overview
 
     @Published private(set) var reviewRoute: ApprovalNotificationReviewRoute?
     @Published private(set) var focusRequest: ReviewFocusRequest?
@@ -50,6 +53,7 @@ final class ApprovalAppComposition: ObservableObject {
         self.clock = clock
         self.setupCoordinator = setupCoordinator ?? AgentJailSetupCoordinator()
         self.mcpInventoryStore = mcpInventoryStore ?? MCPInventoryStore()
+        self.dashboardStore = DashboardStore()
         self.store = ApprovalStore(client: client, clock: clock, sleeper: sleeper)
         self.notificationCoordinator = ApprovalNotificationCoordinator(
             center: notificationCenter,
@@ -149,15 +153,19 @@ final class ApprovalAppComposition: ObservableObject {
     }
 
     func requestSettings() {
+		selectedTab = .settings
+		application.activate()
         settingsRouteGeneration &+= 1
     }
 
     func requestSetup() {
+		selectedTab = .overview
         application.activate()
         setupRouteGeneration &+= 1
     }
 
     func requestMCPInventory() {
+		selectedTab = .mcp
         application.activate()
         mcpInventoryRouteGeneration &+= 1
     }

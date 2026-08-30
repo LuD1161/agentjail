@@ -192,7 +192,7 @@ verify_app() {
   require_plist_value "$app/Contents/Info.plist" CFBundleExecutable "$product_name"
   require_plist_value "$app/Contents/Info.plist" CFBundleIdentifier "$bundle_identifier"
   require_plist_value "$app/Contents/Info.plist" LSMinimumSystemVersion "$minimum_system_version"
-  require_plist_value "$app/Contents/Info.plist" LSUIElement true
+  require_plist_value "$app/Contents/Info.plist" LSUIElement false
   [[ "$("$basename_binary" -- "$binary")" == "$product_name" ]] || fail "binary basename is not $product_name"
 
   architectures="$("$lipo_binary" -archs "$binary")"

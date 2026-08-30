@@ -2,6 +2,7 @@ import AgentjailApprovalCore
 import SwiftUI
 
 enum ApprovalAppSceneID {
+    static let main = "agentjail-main"
     static let review = "approval-review"
     static let settings = "approval-settings"
     static let setup = "agentjail-setup"
@@ -89,7 +90,7 @@ private struct MCPInventoryRouteBridge: View {
     private func openIfNeeded(_ generation: UInt64) {
         guard generation > openedGeneration else { return }
         openedGeneration = generation
-        openWindow(id: ApprovalAppSceneID.mcpInventory)
+        openWindow(id: ApprovalAppSceneID.main)
     }
 }
 
@@ -114,7 +115,7 @@ private struct SetupRouteBridge: View {
     private func openIfNeeded(_ generation: UInt64) {
         guard generation > openedGeneration else { return }
         openedGeneration = generation
-        openWindow(id: ApprovalAppSceneID.setup)
+        openWindow(id: ApprovalAppSceneID.main)
     }
 }
 
@@ -156,34 +157,10 @@ private struct SettingsRouteBridge: View {
     }
 
     var body: some View {
-        Group {
-            if #available(macOS 14.0, *) {
-                SettingsRouteBridgeMacOS14(composition: composition)
-            } else {
-                Color.clear
-                    .frame(width: 0, height: 0)
-                    .onChange(of: composition.settingsRouteGeneration) { _ in
-                        openWindow(id: ApprovalAppSceneID.settings)
-                    }
-            }
-        }
-    }
-}
-
-@available(macOS 14.0, *)
-private struct SettingsRouteBridgeMacOS14: View {
-    @ObservedObject private var composition: ApprovalAppComposition
-    @Environment(\.openSettings) private var openSettings
-
-    init(composition: ApprovalAppComposition) {
-        _composition = ObservedObject(wrappedValue: composition)
-    }
-
-    var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: composition.settingsRouteGeneration) { _ in
-                openSettings()
+                openWindow(id: ApprovalAppSceneID.main)
             }
     }
 }

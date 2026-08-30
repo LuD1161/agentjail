@@ -200,9 +200,18 @@ You may genuinely want this service - but only after you've made an explicit dec
 **macOS (native app):** [Download `AgentJail.dmg`](https://github.com/LuD1161/agentjail/releases/latest/download/AgentJail.dmg),
 drag `AgentJail.app` to Applications, and click **Install AgentJail**. The app
 explains and verifies the CLI, daemon, hooks, and one-time Apple Network
-Extension approval before it reports the machine protected. When setup sends
-you to System Settings, returning to AgentJail refreshes and raises the setup
-window at the resulting ready, waiting, or retry state.
+Extension approval before it reports the machine protected. AgentJail is a
+normal Dock and Cmd-Tab application with one three-tab window: **Overview**,
+**MCP**, and **Settings**. Setup stays as a compact Overview card; when it sends
+you to System Settings, returning to AgentJail refreshes that card at the
+resulting ready, waiting, or retry state.
+
+Overview reads a bounded snapshot from the authenticated local daemon. It shows
+active and recent agent sessions, audited-call totals, a 35-day activity grid,
+and token usage over time from supported local Claude Code, Codex, and OpenCode
+transcripts. The app receives project basenames only—not full paths, commands,
+tool inputs, traffic, or credentials. Cursor token usage is not claimed until a
+versioned local source exists.
 
 **macOS terminal installer or Linux CLI:**
 ```sh
