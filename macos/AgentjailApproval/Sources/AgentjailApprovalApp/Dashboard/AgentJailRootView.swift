@@ -246,7 +246,7 @@ private struct DashboardOverviewView: View {
                         Text("\(agentDisplayName(agent.agent)) \(Int((Double(agent.totalTokens) / Double(total) * 100).rounded()))%")
                             .font(.caption.monospacedDigit())
                     } icon: {
-                        Image(systemName: agentIcon(agent.agent)).foregroundStyle(agentColor(agent.agent))
+                        AgentBrandMark(agent: agent.agent)
                     }
                     .help("\(agentDisplayName(agent.agent)): \(TokenChartScale.fitting(maximum: total).label(for: Double(agent.totalTokens))) tokens")
                 }
@@ -254,6 +254,27 @@ private struct DashboardOverviewView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Token usage by agent")
+    }
+
+    private struct AgentBrandMark: View {
+        let agent: String
+
+        var body: some View {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5).fill(color.opacity(0.16))
+                Text(mark).font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(color)
+            }
+            .frame(width: 25, height: 25)
+            .accessibilityHidden(true)
+        }
+
+        private var mark: String {
+            switch agent { case "claude-code": "C"; case "codex": "✦"; case "opencode": "<>"; default: "•" }
+        }
+
+        private var color: Color {
+            switch agent { case "claude-code": .orange; case "codex": .blue; case "opencode": .purple; default: .secondary }
+        }
     }
 
     private func sessionsCard(_ snapshot: DashboardSnapshotV1) -> some View {
