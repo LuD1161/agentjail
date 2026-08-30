@@ -57,25 +57,21 @@ struct MCPInventoryView: View {
     }
 
     private var summary: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
-            InventorySummaryCard(
-                title: "Configured",
-                value: store.snapshot.configuredCount,
-                color: .green,
-                systemImage: "checkmark.circle.fill"
-            )
-            InventorySummaryCard(
-                title: "Cross-client",
-                value: store.snapshot.duplicateCount,
-                color: .orange,
-                systemImage: "square.on.square"
-            )
-            InventorySummaryCard(
-                title: "Needs attention",
-                value: store.snapshot.issueCount,
-                color: .red,
-                systemImage: "exclamationmark.triangle.fill"
-            )
+        AgentJailSurface(padding: 14) {
+            HStack(spacing: 0) {
+                InventorySummaryMetric(title: "Servers", value: store.snapshot.configuredCount, color: .green, systemImage: "server.rack")
+                Divider().padding(.horizontal, 20)
+                InventorySummaryMetric(title: "Cross-client", value: store.snapshot.duplicateCount, color: .orange, systemImage: "square.on.square")
+                Divider().padding(.horizontal, 20)
+                InventorySummaryMetric(title: "Needs attention", value: store.snapshot.issueCount, color: .red, systemImage: "exclamationmark.triangle.fill")
+                Spacer()
+                Text("Global configuration")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.secondary.opacity(0.1), in: Capsule())
+            }
         }
     }
 
@@ -154,63 +150,33 @@ private struct MCPInventoryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: sourceIcon).font(.title3).foregroundStyle(.blue).frame(width: 26)
-            VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(spacing: 9) {
+                Image(systemName: sourceIcon).font(.callout).foregroundStyle(.blue).frame(width: 18)
+                VStack(alignment: .leading, spacing: 3) {
                 Text(item.name)
-                    .font(.headline)
+                    .font(.callout.weight(.semibold))
                     .lineLimit(1)
                 if item.isDuplicate {
                     Label("In \(item.duplicateCount) clients", systemImage: "square.on.square")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                 }
-                Spacer()
-                statusBadge
-            }
-
-            HStack(spacing: 6) {
-                Label(item.sourceClient.displayName, systemImage: sourceIcon)
-                Text("•")
-                    .accessibilityHidden(true)
-                Text(item.kind.displayName)
-                Text("•")
-                    .accessibilityHidden(true)
-                Text(item.sourceLabel)
-                    .monospaced()
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(item.kind == .remote ? "Origin" : "Command")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 Text(item.target)
-                    .font(.callout.monospaced())
-                    .textSelection(.enabled)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
             }
-
-            if let detail = item.status.detail {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Text("Adapter \(item.adapterVersion)")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(item.sourceClient.displayName).frame(width: 112, alignment: .leading)
+            Text("—").frame(width: 54).help("Tool counts require connecting to the MCP server. This inventory remains read-only and never launches servers.")
+            Text("Global").frame(width: 108, alignment: .leading)
+            statusBadge.frame(width: 112, alignment: .trailing)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        }
+        .overlay(alignment: .bottom) { Divider().padding(.leading, 14) }
         .accessibilityElement(children: .contain)
     }
 
@@ -243,11 +209,11 @@ private struct MCPInventoryRow: View {
 private struct MCPTableHeader: View {
     var body: some View {
         HStack(spacing: 12) {
-            Color.clear.frame(width: 26)
             Text("SERVER").frame(maxWidth: .infinity, alignment: .leading)
-            Text("CLIENT").frame(width: 120, alignment: .leading)
-            Text("TYPE").frame(width: 70, alignment: .leading)
-            Text("STATUS").frame(width: 90, alignment: .trailing)
+            Text("AGENT").frame(width: 112, alignment: .leading)
+            Text("TOOLS").frame(width: 54, alignment: .leading)
+            Text("SCOPE").frame(width: 108, alignment: .leading)
+            Text("STATUS").frame(width: 112, alignment: .trailing)
         }
         .font(.caption2.weight(.semibold))
         .foregroundStyle(.tertiary)
@@ -257,24 +223,18 @@ private struct MCPTableHeader: View {
     }
 }
 
-private struct InventorySummaryCard: View {
+private struct InventorySummaryMetric: View {
     let title: String
     let value: Int
     let color: Color
     let systemImage: String
 
     var body: some View {
-        AgentJailSurface(padding: 15) {
-            HStack(spacing: 12) {
-                AgentJailIconTile(systemImage: systemImage, color: color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(String(value))
-                        .font(.title2.bold())
-                        .monospacedDigit()
-                    Text(title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
+        HStack(spacing: 9) {
+            Image(systemName: systemImage).foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(String(value)).font(.headline.monospacedDigit())
+                Text(title).font(.caption).foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .combine)

@@ -31,6 +31,7 @@ repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 package_root="$repo_root/macos/AgentjailApproval"
 info_plist="$package_root/Resources/Info.plist"
 entitlements="$package_root/Resources/AgentjailApproval.entitlements"
+app_resources="$package_root/Sources/AgentjailApprovalApp/Resources"
 default_artifact_root="$repo_root/build/macos-approval"
 default_build_root="$repo_root/build"
 artifact_root="${APPROVAL_ARTIFACT_ROOT:-$default_artifact_root}"
@@ -114,7 +115,7 @@ verify_package_manifest() {
   require_file "$package_root/Package.swift"
   # shellcheck disable=SC2016
   manifest_hash="$("$shasum_binary" -a 256 "$package_root/Package.swift" | "$awk_binary" '{print $1}')"
-  [[ "$manifest_hash" == "388d7e67eae25baa948ad517133c425e934be8c16ceb7f627ee5a793651af801" ]] || fail "Package.swift changed; review direct packaging inputs before continuing"
+  [[ "$manifest_hash" == "152e2a2e731cb84dc540cf5e4275bb40dade7fa27a17a0a627d4432fdabd2765" ]] || fail "Package.swift changed; review direct packaging inputs before continuing"
   "$grep_binary" -Fqx '// swift-tools-version: 6.0' "$package_root/Package.swift" || fail "unexpected Swift tools version"
   "$grep_binary" -Fq 'name: "AgentjailApproval",' "$package_root/Package.swift" || fail "missing approval package identity"
   "$grep_binary" -Fq '.macOS(.v13)' "$package_root/Package.swift" || fail "package must target macOS 13"
@@ -123,7 +124,8 @@ verify_package_manifest() {
   "$grep_binary" -Fq 'targets: ["AgentjailApprovalApp"]' "$package_root/Package.swift" || fail "executable product must use AgentjailApprovalApp"
   "$grep_binary" -Fq '.executableTarget(' "$package_root/Package.swift" || fail "missing approval app executable target"
   "$grep_binary" -Fq 'dependencies: ["AgentjailApprovalCore"]' "$package_root/Package.swift" || fail "approval app must depend only on Core"
-  if "$grep_binary" -Eq '\.package\(|plugins:|resources:|unsafeFlags' "$package_root/Package.swift"; then
+  "$grep_binary" -Fq 'resources: [.process("Resources")]' "$package_root/Package.swift" || fail "approval app must process its bundled resources"
+  if "$grep_binary" -Eq '\.package\(|plugins:|unsafeFlags' "$package_root/Package.swift"; then
     fail "Package.swift contains an unsupported packaging input"
   fi
 }
@@ -305,6 +307,7 @@ trap cleanup EXIT
 
 require_file "$info_plist"
 require_file "$entitlements"
+[[ -d "$app_resources" && ! -L "$app_resources" ]] || fail "missing or symlinked approval app resources"
 require_executable "$codesign_binary"
 require_executable "$lipo_binary"
 require_executable "$plutil_binary"
@@ -342,6 +345,9 @@ stage_app="$work_root/$product_name.app"
 "$mkdir_binary" -p "$stage_app/Contents/MacOS" "$stage_app/Contents/Resources"
 "$lipo_binary" -create "$work_root/$product_name-arm64" "$work_root/$product_name-x86_64" -output "$stage_app/Contents/MacOS/$product_name"
 "$cp_binary" "$info_plist" "$stage_app/Contents/Info.plist"
+"$cp_binary" "$app_resources/agent-claude.svg" "$stage_app/Contents/Resources/agent-claude.svg"
+"$cp_binary" "$app_resources/agent-codex.svg" "$stage_app/Contents/Resources/agent-codex.svg"
+"$cp_binary" "$app_resources/agent-cursor.svg" "$stage_app/Contents/Resources/agent-cursor.svg"
 
 "$plutil_binary" -lint "$stage_app/Contents/Info.plist" >/dev/null
 require_plist_value "$stage_app/Contents/Info.plist" CFBundleExecutable "$product_name"

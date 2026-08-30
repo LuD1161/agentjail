@@ -282,7 +282,7 @@ private struct DashboardOverviewView: View {
         }
 
         private static func load(_ name: String) -> NSImage? {
-            guard let url = Bundle.module.url(forResource: name, withExtension: "svg") else { return nil }
+            guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
             return NSImage(contentsOf: url)
         }
     }

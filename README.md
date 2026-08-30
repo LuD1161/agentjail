@@ -233,9 +233,10 @@ CLI, starts the daemon, wires detected agent hooks, and opens onboarding. Linux
 downloads only the platform CLI tarball.
 
 The macOS app also includes an **observe-only MCP inventory** for the global
-Claude Code, Codex, and Cursor configurations. It shows client, local or remote
-kind, redacted command or origin, configuration issues, and duplicate names. A
-refresh reads configuration files only: it never launches an MCP server, changes
+Claude Code, Codex, and Cursor configurations. Its compact table shows the
+server, configured agent, global scope, status, redacted command or origin, and
+duplicate names. Tool counts are intentionally not probed: discovery never
+launches an MCP server. A refresh reads configuration files only: it never changes
 configuration or policy, or claims visibility into project-local files or live
 traffic.
 
