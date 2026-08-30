@@ -18,6 +18,7 @@ struct TokenChartScale: Equatable {
     }
 
     func label(for value: Double, locale: Locale = .autoupdatingCurrent) -> String {
+        guard value != 0 else { return "0" }
         let scaled = value / divisor
         let number = scaled.formatted(
             .number
