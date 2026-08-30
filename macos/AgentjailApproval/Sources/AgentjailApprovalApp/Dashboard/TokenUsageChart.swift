@@ -14,6 +14,11 @@ struct TokenUsageChart: View {
         points.first { $0.day == hoveredDay }
     }
 
+    private var domainMaximum: Double {
+        let maximum = Double(points.map(\.totalTokens).max() ?? 0)
+        return max(maximum * 1.15, 1)
+    }
+
     var body: some View {
         Chart(points) { point in
             AreaMark(x: .value("Day", point.day), y: .value("Tokens", point.totalTokens))
@@ -29,6 +34,7 @@ struct TokenUsageChart: View {
                     }
             }
         }
+        .chartYScale(domain: 0...domainMaximum)
         .chartXAxis(.hidden)
         .chartYAxis {
             AxisMarks(position: .trailing) { value in
