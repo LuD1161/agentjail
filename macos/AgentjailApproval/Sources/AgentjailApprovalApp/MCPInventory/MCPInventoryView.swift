@@ -152,7 +152,7 @@ private struct MCPInventoryRow: View {
     var body: some View {
         HStack(spacing: 12) {
             HStack(spacing: 9) {
-                MCPBrandMark.server(named: item.name)
+                MCPBrandMark.server(named: item.name, target: item.target)
                 VStack(alignment: .leading, spacing: 3) {
                 Text(item.name)
                     .font(.callout.weight(.semibold))
@@ -215,6 +215,7 @@ private struct MCPBrandMark: View {
     private let asset: String?
     private let fallback: String
     private let tint: Color
+    @Environment(\.colorScheme) private var colorScheme
 
     private init(asset: String?, fallback: String, tint: Color) {
         self.asset = asset
@@ -222,12 +223,15 @@ private struct MCPBrandMark: View {
         self.tint = tint
     }
 
-    static func server(named name: String) -> MCPBrandMark {
+    static func server(named name: String, target: String) -> MCPBrandMark {
+        let identity = "\(name) \(target)".lowercased()
+        if identity.contains("linear") || identity.contains("mcp.linear.app") {
+            return MCPBrandMark(asset: "server-linear", fallback: "L", tint: .white)
+        }
         switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "linear": MCPBrandMark(asset: "server-linear", fallback: "L", tint: .white)
-        case "chrome-devtools": MCPBrandMark(asset: "server-chrome", fallback: "C", tint: .blue)
-        case "context7": MCPBrandMark(asset: "server-context7", fallback: "7", tint: .purple)
-        default: MCPBrandMark(asset: nil, fallback: String(name.prefix(1)).uppercased(), tint: .blue)
+        case "chrome-devtools": return MCPBrandMark(asset: "server-chrome", fallback: "C", tint: .blue)
+        case "context7": return MCPBrandMark(asset: "server-context7", fallback: "7", tint: .purple)
+        default: return MCPBrandMark(asset: nil, fallback: String(name.prefix(1)).uppercased(), tint: .blue)
         }
     }
 
@@ -240,8 +244,9 @@ private struct MCPBrandMark: View {
     }
 
     var body: some View {
+        let resolvedAsset = asset == "agent-codex" && colorScheme == .dark ? "agent-codex-light" : asset
         Group {
-            if let asset, let image = Self.load(asset) {
+            if let resolvedAsset, let image = Self.load(resolvedAsset) {
                 Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
             } else {
                 Text(fallback).font(.caption.weight(.bold)).foregroundStyle(tint)
