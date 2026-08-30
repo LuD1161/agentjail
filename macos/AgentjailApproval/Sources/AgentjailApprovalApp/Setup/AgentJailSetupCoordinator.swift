@@ -64,7 +64,11 @@ final class AgentJailSetupCoordinator: ObservableObject {
                 return
             }
             record(.componentsSucceeded)
-            health = await inspector.inspect()
+            guard await waitForLocalComponents() else {
+                phase = .failed(.componentInstall)
+                record(.componentsFailed)
+                return
+            }
             phase = phaseForHealth(health)
             return
         }
@@ -102,6 +106,16 @@ final class AgentJailSetupCoordinator: ObservableObject {
         }
         phase = .failed(.verification)
         record(.verificationFailed)
+    }
+
+    private func waitForLocalComponents() async -> Bool {
+        for attempt in 0..<10 {
+            guard !Task.isCancelled else { return false }
+            health = await inspector.inspect()
+            if health.localComponentsReady { return true }
+            if attempt < 9 { await sleeper.pause() }
+        }
+        return false
     }
 
     private func record(_ measurement: AgentJailSetupMeasurement) {

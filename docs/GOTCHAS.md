@@ -1261,6 +1261,17 @@ an indeterminate spinner behind a successful unit-tested coordinator.
   Apple-controlled request, and keep the exact manual path visible after the
   system dialog disappears. See ADR 0141-unified-macos-app.
 
+## 97. Process exit is not service readiness
+
+The macOS component installer returned successfully after handing the daemon to
+`launchd`, then setup sampled health once during the restart gap. The UI changed
+back to an enabled install button while `launchd` was still converging, inviting
+repeated clicks and repeated daemon restarts even though every command succeeded.
+
+- **Rule:** after an installer hands work to a supervisor, keep the action
+  single-flight and poll authoritative health for a bounded interval. A command's
+  exit status proves handoff, not service readiness. See ADR 0141-unified-macos-app.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

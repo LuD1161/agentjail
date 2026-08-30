@@ -22,6 +22,7 @@ final class AgentJailSetupCoordinatorTests: XCTestCase {
         let runner = SetupCommandRunner(approvalRequired: true)
         let inspector = SetupHealthInspector([
             health(cli: false, daemon: false, tunnel: .absent),
+            health(cli: true, daemon: false, tunnel: .absent),
             health(cli: true, daemon: true, tunnel: .absent),
             health(cli: true, daemon: true, tunnel: .disconnected),
         ])
@@ -44,6 +45,28 @@ final class AgentJailSetupCoordinatorTests: XCTestCase {
         XCTAssertTrue(commands.contains(.record(.approvalRequired)))
         XCTAssertTrue(commands.contains(.record(.verificationSucceeded)))
         XCTAssertEqual(coordinator.health.tunnelProfile, .disconnected)
+    }
+
+    func testComponentSuccessWithNoHealthyDaemonBecomesExplicitFailure() async {
+        let runner = SetupCommandRunner()
+        let unavailable = health(cli: true, daemon: false, tunnel: .absent)
+        let coordinator = AgentJailSetupCoordinator(
+            runner: runner,
+            inspector: SetupHealthInspector([
+                health(cli: false, daemon: false, tunnel: .absent),
+                unavailable,
+            ]),
+            sleeper: ImmediateSetupSleeper()
+        )
+        _ = await coordinator.refresh()
+
+        coordinator.beginSetup()
+        await eventually { coordinator.phase == .failed(.componentInstall) }
+        await eventually(runner: runner, contains: .record(.componentsFailed))
+
+        let commands = await runner.commands()
+        XCTAssertEqual(commands.filter { $0 == .installComponents }.count, 1)
+        XCTAssertFalse(commands.contains(.installExtension))
     }
 
     func testApprovalInstructionsAppearBeforeSystemCallback() async {
