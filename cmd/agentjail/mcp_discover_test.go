@@ -28,7 +28,7 @@ func TestRunMCPToolDiscoverJSON(t *testing.T) {
 		},
 	}
 	var out, errOut bytes.Buffer
-	if code := runMCPToolDiscoverOutput([]string{"--json"}, &out, &errOut, dependencies); code != 0 {
+	if code := runMCPToolDiscoverOutput([]string{"--no-color", "--json"}, &out, &errOut, dependencies); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errOut.String())
 	}
 	if gotToken != "control-secret" || gotTimeout != mcpToolDiscoveryTimeout {

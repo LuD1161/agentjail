@@ -889,6 +889,9 @@ func runMCPToolDiscoverOutput(args []string, out, errOut io.Writer, dependencies
 		switch argument {
 		case "--json":
 			jsonMode = true
+		case "--no-color":
+			// Cobra forwards persistent flags to commands with flag parsing disabled.
+			// See docs/GOTCHAS.md #100.
 		case "help", "-h", "--help":
 			fmt.Fprintln(out, "usage: agentjail mcp tool discover [--json]")
 			fmt.Fprintln(out, "Connects to configured servers and requests tools/list; it never invokes a tool.")

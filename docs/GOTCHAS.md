@@ -1318,6 +1318,17 @@ day boundary every cell missed despite non-zero totals and a green test suite.
 - **Rule:** when a wire projection owns a calendar, configure both date
   arithmetic and formatting with that calendar's timezone. See AGE-293.
 
+## 100. Disabled flag parsing forwards global flags
+
+The MCP discovery subcommand disabled Cobra flag parsing so its typed runner
+could own `--json`. Cobra then forwarded the persistent `--no-color` flag as a
+plain argument, and the app's real CLI invocation failed even though direct
+runner tests were green.
+
+- **Rule:** a command with `DisableFlagParsing` must explicitly accept inherited
+  global flags, and its test must include the exact argument vector used by the
+  product wrapper. See ADR 0143-explicit-mcp-enumeration.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its
