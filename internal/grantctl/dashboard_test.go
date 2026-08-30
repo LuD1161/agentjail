@@ -6,6 +6,7 @@ func TestValidateDashboardSnapshotRejectsMalformedAndOversizedData(t *testing.T)
 	valid := DashboardSnapshotV1{
 		ProtocolVersion: DashboardProtocolVersion,
 		RecentSessions:  []DashboardSessionV1{}, Activity: []DashboardDayV1{}, Tokens: []DashboardTokenDayV1{}, TokenCoverage: []string{},
+		TokenStatus: DashboardTokensReady,
 	}
 	if err := validateDashboardSnapshotV1(valid); err != nil {
 		t.Fatalf("valid snapshot: %v", err)
@@ -24,5 +25,10 @@ func TestValidateDashboardSnapshotRejectsMalformedAndOversizedData(t *testing.T)
 	invalid.RecentSessions = []DashboardSessionV1{{SessionID: "s", AuditedCalls: -1}}
 	if err := validateDashboardSnapshotV1(invalid); err == nil {
 		t.Fatal("negative calls accepted")
+	}
+	invalidStatus := valid
+	invalidStatus.TokenStatus = DashboardTokenStatus("unknown")
+	if err := validateDashboardSnapshotV1(invalidStatus); err == nil {
+		t.Fatal("unknown token status accepted")
 	}
 }

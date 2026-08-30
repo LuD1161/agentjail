@@ -150,6 +150,13 @@ const ReviewProtocolVersion ProtocolVersion = 1
 // DashboardProtocolVersion is the only overview protocol version supported.
 const DashboardProtocolVersion ProtocolVersion = 1
 
+type DashboardTokenStatus string
+
+const (
+	DashboardTokensLoading DashboardTokenStatus = "loading"
+	DashboardTokensReady   DashboardTokenStatus = "ready"
+)
+
 // DashboardSnapshotV1 is a bounded, server-generated view of local activity.
 // It intentionally contains no commands, full paths, tool input, or secrets.
 type DashboardSnapshotV1 struct {
@@ -165,6 +172,7 @@ type DashboardSnapshotV1 struct {
 	Activity          []DashboardDayV1      `json:"activity"`
 	Tokens            []DashboardTokenDayV1 `json:"tokens"`
 	TokenCoverage     []string              `json:"token_coverage"`
+	TokenStatus       DashboardTokenStatus  `json:"token_status"`
 }
 
 type DashboardSessionV1 struct {

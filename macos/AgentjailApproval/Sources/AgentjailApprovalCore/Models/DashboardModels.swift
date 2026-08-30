@@ -14,12 +14,13 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
     public let activity: [DashboardDay]
     public let tokens: [DashboardTokenDay]
     public let tokenCoverage: [String]
+    public let tokenStatus: DashboardTokenStatus
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version", generatedAtUnixMs = "generated_at_unix_ms"
         case totalCalls = "total_calls", allowedCalls = "allowed_calls", deniedCalls = "denied_calls", askedCalls = "asked_calls"
         case totalSessions = "total_sessions", activeSessions = "active_sessions", recentSessions = "recent_sessions"
-        case activity, tokens, tokenCoverage = "token_coverage"
+        case activity, tokens, tokenCoverage = "token_coverage", tokenStatus = "token_status"
     }
 
     public init(from decoder: Decoder) throws {
@@ -37,6 +38,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         activity = try values.decode([DashboardDay].self, forKey: .activity)
         tokens = try values.decode([DashboardTokenDay].self, forKey: .tokens)
         tokenCoverage = try values.decode([String].self, forKey: .tokenCoverage)
+        tokenStatus = try values.decodeIfPresent(DashboardTokenStatus.self, forKey: .tokenStatus) ?? .ready
         guard totalCalls >= 0, allowedCalls >= 0, deniedCalls >= 0, askedCalls >= 0,
               totalSessions >= 0, activeSessions >= 0, recentSessions.count <= 12,
               activity.count <= 35, tokens.count <= 35,
@@ -44,6 +46,11 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
             throw DashboardModelError.invalidProjection
         }
     }
+}
+
+public enum DashboardTokenStatus: String, Decodable, Equatable, Sendable {
+    case loading
+    case ready
 }
 
 public struct DashboardSession: Decodable, Identifiable, Equatable, Sendable {

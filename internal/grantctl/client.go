@@ -134,6 +134,9 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	if snapshot.ActiveSessions < 0 || snapshot.TotalCalls < 0 || snapshot.TotalSessions < 0 {
 		return fmt.Errorf("dashboard counts cannot be negative")
 	}
+	if snapshot.TokenStatus != DashboardTokensLoading && snapshot.TokenStatus != DashboardTokensReady {
+		return fmt.Errorf("invalid dashboard token status")
+	}
 	for _, session := range snapshot.RecentSessions {
 		if session.SessionID == "" || len(session.SessionID) > MaxDashboardSessionIDBytes || len(session.Agent) > MaxDashboardLabelBytes || len(session.Project) > MaxDashboardLabelBytes || session.AuditedCalls < 0 {
 			return fmt.Errorf("invalid dashboard session")
