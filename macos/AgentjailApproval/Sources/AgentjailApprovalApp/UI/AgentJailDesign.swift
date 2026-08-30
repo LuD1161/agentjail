@@ -38,10 +38,11 @@ struct AgentJailSurface<Content: View>: View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.42), in: RoundedRectangle(cornerRadius: 16))
             .overlay {
                 RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
             }
     }
 }
@@ -69,9 +70,10 @@ struct AgentJailStatusPill: View {
             Circle().fill(color).frame(width: 6, height: 6)
             Text(title).font(.caption.weight(.semibold))
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(color.opacity(0.1), in: Capsule())
+            .foregroundStyle(color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay { Capsule().fill(color.opacity(0.08)) }
     }
 }
