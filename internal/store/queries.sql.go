@@ -704,6 +704,33 @@ func (q *Queries) ListDiscoveredToolsByServer(ctx context.Context, server string
 	return items, nil
 }
 
+const listMCPDiscoveryStatuses = `-- name: ListMCPDiscoveryStatuses :many
+SELECT server, status, last_seen FROM mcp_discovery_status ORDER BY server
+`
+
+func (q *Queries) ListMCPDiscoveryStatuses(ctx context.Context) ([]DBMCPDiscoveryStatus, error) {
+	rows, err := q.db.QueryContext(ctx, listMCPDiscoveryStatuses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DBMCPDiscoveryStatus{}
+	for rows.Next() {
+		var item DBMCPDiscoveryStatus
+		if err := rows.Scan(&item.Server, &item.Status, &item.LastSeen); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDistinctCWDs = `-- name: ListDistinctCWDs :many
 SELECT DISTINCT cwd FROM sessions WHERE cwd IS NOT NULL AND cwd != '' ORDER BY cwd
 `
@@ -887,6 +914,25 @@ type UpsertDiscoveredToolParams struct {
 	Source    string `json:"source"`
 	FirstSeen string `json:"first_seen"`
 	LastSeen  string `json:"last_seen"`
+}
+
+const upsertMCPDiscoveryStatus = `-- name: UpsertMCPDiscoveryStatus :exec
+INSERT INTO mcp_discovery_status (server, status, last_seen)
+VALUES (?, ?, ?)
+ON CONFLICT(server) DO UPDATE SET
+    status = excluded.status,
+    last_seen = excluded.last_seen
+`
+
+type UpsertMCPDiscoveryStatusParams struct {
+	Server   string `json:"server"`
+	Status   string `json:"status"`
+	LastSeen string `json:"last_seen"`
+}
+
+func (q *Queries) UpsertMCPDiscoveryStatus(ctx context.Context, arg UpsertMCPDiscoveryStatusParams) error {
+	_, err := q.db.ExecContext(ctx, upsertMCPDiscoveryStatus, arg.Server, arg.Status, arg.LastSeen)
+	return err
 }
 
 func (q *Queries) UpsertDiscoveredTool(ctx context.Context, arg UpsertDiscoveredToolParams) error {

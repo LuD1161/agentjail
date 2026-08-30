@@ -1350,6 +1350,16 @@ human report but never asserted the public JSON boundary.
   type or sanitized copy, and its test must seed the same secret into every
   supported configuration channel. See ADR 0146-mcp-command-resolution.
 
+## 104. Persisting successes alone erases actionable failures
+
+Live MCP discovery persisted returned tool names but kept reachability and
+authentication statuses only in the app's in-memory result. Relaunching the app
+therefore changed accurate failures back to the misleading “Not discovered.”
+
+- **Rule:** if a background operation has a bounded typed outcome that the UI
+  must explain later, persist that outcome alongside successful data and project
+  both through the same read model. See ADR 0143-explicit-mcp-enumeration.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

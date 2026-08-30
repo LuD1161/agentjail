@@ -125,6 +125,21 @@ type DiscoveredTool struct {
 	LastSeen  time.Time
 }
 
+type MCPDiscoveryStatus string
+
+const (
+	MCPDiscoveryConnected    MCPDiscoveryStatus = "connected"
+	MCPDiscoveryAuthRequired MCPDiscoveryStatus = "auth_required"
+	MCPDiscoveryUnreachable  MCPDiscoveryStatus = "unreachable"
+	MCPDiscoveryTimeout      MCPDiscoveryStatus = "timeout"
+)
+
+type MCPDiscoveryRecord struct {
+	Server   string
+	Status   MCPDiscoveryStatus
+	LastSeen time.Time
+}
+
 // DiscoveredSkill is a persisted skill entry from audit history.
 type DiscoveredSkill struct {
 	ID        int64
@@ -177,8 +192,10 @@ type EventStore interface {
 	ComputeStats(ctx context.Context, since time.Time) (StatsReport, error)
 	Cleanup(ctx context.Context, maxAge time.Duration) error
 	UpsertDiscoveredTool(ctx context.Context, server, tool, source string) error
+	UpsertMCPDiscoveryStatus(ctx context.Context, server string, status MCPDiscoveryStatus) error
 	UpsertDiscoveredSkill(ctx context.Context, name, source string) error
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
+	ListMCPDiscoveryStatuses(ctx context.Context) ([]MCPDiscoveryRecord, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
 	ListDistinctMCPToolNames(ctx context.Context) ([]string, error)
 	Emit(ctx context.Context, e audit.Event) error
@@ -197,6 +214,7 @@ type ReadOnlyStore interface {
 	ListSessionsFiltered(ctx context.Context, f SessionFilter) ([]Session, error)
 	CountActionsBySession(ctx context.Context) ([]ActionCount, error)
 	ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error)
+	ListMCPDiscoveryStatuses(ctx context.Context) ([]MCPDiscoveryRecord, error)
 	ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error)
 	ListAuditLog(ctx context.Context, f AuditLogFilter) ([]AuditLogEntry, error)
 	ListGrantAuditLog(ctx context.Context, limit int) ([]AuditLogEntry, error)

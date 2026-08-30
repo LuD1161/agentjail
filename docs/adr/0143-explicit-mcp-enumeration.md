@@ -57,7 +57,8 @@ The discovery adapter:
   protocol headers;
 - sorts, sanitizes, and bounds the control response to 64 servers and 128 tool
   names per server;
-- persists only server and tool identifiers with source `live`; and
+- persists server/tool identifiers with source `live`, plus each server's
+  fixed discovery status so app relaunches retain actionable results; and
 - returns fixed status values (`connected`, `auth_required`, `unreachable`, or
   `timeout`) without returning process, network, config, or credential errors.
 

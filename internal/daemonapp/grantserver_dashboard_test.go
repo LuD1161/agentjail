@@ -43,6 +43,9 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	if err := eventStore.UpsertDiscoveredTool(context.Background(), "chrome-devtools", "take_snapshot", "audit"); err != nil {
 		t.Fatal(err)
 	}
+	if err := eventStore.UpsertMCPDiscoveryStatus(context.Background(), "chrome-devtools", store.MCPDiscoveryConnected); err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	projector := &localDashboardProjector{
@@ -91,6 +94,9 @@ func TestLocalDashboardProjectionIsBoundedAndOmitsFullPaths(t *testing.T) {
 	}
 	if len(snapshot.MCPTools) != 2 || snapshot.MCPTools[0].Server != "chrome-devtools" || len(snapshot.MCPTools[0].Tools) != 2 || snapshot.MCPTools[1].Server != "linear" || len(snapshot.MCPTools[1].Tools) != 1 || snapshot.MCPTools[1].Tools[0] != "create_issue" {
 		t.Fatalf("MCP tools: %+v", snapshot.MCPTools)
+	}
+	if len(snapshot.MCPDiscovery) != 1 || snapshot.MCPDiscovery[0].Server != "chrome-devtools" || snapshot.MCPDiscovery[0].Status != grantctl.MCPDiscoveryConnected {
+		t.Fatalf("MCP discovery statuses: %+v", snapshot.MCPDiscovery)
 	}
 }
 

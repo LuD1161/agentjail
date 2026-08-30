@@ -175,7 +175,7 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenAgents == nil || snapshot.TokenCoverage == nil {
 		return fmt.Errorf("dashboard arrays are required")
 	}
-	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 || len(snapshot.MCPTools) > 64 {
+	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 || len(snapshot.MCPTools) > 64 || len(snapshot.MCPDiscovery) > 64 {
 		return fmt.Errorf("dashboard projection exceeds item limits")
 	}
 	for _, agent := range snapshot.TokenAgents {
@@ -212,6 +212,16 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 			if tool == "" || len(tool) > MaxDashboardLabelBytes {
 				return fmt.Errorf("invalid dashboard MCP tool")
 			}
+		}
+	}
+	for _, server := range snapshot.MCPDiscovery {
+		if server.Server == "" || len(server.Server) > MaxDashboardLabelBytes {
+			return fmt.Errorf("invalid dashboard MCP discovery server")
+		}
+		switch server.Status {
+		case MCPDiscoveryConnected, MCPDiscoveryAuthRequired, MCPDiscoveryUnreachable, MCPDiscoveryTimeout:
+		default:
+			return fmt.Errorf("invalid dashboard MCP discovery status")
 		}
 	}
 	return nil

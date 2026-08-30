@@ -728,6 +728,27 @@ func TestUpsertDiscoveredTool(t *testing.T) {
 	}
 }
 
+func TestMCPDiscoveryStatusRoundTrip(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := s.UpsertMCPDiscoveryStatus(ctx, "context7", MCPDiscoveryUnreachable); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	if err := s.UpsertMCPDiscoveryStatus(ctx, "context7", MCPDiscoveryConnected); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	rows, err := s.ListMCPDiscoveryStatuses(ctx)
+	if err != nil {
+		t.Fatalf("list statuses: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Server != "context7" || rows[0].Status != MCPDiscoveryConnected || rows[0].LastSeen.IsZero() {
+		t.Fatalf("statuses = %+v", rows)
+	}
+	if err := s.UpsertMCPDiscoveryStatus(ctx, "context7", MCPDiscoveryStatus("secret")); err == nil {
+		t.Fatal("invalid status accepted")
+	}
+}
+
 func TestUpsertDiscoveredSkill(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

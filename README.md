@@ -245,8 +245,9 @@ table shows an expandable count and the observed tool names. Servers without
 local audit history are labeled **Not observed**. A successful
 `agentjail install` automatically runs the same bounded catalog discovery after
 the daemon starts, so a new installation does not begin with an empty Tools
-column. Per-server authentication and reachability failures remain visible and
-do not fail installation. Refresh never launches an MCP
+column. Per-server authentication and reachability failures remain visible
+across app and daemon refreshes without retaining raw errors, and do not fail
+installation. Refresh never launches an MCP
 server, changes configuration or policy, or claims visibility into project-local
 files or live traffic. **Discover tools** remains a confirmed manual retry backed
 by `agentjail mcp tool discover --json`: it requests paginated `tools/list`

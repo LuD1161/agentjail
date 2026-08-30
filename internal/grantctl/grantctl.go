@@ -180,6 +180,7 @@ type DashboardSnapshotV1 struct {
 	Tokens            []DashboardTokenDayV1   `json:"tokens"`
 	TokenAgents       []DashboardTokenAgentV1 `json:"token_agents"`
 	MCPTools          []DashboardMCPToolsV1   `json:"mcp_tools"`
+	MCPDiscovery      []DashboardMCPStatusV1  `json:"mcp_discovery_status"`
 	TokenCoverage     []string                `json:"token_coverage"`
 	TokenStatus       DashboardTokenStatus    `json:"token_status"`
 }
@@ -218,6 +219,11 @@ type DashboardTokenAgentV1 struct {
 type DashboardMCPToolsV1 struct {
 	Server string   `json:"server"`
 	Tools  []string `json:"tools"`
+}
+
+type DashboardMCPStatusV1 struct {
+	Server string             `json:"server"`
+	Status MCPDiscoveryStatus `json:"status"`
 }
 
 type MCPDiscoveryStatus string

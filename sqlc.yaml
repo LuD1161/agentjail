@@ -14,5 +14,6 @@ sql:
           decision: "DBDecision"
           audit_event: "DBAuditEvent"
           discovered_tool: "DBDiscoveredTool"
+          mcp_discovery_status: "DBMCPDiscoveryStatus"
           discovered_skill: "DBDiscoveredSkill"
           audit_log: "DBAuditLog"

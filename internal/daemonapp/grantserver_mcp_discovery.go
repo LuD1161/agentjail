@@ -76,9 +76,10 @@ func (s *localMCPToolDiscoveryService) Discover(ctx context.Context, _ time.Time
 	}
 	for _, name := range names {
 		result := results[name]
+		status := grantctl.MCPDiscoveryStatus(result.Status)
 		server := grantctl.MCPServerToolsDiscoveryV1{
 			Server: boundedDashboardLabel(name, grantctl.MaxDashboardLabelBytes),
-			Status: grantctl.MCPDiscoveryStatus(result.Status),
+			Status: status,
 			Tools:  make([]string, 0, min(len(result.Tools), 128)),
 		}
 		seen := make(map[string]struct{})
@@ -97,6 +98,9 @@ func (s *localMCPToolDiscoveryService) Discover(ctx context.Context, _ time.Time
 			}
 		}
 		sort.Strings(server.Tools)
+		if err := s.store.UpsertMCPDiscoveryStatus(ctx, server.Server, store.MCPDiscoveryStatus(status)); err != nil {
+			return grantctl.MCPToolsDiscoveryV1{}, fmt.Errorf("persist MCP discovery status: %w", err)
+		}
 		for _, tool := range server.Tools {
 			if err := s.store.UpsertDiscoveredTool(ctx, server.Server, tool, "live"); err != nil {
 				return grantctl.MCPToolsDiscoveryV1{}, fmt.Errorf("persist enumerated MCP tool: %w", err)

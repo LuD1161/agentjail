@@ -78,6 +78,16 @@ SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools ORD
 -- name: ListDiscoveredToolsByServer :many
 SELECT id, server, tool, source, first_seen, last_seen FROM discovered_tools WHERE server = ? ORDER BY tool;
 
+-- name: UpsertMCPDiscoveryStatus :exec
+INSERT INTO mcp_discovery_status (server, status, last_seen)
+VALUES (?, ?, ?)
+ON CONFLICT(server) DO UPDATE SET
+    status = excluded.status,
+    last_seen = excluded.last_seen;
+
+-- name: ListMCPDiscoveryStatuses :many
+SELECT server, status, last_seen FROM mcp_discovery_status ORDER BY server;
+
 -- name: ListDiscoveredSkillsAll :many
 SELECT id, name, source, first_seen, last_seen, use_count FROM discovered_skills ORDER BY name;
 

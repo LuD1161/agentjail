@@ -225,6 +225,10 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 	if err != nil {
 		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list dashboard MCP tools: %w", err)
 	}
+	discoveryStatuses, err := p.store.ListMCPDiscoveryStatuses(ctx)
+	if err != nil {
+		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list dashboard MCP discovery statuses: %w", err)
+	}
 	auditedToolNames, err := p.store.ListDistinctMCPToolNames(ctx)
 	if err != nil {
 		return grantctl.DashboardSnapshotV1{}, fmt.Errorf("list audited dashboard MCP tools: %w", err)
@@ -246,6 +250,7 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 		RecentSessions: make([]grantctl.DashboardSessionV1, 0, len(sessions)),
 		Activity:       make([]grantctl.DashboardDayV1, 0, len(stats.Daily)),
 		MCPTools:       dashboardMCPTools(discoveredTools, auditedToolNames),
+		MCPDiscovery:   dashboardMCPDiscoveryStatuses(discoveryStatuses),
 		TokenCoverage:  []string{"Claude Code", "Codex", "OpenCode"},
 		TokenAgents:    make([]grantctl.DashboardTokenAgentV1, 0),
 	}
@@ -269,6 +274,25 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 
 	snapshot.Tokens, snapshot.TokenAgents, snapshot.TokenStatus = p.tokenCache.snapshot(since, now)
 	return snapshot, nil
+}
+
+func dashboardMCPDiscoveryStatuses(records []store.MCPDiscoveryRecord) []grantctl.DashboardMCPStatusV1 {
+	if len(records) > 64 {
+		records = records[:64]
+	}
+	out := make([]grantctl.DashboardMCPStatusV1, 0, len(records))
+	for _, record := range records {
+		server := boundedDashboardLabel(record.Server, grantctl.MaxDashboardLabelBytes)
+		status := grantctl.MCPDiscoveryStatus(record.Status)
+		if server == "" {
+			continue
+		}
+		switch status {
+		case grantctl.MCPDiscoveryConnected, grantctl.MCPDiscoveryAuthRequired, grantctl.MCPDiscoveryUnreachable, grantctl.MCPDiscoveryTimeout:
+			out = append(out, grantctl.DashboardMCPStatusV1{Server: server, Status: status})
+		}
+	}
+	return out
 }
 
 func dashboardMCPTools(discovered []store.DiscoveredTool, auditedToolNames []string) []grantctl.DashboardMCPToolsV1 {

@@ -51,6 +51,10 @@ func (m *mockReadOnlyStore) ListDiscoveredTools(_ context.Context, _ string) ([]
 	return nil, nil
 }
 
+func (m *mockReadOnlyStore) ListMCPDiscoveryStatuses(_ context.Context) ([]store.MCPDiscoveryRecord, error) {
+	return nil, nil
+}
+
 func (m *mockReadOnlyStore) ListDiscoveredSkills(_ context.Context) ([]store.DiscoveredSkill, error) {
 	return nil, nil
 }

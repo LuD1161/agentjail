@@ -146,6 +146,11 @@ func (s *sqliteStore) migrate() error {
 			UNIQUE(server, tool)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_discovered_tools_server ON discovered_tools(server)`,
+		`CREATE TABLE IF NOT EXISTS mcp_discovery_status (
+			server    TEXT PRIMARY KEY,
+			status    TEXT NOT NULL CHECK(status IN ('connected', 'auth_required', 'unreachable', 'timeout')),
+			last_seen TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS discovered_skills (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			name       TEXT    NOT NULL UNIQUE,
@@ -848,6 +853,23 @@ func (s *sqliteStore) UpsertDiscoveredTool(ctx context.Context, server, tool, so
 	return tx.Commit()
 }
 
+func (s *sqliteStore) UpsertMCPDiscoveryStatus(ctx context.Context, server string, status MCPDiscoveryStatus) error {
+	if server == "" {
+		return fmt.Errorf("store: MCP discovery server is empty")
+	}
+	switch status {
+	case MCPDiscoveryConnected, MCPDiscoveryAuthRequired, MCPDiscoveryUnreachable, MCPDiscoveryTimeout:
+	default:
+		return fmt.Errorf("store: invalid MCP discovery status")
+	}
+	if err := s.queries.UpsertMCPDiscoveryStatus(ctx, UpsertMCPDiscoveryStatusParams{
+		Server: server, Status: string(status), LastSeen: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		return fmt.Errorf("store: upsert MCP discovery status: %w", err)
+	}
+	return nil
+}
+
 // UpsertDiscoveredSkill inserts a discovered skill or updates last_seen,
 // source, and increments use_count on conflict (name). It emits
 // audit.SkillDiscovered only on first insert (use_count bumps are noise).
@@ -913,6 +935,19 @@ func (s *sqliteStore) ListDiscoveredTools(ctx context.Context, server string) ([
 			FirstSeen: firstSeen,
 			LastSeen:  lastSeen,
 		})
+	}
+	return out, nil
+}
+
+func (s *sqliteStore) ListMCPDiscoveryStatuses(ctx context.Context) ([]MCPDiscoveryRecord, error) {
+	rows, err := s.queries.ListMCPDiscoveryStatuses(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: list MCP discovery statuses: %w", err)
+	}
+	out := make([]MCPDiscoveryRecord, 0, len(rows))
+	for _, row := range rows {
+		lastSeen, _ := time.Parse(time.RFC3339Nano, row.LastSeen)
+		out = append(out, MCPDiscoveryRecord{Server: row.Server, Status: MCPDiscoveryStatus(row.Status), LastSeen: lastSeen})
 	}
 	return out, nil
 }
@@ -1174,6 +1209,9 @@ func (r *sqliteROStore) CountActionsBySession(ctx context.Context) ([]ActionCoun
 }
 func (r *sqliteROStore) ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error) {
 	return r.inner.ListDiscoveredTools(ctx, server)
+}
+func (r *sqliteROStore) ListMCPDiscoveryStatuses(ctx context.Context) ([]MCPDiscoveryRecord, error) {
+	return r.inner.ListMCPDiscoveryStatuses(ctx)
 }
 func (r *sqliteROStore) ListDiscoveredSkills(ctx context.Context) ([]DiscoveredSkill, error) {
 	return r.inner.ListDiscoveredSkills(ctx)

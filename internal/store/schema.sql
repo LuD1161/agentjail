@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS discovered_tools (
 
 CREATE INDEX IF NOT EXISTS idx_discovered_tools_server ON discovered_tools(server);
 
+CREATE TABLE IF NOT EXISTS mcp_discovery_status (
+    server    TEXT PRIMARY KEY,
+    status    TEXT NOT NULL CHECK(status IN ('connected', 'auth_required', 'unreachable', 'timeout')),
+    last_seen TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS discovered_skills (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT    NOT NULL UNIQUE,

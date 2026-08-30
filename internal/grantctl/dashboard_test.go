@@ -41,6 +41,11 @@ func TestValidateDashboardSnapshotRejectsMalformedAndOversizedData(t *testing.T)
 	if err := validateDashboardSnapshotV1(invalidTool); err == nil {
 		t.Fatal("empty MCP tool name accepted")
 	}
+	invalidDiscovery := valid
+	invalidDiscovery.MCPDiscovery = []DashboardMCPStatusV1{{Server: "linear", Status: MCPDiscoveryStatus("secret")}}
+	if err := validateDashboardSnapshotV1(invalidDiscovery); err == nil {
+		t.Fatal("unknown dashboard MCP discovery status accepted")
+	}
 }
 
 func TestValidateMCPToolsDiscoveryRejectsUnknownStatusAndMalformedTools(t *testing.T) {

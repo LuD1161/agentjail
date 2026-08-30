@@ -62,6 +62,12 @@ type DBDiscoveredTool struct {
 	LastSeen  string `json:"last_seen"`
 }
 
+type DBMCPDiscoveryStatus struct {
+	Server   string `json:"server"`
+	Status   string `json:"status"`
+	LastSeen string `json:"last_seen"`
+}
+
 type DBSession struct {
 	SessionID     string         `json:"session_id"`
 	StartTs       string         `json:"start_ts"`
