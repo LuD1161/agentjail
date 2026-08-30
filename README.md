@@ -253,6 +253,12 @@ files or live traffic. **Discover tools** remains a confirmed manual retry backe
 by `agentjail mcp tool discover --json`: it requests paginated `tools/list`
 metadata from configured servers, never invokes a tool, persists only sanitized
 server/tool identifiers, and reports authentication or reachability per server.
+For Codex configurations, discovery first asks the installed Codex app-server
+for its authenticated `mcpServerStatus/list` catalog. This reuses Codex's
+existing OAuth session without reading, copying, or persisting its tokens; the
+direct MCP handshake remains the fallback when that versioned interface is not
+available. AgentJail merges only servers already present in the configured
+inventory and never requests a model turn or `mcpServer/tool/call`.
 For stdio servers, the daemon resolves configured executables without invoking a
 login shell, including standard Homebrew and user toolchain locations that are
 normally absent from launchd's minimal `PATH`. `agentjail mcp scan --json`

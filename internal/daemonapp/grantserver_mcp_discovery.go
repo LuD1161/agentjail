@@ -59,7 +59,7 @@ func (s *localMCPToolDiscoveryService) Discover(ctx context.Context, _ time.Time
 	for _, entry := range entries {
 		configs = append(configs, entry.Config)
 	}
-	results := mcpclient.ListAllTools(ctx, configs)
+	results := mcpclient.ListAllToolsWithCatalogs(ctx, configs, mcpclient.NewCodexAuthenticatedCatalog())
 
 	names := make([]string, 0, len(results))
 	for name := range results {

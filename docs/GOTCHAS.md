@@ -1370,6 +1370,18 @@ therefore changed accurate failures back to the misleading “Not discovered.”
   must explain later, persist that outcome alongside successful data and project
   both through the same read model. See ADR 0143-explicit-mcp-enumeration.
 
+## 105. Configured OAuth is not an authenticated MCP session
+
+Codex showed Linear and OpenSEO as connected, but AgentJail independently read
+their endpoint URLs from `config.toml` and opened unauthenticated HTTP sessions.
+The direct client correctly received 401 responses, so transport tests stayed
+green while the product incorrectly told an already-signed-in user to sign in.
+
+- **Rule:** when an agent owns OAuth state outside its public configuration,
+  enumerate through the agent's bounded machine catalog and treat raw config as
+  fallback—not as proof of the agent's effective session. See
+  ADR 0147-codex-catalog-bridge.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

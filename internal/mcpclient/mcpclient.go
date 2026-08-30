@@ -641,6 +641,48 @@ func ListAllTools(ctx context.Context, servers []MCPServerConfig) map[string]Ser
 	return out
 }
 
+// ListAllToolsWithCatalogs runs direct MCP discovery and authenticated agent
+// catalogs concurrently. An authenticated catalog is authoritative only for a
+// server that is already present in the configured-server inventory.
+func ListAllToolsWithCatalogs(ctx context.Context, servers []MCPServerConfig, catalogs ...AuthenticatedToolCatalog) map[string]ServerToolResult {
+	direct := make(chan map[string]ServerToolResult, 1)
+	go func() { direct <- ListAllTools(ctx, servers) }()
+
+	type catalogResult struct {
+		servers map[string]ServerToolResult
+		err     error
+	}
+	overlays := make(chan catalogResult, len(catalogs))
+	for _, catalog := range catalogs {
+		go func(source AuthenticatedToolCatalog) {
+			servers, err := source.ListTools(ctx)
+			overlays <- catalogResult{servers: servers, err: err}
+		}(catalog)
+	}
+
+	results := <-direct
+	for range catalogs {
+		overlay := <-overlays
+		if overlay.err != nil {
+			continue
+		}
+		mergeAuthenticatedCatalog(results, overlay.servers)
+	}
+	return results
+}
+
+func mergeAuthenticatedCatalog(results, overlay map[string]ServerToolResult) {
+	for name, result := range overlay {
+		if _, configured := results[name]; !configured {
+			continue
+		}
+		switch result.Status {
+		case "connected", "auth_required":
+			results[name] = result
+		}
+	}
+}
+
 func discoveryTimeout(server MCPServerConfig) time.Duration {
 	if server.Type == "" || server.Type == "stdio" {
 		return 15 * time.Second
