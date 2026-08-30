@@ -15,6 +15,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
     public let tokens: [DashboardTokenDay]
     public let tokenAgents: [DashboardTokenAgent]
     public let mcpTools: [DashboardMCPTools]
+    public let mcpDiscoveryStatuses: [DashboardMCPDiscoveryStatus]
     public let tokenCoverage: [String]
     public let tokenStatus: DashboardTokenStatus
 
@@ -22,7 +23,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         case protocolVersion = "protocol_version", generatedAtUnixMs = "generated_at_unix_ms"
         case totalCalls = "total_calls", allowedCalls = "allowed_calls", deniedCalls = "denied_calls", askedCalls = "asked_calls"
         case totalSessions = "total_sessions", activeSessions = "active_sessions", recentSessions = "recent_sessions"
-        case activity, tokens, tokenAgents = "token_agents", mcpTools = "mcp_tools", tokenCoverage = "token_coverage", tokenStatus = "token_status"
+        case activity, tokens, tokenAgents = "token_agents", mcpTools = "mcp_tools", mcpDiscoveryStatuses = "mcp_discovery_status", tokenCoverage = "token_coverage", tokenStatus = "token_status"
     }
 
     public init(from decoder: Decoder) throws {
@@ -41,15 +42,30 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         tokens = try values.decode([DashboardTokenDay].self, forKey: .tokens)
         tokenAgents = try values.decodeIfPresent([DashboardTokenAgent].self, forKey: .tokenAgents) ?? []
         mcpTools = try values.decodeIfPresent([DashboardMCPTools].self, forKey: .mcpTools) ?? []
+        mcpDiscoveryStatuses = try values.decodeIfPresent([DashboardMCPDiscoveryStatus].self, forKey: .mcpDiscoveryStatuses) ?? []
         tokenCoverage = try values.decode([String].self, forKey: .tokenCoverage)
         tokenStatus = try values.decodeIfPresent(DashboardTokenStatus.self, forKey: .tokenStatus) ?? .ready
         guard totalCalls >= 0, allowedCalls >= 0, deniedCalls >= 0, askedCalls >= 0,
               totalSessions >= 0, activeSessions >= 0, recentSessions.count <= 12,
-              activity.count <= 35, tokens.count <= 35, tokenAgents.count <= 8, mcpTools.count <= 64,
+              activity.count <= 35, tokens.count <= 35, tokenAgents.count <= 8, mcpTools.count <= 64, mcpDiscoveryStatuses.count <= 64,
               tokenCoverage.allSatisfy({ $0.utf8.count <= 128 }) else {
             throw DashboardModelError.invalidProjection
         }
     }
+}
+
+public struct DashboardMCPDiscoveryStatus: Decodable, Equatable, Sendable {
+    public let server: String
+    public let status: MCPToolDiscoveryStatus
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        server = DisplaySanitizer.text(try values.decode(String.self, forKey: .server), limit: 128).text
+        status = try values.decode(MCPToolDiscoveryStatus.self, forKey: .status)
+        guard !server.isEmpty, server.utf8.count <= 128 else { throw DashboardModelError.invalidProjection }
+    }
+
+    private enum CodingKeys: String, CodingKey { case server, status }
 }
 
 public struct DashboardMCPTools: Decodable, Equatable, Sendable {

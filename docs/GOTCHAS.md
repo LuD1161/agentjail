@@ -1350,6 +1350,16 @@ human report but never asserted the public JSON boundary.
   type or sanitized copy, and its test must seed the same secret into every
   supported configuration channel. See ADR 0146-mcp-command-resolution.
 
+## 103. Glass appearance depends on what scrolls behind it
+
+The MCP summary looked correct at the top of the light-mode page, then turned
+dark when scrolling changed the content sampled by Liquid Glass. Static view
+tests exercised the initial composition only.
+
+- **Rule:** use semantic opaque fills for data strips whose contrast must remain
+  stable while scrolling; reserve sampling materials for surfaces where that
+  environmental response is intentional. See ADR 0141-unified-macos-app.
+
 ## 104. Persisting successes alone erases actionable failures
 
 Live MCP discovery persisted returned tool names but kept reachability and

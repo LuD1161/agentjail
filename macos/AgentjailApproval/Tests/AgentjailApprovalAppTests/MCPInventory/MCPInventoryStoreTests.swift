@@ -28,6 +28,7 @@ final class MCPInventoryStoreTests: XCTestCase {
         XCTAssertEqual(store.snapshot.items[0].target, "npx • 2 arguments hidden")
         XCTAssertFalse(store.snapshot.items[0].target.contains(secret))
         XCTAssertEqual(store.observedTools(for: "safe"), ["read_file", "write_file"])
+        XCTAssertEqual(store.discoveryStatus(for: "safe"), .connected)
         XCTAssertFalse(store.isRefreshing)
     }
 
@@ -55,7 +56,7 @@ final class MCPInventoryStoreTests: XCTestCase {
 
     private func dashboardSnapshot() throws -> DashboardSnapshotV1 {
         let data = Data("""
-        {"protocol_version":1,"generated_at_unix_ms":1788020000000,"total_calls":2,"allowed_calls":2,"denied_calls":0,"asked_calls":0,"total_sessions":1,"active_sessions":0,"recent_sessions":[],"activity":[],"tokens":[],"token_agents":[],"mcp_tools":[{"server":"safe","tools":["write_file","read_file"]}],"token_coverage":[],"token_status":"ready"}
+        {"protocol_version":1,"generated_at_unix_ms":1788020000000,"total_calls":2,"allowed_calls":2,"denied_calls":0,"asked_calls":0,"total_sessions":1,"active_sessions":0,"recent_sessions":[],"activity":[],"tokens":[],"token_agents":[],"mcp_tools":[{"server":"safe","tools":["write_file","read_file"]}],"mcp_discovery_status":[{"server":"safe","status":"connected"}],"token_coverage":[],"token_status":"ready"}
         """.utf8)
         return try JSONDecoder().decode(DashboardSnapshotV1.self, from: data)
     }

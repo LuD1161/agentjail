@@ -78,22 +78,24 @@ struct MCPInventoryView: View {
     }
 
     private var summary: some View {
-        AgentJailSurface(padding: 14) {
-            HStack(spacing: 0) {
-                InventorySummaryMetric(title: "Servers", value: store.snapshot.configuredCount, color: .green, systemImage: "server.rack")
-                Divider().padding(.horizontal, 20)
-                InventorySummaryMetric(title: "Cross-client", value: store.snapshot.duplicateCount, color: .orange, systemImage: "square.on.square")
-                Divider().padding(.horizontal, 20)
-                InventorySummaryMetric(title: "Needs attention", value: store.snapshot.issueCount, color: .red, systemImage: "exclamationmark.triangle.fill")
-                Spacer()
-                Text("Global configuration")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.1), in: Capsule())
-            }
+        HStack(spacing: 0) {
+            InventorySummaryMetric(title: "Servers", value: store.snapshot.configuredCount, color: .green, systemImage: "server.rack")
+            Divider().padding(.horizontal, 20)
+            InventorySummaryMetric(title: "Cross-client", value: store.snapshot.duplicateCount, color: .orange, systemImage: "square.on.square")
+            Divider().padding(.horizontal, 20)
+            InventorySummaryMetric(title: "Needs attention", value: store.snapshot.issueCount, color: .red, systemImage: "exclamationmark.triangle.fill")
+            Spacer()
+            Text("Global configuration")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.secondary.opacity(0.1), in: Capsule())
         }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.1), lineWidth: 1) }
     }
 
     @ViewBuilder

@@ -39,6 +39,9 @@ final class MCPInventoryStore: ObservableObject {
                 let key = normalize(server.server)
                 result[key] = Array(Set((result[key] ?? []) + server.tools)).sorted()
             }
+            discoveryStatusByServer = dashboard.mcpDiscoveryStatuses.reduce(into: [:]) { result, server in
+                result[normalize(server.server)] = server.status
+            }
             toolDataUnavailable = false
         } catch is CancellationError {
             return
