@@ -48,9 +48,10 @@ or edits policy files directly. Fixed application actions may execute the bundle
 CLI without a shell; arbitrary command execution is not an application API.
 
 The containing application is a normal foreground macOS app, not an
-`LSUIElement`-only accessory. Its single primary window has exactly three tabs:
-Overview, MCP, and Settings; the menu-bar review surface remains a supplemental
-entry point. Overview keeps onboarding in a compact status card and obtains a
+`LSUIElement`-only accessory. Its single primary window has exactly three
+persistent sidebar destinations: Overview, MCP inventory, and Settings; the
+menu-bar review surface remains a supplemental entry point. Overview keeps
+onboarding in a compact status card and obtains a
 bounded, versioned, read-only dashboard projection over the authenticated daemon
 control socket. The daemon supplies active and recent sessions, audited-call
 aggregates, daily activity, and supported local transcript token totals. It

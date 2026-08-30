@@ -1240,6 +1240,16 @@ behavior.
   normal foreground app, and release verification must assert `LSUIElement=false`.
   See ADR 0141-unified-macos-app.
 
+## 95. A routed WindowGroup is not a singleton
+
+The foreground app opened one default `WindowGroup` scene, then onboarding's
+setup route opened another instance of the same scene. Every individual window
+looked correct, so view tests stayed green while launch produced two dashboards.
+
+- **Rule:** use a singleton `Window` for a routed primary macOS surface; reserve
+  `WindowGroup` for documents or workflows that intentionally support multiple
+  instances. See ADR 0141-unified-macos-app.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that

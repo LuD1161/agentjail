@@ -201,10 +201,10 @@ You may genuinely want this service - but only after you've made an explicit dec
 drag `AgentJail.app` to Applications, and click **Install AgentJail**. The app
 explains and verifies the CLI, daemon, hooks, and one-time Apple Network
 Extension approval before it reports the machine protected. AgentJail is a
-normal Dock and Cmd-Tab application with one three-tab window: **Overview**,
-**MCP**, and **Settings**. Setup stays as a compact Overview card; when it sends
-you to System Settings, returning to AgentJail refreshes that card at the
-resulting ready, waiting, or retry state.
+normal Dock and Cmd-Tab application with one window and a persistent sidebar for
+**Overview**, **MCP inventory**, and **Settings**. Setup stays as a compact
+Overview card; when it sends you to System Settings, returning to AgentJail
+refreshes that card at the resulting ready, waiting, or retry state.
 
 Overview reads a bounded snapshot from the authenticated local daemon. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,

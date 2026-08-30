@@ -9,88 +9,68 @@ struct MCPInventoryView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    observeOnlyNotice
-                    summary
-                    inventory
-                    coverageNotice
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                AgentJailPageHeader(
+                    eyebrow: "Connections",
+                    title: "MCP inventory",
+                    detail: "Configured servers across Claude Code, Codex, and Cursor"
+                ) {
+                    Button {
+                        store.refresh()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(store.isRefreshing)
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                summary
+                observeOnlyNotice
+                inventory
+                coverageNotice
             }
+            .frame(maxWidth: 1100)
+            .padding(32)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 720, minHeight: 560)
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             store.refresh()
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("MCP inventory")
-                    .font(.title2.bold())
-                Text("Claude Code, Codex, and Cursor")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                store.refresh()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(store.isRefreshing)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
-    }
-
     private var observeOnlyNotice: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "eye.fill")
-                .foregroundStyle(.blue)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Observe only")
-                    .font(.headline)
-                Text("AgentJail reads configuration metadata to show what is connected. It does not modify configuration, launch MCP servers, proxy calls, or change policy.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        AgentJailSurface {
+            HStack(alignment: .top, spacing: 12) {
+                AgentJailIconTile(systemImage: "eye.fill", color: .blue)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Observe only")
+                        .font(.headline)
+                    Text("Discovery reads configuration metadata only. It never modifies files, launches MCP servers, proxies calls, or changes policy.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .accessibilityElement(children: .combine)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
     }
 
     private var summary: some View {
-        HStack(spacing: 10) {
-            InventorySummaryChip(
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+            InventorySummaryCard(
                 title: "Configured",
                 value: store.snapshot.configuredCount,
                 color: .green,
                 systemImage: "checkmark.circle.fill"
             )
-            InventorySummaryChip(
-                title: "Duplicates",
+            InventorySummaryCard(
+                title: "Cross-client",
                 value: store.snapshot.duplicateCount,
                 color: .orange,
                 systemImage: "square.on.square"
             )
-            InventorySummaryChip(
-                title: "Issues",
+            InventorySummaryCard(
+                title: "Needs attention",
                 value: store.snapshot.issueCount,
                 color: .red,
                 systemImage: "exclamationmark.triangle.fill"
@@ -101,28 +81,34 @@ struct MCPInventoryView: View {
     @ViewBuilder
     private var inventory: some View {
         if store.snapshot.items.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "shippingbox")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Text("No global MCP servers found")
-                    .font(.headline)
-                Text("Add a server in one of the supported clients, then refresh this inventory.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity, minHeight: 180)
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            AgentJailSurface {
+                VStack(spacing: 8) {
+                    Image(systemName: "shippingbox")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text("No global MCP servers found")
+                        .font(.headline)
+                    Text("Add a server in one of the supported clients, then refresh this inventory.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 180)
             }
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(store.snapshot.items) { item in
-                    MCPInventoryRow(item: item)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Configured servers")
+                    .font(.title3.bold())
+                Text("Names shared across clients remain separate so their source is always clear.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(store.snapshot.items) { item in
+                        MCPInventoryRow(item: item)
+                    }
                 }
+                .padding(.top, 10)
             }
         }
     }
@@ -192,12 +178,12 @@ private struct MCPInventoryRow: View {
                 .font(.caption2.monospaced())
                 .foregroundStyle(.tertiary)
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
     }
@@ -228,26 +214,26 @@ private struct MCPInventoryRow: View {
     }
 }
 
-private struct InventorySummaryChip: View {
+private struct InventorySummaryCard: View {
     let title: String
     let value: Int
     let color: Color
     let systemImage: String
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: systemImage)
-                .accessibilityHidden(true)
-            Text(String(value))
-                .font(.headline)
-                .monospacedDigit()
-            Text(title)
-                .font(.caption.weight(.medium))
+        AgentJailSurface(padding: 15) {
+            HStack(spacing: 12) {
+                AgentJailIconTile(systemImage: systemImage, color: color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(String(value))
+                        .font(.title2.bold())
+                        .monospacedDigit()
+                    Text(title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(color.opacity(0.08), in: Capsule())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(value) \(title)")
     }

@@ -40,10 +40,10 @@ struct AgentJailApp: App {
             )
         }
 
-        WindowGroup("AgentJail", id: ApprovalAppSceneID.main) {
+        Window("AgentJail", id: ApprovalAppSceneID.main) {
             AgentJailRootView(composition: applicationDelegate.composition)
         }
-        .defaultSize(width: 960, height: 720)
+        .defaultSize(width: 1080, height: 760)
     }
 
     private var menuBarExtraInsertion: Binding<Bool> {

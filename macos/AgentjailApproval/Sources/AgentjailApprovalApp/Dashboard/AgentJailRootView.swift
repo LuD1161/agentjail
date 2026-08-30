@@ -10,24 +10,90 @@ enum AgentJailTab: Hashable {
 
 struct AgentJailRootView: View {
     @ObservedObject private var composition: ApprovalAppComposition
+    @ObservedObject private var setup: AgentJailSetupCoordinator
 
     init(composition: ApprovalAppComposition) {
         _composition = ObservedObject(wrappedValue: composition)
+        _setup = ObservedObject(wrappedValue: composition.setupCoordinator)
     }
 
     var body: some View {
-        TabView(selection: $composition.selectedTab) {
-            DashboardOverviewView(composition: composition)
-                .tabItem { Label("Overview", systemImage: "chart.xyaxis.line") }
-                .tag(AgentJailTab.overview)
-            MCPInventoryView(store: composition.mcpInventoryStore)
-                .tabItem { Label("MCP", systemImage: "point.3.connected.trianglepath.dotted") }
-                .tag(AgentJailTab.mcp)
-            ApprovalSettingsView(composition: composition)
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(AgentJailTab.settings)
+        NavigationSplitView {
+            VStack(spacing: 0) {
+                brand
+                List(selection: $composition.selectedTab) {
+                    Section("Workspace") {
+                        sidebarItem("Overview", icon: "chart.xyaxis.line", tab: .overview)
+                        sidebarItem("MCP inventory", icon: "point.3.connected.trianglepath.dotted", tab: .mcp)
+                    }
+                    Section("AgentJail") {
+                        sidebarItem("Settings", icon: "gearshape", tab: .settings)
+                    }
+                }
+                .listStyle(.sidebar)
+                sidebarStatus
+            }
+            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
+        } detail: {
+            detail
         }
-        .frame(minWidth: 820, minHeight: 650)
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 900, minHeight: 650)
+    }
+
+    private var brand: some View {
+        HStack(spacing: 11) {
+            Image(systemName: "shield.lefthalf.filled")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 11))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("AgentJail").font(.headline)
+                Text("Local security").font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+    }
+
+    private func sidebarItem(_ title: String, icon: String, tab: AgentJailTab) -> some View {
+        Label(title, systemImage: icon)
+            .font(.callout.weight(.medium))
+            .tag(tab)
+    }
+
+    private var sidebarStatus: some View {
+        AgentJailSurface(padding: 12) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(setup.health.isReady ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: (setup.health.isReady ? Color.green : Color.orange).opacity(0.45), radius: 4)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(setup.health.isReady ? "Protection ready" : "Setup required")
+                        .font(.caption.weight(.semibold))
+                    Text(setup.health.isReady ? "Local services online" : "Finish on Overview")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch composition.selectedTab {
+        case .overview:
+            DashboardOverviewView(composition: composition)
+        case .mcp:
+            MCPInventoryView(store: composition.mcpInventoryStore)
+        case .settings:
+            ApprovalSettingsView(composition: composition)
+        }
     }
 }
 
@@ -45,27 +111,30 @@ private struct DashboardOverviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Overview").font(.largeTitle.bold())
-                        Text("Local protection activity from the last 35 days").foregroundStyle(.secondary)
-                    }
-                    Spacer()
+            VStack(alignment: .leading, spacing: 24) {
+                AgentJailPageHeader(eyebrow: "Local security", title: "Overview", detail: "Protection activity from the last 35 days") {
                     Button { Task { await refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .disabled(dashboard.isRefreshing)
                 }
                 if !setup.health.isReady { setupCard }
                 if let snapshot = dashboard.snapshot {
                     metrics(snapshot)
-                    HStack(alignment: .top, spacing: 16) {
-                        activityCard(snapshot).frame(maxWidth: .infinity)
-                        tokenCard(snapshot).frame(maxWidth: .infinity)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 16) {
+                            activityCard(snapshot).frame(maxWidth: .infinity)
+                            tokenCard(snapshot).frame(maxWidth: .infinity)
+                        }
+                        VStack(spacing: 16) {
+                            activityCard(snapshot)
+                            tokenCard(snapshot)
+                        }
                     }
                     sessionsCard(snapshot)
                 } else { emptyDashboard }
             }
-            .padding(24)
+            .frame(maxWidth: 1180)
+            .padding(32)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task { await refresh() }
@@ -77,10 +146,13 @@ private struct DashboardOverviewView: View {
     }
 
     private var setupCard: some View {
-        HStack(spacing: 16) {
-            Image(systemName: setupIcon).font(.title2).foregroundStyle(setupColor)
+        HStack(spacing: 14) {
+            AgentJailIconTile(systemImage: setupIcon, color: setupColor)
             VStack(alignment: .leading, spacing: 4) {
-                Text(setupTitle).font(.headline)
+                HStack(spacing: 8) {
+                    Text(setupTitle).font(.headline)
+                    AgentJailStatusPill(title: "Setup required", color: setupColor)
+                }
                 Text(setupDetail).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -93,13 +165,13 @@ private struct DashboardOverviewView: View {
                 .buttonStyle(.borderedProminent)
             } else { ProgressView().controlSize(.small) }
         }
-        .padding(16)
-        .background(setupColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).stroke(setupColor.opacity(0.2)) }
+        .padding(18)
+        .background(setupColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).stroke(setupColor.opacity(0.22)) }
     }
 
     private func metrics(_ snapshot: DashboardSnapshotV1) -> some View {
-        HStack(spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 155), spacing: 12)], spacing: 12) {
             MetricCard(title: "Audited calls", value: snapshot.totalCalls, icon: "checkmark.shield")
             MetricCard(title: "Active sessions", value: Int64(snapshot.activeSessions), icon: "bolt.horizontal.circle")
             MetricCard(title: "Recent sessions", value: snapshot.totalSessions, icon: "terminal")
@@ -163,11 +235,13 @@ private struct DashboardOverviewView: View {
     }
 
     private var emptyDashboard: some View {
-        DashboardEmptyState(
-            title: emptyDashboardTitle,
-            icon: emptyDashboardIcon,
-            detail: emptyDashboardDetail
-        ).frame(maxWidth: .infinity, minHeight: 280)
+        AgentJailSurface {
+            DashboardEmptyState(
+                title: emptyDashboardTitle,
+                icon: emptyDashboardIcon,
+                detail: emptyDashboardDetail
+            ).frame(maxWidth: .infinity, minHeight: 220)
+        }
     }
 
     private var emptyDashboardTitle: String {
@@ -254,7 +328,8 @@ private struct MetricCard: View {
             Text(value.formatted()).font(.title2.bold()).monospacedDigit()
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08)) }
     }
 }
 
@@ -265,7 +340,7 @@ private struct DashboardCard<Content: View>: View {
             HStack { Image(systemName: icon).foregroundStyle(.tint); VStack(alignment: .leading) { Text(title).font(.headline); Text(subtitle).font(.caption).foregroundStyle(.secondary) }; Spacer() }
             content
         }
-        .padding(18).background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.12)) }
+        .padding(18).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.08)) }
     }
 }

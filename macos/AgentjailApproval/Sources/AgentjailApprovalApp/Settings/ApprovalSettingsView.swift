@@ -9,84 +9,104 @@ struct ApprovalSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("AgentJail daemon") {
-                Text(PanelPresentation(
-                    state: composition.store.state,
-                    actionStates: composition.store.actionStates,
-                    now: SystemApprovalClock().now()
-                ).status.detail)
-                Button("Retry") {
-                    composition.refreshFromMenuOpening()
-                }
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                AgentJailPageHeader(
+                    eyebrow: "AgentJail",
+                    title: "Settings",
+                    detail: "Manage local services, notifications, and privacy"
+                ) { EmptyView() }
 
-            Section("Notifications") {
-                Text(notificationDetail)
-                if composition.notificationAuthorization != .authorized {
-                    Button("Enable notifications") {
-                        Task {
-                            await composition.enableNotificationsFromUserAction()
+                SettingsGroup(title: "General") {
+                    SettingsRow(icon: "server.rack", color: .blue, title: "Local daemon", detail: daemonDetail) {
+                        Button("Retry") { composition.refreshFromMenuOpening() }
+                    }
+                    Divider()
+                    SettingsRow(icon: "bell.badge", color: .orange, title: "Notifications", detail: notificationDetail) {
+                        if composition.notificationAuthorization == .authorized {
+                            AgentJailStatusPill(title: "Enabled", color: .green)
+                        } else {
+                            Button("Enable") {
+                                Task { await composition.enableNotificationsFromUserAction() }
+                            }
                         }
                     }
+                    if composition.notificationAuthorization == .denied {
+                        Text("Notification permission is disabled in System Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 46)
+                    }
+                    Divider()
+                    SettingsRow(icon: "arrow.clockwise.circle", color: .purple, title: "Launch at login", detail: loginDetail) {
+                        Toggle("", isOn: loginItemEnabled).labelsHidden()
+                    }
+                    if composition.loginStatus == .requiresApproval {
+                        Button("Open Login Items Settings") { composition.openLoginItemsSettings() }
+                            .padding(.leading, 46)
+                    }
                 }
-                if composition.notificationAuthorization == .denied {
-                    Text("To change this choice, open System Settings > Notifications > AgentJail.")
+
+                SettingsGroup(title: "Privacy") {
+                    SettingsRow(icon: "chart.bar.xaxis", color: .green, title: "Anonymous product metrics", detail: telemetryDetail) {
+                        Toggle("", isOn: telemetryEnabled)
+                            .labelsHidden()
+                            .disabled(!composition.telemetryStatus.canChange)
+                    }
+                    Text("Includes only app version and fixed setup stage/outcome values. Never includes hosts, paths, commands, traffic, credentials, or error text.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .padding(.leading, 46)
                 }
-            }
 
-            Section("Launch at login") {
-                Toggle("Launch AgentJail at login", isOn: loginItemEnabled)
-                Text(loginDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if composition.loginStatus == .requiresApproval {
-                    Button("Open Login Items Settings") {
-                        composition.openLoginItemsSettings()
+                SettingsGroup(title: "Security model") {
+                    SettingsRow(
+                        icon: "person.badge.shield.checkmark",
+                        color: .blue,
+                        title: "Approval scope",
+                        detail: "Approvals add the displayed host to the verified project policy for future sessions. The current session is unchanged."
+                    ) { EmptyView() }
+                    Divider()
+                    SettingsRow(
+                        icon: "lock.shield",
+                        color: .green,
+                        title: "Local authority",
+                        detail: "This app communicates with the authenticated local daemon. It never stores the control token or opens the AgentJail database."
+                    ) { EmptyView() }
+                    Divider()
+                    SettingsRow(
+                        icon: "point.3.connected.trianglepath.dotted",
+                        color: .purple,
+                        title: "MCP inventory",
+                        detail: "Review observe-only discovery for Claude Code, Codex, and Cursor."
+                    ) {
+                        Button("Open") { composition.requestMCPInventory() }
+                    }
+                }
+
+                if let settingsError = composition.settingsError {
+                    AgentJailSurface {
+                        Label(settingsError, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
                     }
                 }
             }
-
-            Section("Approval scope") {
-                Text("Approve for future sessions adds the displayed host to the verified project policy. The current session is unchanged.")
-                Text("The app communicates only with the local AgentJail daemon. It does not store the control token or read AgentJail databases.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("MCP inventory") {
-                Text("Observe-only discovery reads global Claude Code, Codex, and Cursor MCP configuration without launching servers or changing files.")
-                Button("Open MCP inventory") {
-                    composition.requestMCPInventory()
-                }
-            }
-
-            Section("Anonymous usage metrics") {
-                Toggle("Share anonymous usage metrics", isOn: telemetryEnabled)
-                    .disabled(!composition.telemetryStatus.canChange)
-                Text(telemetryDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Setup metrics contain only fixed stage and outcome values plus app version, OS, and architecture. They never include traffic, hosts, paths, commands, or error text.")
-                Text("Review queued events: agentjail telemetry view")
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-            }
-
-            if let settingsError = composition.settingsError {
-                Section {
-                    Text(settingsError)
-                        .foregroundStyle(.red)
-                }
-            }
+            .frame(maxWidth: 900)
+            .padding(32)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .formStyle(.grouped)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await composition.refreshSettingsStatus()
         }
+    }
+
+    private var daemonDetail: String {
+        PanelPresentation(
+            state: composition.store.state,
+            actionStates: composition.store.actionStates,
+            now: SystemApprovalClock().now()
+        ).status.detail
     }
 
     private var loginItemEnabled: Binding<Bool> {
@@ -155,6 +175,43 @@ struct ApprovalSettingsView: View {
             "Saving your choice…"
         case .unavailable:
             "The bundled AgentJail CLI could not read this setting."
+        }
+    }
+}
+
+private struct SettingsGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+                .padding(.leading, 2)
+            AgentJailSurface { VStack(spacing: 14) { content } }
+        }
+    }
+}
+
+private struct SettingsRow<Trailing: View>: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let detail: String
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            AgentJailIconTile(systemImage: icon, color: color)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            trailing
         }
     }
 }
