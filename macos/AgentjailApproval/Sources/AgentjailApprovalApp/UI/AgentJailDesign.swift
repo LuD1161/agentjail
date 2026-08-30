@@ -38,12 +38,23 @@ struct AgentJailSurface<Content: View>: View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.42), in: RoundedRectangle(cornerRadius: 16))
+            .agentJailGlass(cornerRadius: 16)
             .overlay {
                 RoundedRectangle(cornerRadius: 16)
                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
             }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func agentJailGlass(cornerRadius: CGFloat) -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.42), in: RoundedRectangle(cornerRadius: cornerRadius))
+        }
     }
 }
 
