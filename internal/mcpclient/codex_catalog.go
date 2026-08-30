@@ -47,7 +47,7 @@ func (c CodexAuthenticatedCatalog) ListTools(ctx context.Context) (map[string]Se
 		return nil, fmt.Errorf("mcpclient: resolve Codex catalog command: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, command, "app-server", "--stdio")
-	cmd.Env = sanitizedEnv()
+	cmd.Env = configuredCommandEnv(command)
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

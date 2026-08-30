@@ -27,6 +27,13 @@ arguments and environment overrides are passed unchanged to the resolved
 executable. Stdio startup receives a 15-second deadline; remote transports keep
 the five-second deadline.
 
+The resolved executable's directory is placed first in the spawned process's
+sanitized `PATH`, followed by that same bounded platform/user contract and
+absolute inherited entries. Launchers such as Codex, `npx`, and `uvx` use
+`/usr/bin/env` shebangs; resolving the launcher without making its sibling
+interpreter reachable is not executable resolution in practice. Relative
+inherited `PATH` entries are dropped.
+
 `agentjail mcp scan --json` serializes a sanitized copy. Argument, environment,
 and header values are replaced; URL credentials, query strings, and fragments
 are removed; absolute executable and package paths are reduced to basenames.

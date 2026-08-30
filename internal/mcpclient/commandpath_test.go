@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,5 +34,18 @@ func TestDiscoveryTimeoutAllowsStdioStartup(t *testing.T) {
 	}
 	if got := discoveryTimeout(MCPServerConfig{Type: "http"}); got != 5*time.Second {
 		t.Fatalf("http timeout = %s", got)
+	}
+}
+
+func TestConfiguredCommandEnvIncludesResolvedInterpreterDirectory(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin:relative-bin")
+	command := filepath.Join(t.TempDir(), "codex")
+	pathValue := envValue(configuredCommandEnv(command), "PATH")
+	directories := filepath.SplitList(pathValue)
+	if len(directories) == 0 || directories[0] != filepath.Dir(command) {
+		t.Fatalf("PATH = %q, want command directory first", pathValue)
+	}
+	if strings.Contains(pathValue, "relative-bin") {
+		t.Fatalf("PATH retained a relative search directory: %q", pathValue)
 	}
 }

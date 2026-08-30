@@ -118,7 +118,7 @@ func listToolsStdio(ctx context.Context, cfg MCPServerConfig) ([]ToolInfo, error
 	// Security: strip sensitive environment variables before spawning MCP
 	// server processes.  Discovery runs outside the agent sandbox, so we
 	// must not leak ambient credentials to third-party server binaries.
-	cmd.Env = sanitizedEnv()
+	cmd.Env = configuredCommandEnv(command)
 
 	// Apply server-specific env overrides on top of the sanitized env.
 	for k, v := range cfg.Env {

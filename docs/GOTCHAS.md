@@ -1333,11 +1333,14 @@ runner tests were green.
 
 MCP discovery worked in terminal-oriented tests but marked every bare `npx`
 server unreachable after installation. The daemon was launched with a minimal
-environment that omitted Homebrew and user toolchain directories.
+environment that omitted Homebrew and user toolchain directories. Resolving
+`/opt/homebrew/bin/npx` was still insufficient: its `/usr/bin/env node` shebang
+consulted that same minimal child `PATH` and immediately exited.
 
-- **Rule:** resolve configured executables directly against a shared, bounded
-  platform search contract; never source a login shell to manufacture daemon
-  state. See ADR 0146-mcp-command-resolution.
+- **Rule:** resolve configured executables and their env-based shebang
+  interpreters against one shared, bounded platform search contract; never
+  source a login shell to manufacture daemon state. See
+  ADR 0146-mcp-command-resolution.
 
 ## 102. Machine-readable inventory can bypass display redaction
 
