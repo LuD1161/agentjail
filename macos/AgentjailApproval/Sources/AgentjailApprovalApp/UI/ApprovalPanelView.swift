@@ -1,6 +1,16 @@
 import AgentjailApprovalCore
 import SwiftUI
 
+enum ApprovalPanelLayout {
+    static let width: CGFloat = 400
+    static let emptyHeight: CGFloat = 304
+    static let reviewHeight: CGFloat = 520
+
+    static func height(hasPendingReviews: Bool) -> CGFloat {
+        hasPendingReviews ? reviewHeight : emptyHeight
+    }
+}
+
 struct ApprovalPanelView: View {
     let presentation: PanelPresentation
     let onApprove: (ReviewID) -> Void
@@ -45,74 +55,89 @@ struct ApprovalPanelView: View {
             header
             Divider()
 
-            StatusBanner(presentation: presentation.status, onRetry: onRetry)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+            if showsStatusBanner {
+                StatusBanner(presentation: presentation.status, onRetry: onRetry)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                Divider()
+            }
 
-            Divider()
             content
             Divider()
             footer
         }
-        .frame(width: 420, height: 520)
+        .frame(
+            width: ApprovalPanelLayout.width,
+            height: ApprovalPanelLayout.height(hasPendingReviews: hasPendingReviews)
+        )
+        .background(Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("AgentJail approval review")
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "shield")
-                .font(.title2)
+        HStack(alignment: .center, spacing: 12) {
+            AgentJailAppMark(size: 34)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("AgentJail")
                     .font(.headline)
-                Text("Project host approvals")
+                Text("Approval center")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(presentation.pendingCountText)
-                .font(.callout.weight(.semibold))
-                .monospacedDigit()
-                .accessibilityLabel("Pending approvals")
-                .accessibilityValue(String(presentation.totalPending))
+            PanelStatusBadge(
+                status: presentation.status,
+                pendingCount: presentation.totalPending
+            )
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
     }
 
     private var content: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    focusFeedback
-
-                    if let empty = presentation.empty {
-                        EmptyApprovalView(presentation: empty)
-                    } else {
-                        ForEach(presentation.cards) { card in
-                            ReviewCardView(
-                                presentation: card,
-                                isFocusTarget: focusTargetReviewID == card.id,
-                                onApprove: onApprove,
-                                onDeny: onDeny
-                            )
-                            .id(card.id)
-                            .focusable()
-                            .focused($keyboardFocusedReviewID, equals: card.id)
-                            .accessibilityFocused($focusedReviewID, equals: card.id)
-                        }
+            Group {
+                if let empty = presentation.empty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        focusFeedback
+                        EmptyApprovalView(
+                            presentation: empty,
+                            status: presentation.status,
+                            onRetry: onRetry
+                        )
                     }
+                    .padding(16)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            focusFeedback
 
-                    if let truncationText = presentation.truncationText {
-                        Label(truncationText, systemImage: "ellipsis.circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel(truncationText)
+                            ForEach(presentation.cards) { card in
+                                ReviewCardView(
+                                    presentation: card,
+                                    isFocusTarget: focusTargetReviewID == card.id,
+                                    onApprove: onApprove,
+                                    onDeny: onDeny
+                                )
+                                .id(card.id)
+                                .focusable()
+                                .focused($keyboardFocusedReviewID, equals: card.id)
+                                .accessibilityFocused($focusedReviewID, equals: card.id)
+                            }
+
+                            if let truncationText = presentation.truncationText {
+                                Label(truncationText, systemImage: "ellipsis.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .accessibilityLabel(truncationText)
+                            }
+                        }
+                        .padding(16)
                     }
                 }
-                .padding(16)
             }
             .onAppear {
                 applyFocus(using: proxy)
@@ -121,6 +146,14 @@ struct ApprovalPanelView: View {
                 applyFocus(using: proxy)
             }
         }
+    }
+
+    private var hasPendingReviews: Bool {
+        !presentation.cards.isEmpty
+    }
+
+    private var showsStatusBanner: Bool {
+        hasPendingReviews && presentation.status.kind != .ready
     }
 
     @ViewBuilder
@@ -137,35 +170,45 @@ struct ApprovalPanelView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            Button(action: onOpenAgentJail) {
-                Label("AgentJail", systemImage: "shield")
-            }
-            .accessibilityHint("Opens AgentJail setup and health status.")
-            .agentJailInteractiveHover()
+        HStack(spacing: 8) {
+            PanelFooterAction(
+                title: "Open AgentJail",
+                systemImage: "macwindow",
+                prominence: .primary,
+                accessibilityHint: "Opens AgentJail setup and health status.",
+                action: onOpenAgentJail
+            )
 
-            Button(action: onSettings) {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .accessibilityHint("Opens AgentJail settings.")
-            .agentJailInteractiveHover()
+            Spacer(minLength: 4)
 
-            Button(action: onMCPInventory) {
-                Label("MCPs", systemImage: "point.3.connected.trianglepath.dotted")
-            }
-            .accessibilityHint("Opens the read-only MCP inventory.")
-            .agentJailInteractiveHover()
+            PanelFooterAction(
+                title: "Settings",
+                systemImage: "gearshape",
+                accessibilityHint: "Opens AgentJail settings.",
+                action: onSettings
+            )
 
-            Spacer()
+            PanelFooterAction(
+                title: "MCP inventory",
+                systemImage: "point.3.connected.trianglepath.dotted",
+                accessibilityHint: "Opens the read-only MCP inventory.",
+                action: onMCPInventory
+            )
 
-            Button(action: onQuit) {
-                Text("Quit")
-            }
-            .accessibilityLabel("Quit AgentJail")
-            .accessibilityHint("Stops this menu-bar app. The AgentJail daemon remains authoritative.")
-            .agentJailInteractiveHover()
+            Divider()
+                .frame(height: 22)
+                .padding(.horizontal, 2)
+
+            PanelFooterAction(
+                title: "Quit AgentJail",
+                systemImage: "power",
+                prominence: .destructive,
+                accessibilityHint: "Stops this menu-bar app. The AgentJail daemon remains authoritative.",
+                action: onQuit
+            )
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     private var focusTargetReviewID: ReviewID? {
@@ -201,6 +244,50 @@ struct ApprovalPanelView: View {
     }
 }
 
+private struct PanelStatusBadge: View {
+    let status: ApprovalPanelStatusPresentation
+    let pendingCount: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.11), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var title: String {
+        if pendingCount > 0 {
+            return "\(pendingCount) pending"
+        }
+        return status.kind == .ready ? "All clear" : status.title
+    }
+
+    private var accessibilityLabel: String {
+        pendingCount > 0 ? "\(pendingCount) pending approvals" : status.accessibilityText
+    }
+
+    private var color: Color {
+        switch status.kind {
+        case .starting, .connecting:
+            .secondary
+        case .ready:
+            .green
+        case .disconnected, .unauthorized, .unsupportedProtocol:
+            .orange
+        }
+    }
+}
+
 private struct StatusBanner: View {
     let presentation: ApprovalPanelStatusPresentation
     let onRetry: () -> Void
@@ -221,6 +308,8 @@ private struct StatusBanner: View {
             Spacer(minLength: 8)
             if presentation.canRetry {
                 Button("Retry", action: onRetry)
+                    .buttonStyle(.borderless)
+                    .focusable(false)
                     .accessibilityHint("Refreshes approval state from the local AgentJail daemon.")
                     .agentJailInteractiveHover()
             }
@@ -244,22 +333,119 @@ private struct StatusBanner: View {
 
 private struct EmptyApprovalView: View {
     let presentation: ApprovalEmptyPresentation
+    let status: ApprovalPanelStatusPresentation
+    let onRetry: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 14) {
             Image(systemName: presentation.systemImage)
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
+                .font(.title2.weight(.medium))
+                .foregroundStyle(statusColor)
+                .frame(width: 44, height: 44)
+                .background(statusColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
-            Text(presentation.title)
-                .font(.headline)
-            Text(presentation.detail)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(presentation.title)
+                    .font(.headline)
+                Text(presentation.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            if status.canRetry {
+                Button("Retry", action: onRetry)
+                    .buttonStyle(.borderless)
+                    .focusable(false)
+                    .accessibilityHint("Refreshes approval state from the local AgentJail daemon.")
+                    .agentJailInteractiveHover()
+            }
         }
-        .frame(maxWidth: .infinity, minHeight: 220)
-        .accessibilityElement(children: .combine)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(presentation.title). \(presentation.detail)")
+    }
+
+    private var statusColor: Color {
+        switch status.kind {
+        case .starting, .connecting:
+            .secondary
+        case .ready:
+            .green
+        case .disconnected, .unauthorized, .unsupportedProtocol:
+            .orange
+        }
+    }
+}
+
+private enum PanelFooterActionProminence {
+    case primary
+    case standard
+    case destructive
+}
+
+private struct PanelFooterAction: View {
+    let title: String
+    let systemImage: String
+    var prominence: PanelFooterActionProminence = .standard
+    let accessibilityHint: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .medium))
+                if prominence == .primary {
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                }
+            }
+            .padding(.horizontal, prominence == .primary ? 11 : 9)
+            .frame(minHeight: 34)
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .foregroundStyle(foregroundColor)
+        .background(backgroundColor, in: RoundedRectangle(cornerRadius: 9))
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .agentJailPointingCursor()
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityHint(accessibilityHint)
+    }
+
+    private var foregroundColor: Color {
+        if prominence == .destructive && isHovering {
+            return .red
+        }
+        if prominence == .primary {
+            return .accentColor
+        }
+        return .primary
+    }
+
+    private var backgroundColor: Color {
+        switch prominence {
+        case .primary:
+            Color.accentColor.opacity(isHovering ? 0.17 : 0.10)
+        case .standard:
+            Color.primary.opacity(isHovering ? 0.09 : 0.045)
+        case .destructive:
+            Color.red.opacity(isHovering ? 0.12 : 0)
+        }
     }
 }

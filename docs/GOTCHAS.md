@@ -1408,6 +1408,18 @@ especially in dark mode.
   row content may define hit testing and spacing, but must not paint another
   full-row interaction background. See ADR 0141-unified-macos-app.
 
+## 107. One fixed panel size is not one coherent menu
+
+The approval menu used the review list's fixed height even when it had no rows.
+Snapshot and state tests stayed green, but the empty state became a large
+translucent window, repeated the ready message, and promoted a footer button
+with persistent focus chrome.
+
+- **Rule:** give bounded menu states explicit layout contracts, and test the
+  compact empty state separately from the scrolling work state. Use an opaque
+  semantic surface when desktop sampling is not part of the design. See
+  ADR 0141-unified-macos-app.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

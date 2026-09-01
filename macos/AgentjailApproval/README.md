@@ -16,6 +16,12 @@ write policy files, retain the control token, or provide a path for Codex
 command approvals. Its tunnel command surface accepts only fixed verbs used by
 `agentjail-shield`; it is not an arbitrary shell interface.
 
+The panel uses a compact, opaque empty layout with one authoritative status
+summary. It expands to a bounded scrolling review layout only while approvals
+are present; status failures remain visible alongside stale non-actionable
+cards. Footer actions use explicit hover surfaces without persistent keyboard
+focus chrome, while retaining labels, help text, and accessibility hints.
+
 The native MCP inventory is a separate read-only presentation path. Versioned
 Core adapters read only `~/.claude.json`, `~/.codex/config.toml`, and
 `~/.cursor/mcp.json`, then return typed records whose commands and origins are
