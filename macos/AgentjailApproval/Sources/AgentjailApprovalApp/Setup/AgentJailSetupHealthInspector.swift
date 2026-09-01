@@ -5,7 +5,6 @@ import Foundation
 struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
     private let appURL: URL
     private let cliURL: URL
-    private let bundledCLIURL: URL?
     private let reviewClient: any ReviewControlling
 
     init(
@@ -16,9 +15,6 @@ struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
         appURL = bundle.bundleURL
         cliURL = (homeDirectory ?? URL(fileURLWithPath: "/", isDirectory: true))
             .appendingPathComponent(".agentjail/bin/agentjail")
-        bundledCLIURL = bundle.resourceURL?
-            .appendingPathComponent("bin", isDirectory: true)
-            .appendingPathComponent("agentjail")
         self.reviewClient = reviewClient
     }
 
@@ -27,11 +23,7 @@ struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
         async let daemonReachable = inspectDaemon()
         return await AgentJailSetupHealth(
             appInApplications: appURL.resolvingSymlinksInPath().standardizedFileURL.path == "/Applications/AgentJail.app",
-            cliInstalled: installedExecutableMatchesBundled(
-                installedURL: cliURL,
-                bundledURL: bundledCLIURL,
-                fileManager: .default
-            ),
+            cliInstalled: installedExecutableIsAvailable(at: cliURL, fileManager: .default),
             daemonReachable: daemonReachable,
             tunnelProfile: tunnelProfile
         )
@@ -74,14 +66,6 @@ struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
     }
 }
 
-func installedExecutableMatchesBundled(
-    installedURL: URL,
-    bundledURL: URL?,
-    fileManager: FileManager
-) -> Bool {
-    guard let bundledURL,
-          fileManager.isExecutableFile(atPath: installedURL.path),
-          fileManager.isExecutableFile(atPath: bundledURL.path)
-    else { return false }
-    return fileManager.contentsEqual(atPath: installedURL.path, andPath: bundledURL.path)
+func installedExecutableIsAvailable(at installedURL: URL, fileManager: FileManager) -> Bool {
+    fileManager.isExecutableFile(atPath: installedURL.path)
 }

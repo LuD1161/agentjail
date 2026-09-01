@@ -235,7 +235,9 @@ curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh |
 On macOS the terminal installer checksum-verifies the same notarized DMG,
 Gatekeeper-assesses it, installs `AgentJail.app` atomically, installs its bundled
 CLI, starts the daemon, wires detected agent hooks, and opens onboarding. Linux
-downloads only the platform CLI tarball.
+downloads only the platform CLI tarball. The app derives setup readiness from
+the installed executable and live daemon health; rebuilding the same release
+does not incorrectly return an already configured machine to onboarding.
 
 The macOS app also includes an **observe-only MCP inventory** for the global
 Claude Code, Codex, and Cursor configurations. Its compact table shows the

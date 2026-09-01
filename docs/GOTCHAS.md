@@ -1283,6 +1283,18 @@ and unit test passed.
   bounded single-flight cache; return independently available data immediately.
   See ADR 0141-unified-macos-app.
 
+## 99. Build identity is not installation health
+
+The macOS app compared the installed CLI byte-for-byte with the CLI bundled in
+the app. A local rebuild changed executable bytes without changing the release
+or service compatibility, so the healthy daemon, hooks, and policies disappeared
+behind a **Setup required** screen. The unit test asserted byte equality and
+therefore made the false-positive behavior look intentional.
+
+- **Rule:** derive readiness from executable availability and authoritative live
+  service health. Report artifact drift as an update state, never as a missing
+  installation.
+
 ## 70. A successful detach is not proof of an unmounted image
 
 The approval DMG packager treated an exit-zero `hdiutil detach` as proof that
