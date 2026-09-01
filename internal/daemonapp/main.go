@@ -1682,6 +1682,7 @@ func Run(args []string) int {
 			slog.Warn("grant control server failed to start (grants unavailable)", "err", gerr)
 		} else {
 			gs.dashboard = newLocalDashboardProjector(srv.eventStore, srv.activeSessions)
+			gs.activity = newLocalActivityProjector(srv.eventStore, srv.activeSessions)
 			gs.mcpTools = newLocalMCPToolDiscoveryService(srv.eventStore)
 			srv.grantSrv = gs
 			go srv.grantSrv.serveCtl(ctx)

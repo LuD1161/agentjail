@@ -367,10 +367,19 @@ agentjail logs / replay / ui  (readers via OpenReadOnly)
   passwords) are stripped wherever they appear — including inside a positional
   value such as a Bash `command` string (ADR 0019, ADR 0084-redact-secret-values)
 
-**Filter support:** `store.Filter` supports `SessionID` (substring), `Actions`
-(case-insensitive OR), `Tool` (exact), `Rule` (case-insensitive substring),
-`AfterID` (keyset pagination, direction-aware for ASC/DESC), and `Limit` (clamped
-to [100, 10000]).
+**Filter support:** `store.Filter` supports `SessionID` (substring),
+`ExactSessionID` (trusted session projections), `Actions` (case-insensitive OR),
+`Tool` (exact), `Rule` (case-insensitive substring), `AfterID` (keyset
+pagination, direction-aware for ASC/DESC), and `Limit` (clamped to [100,
+10000]).
+
+The authenticated daemon control socket projects bounded display models for
+the native macOS app. `dashboard_snapshot` serves overview aggregates;
+`network_snapshot` serves the newest traffic window through one lazy read-only
+`network.db` handle; and `session_log_snapshot` serves exact-session decision
+summaries from the daemon's existing event store. These projections omit full
+paths, request headers/bodies/query strings, and tool input. See
+[ADR 0149-local-activity-feed](./adr/0149-local-activity-feed.md).
 
 ### Unified Audit Log
 

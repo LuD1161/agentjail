@@ -92,14 +92,15 @@ type Session struct {
 
 // Filter selects decisions. Zero-value fields are not filtered on.
 type Filter struct {
-	SessionID string        // substring match (consistent with daemon.log --session)
-	Since     time.Duration // only decisions newer than now-Since; 0 = no filter
-	Actions   []string      // match any (lower-cased)
-	Tool      string        // exact tool name
-	Rule      string        // substring match on rule_id (case-insensitive)
-	Limit     int           // 0 = no limit (caller should bound it)
-	AfterID   int64         // only rows with id > AfterID (for --follow tailing)
-	OrderDesc bool          // order by id DESC (newest first); default ASC (chronological)
+	SessionID      string        // substring match (consistent with daemon.log --session)
+	ExactSessionID string        // exact match for trusted UI/session projections
+	Since          time.Duration // only decisions newer than now-Since; 0 = no filter
+	Actions        []string      // match any (lower-cased)
+	Tool           string        // exact tool name
+	Rule           string        // substring match on rule_id (case-insensitive)
+	Limit          int           // 0 = no limit (caller should bound it)
+	AfterID        int64         // only rows with id > AfterID (for --follow tailing)
+	OrderDesc      bool          // order by id DESC (newest first); default ASC (chronological)
 }
 
 // SessionFilter selects sessions for ListSessionsFiltered.

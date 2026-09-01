@@ -294,6 +294,26 @@ func TestListDecisionsFilters(t *testing.T) {
 	}
 }
 
+func TestListDecisionsExactSessionDoesNotMatchPrefixes(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	for _, sessionID := range []string{"session-1", "session-10"} {
+		if err := s.RecordDecision(ctx, DecisionRecord{
+			Ts: time.Now(), SessionID: sessionID, ToolName: "Bash", Action: "allow",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.ListDecisions(ctx, Filter{ExactSessionID: "session-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SessionID != "session-1" {
+		t.Fatalf("exact session rows = %+v, want only session-1", got)
+	}
+}
+
 func TestListDecisionsFilterByRule(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

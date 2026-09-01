@@ -69,6 +69,7 @@ type grantServer struct {
 	registry  *grantctl.Registry
 	reviews   reviewSnapshotProjector
 	dashboard dashboardSnapshotProjector
+	activity  activitySnapshotProjector
 	mcpTools  mcpToolDiscoveryService
 	emitter   audit.Emitter
 	// durableAudit is true only when emitter is backed by a real, writable
@@ -176,6 +177,11 @@ func startGrantServer(sockPath string, emitter audit.Emitter, durableAudit bool,
 
 // close stops serving, removes the socket, and releases the lock.
 func (gs *grantServer) close() {
+	if gs.activity != nil {
+		if err := gs.activity.Close(); err != nil {
+			slog.Warn("close activity projector", "err", err)
+		}
+	}
 	if gs.ctlLn != nil {
 		gs.ctlLn.Close()
 	}
@@ -267,6 +273,10 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	case grantctl.ReqDashboardSnapshot:
 		_ = conn.SetDeadline(time.Now().Add(ctlDashboardDeadline))
 		gs.reply(conn, dashboardSnapshotResponse(gs.dashboard, req.ProtocolVersion, now))
+	case grantctl.ReqNetworkSnapshot:
+		gs.reply(conn, networkSnapshotResponse(gs.activity, req.ProtocolVersion, now))
+	case grantctl.ReqSessionLogSnapshot:
+		gs.reply(conn, sessionLogSnapshotResponse(gs.activity, req.ProtocolVersion, req.SessionID, now))
 	case grantctl.ReqMCPToolsDiscover:
 		_ = conn.SetDeadline(time.Now().Add(45 * time.Second))
 		gs.reply(conn, mcpToolsDiscoveryResponse(gs.mcpTools, req.ProtocolVersion, now))

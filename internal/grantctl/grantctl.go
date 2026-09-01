@@ -57,6 +57,10 @@ const (
 	ReqReviewSnapshot RequestType = "review_snapshot"
 	// ReqDashboardSnapshot returns the bounded, read-only overview projection.
 	ReqDashboardSnapshot RequestType = "dashboard_snapshot"
+	// ReqNetworkSnapshot returns the newest bounded network-event window.
+	ReqNetworkSnapshot RequestType = "network_snapshot"
+	// ReqSessionLogSnapshot returns recent sessions and one session's actions.
+	ReqSessionLogSnapshot RequestType = "session_log_snapshot"
 	// ReqMCPToolsDiscover explicitly connects to configured MCP servers and
 	// requests their tool catalogs. Control-socket only; CtlToken required.
 	ReqMCPToolsDiscover RequestType = "mcp_tools_discover"
@@ -118,13 +122,15 @@ type Request struct {
 
 // Response is the control-plane response envelope (JSON on the socket).
 type Response struct {
-	OK                bool                 `json:"ok"`
-	Error             string               `json:"error,omitempty"`
-	GrantID           string               `json:"grant_id,omitempty"`
-	Grants            []GrantInfo          `json:"grants,omitempty"`
-	ReviewSnapshot    *ReviewSnapshotV1    `json:"review_snapshot,omitempty"`
-	DashboardSnapshot *DashboardSnapshotV1 `json:"dashboard_snapshot,omitempty"`
-	MCPToolsDiscovery *MCPToolsDiscoveryV1 `json:"mcp_tools_discovery,omitempty"`
+	OK                 bool                  `json:"ok"`
+	Error              string                `json:"error,omitempty"`
+	GrantID            string                `json:"grant_id,omitempty"`
+	Grants             []GrantInfo           `json:"grants,omitempty"`
+	ReviewSnapshot     *ReviewSnapshotV1     `json:"review_snapshot,omitempty"`
+	DashboardSnapshot  *DashboardSnapshotV1  `json:"dashboard_snapshot,omitempty"`
+	NetworkSnapshot    *NetworkSnapshotV1    `json:"network_snapshot,omitempty"`
+	SessionLogSnapshot *SessionLogSnapshotV1 `json:"session_log_snapshot,omitempty"`
+	MCPToolsDiscovery  *MCPToolsDiscoveryV1  `json:"mcp_tools_discovery,omitempty"`
 }
 
 // GrantInfo describes one pending grant request, suitable for display to a
@@ -153,6 +159,12 @@ const ReviewProtocolVersion ProtocolVersion = 1
 
 // DashboardProtocolVersion is the only overview protocol version supported.
 const DashboardProtocolVersion ProtocolVersion = 1
+
+// NetworkProtocolVersion is the only network activity protocol supported.
+const NetworkProtocolVersion ProtocolVersion = 1
+
+// SessionLogProtocolVersion is the only session action protocol supported.
+const SessionLogProtocolVersion ProtocolVersion = 1
 
 // MCPDiscoveryProtocolVersion is the explicit tool-enumeration wire version.
 const MCPDiscoveryProtocolVersion ProtocolVersion = 1
