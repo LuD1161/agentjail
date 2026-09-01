@@ -24,13 +24,42 @@ configuration writer, database, policy, or telemetry dependency. Malformed
 entries remain visible as fixed configuration issues and never prevent other
 clients from loading. See ADR 0142-readonly-mcp-inventory.
 
+The Policies destination is another bounded read-only path. The bundled CLI
+joins installed active Rego with typed selected-decision aggregates from one
+read-only store handle. SwiftUI receives exact match totals, bounded
+agent/session rows, `…/basename` folder labels, and each source module once. It
+does not open SQLite, edit policy, or describe resolver-selected rows as every
+candidate OPA considered. See ADR 0148-policy-inventory.
+
+The active table sorts defaults, Bash/command rules, and Git rules before the
+remaining policies, with local search, category filters, domain-specific icons,
+and description tooltips. Policy details show plain Rego immediately while a
+bounded cache prepares each shared module's syntax colors once. The two-axis,
+syntax-colored Rego viewer has a tall reading viewport and compact end marker,
+and clipboard actions
+acknowledge a successful copy in place without retaining keyboard-focus chrome.
+A present but older installed CLI is shown as an
+available component update rather than as a missing installation.
+
+Settings uses a deterministic two-column desktop grid for service and privacy
+controls. Its displayed semantic version links to the exact GitHub release, and
+the persistent About destination presents the app identity, principles, build,
+release notes, source repository, feedback and issue entry point, and muted
+creator link in an open centered composition.
+
 Notifications are off until enabled from Settings. Their content is generic;
 Review opens the supplemental review window and refreshes the daemon snapshot
 before focusing a request, while Deny revalidates through the daemon. Launch at
 login is likewise an explicit Settings choice backed by macOS's login-item
-status. Removing the menu-bar item stops the app rather than leaving an
-invisible menu-only process running; it does not change daemon state or login
-registration.
+status. If notification access is denied, Settings links directly to AgentJail's
+notification controls, with the Notifications pane as a fallback. Removing the
+menu-bar item stops the app rather than leaving an invisible menu-only process
+running; it does not change daemon state or login registration.
+
+The dashboard summarizes audited activity and daily token usage. The token chart
+shows weekly date markers, the displayed-series total, and supports per-day
+inspection without blocking the primary dashboard refresh. Missing calendar
+days render as zero, and the chart never smooths nonnegative totals below zero.
 
 Build the executable from the repository root:
 

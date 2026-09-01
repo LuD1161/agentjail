@@ -115,6 +115,27 @@ type ActionCount struct {
 	Count     int
 }
 
+// PolicyMatchCount is the number of decisions for which a policy rule was the
+// selected result. It does not count candidate rules OPA considered but did not
+// select.
+type PolicyMatchCount struct {
+	RuleID       string
+	Count        int64
+	AgentCount   int64
+	SessionCount int64
+}
+
+// PolicySessionMatch attributes selected policy decisions to one agent and
+// session. CWD stays inside the local typed store boundary; callers must project
+// only the minimum path detail their UI needs.
+type PolicySessionMatch struct {
+	RuleID    string
+	Agent     string
+	SessionID string
+	CWD       string
+	Count     int64
+}
+
 // DiscoveredTool is a persisted MCP tool entry from scan/audit/session logs.
 type DiscoveredTool struct {
 	ID        int64

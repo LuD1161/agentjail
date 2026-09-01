@@ -6,12 +6,16 @@ struct TokenUsageChart: View {
     let points: [DashboardTokenDay]
     @State private var hoveredDay: String?
 
+    private var plottedPoints: [TokenChartPoint] {
+        TokenChartSeries.daily(points: points)
+    }
+
     private var scale: TokenChartScale {
         .fitting(maximum: points.map(\.totalTokens).max() ?? 0)
     }
 
-    private var hoveredPoint: DashboardTokenDay? {
-        points.first { $0.day == hoveredDay }
+    private var hoveredPoint: TokenChartPoint? {
+        plottedPoints.first { $0.day == hoveredDay }
     }
 
     private var domainMaximum: Double {
@@ -19,23 +23,38 @@ struct TokenUsageChart: View {
         return max(maximum * 1.15, 1)
     }
 
+    private var xAxisDates: [Date] {
+        TokenChartXAxis.tickDates(from: points.map(\.day))
+    }
+
     var body: some View {
-        Chart(points) { point in
-            AreaMark(x: .value("Day", point.day), y: .value("Tokens", point.totalTokens))
+        Chart(plottedPoints) { plottedPoint in
+            AreaMark(
+                x: .value("Day", plottedPoint.date),
+                yStart: .value("Baseline", 0),
+                yEnd: .value("Tokens", plottedPoint.totalTokens)
+            )
                 .foregroundStyle(.blue.opacity(0.16))
-            LineMark(x: .value("Day", point.day), y: .value("Tokens", point.totalTokens))
+                .interpolationMethod(.monotone)
+            LineMark(x: .value("Day", plottedPoint.date), y: .value("Tokens", plottedPoint.totalTokens))
                 .foregroundStyle(.blue)
-                .interpolationMethod(.catmullRom)
-            if point.day == hoveredDay {
-                RuleMark(x: .value("Selected day", point.day))
+                .interpolationMethod(.monotone)
+            if plottedPoint.day == hoveredDay {
+                RuleMark(x: .value("Selected day", plottedPoint.date))
                     .foregroundStyle(.secondary)
-                    .annotation(position: .top, spacing: 8) {
-                        TokenUsageHoverLabel(point: point)
-                    }
             }
         }
         .chartYScale(domain: 0...domainMaximum)
-        .chartXAxis(.hidden)
+        .chartXAxis {
+            AxisMarks(preset: .aligned, position: .bottom, values: xAxisDates) { value in
+                AxisTick()
+                AxisValueLabel(collisionResolution: .disabled) {
+                    if let date = value.as(Date.self) {
+                        Text(TokenChartXAxis.label(for: date))
+                    }
+                }
+            }
+        }
         .chartYAxis {
             AxisMarks(position: .trailing) { value in
                 AxisGridLine()
@@ -48,12 +67,25 @@ struct TokenUsageChart: View {
         }
         .chartOverlay { proxy in
             GeometryReader { geometry in
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        updateHover(phase, proxy: proxy, geometry: geometry)
+                ZStack {
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            updateHover(phase, proxy: proxy, geometry: geometry)
+                        }
+                    if let hoveredPoint {
+                        TokenUsageHoverLabel(day: hoveredPoint.day, totalTokens: hoveredPoint.totalTokens)
+                            .fixedSize()
+                            .frame(
+                                maxWidth: .infinity,
+                                maxHeight: .infinity,
+                                alignment: tooltipAlignment(for: hoveredPoint)
+                            )
+                            .padding(4)
+                            .allowsHitTesting(false)
                     }
+                }
             }
         }
         .frame(height: 130)
@@ -69,9 +101,24 @@ struct TokenUsageChart: View {
                 hoveredDay = nil
                 return
             }
-            hoveredDay = proxy.value(atX: location.x - plotFrame.origin.x, as: String.self)
+            guard let date = proxy.value(atX: location.x - plotFrame.origin.x, as: Date.self) else {
+                hoveredDay = nil
+                return
+            }
+            hoveredDay = plottedPoints.min {
+                abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+            }?.day
         case .ended:
             hoveredDay = nil
+        }
+    }
+
+    private func tooltipAlignment(for point: TokenChartPoint) -> Alignment {
+        let index = plottedPoints.firstIndex(where: { $0.id == point.id }) ?? 0
+        switch TokenChartTooltipPlacement.resolve(index: index, count: plottedPoints.count) {
+        case .leading: return .topLeading
+        case .center: return .top
+        case .trailing: return .topTrailing
         }
     }
 }

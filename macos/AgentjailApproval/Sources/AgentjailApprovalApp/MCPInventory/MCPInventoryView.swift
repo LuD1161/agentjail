@@ -12,43 +12,39 @@ struct MCPInventoryView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                AgentJailPageHeader(
-                    eyebrow: "Connections",
-                    title: "MCP inventory",
-                    detail: "Configured servers across Claude Code, Codex, and Cursor"
-                ) {
-                    HStack(spacing: 8) {
-                        Button {
-                            showsDiscoveryConfirmation = true
-                        } label: {
-                            if store.isDiscoveringTools {
-                                Label("Discovering", systemImage: "arrow.triangle.2.circlepath")
-                            } else {
-                                Label("Discover tools", systemImage: "sparkle.magnifyingglass")
-                            }
+        AgentJailPage {
+            AgentJailPageHeader(
+                eyebrow: "",
+                title: "MCP inventory",
+                detail: "Configured servers across Claude Code, Codex, and Cursor"
+            ) {
+                HStack(spacing: 8) {
+                    Button {
+                        showsDiscoveryConfirmation = true
+                    } label: {
+                        if store.isDiscoveringTools {
+                            Label("Discovering", systemImage: "arrow.triangle.2.circlepath")
+                        } else {
+                            Label("Discover tools", systemImage: "sparkle.magnifyingglass")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(store.isDiscoveringTools)
-                        Button {
-                            Task { await store.refresh() }
-                        } label: {
-                            Label("Refresh", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(store.isRefreshing || store.isDiscoveringTools)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.isDiscoveringTools)
+                    .agentJailInteractiveHover()
+                    Button {
+                        Task { await store.refresh() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(store.isRefreshing || store.isDiscoveringTools)
+                    .agentJailInteractiveHover()
                 }
-                summary
-                observeOnlyNotice
-                inventory
-                coverageNotice
             }
-            .frame(maxWidth: 1100)
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            summary
+            observeOnlyNotice
+            inventory
+            coverageNotice
         }
-        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await store.refresh()
         }
@@ -61,7 +57,7 @@ struct MCPInventoryView: View {
     }
 
     private var observeOnlyNotice: some View {
-        AgentJailSurface {
+        AgentJailCardSurface {
             HStack(alignment: .top, spacing: 12) {
                 AgentJailIconTile(systemImage: "eye.fill", color: .blue)
                 VStack(alignment: .leading, spacing: 4) {
@@ -94,14 +90,13 @@ struct MCPInventoryView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.1), lineWidth: 1) }
+        .agentJailCardSurface()
     }
 
     @ViewBuilder
     private var inventory: some View {
         if store.snapshot.items.isEmpty {
-            AgentJailSurface {
+            AgentJailCardSurface {
                 VStack(spacing: 8) {
                     Image(systemName: "shippingbox")
                         .font(.largeTitle)
@@ -117,24 +112,7 @@ struct MCPInventoryView: View {
                 .frame(maxWidth: .infinity, minHeight: 180)
             }
         } else {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Configured servers").font(.title3.bold())
-                        Text("Names shared across clients remain separate.").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Picker("Client", selection: $clientFilter) {
-                        Text("All").tag("all")
-                        Label("Claude", systemImage: "c.circle").tag("claude")
-                        Label("Codex", systemImage: "sparkles").tag("codex")
-                        Label("Cursor", systemImage: "cursorarrow").tag("cursor")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 330)
-                }
-                MCPTableHeader()
+            VStack(alignment: .leading, spacing: 8) {
                 if let summary = store.discoverySummary {
                     Label(summary, systemImage: summary.hasPrefix("Found") ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                         .font(.caption.weight(.medium))
@@ -143,6 +121,10 @@ struct MCPInventoryView: View {
                         .padding(.vertical, 6)
                 }
                 VStack(spacing: 0) {
+                    inventoryTableToolbar
+                    Divider()
+                    MCPTableHeader()
+                    Divider()
                     ForEach(filteredItems) { item in
                         MCPInventoryRow(
                             item: item,
@@ -152,10 +134,36 @@ struct MCPInventoryView: View {
                         )
                     }
                 }
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                .overlay { RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+                .compositingGroup()
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .agentJailCardSurface(cornerRadius: 12)
             }
         }
+    }
+
+    private var inventoryTableToolbar: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Configured servers")
+                    .font(.title3.bold())
+                Text("Names shared across clients remain separate.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Picker("Client", selection: $clientFilter) {
+                Text("All").tag("all")
+                Label("Claude", systemImage: "c.circle").tag("claude")
+                Label("Codex", systemImage: "sparkles").tag("codex")
+                Label("Cursor", systemImage: "cursorarrow").tag("cursor")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 330)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .agentJailTableSectionBackground(Color.primary.opacity(0.018))
     }
 
     private var filteredItems: [MCPInventoryItem] {
@@ -188,40 +196,28 @@ private struct MCPInventoryRow: View {
     let toolDataUnavailable: Bool
     let discoveryStatus: MCPToolDiscoveryStatus?
     @State private var isExpanded = false
+    @State private var isHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                HStack(spacing: 9) {
-                    MCPBrandMark.server(named: item.name, target: item.target)
-                    VStack(alignment: .leading, spacing: 3) {
-                    Text(item.name)
-                        .font(.callout.weight(.semibold))
-                        .lineLimit(1)
-                    if item.isDuplicate {
-                        Label("In \(item.duplicateCount) clients", systemImage: "square.on.square")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
-                    Text(item.target)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    }
+            if observedTools.isEmpty {
+                rowHeader
+            } else {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) { isExpanded.toggle() }
+                } label: {
+                    rowHeader
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 7) {
-                    MCPBrandMark.agent(item.sourceClient)
-                    Text(item.sourceClient.displayName)
-                }
-                .frame(width: 112, alignment: .leading)
-                toolSummary.frame(width: 100, alignment: .leading)
-                Text("Global").frame(width: 108, alignment: .leading)
-                statusBadge.frame(width: 112, alignment: .trailing)
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .help(isExpanded ? "Hide observed tools" : "Show observed tools")
+                .accessibilityLabel("\(item.name), \(observedTools.count) observed tools")
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                .agentJailTableSectionBackground(Color.primary.opacity(isHovering ? 0.06 : 0))
+                .animation(.easeOut(duration: 0.12), value: isHovering)
+                .onHover { isHovering = $0 }
+                .agentJailPointingCursor()
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isExpanded {
                 Divider().padding(.leading, 14)
@@ -244,11 +240,46 @@ private struct MCPInventoryRow: View {
                 .padding(.horizontal, 42)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.018))
+                .agentJailTableSectionBackground(Color.primary.opacity(0.018))
             }
         }
         .overlay(alignment: .bottom) { Divider().padding(.leading, 14) }
         .accessibilityElement(children: .contain)
+    }
+
+    private var rowHeader: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 9) {
+                MCPBrandMark.server(named: item.name, target: item.target)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    if item.isDuplicate {
+                        Label("In \(item.duplicateCount) clients", systemImage: "square.on.square")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    Text(item.target)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 7) {
+                MCPBrandMark.agent(item.sourceClient)
+                Text(item.sourceClient.displayName)
+            }
+            .frame(width: 112, alignment: .leading)
+            toolSummary.frame(width: 100, alignment: .leading)
+            Text("Global").frame(width: 108, alignment: .leading)
+            statusBadge.frame(width: 112, alignment: .trailing)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -264,22 +295,14 @@ private struct MCPInventoryRow: View {
                 .foregroundStyle(emptyToolStatusColor)
                 .help(emptyToolStatusHelp)
         } else {
-            Button {
-                withAnimation(.easeInOut(duration: 0.16)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 5) {
-                    Text(observedTools.count.formatted())
-                        .font(.callout.weight(.semibold).monospacedDigit())
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
+            HStack(spacing: 5) {
+                Text(observedTools.count.formatted())
+                    .font(.callout.weight(.semibold).monospacedDigit())
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
-            .buttonStyle(.plain)
             .foregroundStyle(.tint)
-            .help(isExpanded ? "Hide observed tools" : "Show observed tools")
-            .accessibilityLabel("\(observedTools.count) observed tools")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
         }
     }
 
@@ -369,7 +392,7 @@ private struct MCPBrandMark: View {
     }
 
     var body: some View {
-        let resolvedAsset = asset == "agent-codex" && colorScheme == .dark ? "agent-codex-light" : asset
+        let resolvedAsset = asset.map { AgentBrandAssets.themedName(for: $0, colorScheme: colorScheme) }
         Group {
             if let resolvedAsset, let image = Self.load(resolvedAsset) {
                 Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
@@ -392,19 +415,27 @@ private struct MCPBrandMark: View {
 }
 
 private struct MCPTableHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack(spacing: 12) {
-            Text("SERVER").frame(maxWidth: .infinity, alignment: .leading)
-            Text("AGENT").frame(width: 112, alignment: .leading)
+            Text("SERVER")
+                .padding(.leading, 27)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("AGENT")
+                .padding(.leading, 25)
+                .frame(width: 112, alignment: .leading)
             Text("TOOLS").frame(width: 100, alignment: .leading)
             Text("SCOPE").frame(width: 108, alignment: .leading)
             Text("STATUS").frame(width: 112, alignment: .trailing)
         }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.tertiary)
+        .font(.caption.weight(.bold))
+        .foregroundStyle(.primary.opacity(0.72))
         .padding(.horizontal, 14)
-        .padding(.top, 14)
-        .padding(.bottom, 6)
+        .padding(.vertical, 10)
+        .agentJailTableSectionBackground(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Server, agent, tools, scope, and status columns")
     }
 }
 

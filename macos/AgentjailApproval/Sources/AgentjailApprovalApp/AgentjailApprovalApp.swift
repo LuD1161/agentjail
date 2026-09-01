@@ -44,6 +44,7 @@ struct AgentJailApp: App {
             AgentJailRootView(composition: applicationDelegate.composition)
         }
         .defaultSize(width: 1080, height: 760)
+        .windowToolbarStyle(.unified(showsTitle: false))
     }
 
     private var menuBarExtraInsertion: Binding<Bool> {

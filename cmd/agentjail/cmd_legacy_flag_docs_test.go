@@ -22,6 +22,7 @@ func TestLegacyCommandsExposeTheirRuntimeFlagsInHelp(t *testing.T) {
 		{uiCmd, []string{"addr", "trusted-host", "log", "db", "insecure-bind", "edit-policy"}},
 		{installCmd, []string{"for", "all", "yes", "allow-unsupported", "with-path-shim", "with-apparmor", "chain", "replace"}},
 		{uninstallCmd, []string{"for", "path-shim-only", "keep-credentials", "keep-secrets", "force"}},
+		{statusCmd, []string{"json"}},
 		{updateCmd, []string{"force"}},
 		{runCmd, []string{"tunnel", "no-sandbox", "git-ssh", "no-git-ssh", "verbose", "credential"}},
 		{claudeCmd, []string{"tunnel", "no-sandbox", "git-ssh", "no-git-ssh", "verbose", "credential"}},

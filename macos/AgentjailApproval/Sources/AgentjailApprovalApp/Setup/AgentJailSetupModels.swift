@@ -48,9 +48,24 @@ enum AgentJailTunnelProfileState: Equatable, Sendable {
 
 struct AgentJailSetupHealth: Equatable, Sendable {
     let appInApplications: Bool
+    let cliPresent: Bool
     let cliInstalled: Bool
     let daemonReachable: Bool
     let tunnelProfile: AgentJailTunnelProfileState
+
+    init(
+        appInApplications: Bool,
+        cliPresent: Bool? = nil,
+        cliInstalled: Bool,
+        daemonReachable: Bool,
+        tunnelProfile: AgentJailTunnelProfileState
+    ) {
+        self.appInApplications = appInApplications
+        self.cliPresent = cliPresent ?? cliInstalled
+        self.cliInstalled = cliInstalled
+        self.daemonReachable = daemonReachable
+        self.tunnelProfile = tunnelProfile
+    }
 
     static let unknown = AgentJailSetupHealth(
         appInApplications: false,
@@ -65,6 +80,10 @@ struct AgentJailSetupHealth: Equatable, Sendable {
 
     var localComponentsReady: Bool {
         appInApplications && cliInstalled && daemonReachable
+    }
+
+    var localComponentsNeedUpdate: Bool {
+        appInApplications && cliPresent && !cliInstalled
     }
 }
 

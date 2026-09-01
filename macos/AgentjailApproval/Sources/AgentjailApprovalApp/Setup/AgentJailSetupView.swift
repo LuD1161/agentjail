@@ -51,6 +51,7 @@ struct AgentJailSetupView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Open MCP inventory", action: onOpenMCPInventory)
                     .buttonStyle(.link)
+                    .agentJailInteractiveHover()
             }
         }
     }
@@ -144,22 +145,28 @@ struct AgentJailSetupView: View {
                     NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications", isDirectory: true))
                 }
                 .buttonStyle(.borderedProminent)
+                .agentJailInteractiveHover()
                 Button("Check again") { coordinator.retry() }
+                    .agentJailInteractiveHover()
             }
         case .readyToInstall:
-            Button(coordinator.health.localComponentsReady ? "Enable Network Monitoring" : "Install Local Components") {
+            Button(readyActionTitle) {
                 coordinator.beginSetup()
             }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .agentJailInteractiveHover()
         case .awaitingApproval:
             Button("Open Login Items & Extensions", action: onOpenExtensionSettings)
-            .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent)
+                .agentJailInteractiveHover()
         case .failed:
             HStack {
                 Button("Try again") { coordinator.beginSetup() }
                     .buttonStyle(.borderedProminent)
+                    .agentJailInteractiveHover()
                 Button("Check status") { coordinator.retry() }
+                    .agentJailInteractiveHover()
             }
         case .ready:
             HStack {
@@ -168,6 +175,7 @@ struct AgentJailSetupView: View {
                     .font(.headline)
                 Spacer()
                 Button("Refresh") { coordinator.retry() }
+                    .agentJailInteractiveHover()
             }
         case .checking, .installingComponents, .enablingExtension, .verifying:
             ProgressView()
@@ -188,54 +196,68 @@ struct AgentJailSetupView: View {
                     .foregroundStyle(.secondary)
                 Button("Review telemetry settings", action: onOpenSettings)
                     .buttonStyle(.link)
+                    .agentJailInteractiveHover()
             }
         }
     }
 
     private var statusTitle: String {
         switch coordinator.phase {
-        case .checking: "Checking"
-        case .moveToApplications: "Action needed"
-        case .readyToInstall: coordinator.health.localComponentsReady ? "Network monitoring off" : "Ready to install"
-        case .installingComponents: "Installing"
-        case .enablingExtension: "Enabling network"
-        case .awaitingApproval: "Approval needed"
-        case .verifying: "Verifying"
-        case .ready: "Protected"
-        case .failed: "Needs attention"
+        case .checking: return "Checking"
+        case .moveToApplications: return "Action needed"
+        case .readyToInstall:
+            if coordinator.health.localComponentsReady { return "Network monitoring off" }
+            if coordinator.health.localComponentsNeedUpdate { return "Update available" }
+            return "Ready to install"
+        case .installingComponents: return "Installing"
+        case .enablingExtension: return "Enabling network"
+        case .awaitingApproval: return "Approval needed"
+        case .verifying: return "Verifying"
+        case .ready: return "Protected"
+        case .failed: return "Needs attention"
         }
     }
 
     private var statusDetail: String {
         switch coordinator.phase {
         case .checking:
-            "Checking the app, CLI, daemon, and Network Extension."
+            return "Checking the app, CLI, daemon, and Network Extension."
         case .moveToApplications:
-            "Drag AgentJail into Applications, open that copy, then check again. macOS requires the Network Extension host to stay at a stable application path."
+            return "Drag AgentJail into Applications, open that copy, then check again. macOS requires the Network Extension host to stay at a stable application path."
         case .readyToInstall:
-            coordinator.health.localComponentsReady
-                ? "Network monitoring is optional. Enable it now or continue and turn it on later from Settings."
-                : "Install the user-level CLI, daemon, policy rules, and hooks first. Network monitoring is a separate optional step."
+            if coordinator.health.localComponentsReady {
+                return "Network monitoring is optional. Enable it now or continue and turn it on later from Settings."
+            }
+            if coordinator.health.localComponentsNeedUpdate {
+                return "The app includes newer local components. Update them without changing policy configuration or audit history."
+            }
+            return "Install the user-level CLI, daemon, policy rules, and hooks first. Network monitoring is a separate optional step."
         case .installingComponents:
-            "Installing the CLI, daemon, policy rules, and detected agent hooks in your user account."
+            return "Installing the CLI, daemon, policy rules, and detected agent hooks in your user account."
         case .enablingExtension:
-            "Requesting activation of the signed AgentJail Network Extension. macOS may ask for your approval next."
+            return "Requesting activation of the signed AgentJail Network Extension. macOS may ask for your approval next."
         case .awaitingApproval:
-            "In System Settings, open General → Login Items & Extensions → Network Extensions and enable AgentJail. Setup will continue automatically."
+            return "In System Settings, open General → Login Items & Extensions → Network Extensions and enable AgentJail. Setup will continue automatically."
         case .verifying:
-            "Confirming that the daemon answers locally and the network profile is enabled."
+            return "Confirming that the daemon answers locally and the network profile is enabled."
         case .ready:
-            "The local daemon and Network Extension are ready. Start an agent through AgentJail to enforce network policy and process-local TLS inspection."
+            return "The local daemon and Network Extension are ready. Start an agent through AgentJail to enforce network policy and process-local TLS inspection."
         case let .failed(failure):
             switch failure {
             case .componentInstall:
-                "The local components could not be installed. Nothing was approved or weakened; try again after checking that this app is in Applications."
+                return "The local components could not be installed. Nothing was approved or weakened; try again after checking that this app is in Applications."
             case .extensionInstall:
-                "The Network Extension did not finish activation. Check Login Items & Extensions, then try again."
+                return "The Network Extension did not finish activation. Check Login Items & Extensions, then try again."
             case .verification:
-                "Setup finished, but one or more health checks did not become ready. Check status and retry."
+                return "Setup finished, but one or more health checks did not become ready. Check status and retry."
             }
         }
+    }
+
+    private var readyActionTitle: String {
+        if coordinator.health.localComponentsReady { return "Enable Network Monitoring" }
+        if coordinator.health.localComponentsNeedUpdate { return "Update Local Components" }
+        return "Install Local Components"
     }
 
     private var statusIcon: String {

@@ -2,11 +2,12 @@ import AgentjailApprovalCore
 import SwiftUI
 
 struct TokenUsageHoverLabel: View {
-    let point: DashboardTokenDay
+    let day: String
+    let totalTokens: Int64
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(point.day)
+            Text(day)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(compactTotal + " tokens")
@@ -20,6 +21,6 @@ struct TokenUsageHoverLabel: View {
     }
 
     private var compactTotal: String {
-        TokenChartScale.fitting(maximum: point.totalTokens).label(for: Double(point.totalTokens))
+        TokenChartScale.fitting(maximum: totalTokens).label(for: Double(totalTokens))
     }
 }

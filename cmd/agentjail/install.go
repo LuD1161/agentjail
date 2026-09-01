@@ -1230,11 +1230,18 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 
 // runStatusCmd handles `agentjail status`.
 // It prints daemon infrastructure status plus per-agent detection and hook state.
-func runStatusCmd() {
+func runStatusCmd(jsonOutput bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail status: cannot determine home dir: %v", err)))
 		os.Exit(1)
+	}
+	if jsonOutput {
+		if err := printStatusJSONOutput(os.Stdout, home); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail status: encode JSON: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	printStatusOutput(os.Stdout, home)
 }

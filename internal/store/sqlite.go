@@ -737,6 +737,63 @@ func (s *sqliteStore) CountActionsBySession(ctx context.Context) ([]ActionCount,
 	return out, nil
 }
 
+func (s *sqliteStore) CountPolicyMatches(ctx context.Context) ([]PolicyMatchCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT rule_id,
+		       COUNT(*),
+		       COUNT(DISTINCT COALESCE(NULLIF(agent, ''), 'unknown')),
+		       COUNT(DISTINCT session_id)
+		FROM decisions
+		WHERE rule_id IS NOT NULL AND rule_id != ''
+		GROUP BY rule_id
+		ORDER BY COUNT(*) DESC, rule_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: count policy matches: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]PolicyMatchCount, 0)
+	for rows.Next() {
+		var match PolicyMatchCount
+		if err := rows.Scan(&match.RuleID, &match.Count, &match.AgentCount, &match.SessionCount); err != nil {
+			return nil, fmt.Errorf("store: scan policy match: %w", err)
+		}
+		out = append(out, match)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) CountPolicyMatchesBySession(ctx context.Context, limit int) ([]PolicySessionMatch, error) {
+	if limit <= 0 || limit > 10_000 {
+		limit = 5_000
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT rule_id,
+		       COALESCE(NULLIF(agent, ''), 'unknown'),
+		       session_id,
+		       COALESCE(NULLIF(cwd, ''), ''),
+		       COUNT(*)
+		FROM decisions
+		WHERE rule_id IS NOT NULL AND rule_id != ''
+		GROUP BY rule_id, 2, session_id, 4
+		ORDER BY COUNT(*) DESC, rule_id ASC, session_id ASC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: count policy matches by session: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]PolicySessionMatch, 0)
+	for rows.Next() {
+		var match PolicySessionMatch
+		if err := rows.Scan(&match.RuleID, &match.Agent, &match.SessionID, &match.CWD, &match.Count); err != nil {
+			return nil, fmt.Errorf("store: scan policy session match: %w", err)
+		}
+		out = append(out, match)
+	}
+	return out, rows.Err()
+}
+
 // Cleanup deletes decisions, audit_log entries, and sessions older than
 // maxAge, VACUUMs if anything was purged, then checkpoints the WAL
 // (ADR 0071). A retention.purged audit event is emitted post-commit
@@ -1206,6 +1263,12 @@ func (r *sqliteROStore) ListSessionsFiltered(ctx context.Context, f SessionFilte
 }
 func (r *sqliteROStore) CountActionsBySession(ctx context.Context) ([]ActionCount, error) {
 	return r.inner.CountActionsBySession(ctx)
+}
+func (r *sqliteROStore) CountPolicyMatches(ctx context.Context) ([]PolicyMatchCount, error) {
+	return r.inner.CountPolicyMatches(ctx)
+}
+func (r *sqliteROStore) CountPolicyMatchesBySession(ctx context.Context, limit int) ([]PolicySessionMatch, error) {
+	return r.inner.CountPolicyMatchesBySession(ctx, limit)
 }
 func (r *sqliteROStore) ListDiscoveredTools(ctx context.Context, server string) ([]DiscoveredTool, error) {
 	return r.inner.ListDiscoveredTools(ctx, server)

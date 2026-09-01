@@ -129,3 +129,58 @@ func TestComputeStats(t *testing.T) {
 		t.Errorf("Latency = %+v, want count=4 max=4000", rep.Latency)
 	}
 }
+
+func TestPolicyMatchAggregatesPreserveTotalsAndAttribution(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "policy-matches.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	ts := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	for _, record := range []DecisionRecord{
+		{Ts: ts, SessionID: "session-a", Agent: "codex", CWD: "/work/alpha", ToolName: "Bash", Action: "deny", RuleID: "command_policy/no-sudo"},
+		{Ts: ts, SessionID: "session-a", Agent: "codex", CWD: "/work/alpha", ToolName: "Bash", Action: "deny", RuleID: "command_policy/no-sudo"},
+		{Ts: ts, SessionID: "session-b", Agent: "claude", CWD: "/work/beta", ToolName: "Read", Action: "ask", RuleID: "file_policy/default"},
+		{Ts: ts, SessionID: "session-c", Agent: "codex", CWD: "/work/gamma", ToolName: "Read", Action: "allow"},
+	} {
+		if err := s.RecordDecision(ctx, record); err != nil {
+			t.Fatalf("RecordDecision: %v", err)
+		}
+	}
+
+	ro, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	defer ro.Close()
+	policyReader, ok := ro.(interface {
+		CountPolicyMatches(context.Context) ([]PolicyMatchCount, error)
+		CountPolicyMatchesBySession(context.Context, int) ([]PolicySessionMatch, error)
+	})
+	if !ok {
+		t.Fatal("read-only store does not expose policy match projection")
+	}
+
+	totals, err := policyReader.CountPolicyMatches(ctx)
+	if err != nil {
+		t.Fatalf("CountPolicyMatches: %v", err)
+	}
+	if len(totals) != 2 || totals[0] != (PolicyMatchCount{
+		RuleID: "command_policy/no-sudo", Count: 2, AgentCount: 1, SessionCount: 1,
+	}) {
+		t.Fatalf("totals = %+v", totals)
+	}
+
+	breakdown, err := policyReader.CountPolicyMatchesBySession(ctx, 10)
+	if err != nil {
+		t.Fatalf("CountPolicyMatchesBySession: %v", err)
+	}
+	if len(breakdown) != 2 || breakdown[0] != (PolicySessionMatch{
+		RuleID: "command_policy/no-sudo", Agent: "codex", SessionID: "session-a", CWD: "/work/alpha", Count: 2,
+	}) {
+		t.Fatalf("breakdown = %+v", breakdown)
+	}
+}

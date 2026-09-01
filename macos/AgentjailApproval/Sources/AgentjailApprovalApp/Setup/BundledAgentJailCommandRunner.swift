@@ -52,7 +52,7 @@ struct BundledAgentJailCommandRunner: AgentJailSetupCommandRunning {
             environment["AGENTJAIL_ASSUME_YES"] = "1"
             return AgentJailSetupInvocation(
                 executableURL: cliURL,
-                arguments: ["--no-color", "install", "--all", "--yes"],
+                arguments: ["--no-color", "install", "--all", "--yes", "--with-cli-path"],
                 environment: environment
             )
         case .installExtension:

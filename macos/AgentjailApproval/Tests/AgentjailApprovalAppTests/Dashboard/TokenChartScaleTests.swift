@@ -18,4 +18,9 @@ final class TokenChartScaleTests: XCTestCase {
         XCTAssertEqual(TokenChartScale.fitting(maximum: 999_500).label(for: 999_500, locale: locale), "1M")
         XCTAssertEqual(TokenChartScale.fitting(maximum: 1_000_000).label(for: 1_000_000, locale: locale), "1M")
     }
+
+    func testTotalMatchesDisplayedSeriesAndSaturatesOnOverflow() {
+        XCTAssertEqual(TokenChartScale.total(of: [10, 20, 30]), 60)
+        XCTAssertEqual(TokenChartScale.total(of: [Int64.max, 1]), Int64.max)
+    }
 }

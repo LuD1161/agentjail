@@ -204,11 +204,15 @@ Settings. When enabled, the app explains the one-time Apple Network Extension
 approval and keeps the exact System Settings path visible even if Apple's notice
 is dismissed with **OK**. AgentJail is a
 normal Dock and Cmd-Tab application with one window and a persistent sidebar for
-**Overview**, **MCP inventory**, and **Settings**. Setup stays as a compact
+**Overview**, **Policies**, **MCP inventory**, **Settings**, and **About**. Setup stays as a compact
 Overview card; when it sends you to System Settings, returning to AgentJail
 refreshes that card at the resulting ready, waiting, or retry state.
 The sidebar also keeps a **Star on GitHub** action available on every page.
 The same AgentJail app mark is used in the Dock, sidebar, and menu bar.
+Settings keeps its service and privacy cards in the same compact two-column
+desktop grid, and its version label opens the matching GitHub release. About
+shows the product identity, guiding principles, exact build, release notes,
+source link, feedback and issue entry point, and the linked creator credit.
 
 Overview reads a bounded snapshot from the authenticated local daemon. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,
@@ -226,6 +230,17 @@ Gryph is used only for offline model-name resolution and pricing estimates.
 The app receives project basenames only—not full paths, commands,
 tool inputs, traffic, or credentials. Cursor token usage is not claimed until a
 versioned local source exists.
+
+The **Policies** page prioritizes default, Bash, and Git rules and supports
+search and category filters across all active local Rego rules. Category-aware icons and
+row tooltips make the inventory scannable before opening a rule. Selecting a rule shows
+its description, policy-authored outcomes, scrollable syntax-colored installed Rego, and the times
+it was the selected policy decision, broken down by agent and session. Session
+folders are projected only as `…/basename`; full paths never enter the app.
+These are labeled **recorded matches** because the decision store does not claim
+that every Rego candidate OPA considered matched. The projection is available
+to local tooling as `agentjail policy list --json` and is never product
+telemetry. See [ADR 0148-policy-inventory](./docs/adr/0148-policy-inventory.md).
 
 **macOS terminal installer or Linux CLI:**
 ```sh

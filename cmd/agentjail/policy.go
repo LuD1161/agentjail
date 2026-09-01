@@ -72,6 +72,17 @@ func runPolicy(args []string) int {
 	}
 	switch args[0] {
 	case "list":
+		if len(args) > 1 && args[1] == "--json" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return 1
+			}
+			if err := printPolicyReportJSONOutput(os.Stdout, home); err != nil {
+				fmt.Fprintf(os.Stderr, "agentjail policy list: %v\n", err)
+				return 1
+			}
+			return 0
+		}
 		return runPolicyList()
 	case "enable":
 		if len(args) < 2 {

@@ -21,9 +21,11 @@ struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
     func inspect() async -> AgentJailSetupHealth {
         async let tunnelProfile = inspectTunnelProfile()
         async let daemonReachable = inspectDaemon()
+        let cliPresent = installedExecutableIsAvailable(at: cliURL, fileManager: .default)
         return await AgentJailSetupHealth(
             appInApplications: appURL.resolvingSymlinksInPath().standardizedFileURL.path == "/Applications/AgentJail.app",
-            cliInstalled: installedExecutableIsAvailable(at: cliURL, fileManager: .default),
+            cliPresent: cliPresent,
+            cliInstalled: cliPresent,
             daemonReachable: daemonReachable,
             tunnelProfile: tunnelProfile
         )

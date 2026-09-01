@@ -181,6 +181,7 @@ struct ReviewCardView: View {
             .buttonStyle(.bordered)
             .disabled(!presentation.canDeny)
             .accessibilityHint("Rejects this request without changing project policy.")
+            .agentJailInteractiveHover()
 
             if presentation.showsApproveAction {
                 Button {
@@ -191,6 +192,7 @@ struct ReviewCardView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!presentation.canApprove)
                 .accessibilityHint("Adds the displayed host to this verified project for future sessions. The current session is unchanged.")
+                .agentJailInteractiveHover()
             }
         }
     }

@@ -17,6 +17,13 @@ struct TokenChartScale: Equatable {
         }
     }
 
+    static func total<S: Sequence>(of values: S) -> Int64 where S.Element == Int64 {
+        values.reduce(Int64(0)) { partial, value in
+            let (sum, overflow) = partial.addingReportingOverflow(value)
+            return overflow ? .max : sum
+        }
+    }
+
     func label(for value: Double, locale: Locale = .autoupdatingCurrent) -> String {
         guard value != 0 else { return "0" }
         let scaled = value / divisor

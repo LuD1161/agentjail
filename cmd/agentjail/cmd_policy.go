@@ -16,9 +16,23 @@ var policyListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show all rules and their status",
 	Run: func(cmd *cobra.Command, args []string) {
+		if policyListJSON {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				cmd.PrintErrf("agentjail policy list: %v\n", err)
+				os.Exit(1)
+			}
+			if err := printPolicyReportJSONOutput(os.Stdout, home); err != nil {
+				cmd.PrintErrf("agentjail policy list: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 		os.Exit(runPolicyList())
 	},
 }
+
+var policyListJSON bool
 
 var policyEnableCmd = &cobra.Command{
 	Use:   "enable <name|rule_id>",
@@ -73,6 +87,7 @@ var policyRemoveCmd = &cobra.Command{
 }
 
 func init() {
+	policyListCmd.Flags().BoolVar(&policyListJSON, "json", false, "write the bounded policy inventory and local match history as JSON")
 	policyDisableCmd.Flags().BoolVar(&policyDisableForce, "force", false, "allow a non-locked core rule to be disabled after interactive human confirmation")
 
 	policyCmd.AddCommand(policyListCmd)

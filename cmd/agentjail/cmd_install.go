@@ -42,7 +42,8 @@ var statusCmd = &cobra.Command{
 	Short: "Show a quick installed-component snapshot",
 	Long:  "Show a fast read-only summary of detected agents, installed hooks, daemon state, and policy location. Use 'agentjail doctor' for comprehensive enforcement diagnostics or repair.",
 	Run: func(cmd *cobra.Command, args []string) {
-		runStatusCmd()
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		runStatusCmd(jsonOutput)
 	},
 }
 

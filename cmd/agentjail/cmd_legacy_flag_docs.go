@@ -86,6 +86,7 @@ func init() {
 	documentBoolFlag(uninstallCmd, "keep-credentials", "during full uninstall, preserve the encrypted credential vault")
 	documentBoolFlag(uninstallCmd, "keep-secrets", "deprecated alias for --keep-credentials")
 	documentBoolFlag(uninstallCmd, "force", "continue teardown past recoverable failures")
+	documentBoolFlag(statusCmd, "json", "write a versioned machine-readable status projection")
 
 	updateCmd.Use = "update [flags]"
 	documentBoolFlag(updateCmd, "force", "reinstall the current version")

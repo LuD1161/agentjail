@@ -28,6 +28,18 @@ final class ApprovalNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(center.authorizationRequests, 1)
     }
 
+    func testGrantedRequestWinsOverLaggingSettingsRead() async {
+        let center = FakeNotificationCenter(authorization: .notDetermined, authorizationRequestGranted: true)
+        let store = ApprovalStore(client: ScriptedReviewClient(fetches: []), clock: FixedClock())
+        let coordinator = ApprovalNotificationCoordinator(center: center, storage: FakeDedupeStorage(), store: store)
+
+        let authorization = await coordinator.enableNotificationsFromUserAction()
+
+        XCTAssertEqual(authorization, .authorized)
+        XCTAssertEqual(center.authorizationRequests, 1)
+        XCTAssertEqual(center.authorizationStatusRequests, 0)
+    }
+
     func testGenericDigestRequestsDeduplicateAndPrune() async throws {
         let first = try ReviewID(rawValue: "review-first")
         let second = try ReviewID(rawValue: "review-second")
@@ -211,22 +223,32 @@ final class ApprovalNotificationCoordinatorTests: XCTestCase {
 @MainActor
 private final class FakeNotificationCenter: ApprovalNotificationCenter {
     var authorization: ApprovalNotificationAuthorization
+    let authorizationRequestGranted: Bool?
     var categoryRegistrations = 0
     var authorizationRequests = 0
+    var authorizationStatusRequests = 0
     var requests: [ApprovalNotificationRequest] = []
     var existing: Set<String>
     var removedIdentifiers: Set<String> = []
 
-    init(authorization: ApprovalNotificationAuthorization = .authorized, existing: Set<String> = []) {
+    init(
+        authorization: ApprovalNotificationAuthorization = .authorized,
+        authorizationRequestGranted: Bool? = nil,
+        existing: Set<String> = []
+    ) {
         self.authorization = authorization
+        self.authorizationRequestGranted = authorizationRequestGranted
         self.existing = existing
     }
 
     func registerApprovalCategory() { categoryRegistrations += 1 }
-    func authorizationStatus() async -> ApprovalNotificationAuthorization { authorization }
+    func authorizationStatus() async -> ApprovalNotificationAuthorization {
+        authorizationStatusRequests += 1
+        return authorization
+    }
     func requestAuthorizationFromUser() async throws -> Bool {
         authorizationRequests += 1
-        return authorization == .authorized
+        return authorizationRequestGranted ?? (authorization == .authorized)
     }
     func schedule(_ request: ApprovalNotificationRequest) async throws {
         requests.append(request)

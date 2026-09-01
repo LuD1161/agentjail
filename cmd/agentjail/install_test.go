@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -832,6 +833,70 @@ func TestPrintStatusOutputStructure(t *testing.T) {
 	}
 	if !strings.HasSuffix(out, "\n\n") {
 		t.Errorf("printStatusOutput should end with a blank line before the shell prompt\ngot:\n%q", out)
+	}
+}
+
+func TestPrintStatusJSONOutputIsVersionedAndMachineReadable(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".agentjail", "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	for _, name := range []string{cliBinaryName, hookBinaryName, daemonBinaryName} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("test"), 0o700); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := writeDefaultPolicy(home, nil); err != nil {
+		t.Fatalf("write default policy: %v", err)
+	}
+	if err := installCoreRules(filepath.Join(home, ".agentjail", "rules")); err != nil {
+		t.Fatalf("install core rules: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := printStatusJSONOutput(&buf, home); err != nil {
+		t.Fatalf("printStatusJSONOutput: %v", err)
+	}
+	var report statusReport
+	if err := json.Unmarshal(buf.Bytes(), &report); err != nil {
+		t.Fatalf("decode status JSON: %v\n%s", err, buf.String())
+	}
+	if report.ProtocolVersion != statusReportProtocolVersion {
+		t.Fatalf("protocol version = %d, want %d", report.ProtocolVersion, statusReportProtocolVersion)
+	}
+	if !report.Infrastructure.CLIInstalled || !report.Infrastructure.HookBinaryInstalled || !report.Infrastructure.DaemonBinaryInstalled {
+		t.Fatalf("installed binaries not reflected in status: %+v", report.Infrastructure)
+	}
+	if !report.Policies.Configured || !report.Policies.Readable || report.Policies.ActiveRules == 0 {
+		t.Fatalf("policy status = %+v, want configured readable active rules", report.Policies)
+	}
+	if len(report.Agents) != len(agents.Registry()) {
+		t.Fatalf("agents = %d, want %d", len(report.Agents), len(agents.Registry()))
+	}
+	for _, agent := range report.Agents {
+		if agent.ID == "" || agent.DisplayName == "" {
+			t.Fatalf("agent identity is incomplete: %+v", agent)
+		}
+	}
+	if strings.Contains(buf.String(), home) {
+		t.Fatalf("status JSON leaked home path %q: %s", home, buf.String())
+	}
+}
+
+func TestCollectStatusPoliciesReportsMalformedPolicyWithoutDefaulting(t *testing.T) {
+	home := t.TempDir()
+	policyPath := filepath.Join(home, ".agentjail", "policy.yaml")
+	if err := os.MkdirAll(filepath.Dir(policyPath), 0o700); err != nil {
+		t.Fatalf("mkdir policy dir: %v", err)
+	}
+	if err := os.WriteFile(policyPath, []byte("\tinvalid: yaml\n"), 0o600); err != nil {
+		t.Fatalf("write malformed policy: %v", err)
+	}
+
+	got := collectStatusPolicies(home, policyPath)
+	if !got.Configured || got.Readable || got.ActiveRules != 0 {
+		t.Fatalf("malformed policy status = %+v, want configured but unreadable", got)
 	}
 }
 

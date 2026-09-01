@@ -18,6 +18,19 @@ final class AgentJailSetupCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .moveToApplications)
     }
 
+    func testInstalledOlderCLIIsReportedAsAnUpdateRatherThanAMissingInstall() {
+        let health = AgentJailSetupHealth(
+            appInApplications: true,
+            cliPresent: true,
+            cliInstalled: false,
+            daemonReachable: true,
+            tunnelProfile: .disconnected
+        )
+
+        XCTAssertTrue(health.localComponentsNeedUpdate)
+        XCTAssertFalse(health.localComponentsReady)
+    }
+
     func testSetupSeparatesLocalComponentsFromNetworkApproval() async {
         let runner = SetupCommandRunner(approvalRequired: true)
         let inspector = SetupHealthInspector([

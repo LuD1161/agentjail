@@ -1397,6 +1397,17 @@ green while the product incorrectly told an already-signed-in user to sign in.
   fallback—not as proof of the agent's effective session. See
   ADR 0147-codex-catalog-bridge.
 
+## 106. Native list selection and custom row fills stack
+
+The sidebar used SwiftUI's native `List(selection:)` highlight and also painted
+a rounded full-row hover background. Both looked plausible in isolation and the
+view tests stayed green, but a selected row showed a visibly doubled boundary,
+especially in dark mode.
+
+- **Rule:** let the native list own selection and hover fills; custom sidebar
+  row content may define hit testing and spacing, but must not paint another
+  full-row interaction background. See ADR 0141-unified-macos-app.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

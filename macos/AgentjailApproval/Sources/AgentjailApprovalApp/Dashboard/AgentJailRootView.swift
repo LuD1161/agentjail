@@ -4,8 +4,10 @@ import SwiftUI
 
 enum AgentJailTab: Hashable {
     case overview
+    case policies
     case mcp
     case settings
+    case about
 }
 
 struct AgentJailRootView: View {
@@ -23,9 +25,11 @@ struct AgentJailRootView: View {
                 brand
                 List(selection: $composition.selectedTab) {
                     sidebarItem("Overview", icon: "chart.xyaxis.line", tab: .overview)
+                    sidebarItem("Policies", icon: "checkmark.shield", tab: .policies)
                     sidebarItem("MCP inventory", icon: "point.3.connected.trianglepath.dotted", tab: .mcp)
                     Divider()
                     sidebarItem("Settings", icon: "gearshape", tab: .settings)
+                    sidebarItem("About", icon: "info.circle", tab: .about)
                 }
                 .listStyle(.sidebar)
                 sidebarGitHubLink
@@ -56,22 +60,18 @@ struct AgentJailRootView: View {
     }
 
     private func sidebarItem(_ title: String, icon: String, tab: AgentJailTab) -> some View {
-        Label(title, systemImage: icon)
-            .font(.callout.weight(.medium))
+        SidebarNavigationItem(
+            title: title,
+            icon: icon
+        )
+            .padding(.vertical, 1)
             .tag(tab)
     }
 
     private var sidebarGitHubLink: some View {
-        Link(destination: URL(string: "https://github.com/LuD1161/agentjail")!) {
-            Label("Star on GitHub", systemImage: "star")
-                .font(.callout.weight(.semibold))
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .tint(.secondary)
+        SidebarGitHubLink()
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
-        .accessibilityHint("Opens AgentJail's GitHub repository in your default browser")
     }
 
     private var sidebarStatus: some View {
@@ -94,15 +94,21 @@ struct AgentJailRootView: View {
     }
 
     private var sidebarStatusColor: Color {
-        setup.health.isReady ? .green : (setup.health.localComponentsReady ? .orange : .red)
+        setup.health.isReady ? .green : (setup.health.localComponentsReady || setup.health.localComponentsNeedUpdate ? .orange : .red)
     }
 
     private var sidebarStatusTitle: String {
-        setup.health.isReady ? "Protection ready" : (setup.health.localComponentsReady ? "Network monitoring off" : "Setup required")
+        if setup.health.isReady { return "All services operational" }
+        if setup.health.localComponentsReady { return "Local services operational" }
+        if setup.health.localComponentsNeedUpdate { return "Update available" }
+        return "Setup required"
     }
 
     private var sidebarStatusDetail: String {
-        setup.health.isReady ? "Local services online" : (setup.health.localComponentsReady ? "Enable anytime in Settings" : "Finish on Overview")
+        if setup.health.isReady { return "Daemon · Network · Policy engine" }
+        if setup.health.localComponentsReady { return "Daemon · Policy engine · Network off" }
+        if setup.health.localComponentsNeedUpdate { return "Refresh local components" }
+        return "Finish on Overview"
     }
 
     @ViewBuilder
@@ -110,15 +116,42 @@ struct AgentJailRootView: View {
         switch composition.selectedTab {
         case .overview:
             DashboardOverviewView(composition: composition)
+        case .policies:
+            PoliciesView(store: composition.policyInventoryStore)
         case .mcp:
             MCPInventoryView(store: composition.mcpInventoryStore)
         case .settings:
             ApprovalSettingsView(composition: composition)
+        case .about:
+            AgentJailAboutView()
         }
     }
 }
 
-private struct AgentJailAppMark: View {
+private struct SidebarNavigationItem: View {
+    let title: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 14, weight: .medium))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+        .contentShape(Rectangle())
+        .agentJailPointingCursor()
+    }
+}
+
+struct AgentJailAppMark: View {
+    let size: CGFloat
+
+    init(size: CGFloat = 46) {
+        self.size = size
+    }
+
     var body: some View {
         Group {
             if let url = Bundle.main.url(forResource: "AgentJail", withExtension: "icns"), let icon = NSImage(contentsOf: url) {
@@ -129,8 +162,106 @@ private struct AgentJailAppMark: View {
                     .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 11))
             }
         }
-        .frame(width: 46, height: 46)
+        .frame(width: size, height: size)
         .accessibilityLabel("AgentJail")
+    }
+}
+
+private struct SidebarGitHubLink: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovering = false
+
+    var body: some View {
+        Link(destination: URL(string: "https://github.com/LuD1161/agentjail")!) {
+            HStack(spacing: 8) {
+                GitHubBrandMark()
+                Text("Star on GitHub")
+                    .font(.callout.weight(.semibold))
+                Spacer(minLength: 4)
+                GitHubStarMark()
+            }
+            .padding(.horizontal, 11)
+            .frame(maxWidth: .infinity, minHeight: 38)
+        }
+        .buttonStyle(SidebarGitHubButtonStyle(isHovering: isHovering, colorScheme: colorScheme))
+        .onHover { isHovering = $0 }
+        .agentJailPointingCursor()
+        .accessibilityLabel("Star AgentJail on GitHub")
+        .accessibilityHint("Opens AgentJail's GitHub repository in your default browser")
+    }
+}
+
+private struct GitHubStarMark: View {
+    var body: some View {
+        Group {
+            if let url = Bundle.main.url(forResource: "github-star", withExtension: "svg"),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "star.fill")
+                    .foregroundStyle(.yellow)
+            }
+        }
+        .frame(width: 18, height: 18)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct SidebarGitHubButtonStyle: ButtonStyle {
+    let isHovering: Bool
+    let colorScheme: ColorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 10)
+        configuration.label
+            .foregroundStyle(.primary)
+            .background {
+                shape.fill(backgroundColor)
+            }
+            .overlay {
+                shape.strokeBorder(borderColor, lineWidth: isHovering ? 1.25 : 1)
+            }
+            .shadow(color: .black.opacity(isHovering ? 0.10 : 0.04), radius: isHovering ? 6 : 2, y: 2)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.14), value: isHovering)
+    }
+
+    private var backgroundColor: Color {
+        if isHovering { return Color.accentColor.opacity(colorScheme == .dark ? 0.18 : 0.10) }
+        return Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.035)
+    }
+
+    private var borderColor: Color {
+        isHovering ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.12)
+    }
+}
+
+private struct GitHubBrandMark: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+            }
+        }
+        .frame(width: 17, height: 17)
+        .accessibilityHidden(true)
+    }
+
+    private var image: NSImage? {
+        let name = colorScheme == .dark ? "github-light" : "github"
+        guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
+        return NSImage(contentsOf: url)
     }
 }
 
@@ -147,41 +278,45 @@ private struct DashboardOverviewView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                AgentJailPageHeader(eyebrow: "Local security", title: "Overview", detail: "Protection activity from the last 35 days") {
-                    Button { Task { await refresh() } } label: {
-                        if dashboard.isRefreshing {
-                            Label("Refreshing", systemImage: "arrow.triangle.2.circlepath")
-                        } else {
-                            Label("Refresh", systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .dashboardRefreshFocusStyle()
-                        .disabled(dashboard.isRefreshing)
-                }
-                if !setup.health.isReady { setupCard }
-                if let snapshot = dashboard.snapshot {
-                    metrics(snapshot)
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 16) {
-                            activityCard(snapshot).frame(maxWidth: .infinity)
-                            tokenCard(snapshot).frame(maxWidth: .infinity)
-                        }
-                        VStack(spacing: 16) {
-                            activityCard(snapshot)
-                            tokenCard(snapshot)
-                        }
-                    }
-                    sessionsCard(snapshot)
-                } else { emptyDashboard }
-            }
-            .frame(maxWidth: 1180)
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+        let report = dashboard.snapshot.map {
+            DashboardActivityReport(activity: $0.activity, referenceDate: Date())
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        AgentJailPage {
+            AgentJailPageHeader(
+                eyebrow: "",
+                title: "Overview",
+                detail: report?.headerDetail ?? "Loading local protection activity"
+            ) {
+                Button { Task { await refresh() } } label: {
+                    if dashboard.isRefreshing {
+                        Label("Refreshing", systemImage: "arrow.triangle.2.circlepath")
+                    } else {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .dashboardRefreshFocusStyle()
+                .disabled(dashboard.isRefreshing)
+                .agentJailInteractiveHover()
+            }
+            if !setup.health.isReady { setupCard }
+            if let snapshot = dashboard.snapshot, let report {
+                metrics(snapshot)
+                ViewThatFits(in: .horizontal) {
+                    Grid(horizontalSpacing: AgentJailPageMetrics.cardSpacing) {
+                        GridRow(alignment: .top) {
+                            activityCard(snapshot, report: report)
+                            tokenCard(dashboard.tokenSnapshot ?? snapshot)
+                        }
+                    }
+                    VStack(spacing: AgentJailPageMetrics.cardSpacing) {
+                        activityCard(snapshot, report: report)
+                        tokenCard(dashboard.tokenSnapshot ?? snapshot)
+                    }
+                }
+                sessionsCard(snapshot)
+            } else { emptyDashboard }
+        }
         .task { await refresh() }
     }
 
@@ -210,11 +345,13 @@ private struct DashboardOverviewView: View {
             if setup.phase == .awaitingApproval {
                 Button("Open System Settings", action: composition.openExtensionApprovalSettings)
                     .buttonStyle(.borderedProminent)
+                    .agentJailInteractiveHover()
             } else if !setup.phase.isWorking {
                 Button(setupActionTitle) {
                     if setup.phase == .readyToInstall { setup.beginSetup() } else { setup.retry() }
                 }
                 .buttonStyle(.borderedProminent)
+                .agentJailInteractiveHover()
             } else { ProgressView().controlSize(.small) }
         }
         .padding(18)
@@ -231,9 +368,8 @@ private struct DashboardOverviewView: View {
         }
     }
 
-    private func activityCard(_ snapshot: DashboardSnapshotV1) -> some View {
-        let total = snapshot.activity.reduce(Int64(0)) { $0 + $1.count }
-        return DashboardCard(title: "Audited activity", subtitle: "\(total.formatted()) activities in the last 35 days", icon: "square.grid.3x3.fill") {
+    private func activityCard(_ snapshot: DashboardSnapshotV1, report: DashboardActivityReport) -> some View {
+        DashboardCard(title: "Audited activity", subtitle: report.cardDetail, icon: "square.grid.3x3.fill") {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 7), spacing: 5) {
                 ForEach(activityCells(snapshot)) { point in
                     ActivityCellView(point: point)
@@ -243,7 +379,14 @@ private struct DashboardOverviewView: View {
     }
 
     private func tokenCard(_ snapshot: DashboardSnapshotV1) -> some View {
-        DashboardCard(title: "Tokens over time", subtitle: snapshot.tokenCoverage.joined(separator: ", "), icon: "waveform.path.ecg") {
+        let totalTokens = TokenChartScale.total(of: snapshot.tokens.lazy.map(\.totalTokens))
+        let totalLabel = TokenChartScale.fitting(maximum: totalTokens).label(for: Double(totalTokens))
+        return DashboardCard(
+            title: "Agent token usage",
+            subtitle: "Local agent history · not audit coverage",
+            icon: "waveform.path.ecg",
+            trailingMetric: DashboardCardMetric(value: totalLabel, label: "total tokens")
+        ) {
             if snapshot.tokenStatus == .loading && snapshot.tokens.isEmpty {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -291,19 +434,20 @@ private struct DashboardOverviewView: View {
     }
 
     private func sessionsCard(_ snapshot: DashboardSnapshotV1) -> some View {
+        let sessions = DashboardSessionOrdering.liveFirst(snapshot.recentSessions)
         let visibleAuditedCalls = snapshot.recentSessions.reduce(0) { $0 + $1.auditedCalls }
         return DashboardCard(
             title: "Agent sessions",
             subtitle: "\(snapshot.activeSessions) active · \(visibleAuditedCalls.formatted()) calls in recent sessions",
             icon: "terminal.fill"
         ) {
-            if snapshot.recentSessions.isEmpty {
+            if sessions.isEmpty {
                 Text("No audited agent sessions yet.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(snapshot.recentSessions) { session in
+                    ForEach(sessions) { session in
                         DashboardSessionRow(session: session, generatedAtUnixMs: snapshot.generatedAtUnixMs)
-                        if session.id != snapshot.recentSessions.last?.id { Divider() }
+                        if session.id != sessions.last?.id { Divider() }
                     }
                 }
             }
@@ -349,35 +493,45 @@ private struct DashboardOverviewView: View {
 
     private var setupTitle: String {
         switch setup.phase {
-        case .readyToInstall: setup.health.localComponentsReady ? "Network monitoring is off" : "Set up AgentJail"
-        case .awaitingApproval: "Network approval required"
-        case .failed: "Setup needs attention"
-        case .moveToApplications: "Move AgentJail to Applications"
-        default: "Setting up AgentJail"
+        case .readyToInstall:
+            if setup.health.localComponentsReady { return "Network monitoring is off" }
+            if setup.health.localComponentsNeedUpdate { return "AgentJail update available" }
+            return "Set up AgentJail"
+        case .awaitingApproval: return "Network approval required"
+        case .failed: return "Setup needs attention"
+        case .moveToApplications: return "Move AgentJail to Applications"
+        default: return "Setting up AgentJail"
         }
     }
 
     private var setupDetail: String {
         switch setup.phase {
-        case .awaitingApproval: "Click Open System Settings, enable AgentJail at the path below, then return here. Apple’s OK button only dismisses its notice."
-        case .moveToApplications: "The Network Extension requires the app to run from /Applications."
-        case .readyToInstall: setup.health.localComponentsReady
-            ? "Optional. Enable traffic auditing now, or continue using AgentJail and turn it on later from Settings."
-            : "Install the local CLI, daemon, and hooks. Network monitoring is a separate optional step."
-        case .failed: "No protection was weakened. Retry after reviewing the current status."
-        default: "Checking the CLI, daemon, and Network Extension."
+        case .awaitingApproval: return "Click Open System Settings, enable AgentJail at the path below, then return here. Apple’s OK button only dismisses its notice."
+        case .moveToApplications: return "The Network Extension requires the app to run from /Applications."
+        case .readyToInstall:
+            if setup.health.localComponentsReady {
+                return "Optional. Enable traffic auditing now, or continue using AgentJail and turn it on later from Settings."
+            }
+            if setup.health.localComponentsNeedUpdate {
+                return "The app includes newer local components. Update them without changing policy configuration or audit history."
+            }
+            return "Install the local CLI, daemon, and hooks. Network monitoring is a separate optional step."
+        case .failed: return "No protection was weakened. Retry after reviewing the current status."
+        default: return "Checking the CLI, daemon, and Network Extension."
         }
     }
 
     private var setupActionTitle: String {
-        setup.phase == .readyToInstall
-            ? (setup.health.localComponentsReady ? "Enable Network Monitoring" : "Install Local Components")
-            : "Try Again"
+        guard setup.phase == .readyToInstall else { return "Try Again" }
+        if setup.health.localComponentsReady { return "Enable Network Monitoring" }
+        if setup.health.localComponentsNeedUpdate { return "Update Local Components" }
+        return "Install Local Components"
     }
 
     private var setupStatusTitle: String {
         if setup.phase == .awaitingApproval { return "Action required" }
         if setup.health.localComponentsReady { return "Optional" }
+        if setup.health.localComponentsNeedUpdate { return "Update available" }
         return "Setup required"
     }
 
@@ -400,7 +554,7 @@ private struct DashboardOverviewView: View {
         return (0..<35).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset - 34, to: today) else { return nil }
             let day = formatter.string(from: date)
-            return ActivityCell(day: day, count: counts[day] ?? 0, maximum: maximum)
+            return ActivityCell(day: day, count: counts[day] ?? 0, maximum: maximum, column: offset % 7)
         }
     }
 
@@ -410,55 +564,12 @@ private struct DashboardOverviewView: View {
     }
 }
 
-private struct AgentBrandMark: View {
-    let agent: String
-    var size: CGFloat = 25
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        Group {
-            if let imageName, let image = AgentBrandMark.load(imageName) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-            } else {
-                Text("<>")
-                    .font(.system(size: max(size * 0.42, 9), weight: .bold, design: .monospaced))
-                    .foregroundStyle(.purple)
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-
-    private var imageName: String? {
-        switch agent {
-        case "claude-code": "agent-claude"
-        case "codex": colorScheme == .dark ? "agent-codex-light" : "agent-codex"
-        default: nil
-        }
-    }
-
-    private static func load(_ name: String) -> NSImage? {
-        guard let url = Bundle.main.url(forResource: name, withExtension: "svg") else { return nil }
-        return NSImage(contentsOf: url)
-    }
-}
-
 private struct DashboardSessionRow: View {
     let session: DashboardSession
     let generatedAtUnixMs: Int64
 
     var body: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 11)
-                    .fill(agentColor.opacity(0.12))
-                AgentBrandMark(agent: session.agent, size: 24)
-            }
-            .frame(width: 42, height: 42)
-
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(session.project)
                     .font(.headline)
@@ -472,7 +583,10 @@ private struct DashboardSessionRow: View {
                     }
                     .foregroundStyle(session.active ? Color.green : Color.secondary)
                     Text("·").foregroundStyle(.tertiary)
-                    Text(agentDisplayName)
+                    HStack(spacing: 5) {
+                        AgentBrandMark(agent: session.agent, size: 14)
+                        Text(agentDisplayName)
+                    }
                     Text("·").foregroundStyle(.tertiary)
                     Label(timingText, systemImage: "clock")
                 }
@@ -512,15 +626,6 @@ private struct DashboardSessionRow: View {
         }
     }
 
-    private var agentColor: Color {
-        switch session.agent {
-        case "claude-code": .orange
-        case "codex": .mint
-        case "opencode": .purple
-        default: .blue
-        }
-    }
-
     private var timingText: String {
         let endUnixMs = session.active ? generatedAtUnixMs : (session.endedAtUnixMs ?? generatedAtUnixMs)
         let duration = compactDuration(milliseconds: max(endUnixMs - session.startedAtUnixMs, 0))
@@ -550,7 +655,14 @@ private extension View {
     }
 }
 
-private struct ActivityCell: Identifiable { let day: String; let count: Int64; let maximum: Int64; var id: String { day } }
+private struct ActivityCell: Identifiable {
+    let day: String
+    let count: Int64
+    let maximum: Int64
+    let column: Int
+
+    var id: String { day }
+}
 
 private struct ActivityCellView: View {
     let point: ActivityCell
@@ -560,18 +672,19 @@ private struct ActivityCellView: View {
         RoundedRectangle(cornerRadius: 3)
             .fill(activityColor)
             .aspectRatio(1, contentMode: .fit)
-            .overlay {
+            .overlay(alignment: tooltipAlignment) {
                 if hovering {
                     Text("\(point.day) · \(point.count.formatted()) audited")
                         .font(.caption2.weight(.medium))
+                        .lineLimit(1)
                         .fixedSize()
                         .padding(.horizontal, 7)
                         .padding(.vertical, 5)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                         .shadow(radius: 4)
-                        .zIndex(2)
                 }
             }
+            .zIndex(hovering ? 1 : 0)
             .onHover { hovering = $0 }
             .help("\(point.day): \(point.count.formatted()) audited activities")
             .accessibilityLabel("\(point.day), \(point.count.formatted()) audited activities")
@@ -581,6 +694,17 @@ private struct ActivityCellView: View {
         guard point.count > 0 else { return Color.secondary.opacity(0.12) }
         let intensity = Double(point.count) / Double(max(point.maximum, 1))
         return Color.green.opacity(0.18 + 0.82 * intensity)
+    }
+
+    private var tooltipAlignment: Alignment {
+        switch point.column {
+        case 0, 1:
+            .leading
+        case 5, 6:
+            .trailing
+        default:
+            .center
+        }
     }
 }
 
@@ -608,14 +732,58 @@ private struct MetricCard: View {
     }
 }
 
+private struct DashboardCardMetric {
+    let value: String
+    let label: String
+}
+
 private struct DashboardCard<Content: View>: View {
-    let title: String; let subtitle: String; let icon: String; @ViewBuilder let content: Content
+    let title: String
+    let subtitle: String
+    let icon: String
+    let trailingMetric: DashboardCardMetric?
+    @ViewBuilder let content: Content
+
+    init(
+        title: String,
+        subtitle: String,
+        icon: String,
+        trailingMetric: DashboardCardMetric? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.icon = icon
+        self.trailingMetric = trailingMetric
+        self.content = content()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Image(systemName: icon).foregroundStyle(.tint); VStack(alignment: .leading) { Text(title).font(.headline); Text(subtitle).font(.caption).foregroundStyle(.secondary) }; Spacer() }
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon).foregroundStyle(.tint)
+                VStack(alignment: .leading) {
+                    Text(title).font(.headline)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                if let trailingMetric {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(trailingMetric.value)
+                            .font(.title3.bold())
+                            .monospacedDigit()
+                        Text(trailingMetric.label)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(trailingMetric.value) \(trailingMetric.label)")
+                }
+            }
             content
         }
-        .padding(18).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.08)) }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .agentJailCardSurface()
     }
 }

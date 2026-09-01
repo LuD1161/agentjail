@@ -125,11 +125,11 @@ public final class ApprovalNotificationCoordinator {
     @discardableResult
     public func enableNotificationsFromUserAction() async -> ApprovalNotificationAuthorization {
         do {
-            _ = try await center.requestAuthorizationFromUser()
+            let granted = try await center.requestAuthorizationFromUser()
+            return granted ? .authorized : .denied
         } catch {
             return .denied
         }
-        return await center.authorizationStatus()
     }
 
     public func synchronize(snapshot: AuthoritativeApprovalSnapshot) async {

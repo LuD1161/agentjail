@@ -142,16 +142,19 @@ struct ApprovalPanelView: View {
                 Label("AgentJail", systemImage: "shield")
             }
             .accessibilityHint("Opens AgentJail setup and health status.")
+            .agentJailInteractiveHover()
 
             Button(action: onSettings) {
                 Label("Settings", systemImage: "gearshape")
             }
             .accessibilityHint("Opens AgentJail settings.")
+            .agentJailInteractiveHover()
 
             Button(action: onMCPInventory) {
                 Label("MCPs", systemImage: "point.3.connected.trianglepath.dotted")
             }
             .accessibilityHint("Opens the read-only MCP inventory.")
+            .agentJailInteractiveHover()
 
             Spacer()
 
@@ -160,6 +163,7 @@ struct ApprovalPanelView: View {
             }
             .accessibilityLabel("Quit AgentJail")
             .accessibilityHint("Stops this menu-bar app. The AgentJail daemon remains authoritative.")
+            .agentJailInteractiveHover()
         }
         .padding(12)
     }
@@ -218,6 +222,7 @@ private struct StatusBanner: View {
             if presentation.canRetry {
                 Button("Retry", action: onRetry)
                     .accessibilityHint("Refreshes approval state from the local AgentJail daemon.")
+                    .agentJailInteractiveHover()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -4,11 +4,13 @@ import Foundation
 @MainActor
 final class DashboardStore: ObservableObject {
     @Published private(set) var snapshot: DashboardSnapshotV1?
+    @Published private(set) var tokenSnapshot: DashboardSnapshotV1?
     @Published private(set) var isRefreshing = false
     @Published private(set) var unavailable = false
     private let client: any DashboardControlling
     private let sleeper: any DashboardSleeping
     private let tokenPollLimit: Int
+    private var tokenRefreshTask: Task<Void, Never>?
 
     init(
         client: any DashboardControlling = DashboardControlClient(),
@@ -22,20 +24,37 @@ final class DashboardStore: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        tokenRefreshTask?.cancel()
         isRefreshing = true
         defer { isRefreshing = false }
-        for attempt in 0..<tokenPollLimit {
-            do {
-                snapshot = try await client.fetchDashboard()
-                unavailable = false
-            } catch is CancellationError {
-                return
-            } catch {
-                unavailable = snapshot == nil
-                return
+        do {
+            let freshSnapshot = try await client.fetchDashboard()
+            snapshot = freshSnapshot
+            tokenSnapshot = freshSnapshot
+            unavailable = false
+            beginTokenRefreshIfNeeded(after: freshSnapshot)
+        } catch is CancellationError {
+            return
+        } catch {
+            unavailable = snapshot == nil
+        }
+    }
+
+    private func beginTokenRefreshIfNeeded(after freshSnapshot: DashboardSnapshotV1) {
+        guard freshSnapshot.tokenStatus == .loading, tokenPollLimit > 1 else { return }
+        tokenRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            for _ in 1..<tokenPollLimit {
+                do {
+                    try await sleeper.pause()
+                    try Task.checkCancellation()
+                    let refreshedTokens = try await client.fetchDashboard()
+                    tokenSnapshot = refreshedTokens
+                    guard refreshedTokens.tokenStatus == .loading else { return }
+                } catch {
+                    return
+                }
             }
-            guard snapshot?.tokenStatus == .loading, attempt + 1 < tokenPollLimit else { return }
-            do { try await sleeper.pause() } catch { return }
         }
     }
 }
