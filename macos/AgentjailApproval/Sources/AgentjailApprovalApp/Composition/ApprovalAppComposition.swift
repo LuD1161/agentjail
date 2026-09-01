@@ -9,6 +9,7 @@ final class ApprovalAppComposition: ObservableObject {
     let mcpInventoryStore: MCPInventoryStore
     let policyInventoryStore: PolicyInventoryStore
     let dashboardStore: DashboardStore
+    let activityStore: ActivityStore
     let settingsStatusStore: AgentJailStatusStore
 
     @Published var selectedTab: AgentJailTab = .overview
@@ -50,6 +51,7 @@ final class ApprovalAppComposition: ObservableObject {
         mcpInventoryStore: MCPInventoryStore? = nil,
         policyInventoryStore: PolicyInventoryStore? = nil,
         settingsStatusStore: AgentJailStatusStore? = nil,
+        activityStore: ActivityStore? = nil,
         telemetryService: any ApprovalTelemetryServicing = BundledAgentJailTelemetryService(),
         clock: any ApprovalClock = SystemApprovalClock(),
         sleeper: any ApprovalSleeping = TaskApprovalSleeper()
@@ -59,6 +61,7 @@ final class ApprovalAppComposition: ObservableObject {
         self.mcpInventoryStore = mcpInventoryStore ?? MCPInventoryStore()
         self.policyInventoryStore = policyInventoryStore ?? PolicyInventoryStore()
         self.dashboardStore = DashboardStore()
+        self.activityStore = activityStore ?? ActivityStore()
         self.settingsStatusStore = settingsStatusStore ?? AgentJailStatusStore()
         self.store = ApprovalStore(client: client, clock: clock, sleeper: sleeper)
         self.notificationCoordinator = ApprovalNotificationCoordinator(

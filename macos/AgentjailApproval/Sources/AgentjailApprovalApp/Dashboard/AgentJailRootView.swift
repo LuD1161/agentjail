@@ -5,6 +5,8 @@ import SwiftUI
 enum AgentJailTab: Hashable {
     case overview
     case policies
+    case network
+    case logs
     case mcp
     case settings
     case about
@@ -26,6 +28,8 @@ struct AgentJailRootView: View {
                 List(selection: $composition.selectedTab) {
                     sidebarItem("Overview", icon: "chart.xyaxis.line", tab: .overview)
                     sidebarItem("Policies", icon: "checkmark.shield", tab: .policies)
+                    sidebarItem("Network", icon: "network", tab: .network)
+                    sidebarItem("Logs", icon: "list.bullet.rectangle.portrait", tab: .logs)
                     sidebarItem("MCP inventory", icon: "point.3.connected.trianglepath.dotted", tab: .mcp)
                     Divider()
                     sidebarItem("Settings", icon: "gearshape", tab: .settings)
@@ -38,6 +42,7 @@ struct AgentJailRootView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
             detail
+                .id(composition.selectedTab)
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 900, minHeight: 650)
@@ -118,6 +123,14 @@ struct AgentJailRootView: View {
             DashboardOverviewView(composition: composition)
         case .policies:
             PoliciesView(store: composition.policyInventoryStore)
+        case .network:
+            NetworkActivityView(
+                store: composition.activityStore,
+                setup: composition.setupCoordinator,
+                showSetup: composition.requestSetup
+            )
+        case .logs:
+            SessionLogsView(store: composition.activityStore)
         case .mcp:
             MCPInventoryView(store: composition.mcpInventoryStore)
         case .settings:

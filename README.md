@@ -204,7 +204,7 @@ Settings. When enabled, the app explains the one-time Apple Network Extension
 approval and keeps the exact System Settings path visible even if Apple's notice
 is dismissed with **OK**. AgentJail is a
 normal Dock and Cmd-Tab application with one window and a persistent sidebar for
-**Overview**, **Policies**, **MCP inventory**, **Settings**, and **About**. Setup stays as a compact
+**Overview**, **Policies**, **Network**, **Logs**, **MCP inventory**, **Settings**, and **About**. Setup stays as a compact
 Overview card; when it sends you to System Settings, returning to AgentJail
 refreshes that card at the resulting ready, waiting, or retry state.
 The sidebar also keeps a **Star on GitHub** action available on every page.
@@ -241,6 +241,19 @@ These are labeled **recorded matches** because the decision store does not claim
 that every Rego candidate OPA considered matched. The projection is available
 to local tooling as `agentjail policy list --json` and is never product
 telemetry. See [ADR 0148-policy-inventory](./docs/adr/0148-policy-inventory.md).
+
+The **Network** page shows the newest intercepted requests as a live, searchable
+feed with destination, method, response status, agent/project, policy outcome,
+and latency. It never receives headers, bodies, URL queries, credentials, full
+working paths, or raw tool input. If the optional macOS Network Extension is not
+configured, the page says so explicitly and links back to setup while keeping
+any previously recorded history visible. The **Logs** page groups audited file,
+shell, MCP, and policy actions by exact session identity, with outcome filters
+and redacted summaries. Selecting an action opens its decision details; Bash
+rows fetch the full recorded command on demand after store-boundary secret
+redaction. Commands never ride in the repeating timeline feed. Both feeds are
+item- and byte-bounded and poll only while their page is visible. See
+[ADR 0149-local-activity-feed](./docs/adr/0149-local-activity-feed.md).
 
 **macOS terminal installer or Linux CLI:**
 ```sh
