@@ -277,6 +277,8 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 		gs.reply(conn, networkSnapshotResponse(gs.activity, req.ProtocolVersion, now))
 	case grantctl.ReqSessionLogSnapshot:
 		gs.reply(conn, sessionLogSnapshotResponse(gs.activity, req.ProtocolVersion, req.SessionID, now))
+	case grantctl.ReqSessionActionDetail:
+		gs.reply(conn, sessionActionDetailResponse(gs.activity, req.ProtocolVersion, req.SessionID, req.ActionID))
 	case grantctl.ReqMCPToolsDiscover:
 		_ = conn.SetDeadline(time.Now().Add(45 * time.Second))
 		gs.reply(conn, mcpToolsDiscoveryResponse(gs.mcpTools, req.ProtocolVersion, now))

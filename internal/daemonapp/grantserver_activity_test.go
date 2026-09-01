@@ -2,7 +2,10 @@ package daemonapp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +23,7 @@ func TestLocalActivityProjectionIsBoundedRedactedAndSessionExact(t *testing.T) {
 	defer eventStore.Close()
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	for _, row := range []store.DecisionRecord{
-		{Ts: now, SessionID: "session-1", Agent: "codex", CWD: "/Users/private/secret-project", ToolName: "Bash", Summary: "git status", Action: "allow", RuleID: "command_policy/default-allow"},
+		{Ts: now, SessionID: "session-1", Agent: "codex", CWD: "/Users/private/secret-project", ToolName: "Bash", Summary: "git status", ToolInput: map[string]interface{}{"command": "curl -H 'Authorization: Bearer sk-proj-abc123def456ghi789' https://api.example.com"}, Action: "allow", RuleID: "command_policy/default-allow"},
 		{Ts: now, SessionID: "session-10", Agent: "codex", CWD: "/Users/private/other", ToolName: "Read", Summary: "unrelated", Action: "allow"},
 	} {
 		if err := eventStore.RecordDecision(context.Background(), row); err != nil {
@@ -72,6 +75,16 @@ func TestLocalActivityProjectionIsBoundedRedactedAndSessionExact(t *testing.T) {
 	if logs.SelectedSessionID != "session-1" || len(logs.Entries) != 1 || logs.Entries[0].Summary != "git status" {
 		t.Fatalf("session log = %+v", logs)
 	}
+	detail, err := projector.SessionActionDetail(context.Background(), "session-1", logs.Entries[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(detail.Command, "sk-proj-abc123def456ghi789") || !strings.Contains(detail.Command, "api.example.com") {
+		t.Fatalf("session command was not safely projected: %q", detail.Command)
+	}
+	if _, err := projector.SessionActionDetail(context.Background(), "session-10", logs.Entries[0].ID); !errors.Is(err, errActivityActionNotFound) {
+		t.Fatalf("cross-session action detail error = %v", err)
+	}
 	if len(logs.Sessions) != 2 || logs.Sessions[0].Project == "/Users/private/secret-project" {
 		t.Fatalf("session projection exposed full path: %+v", logs.Sessions)
 	}
@@ -87,6 +100,42 @@ func TestActivityResponsesRequireSupportedVersions(t *testing.T) {
 	}
 	if response := sessionLogSnapshotResponse(nil, grantctl.SessionLogProtocolVersion, string(make([]byte, grantctl.MaxDashboardSessionIDBytes+1)), now); response.OK || response.Error != "invalid session_id" {
 		t.Fatalf("oversized session response = %+v", response)
+	}
+	if response := sessionActionDetailResponse(nil, grantctl.SessionActionDetailProtocolVersion, "session-1", 0); response.OK || response.Error != "invalid session action detail selector" {
+		t.Fatalf("invalid action detail response = %+v", response)
+	}
+}
+
+func TestSessionLogProjectionStopsBeforeControlFrameLimit(t *testing.T) {
+	eventStore, err := store.Open(filepath.Join(t.TempDir(), "agentjail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventStore.Close()
+	for index := 0; index < 200; index++ {
+		if err := eventStore.RecordDecision(context.Background(), store.DecisionRecord{
+			Ts: time.Now(), SessionID: "large-session", Agent: "codex", CWD: "/tmp/project",
+			ToolName: "Bash", Summary: strings.Repeat("s", grantctl.MaxActivityTextBytes),
+			Action: "allow", RuleID: strings.Repeat("r", grantctl.MaxActivityTextBytes),
+			Reason: strings.Repeat("x", grantctl.MaxActivityTextBytes),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projector := &localActivityProjector{store: eventStore}
+	snapshot, err := projector.SessionLogSnapshot(context.Background(), "large-session", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Truncated || len(snapshot.Entries) >= 200 {
+		t.Fatalf("snapshot was not truncated: entries=%d truncated=%v", len(snapshot.Entries), snapshot.Truncated)
+	}
+	if len(encoded) > grantctl.MaxSessionLogSnapshotBytes {
+		t.Fatalf("snapshot bytes = %d, max %d", len(encoded), grantctl.MaxSessionLogSnapshotBytes)
 	}
 }
 

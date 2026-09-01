@@ -61,6 +61,9 @@ const (
 	ReqNetworkSnapshot RequestType = "network_snapshot"
 	// ReqSessionLogSnapshot returns recent sessions and one session's actions.
 	ReqSessionLogSnapshot RequestType = "session_log_snapshot"
+	// ReqSessionActionDetail returns one store-redacted action by exact session
+	// and decision ID. It keeps commands out of the repeating activity feed.
+	ReqSessionActionDetail RequestType = "session_action_detail"
 	// ReqMCPToolsDiscover explicitly connects to configured MCP servers and
 	// requests their tool catalogs. Control-socket only; CtlToken required.
 	ReqMCPToolsDiscover RequestType = "mcp_tools_discover"
@@ -107,6 +110,7 @@ type Request struct {
 	// an alias for v1. See ADR 0133-macos-menu-review.
 	ProtocolVersion ProtocolVersion   `json:"protocol_version,omitempty"`
 	SessionID       string            `json:"session_id,omitempty"`
+	ActionID        int64             `json:"action_id,omitempty"`
 	CWD             string            `json:"cwd,omitempty"`
 	Host            string            `json:"host,omitempty"`
 	TTLMs           int64             `json:"ttl_ms,omitempty"`
@@ -122,15 +126,16 @@ type Request struct {
 
 // Response is the control-plane response envelope (JSON on the socket).
 type Response struct {
-	OK                 bool                  `json:"ok"`
-	Error              string                `json:"error,omitempty"`
-	GrantID            string                `json:"grant_id,omitempty"`
-	Grants             []GrantInfo           `json:"grants,omitempty"`
-	ReviewSnapshot     *ReviewSnapshotV1     `json:"review_snapshot,omitempty"`
-	DashboardSnapshot  *DashboardSnapshotV1  `json:"dashboard_snapshot,omitempty"`
-	NetworkSnapshot    *NetworkSnapshotV1    `json:"network_snapshot,omitempty"`
-	SessionLogSnapshot *SessionLogSnapshotV1 `json:"session_log_snapshot,omitempty"`
-	MCPToolsDiscovery  *MCPToolsDiscoveryV1  `json:"mcp_tools_discovery,omitempty"`
+	OK                  bool                   `json:"ok"`
+	Error               string                 `json:"error,omitempty"`
+	GrantID             string                 `json:"grant_id,omitempty"`
+	Grants              []GrantInfo            `json:"grants,omitempty"`
+	ReviewSnapshot      *ReviewSnapshotV1      `json:"review_snapshot,omitempty"`
+	DashboardSnapshot   *DashboardSnapshotV1   `json:"dashboard_snapshot,omitempty"`
+	NetworkSnapshot     *NetworkSnapshotV1     `json:"network_snapshot,omitempty"`
+	SessionLogSnapshot  *SessionLogSnapshotV1  `json:"session_log_snapshot,omitempty"`
+	SessionActionDetail *SessionActionDetailV1 `json:"session_action_detail,omitempty"`
+	MCPToolsDiscovery   *MCPToolsDiscoveryV1   `json:"mcp_tools_discovery,omitempty"`
 }
 
 // GrantInfo describes one pending grant request, suitable for display to a
@@ -165,6 +170,9 @@ const NetworkProtocolVersion ProtocolVersion = 1
 
 // SessionLogProtocolVersion is the only session action protocol supported.
 const SessionLogProtocolVersion ProtocolVersion = 1
+
+// SessionActionDetailProtocolVersion is the only action-detail protocol supported.
+const SessionActionDetailProtocolVersion ProtocolVersion = 1
 
 // MCPDiscoveryProtocolVersion is the explicit tool-enumeration wire version.
 const MCPDiscoveryProtocolVersion ProtocolVersion = 1

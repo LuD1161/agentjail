@@ -314,6 +314,30 @@ func TestListDecisionsExactSessionDoesNotMatchPrefixes(t *testing.T) {
 	}
 }
 
+func TestListDecisionsExactDecisionAndSessionMustBothMatch(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	for _, sessionID := range []string{"session-1", "session-2"} {
+		if err := s.RecordDecision(ctx, DecisionRecord{
+			Ts: time.Now(), SessionID: sessionID, ToolName: "Bash", Action: "allow",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := s.ListDecisions(ctx, Filter{ExactSessionID: "session-1", Limit: 1})
+	if err != nil || len(all) != 1 {
+		t.Fatalf("seed decision = %+v, %v", all, err)
+	}
+	got, err := s.ListDecisions(ctx, Filter{DecisionID: all[0].ID, ExactSessionID: "session-1", Limit: 1})
+	if err != nil || len(got) != 1 || got[0].ID != all[0].ID {
+		t.Fatalf("exact decision = %+v, %v", got, err)
+	}
+	got, err = s.ListDecisions(ctx, Filter{DecisionID: all[0].ID, ExactSessionID: "session-2", Limit: 1})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("cross-session decision leaked = %+v, %v", got, err)
+	}
+}
+
 func TestListDecisionsFilterByRule(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

@@ -1420,6 +1420,27 @@ with persistent focus chrome.
   semantic surface when desktop sampling is not part of the design. See
   ADR 0141-unified-macos-app.
 
+## 108. Search filters are not identity filters
+
+The decision store's session filter intentionally used substring matching for
+CLI search. Reusing it for a selected UI session looked correct and existing
+query tests stayed green, but selecting `session-1` could also return actions
+from `session-10`.
+
+- **Rule:** model human search and domain identity as separate typed filters;
+  projections for one selected entity must use exact equality. See
+  ADR 0149-local-activity-feed.
+
+## 109. A bounded row count is not a bounded frame
+
+The session feed capped its number of rows and every individual field, so its
+tests stayed green. Adding one redacted command per row still pushed real
+sessions past the control transport's 64 KiB frame and made the whole Logs page
+look unavailable.
+
+- **Rule:** bound serialized bytes at every framed transport boundary, and load
+  large per-row details on demand. See ADR 0149-local-activity-feed.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

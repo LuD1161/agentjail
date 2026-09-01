@@ -2,6 +2,7 @@ package daemonapp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 type activitySnapshotProjector interface {
 	NetworkSnapshot(context.Context, time.Time) (grantctl.NetworkSnapshotV1, error)
 	SessionLogSnapshot(context.Context, string, time.Time) (grantctl.SessionLogSnapshotV1, error)
+	SessionActionDetail(context.Context, string, int64) (grantctl.SessionActionDetailV1, error)
 	Close() error
 }
 
@@ -127,8 +129,10 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 		GeneratedAtUnixMs: grantctl.UnixMilliseconds(now.UnixMilli()),
 		Sessions:          make([]grantctl.ActivitySessionV1, 0, len(sessions)),
 		Entries:           make([]grantctl.SessionActionV1, 0),
+		Truncated:         false,
 	}
 	selected := ""
+	selectedDecisionCount := 0
 	for _, session := range sessions {
 		_, isActive := active[session.SessionID]
 		projected := grantctl.ActivitySessionV1{
@@ -142,10 +146,12 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 		snapshot.Sessions = append(snapshot.Sessions, projected)
 		if session.SessionID == requestedSessionID {
 			selected = session.SessionID
+			selectedDecisionCount = session.DecisionCount
 		}
 	}
 	if selected == "" && len(sessions) > 0 {
 		selected = sessions[0].SessionID
+		selectedDecisionCount = sessions[0].DecisionCount
 	}
 	if selected == "" {
 		return snapshot, nil
@@ -157,8 +163,13 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 	if err != nil {
 		return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("list session actions: %w", err)
 	}
+	baseJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("encode session activity base: %w", err)
+	}
+	entriesBytes := 0
 	for _, row := range rows {
-		snapshot.Entries = append(snapshot.Entries, grantctl.SessionActionV1{
+		projected := grantctl.SessionActionV1{
 			ID: row.ID, TimestampUnixMs: grantctl.UnixMilliseconds(row.Ts.UnixMilli()),
 			ToolName: activityText(row.ToolName), Summary: activityText(row.Summary), Action: activityText(row.Action),
 			RuleID: activityText(row.RuleID), Reason: activityText(row.Reason), Impact: activityText(row.Impact),
@@ -166,9 +177,59 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 			PolicyAction: activityText(row.PolicyAction), EffectiveAction: activityText(row.EffectiveAction),
 			Adapter: activityText(row.Adapter), TranslationReason: activityText(row.TranslationReason),
 			FinalAction: activityText(row.FinalAction), Enforcer: activityText(row.Enforcer),
-		})
+		}
+		encoded, marshalErr := json.Marshal(projected)
+		if marshalErr != nil {
+			return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("encode session action: %w", marshalErr)
+		}
+		separator := 0
+		if len(snapshot.Entries) > 0 {
+			separator = 1
+		}
+		if len(baseJSON)-2+entriesBytes+separator+len(encoded) > grantctl.MaxSessionLogSnapshotBytes {
+			snapshot.Truncated = true
+			break
+		}
+		snapshot.Entries = append(snapshot.Entries, projected)
+		entriesBytes += separator + len(encoded)
+	}
+	if selectedDecisionCount > len(snapshot.Entries) {
+		snapshot.Truncated = true
 	}
 	return snapshot, nil
+}
+
+type redactedActivityInput struct {
+	Command string `json:"command"`
+}
+
+func activityCommand(row store.DecisionRecord) string {
+	if row.ToolName != "Bash" || row.ToolInputRedacted == "" {
+		return ""
+	}
+	var input redactedActivityInput
+	if err := json.Unmarshal([]byte(row.ToolInputRedacted), &input); err != nil {
+		return ""
+	}
+	return boundedActivityText(input.Command, grantctl.MaxSessionCommandBytes)
+}
+
+var errActivityActionNotFound = errors.New("session action not found")
+
+func (p *localActivityProjector) SessionActionDetail(ctx context.Context, sessionID string, actionID int64) (grantctl.SessionActionDetailV1, error) {
+	rows, err := p.store.ListDecisions(ctx, store.Filter{DecisionID: actionID, ExactSessionID: sessionID, Limit: 1})
+	if err != nil {
+		return grantctl.SessionActionDetailV1{}, fmt.Errorf("read session action: %w", err)
+	}
+	if len(rows) != 1 {
+		return grantctl.SessionActionDetailV1{}, errActivityActionNotFound
+	}
+	return grantctl.SessionActionDetailV1{
+		ProtocolVersion: grantctl.SessionActionDetailProtocolVersion,
+		ActionID:        rows[0].ID,
+		SessionID:       activitySessionID(rows[0].SessionID),
+		Command:         activityCommand(rows[0]),
+	}, nil
 }
 
 func activitySessionID(value string) string {
@@ -248,4 +309,27 @@ func sessionLogSnapshotResponse(projector activitySnapshotProjector, version gra
 		return grantctl.Response{OK: false, Error: "session log snapshot unavailable"}
 	}
 	return grantctl.Response{OK: true, SessionLogSnapshot: &snapshot}
+}
+
+func sessionActionDetailResponse(projector activitySnapshotProjector, version grantctl.ProtocolVersion, sessionID string, actionID int64) grantctl.Response {
+	if version == 0 {
+		return grantctl.Response{OK: false, Error: "session_action_detail requires protocol_version"}
+	}
+	if version != grantctl.SessionActionDetailProtocolVersion {
+		return grantctl.Response{OK: false, Error: fmt.Sprintf("unsupported session action detail protocol version %d", version)}
+	}
+	if sessionID == "" || len(sessionID) > grantctl.MaxDashboardSessionIDBytes || actionID <= 0 {
+		return grantctl.Response{OK: false, Error: "invalid session action detail selector"}
+	}
+	if projector == nil {
+		return grantctl.Response{OK: false, Error: "session action detail unavailable"}
+	}
+	detail, err := projector.SessionActionDetail(context.Background(), sessionID, actionID)
+	if err != nil {
+		if errors.Is(err, errActivityActionNotFound) {
+			return grantctl.Response{OK: false, Error: "session action not found"}
+		}
+		return grantctl.Response{OK: false, Error: "session action detail unavailable"}
+	}
+	return grantctl.Response{OK: true, SessionActionDetail: &detail}
 }

@@ -18,18 +18,22 @@ poll to the dashboard's slower token aggregation.
 
 Network rows can contain request headers, captured-body references, full working
 paths, URLs with query credentials, and other fields that an overview does not
-need. Decision rows can contain redacted tool input that is still too detailed
-for a default session timeline.
+need. Decision rows contain store-redacted tool input that is too detailed for
+the default session timeline but is the only durable source for reviewing the
+complete recorded shell command from an explicitly opened action.
 
 ## Decision
 
-The daemon control socket exposes two authenticated, versioned, bounded v1
+The daemon control socket exposes three authenticated, versioned, bounded v1
 projections:
 
 - `network_snapshot` returns at most 200 newest traffic events from the typed
   `mitm.RequestStore`.
 - `session_log_snapshot` returns at most 50 recent session summaries and 500
-  newest decisions for one exact session identifier.
+  newest decisions for one exact session identifier, stopping sooner when the
+  serialized projection reaches 56 KiB.
+- `session_action_detail` returns one exact decision from one exact session
+  after the user opens that row.
 
 The network projector owns one lazily opened read-only `network.db` handle. An
 absent database is a normal typed state (`available: false`) and is retried on
@@ -40,9 +44,12 @@ read only through the daemon's existing singleton `store.EventStore`.
 Both projections are server-generated display models. Network events omit
 headers, bodies, body paths, full URLs, and full working directories; request
 query and fragment data are removed before projection. Session actions omit
-tool input and expose only the store-redacted summary and bounded policy/outcome
-metadata. The session query uses an exact identifier rather than the CLI's
-historical substring filter.
+general tool input and expose the store-redacted summary and bounded
+policy/outcome metadata. Commands never enter the repeating snapshot. An action
+detail request selects both exact decision ID and exact session ID, then a Bash
+detail exposes only the `command` field parsed from the already-redacted
+persisted JSON and capped at 4096 bytes. The timeline and detail queries use
+exact identity rather than the CLI's historical substring filter.
 
 The macOS app polls these small projections only while their destinations are
 visible. The Network page separately consumes the existing setup-health model
@@ -52,11 +59,11 @@ does not claim installation authority.
 ## Consequences
 
 - Swift receives no database path, SQLite dependency, control token value, raw
-  request metadata, full project path, or tool input.
+  request metadata, full project path, or unredacted tool input.
 - Live refresh avoids spawning CLI processes and does not trigger dashboard
   token collection.
 - The feed is a bounded recent window, not an unbounded transcript export. The
-  UI must say when a session contains more actions than the 500 projected rows.
+  UI says when an item or byte boundary truncates the projected rows.
 - New projection fields require additive protocol evolution; incompatible
   changes require a new protocol version.
 - The lazy network handle is closed with the daemon control server.

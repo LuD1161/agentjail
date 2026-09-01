@@ -1,10 +1,12 @@
 package grantctl
 
 const (
-	MaxNetworkEvents     = 200
-	MaxActivitySessions  = 50
-	MaxSessionLogEntries = 500
-	MaxActivityTextBytes = 512
+	MaxNetworkEvents           = 200
+	MaxActivitySessions        = 50
+	MaxSessionLogEntries       = 500
+	MaxActivityTextBytes       = 512
+	MaxSessionCommandBytes     = 4096
+	MaxSessionLogSnapshotBytes = 56 * 1024
 )
 
 // NetworkSnapshotV1 is a bounded read-only window over intercepted traffic.
@@ -46,6 +48,7 @@ type SessionLogSnapshotV1 struct {
 	SelectedSessionID string              `json:"selected_session_id,omitempty"`
 	Sessions          []ActivitySessionV1 `json:"sessions"`
 	Entries           []SessionActionV1   `json:"entries"`
+	Truncated         bool                `json:"truncated"`
 }
 
 type ActivitySessionV1 struct {
@@ -76,4 +79,14 @@ type SessionActionV1 struct {
 	TranslationReason string           `json:"translation_reason,omitempty"`
 	FinalAction       string           `json:"final_action,omitempty"`
 	Enforcer          string           `json:"enforcer,omitempty"`
+}
+
+// SessionActionDetailV1 is fetched only after a user opens one timeline row.
+// Command is the bounded, store-redacted shell command; non-Bash actions return
+// an empty command.
+type SessionActionDetailV1 struct {
+	ProtocolVersion ProtocolVersion `json:"protocol_version"`
+	ActionID        int64           `json:"action_id"`
+	SessionID       string          `json:"session_id"`
+	Command         string          `json:"command,omitempty"`
 }

@@ -28,4 +28,16 @@ func TestActivitySnapshotValidationBoundsAndRequiresSelectedSession(t *testing.T
 	if err := validateSessionLogSnapshotV1(logs); err == nil {
 		t.Fatal("unknown selected session accepted")
 	}
+
+	detail := SessionActionDetailV1{
+		ProtocolVersion: SessionActionDetailProtocolVersion,
+		ActionID:        1, SessionID: "session-1", Command: "git status",
+	}
+	if err := validateSessionActionDetailV1(detail); err != nil {
+		t.Fatal(err)
+	}
+	detail.Command = string(make([]byte, MaxSessionCommandBytes+1))
+	if err := validateSessionActionDetailV1(detail); err == nil {
+		t.Fatal("oversized action detail accepted")
+	}
 }

@@ -1,6 +1,7 @@
 package grantctl
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -22,6 +23,29 @@ func NetworkSnapshot(sockPath, ctlToken string, timeout time.Duration) (NetworkS
 		return NetworkSnapshotV1{}, fmt.Errorf("invalid network snapshot: %w", err)
 	}
 	return *resp.NetworkSnapshot, nil
+}
+
+func SessionActionDetail(sockPath, ctlToken, sessionID string, actionID int64, timeout time.Duration) (SessionActionDetailV1, error) {
+	resp, err := roundTrip(sockPath, Request{
+		Type: ReqSessionActionDetail, CtlToken: ctlToken, ProtocolVersion: SessionActionDetailProtocolVersion,
+		SessionID: sessionID, ActionID: actionID,
+	}, timeout)
+	if err != nil {
+		return SessionActionDetailV1{}, err
+	}
+	if !resp.OK {
+		return SessionActionDetailV1{}, fmt.Errorf("session action detail refused: %s", resp.Error)
+	}
+	if resp.SessionActionDetail == nil || resp.SessionActionDetail.ProtocolVersion != SessionActionDetailProtocolVersion {
+		return SessionActionDetailV1{}, fmt.Errorf("unsupported or missing session action detail protocol version")
+	}
+	if err := validateSessionActionDetailV1(*resp.SessionActionDetail); err != nil {
+		return SessionActionDetailV1{}, fmt.Errorf("invalid session action detail: %w", err)
+	}
+	if resp.SessionActionDetail.SessionID != sessionID || resp.SessionActionDetail.ActionID != actionID {
+		return SessionActionDetailV1{}, fmt.Errorf("session action detail selector mismatch")
+	}
+	return *resp.SessionActionDetail, nil
 }
 
 func SessionLogSnapshot(sockPath, ctlToken, sessionID string, timeout time.Duration) (SessionLogSnapshotV1, error) {
@@ -86,6 +110,18 @@ func validateSessionLogSnapshotV1(snapshot SessionLogSnapshotV1) error {
 				return fmt.Errorf("session action text exceeds limit")
 			}
 		}
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil || len(encoded) > MaxSessionLogSnapshotBytes {
+		return fmt.Errorf("session log snapshot exceeds byte limit")
+	}
+	return nil
+}
+
+func validateSessionActionDetailV1(detail SessionActionDetailV1) error {
+	if detail.ProtocolVersion != SessionActionDetailProtocolVersion || detail.ActionID <= 0 || detail.SessionID == "" ||
+		len(detail.SessionID) > MaxDashboardSessionIDBytes || len(detail.Command) > MaxSessionCommandBytes {
+		return fmt.Errorf("invalid session action detail")
 	}
 	return nil
 }

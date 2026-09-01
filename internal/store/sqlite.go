@@ -490,6 +490,10 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		conds []string
 		args  []any
 	)
+	if f.DecisionID > 0 {
+		conds = append(conds, "id = ?")
+		args = append(args, f.DecisionID)
+	}
 	if f.ExactSessionID != "" {
 		conds = append(conds, "session_id = ?")
 		args = append(args, f.ExactSessionID)

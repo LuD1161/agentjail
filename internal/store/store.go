@@ -92,6 +92,7 @@ type Session struct {
 
 // Filter selects decisions. Zero-value fields are not filtered on.
 type Filter struct {
+	DecisionID     int64         // exact decision row for trusted detail projections
 	SessionID      string        // substring match (consistent with daemon.log --session)
 	ExactSessionID string        // exact match for trusted UI/session projections
 	Since          time.Duration // only decisions newer than now-Since; 0 = no filter
