@@ -314,6 +314,42 @@ func TestListDecisionsExactSessionDoesNotMatchPrefixes(t *testing.T) {
 	}
 }
 
+func TestDecisionSearchIsCorpusWideLiteralAndCounted(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	rows := []DecisionRecord{
+		{Ts: time.Now(), SessionID: "session-1", ToolName: "Bash", Summary: "deploy 100%", Action: "allow", RuleID: "command_policy/default"},
+		{Ts: time.Now(), SessionID: "session-1", ToolName: "Write", Reason: "protected_path", Action: "deny", RuleID: "file_policy/sensitive"},
+		{Ts: time.Now(), SessionID: "session-1", ToolName: "Bash", Summary: "sandbox blocked", Action: "allow", FinalAction: "deny"},
+		{Ts: time.Now(), SessionID: "session-2", ToolName: "Bash", Summary: "deploy 100%", Action: "allow"},
+	}
+	for _, row := range rows {
+		if err := s.RecordDecision(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter := Filter{ExactSessionID: "session-1", Search: DecisionSearch("100%"), Limit: 10}
+	got, err := s.ListDecisions(ctx, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.CountDecisions(ctx, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || count != 1 || got[0].Summary != "deploy 100%" {
+		t.Fatalf("literal search rows=%+v count=%d", got, count)
+	}
+	got, err = s.ListDecisions(ctx, Filter{ExactSessionID: "session-1", Search: DecisionSearch("protected_path"), Limit: 10})
+	if err != nil || len(got) != 1 || got[0].ToolName != "Write" {
+		t.Fatalf("metadata search rows=%+v err=%v", got, err)
+	}
+	got, err = s.ListDecisions(ctx, Filter{ExactSessionID: "session-1", ResolvedActions: []string{"deny"}, Limit: 10})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("resolved action rows=%+v err=%v", got, err)
+	}
+}
+
 func TestListDecisionsExactDecisionAndSessionMustBothMatch(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

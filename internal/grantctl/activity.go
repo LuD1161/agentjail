@@ -6,6 +6,7 @@ const (
 	MaxSessionLogEntries       = 500
 	MaxActivityTextBytes       = 512
 	MaxSessionCommandBytes     = 4096
+	MaxSessionSearchBytes      = 256
 	MaxSessionLogSnapshotBytes = 56 * 1024
 )
 
@@ -48,7 +49,19 @@ type SessionLogSnapshotV1 struct {
 	SelectedSessionID string              `json:"selected_session_id,omitempty"`
 	Sessions          []ActivitySessionV1 `json:"sessions"`
 	Entries           []SessionActionV1   `json:"entries"`
+	TotalMatches      int                 `json:"total_matches"`
+	HasMore           bool                `json:"has_more"`
+	NextBeforeID      int64               `json:"next_before_id,omitempty"`
 	Truncated         bool                `json:"truncated"`
+}
+
+// SessionLogQueryV1 selects one byte-bounded page from an exact session.
+// BeforeID is a descending keyset cursor; Search never scans raw tool input.
+type SessionLogQueryV1 struct {
+	SessionID string
+	BeforeID  int64
+	Search    string
+	Actions   []string
 }
 
 type ActivitySessionV1 struct {

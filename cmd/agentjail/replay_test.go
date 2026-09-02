@@ -35,6 +35,10 @@ func (m *mockReadOnlyStore) ListDecisions(_ context.Context, f store.Filter) ([]
 	return result, nil
 }
 
+func (m *mockReadOnlyStore) CountDecisions(_ context.Context, _ store.Filter) (int64, error) {
+	return int64(len(m.decisions)), nil
+}
+
 func (m *mockReadOnlyStore) ListAuditEvents(_ context.Context, _ store.AuditFilter) ([]store.AuditRecord, error) {
 	return nil, nil
 }

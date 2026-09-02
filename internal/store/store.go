@@ -92,17 +92,23 @@ type Session struct {
 
 // Filter selects decisions. Zero-value fields are not filtered on.
 type Filter struct {
-	DecisionID     int64         // exact decision row for trusted detail projections
-	SessionID      string        // substring match (consistent with daemon.log --session)
-	ExactSessionID string        // exact match for trusted UI/session projections
-	Since          time.Duration // only decisions newer than now-Since; 0 = no filter
-	Actions        []string      // match any (lower-cased)
-	Tool           string        // exact tool name
-	Rule           string        // substring match on rule_id (case-insensitive)
-	Limit          int           // 0 = no limit (caller should bound it)
-	AfterID        int64         // only rows with id > AfterID (for --follow tailing)
-	OrderDesc      bool          // order by id DESC (newest first); default ASC (chronological)
+	DecisionID      int64          // exact decision row for trusted detail projections
+	SessionID       string         // substring match (consistent with daemon.log --session)
+	ExactSessionID  string         // exact match for trusted UI/session projections
+	Since           time.Duration  // only decisions newer than now-Since; 0 = no filter
+	Actions         []string       // match any (lower-cased)
+	ResolvedActions []string       // match projected final/effective/policy/action outcome
+	Tool            string         // exact tool name
+	Rule            string         // substring match on rule_id (case-insensitive)
+	Search          DecisionSearch // literal substring across safe action metadata
+	Limit           int            // 0 = no limit (caller should bound it)
+	AfterID         int64          // only rows with id > AfterID (for --follow tailing)
+	OrderDesc       bool           // order by id DESC (newest first); default ASC (chronological)
 }
+
+// DecisionSearch is a literal, case-insensitive search over the redacted
+// action metadata exposed by the local activity feed.
+type DecisionSearch string
 
 // SessionFilter selects sessions for ListSessionsFiltered.
 type SessionFilter struct {
@@ -208,6 +214,7 @@ type EventStore interface {
 	UpdateOutcome(ctx context.Context, toolUseID, finalAction, enforcer string) error
 	RecordAuditEvent(ctx context.Context, a AuditRecord) error
 	DecisionCount(ctx context.Context) (int64, error)
+	CountDecisions(ctx context.Context, f Filter) (int64, error)
 	ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error)
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)
@@ -231,6 +238,7 @@ type EventStore interface {
 // use this to avoid write-lock contention with the daemon.
 type ReadOnlyStore interface {
 	DecisionCount(ctx context.Context) (int64, error)
+	CountDecisions(ctx context.Context, f Filter) (int64, error)
 	ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error)
 	ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error)
 	ListSessions(ctx context.Context) ([]Session, error)

@@ -20,10 +20,24 @@ func TestActivitySnapshotValidationBoundsAndRequiresSelectedSession(t *testing.T
 		SelectedSessionID: "session-1",
 		Sessions:          []ActivitySessionV1{{SessionID: "session-1", Agent: "codex", Project: "repo"}},
 		Entries:           []SessionActionV1{{ID: 1, TimestampUnixMs: 1, ToolName: "Bash", Action: "allow"}},
+		TotalMatches:      1,
 	}
 	if err := validateSessionLogSnapshotV1(logs); err != nil {
 		t.Fatal(err)
 	}
+	logs.HasMore = true
+	logs.Truncated = true
+	logs.NextBeforeID = logs.Entries[0].ID
+	if err := validateSessionLogSnapshotV1(logs); err != nil {
+		t.Fatal(err)
+	}
+	logs.NextBeforeID++
+	if err := validateSessionLogSnapshotV1(logs); err == nil {
+		t.Fatal("mismatched page cursor accepted")
+	}
+	logs.HasMore = false
+	logs.Truncated = false
+	logs.NextBeforeID = 0
 	logs.SelectedSessionID = "missing"
 	if err := validateSessionLogSnapshotV1(logs); err == nil {
 		t.Fatal("unknown selected session accepted")

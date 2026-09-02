@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func TestLocalActivityProjectionIsBoundedRedactedAndSessionExact(t *testing.T) {
 		t.Fatal("query credential reached network projection")
 	}
 
-	logs, err := projector.SessionLogSnapshot(context.Background(), "session-1", now)
+	logs, err := projector.SessionLogSnapshot(context.Background(), grantctl.SessionLogQueryV1{SessionID: "session-1"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,14 +96,71 @@ func TestActivityResponsesRequireSupportedVersions(t *testing.T) {
 	if response := networkSnapshotResponse(nil, 0, now); response.OK || response.Error != "network_snapshot requires protocol_version" {
 		t.Fatalf("missing network version response = %+v", response)
 	}
-	if response := sessionLogSnapshotResponse(nil, grantctl.SessionLogProtocolVersion+1, "", now); response.OK {
+	if response := sessionLogSnapshotResponse(nil, grantctl.SessionLogProtocolVersion+1, grantctl.SessionLogQueryV1{}, now); response.OK {
 		t.Fatalf("unsupported log version response = %+v", response)
 	}
-	if response := sessionLogSnapshotResponse(nil, grantctl.SessionLogProtocolVersion, string(make([]byte, grantctl.MaxDashboardSessionIDBytes+1)), now); response.OK || response.Error != "invalid session_id" {
+	if response := sessionLogSnapshotResponse(nil, grantctl.SessionLogProtocolVersion, grantctl.SessionLogQueryV1{SessionID: string(make([]byte, grantctl.MaxDashboardSessionIDBytes+1))}, now); response.OK || response.Error != "invalid session log query" {
 		t.Fatalf("oversized session response = %+v", response)
+	}
+	for _, query := range []grantctl.SessionLogQueryV1{
+		{BeforeID: -1},
+		{Search: string(make([]byte, grantctl.MaxSessionSearchBytes+1))},
+		{Actions: []string{"permit"}},
+		{Actions: []string{"deny", "deny"}},
+	} {
+		if response := sessionLogSnapshotResponse(nil, grantctl.SessionLogProtocolVersion, query, now); response.OK || response.Error != "invalid session log query" {
+			t.Fatalf("invalid query response = %+v", response)
+		}
 	}
 	if response := sessionActionDetailResponse(nil, grantctl.SessionActionDetailProtocolVersion, "session-1", 0); response.OK || response.Error != "invalid session action detail selector" {
 		t.Fatalf("invalid action detail response = %+v", response)
+	}
+}
+
+func TestSessionLogProjectionPagesAndSearchesWholeSession(t *testing.T) {
+	eventStore, err := store.Open(filepath.Join(t.TempDir(), "agentjail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventStore.Close()
+	for index := 0; index < 520; index++ {
+		summary := fmt.Sprintf("action-%03d", index)
+		if index == 0 {
+			summary = "oldest corpus needle"
+		}
+		if err := eventStore.RecordDecision(context.Background(), store.DecisionRecord{
+			Ts: time.Now().Add(time.Duration(index) * time.Millisecond), SessionID: "paged-session",
+			Agent: "codex", CWD: "/tmp/project", ToolName: "Bash", Summary: summary,
+			Action: "allow", RuleID: "command_policy/default-allow",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projector := &localActivityProjector{store: eventStore}
+	first, err := projector.SessionLogSnapshot(context.Background(), grantctl.SessionLogQueryV1{SessionID: "paged-session"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.TotalMatches != 520 || !first.HasMore || first.NextBeforeID == 0 || len(first.Entries) == 0 {
+		t.Fatalf("first page metadata = %+v", first)
+	}
+	second, err := projector.SessionLogSnapshot(context.Background(), grantctl.SessionLogQueryV1{
+		SessionID: "paged-session", BeforeID: first.NextBeforeID,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Entries) == 0 || second.Entries[0].ID >= first.NextBeforeID {
+		t.Fatalf("second page did not advance cursor: first=%d second=%+v", first.NextBeforeID, second.Entries)
+	}
+	searched, err := projector.SessionLogSnapshot(context.Background(), grantctl.SessionLogQueryV1{
+		SessionID: "paged-session", Search: "corpus needle",
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searched.TotalMatches != 1 || len(searched.Entries) != 1 || searched.Entries[0].Summary != "oldest corpus needle" || searched.HasMore {
+		t.Fatalf("whole-session search = %+v", searched)
 	}
 }
 
@@ -123,7 +181,7 @@ func TestSessionLogProjectionStopsBeforeControlFrameLimit(t *testing.T) {
 		}
 	}
 	projector := &localActivityProjector{store: eventStore}
-	snapshot, err := projector.SessionLogSnapshot(context.Background(), "large-session", time.Now())
+	snapshot, err := projector.SessionLogSnapshot(context.Background(), grantctl.SessionLogQueryV1{SessionID: "large-session"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +191,9 @@ func TestSessionLogProjectionStopsBeforeControlFrameLimit(t *testing.T) {
 	}
 	if !snapshot.Truncated || len(snapshot.Entries) >= 200 {
 		t.Fatalf("snapshot was not truncated: entries=%d truncated=%v", len(snapshot.Entries), snapshot.Truncated)
+	}
+	if !snapshot.HasMore || snapshot.NextBeforeID != snapshot.Entries[len(snapshot.Entries)-1].ID || snapshot.TotalMatches != 200 {
+		t.Fatalf("snapshot page metadata = %+v", snapshot)
 	}
 	if len(encoded) > grantctl.MaxSessionLogSnapshotBytes {
 		t.Fatalf("snapshot bytes = %d, max %d", len(encoded), grantctl.MaxSessionLogSnapshotBytes)

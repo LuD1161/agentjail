@@ -49,9 +49,13 @@ func SessionActionDetail(sockPath, ctlToken, sessionID string, actionID int64, t
 }
 
 func SessionLogSnapshot(sockPath, ctlToken, sessionID string, timeout time.Duration) (SessionLogSnapshotV1, error) {
+	return SessionLogPage(sockPath, ctlToken, SessionLogQueryV1{SessionID: sessionID}, timeout)
+}
+
+func SessionLogPage(sockPath, ctlToken string, query SessionLogQueryV1, timeout time.Duration) (SessionLogSnapshotV1, error) {
 	resp, err := roundTrip(sockPath, Request{
 		Type: ReqSessionLogSnapshot, CtlToken: ctlToken, ProtocolVersion: SessionLogProtocolVersion,
-		SessionID: sessionID,
+		SessionID: query.SessionID, BeforeID: query.BeforeID, Search: query.Search, Actions: query.Actions,
 	}, timeout)
 	if err != nil {
 		return SessionLogSnapshotV1{}, err
@@ -89,6 +93,11 @@ func validateNetworkSnapshotV1(snapshot NetworkSnapshotV1) error {
 func validateSessionLogSnapshotV1(snapshot SessionLogSnapshotV1) error {
 	if snapshot.Sessions == nil || snapshot.Entries == nil || len(snapshot.Sessions) > MaxActivitySessions || len(snapshot.Entries) > MaxSessionLogEntries {
 		return fmt.Errorf("session log arrays are missing or exceed item limits")
+	}
+	if snapshot.TotalMatches < len(snapshot.Entries) || snapshot.NextBeforeID < 0 ||
+		(snapshot.HasMore && (len(snapshot.Entries) == 0 || snapshot.NextBeforeID != snapshot.Entries[len(snapshot.Entries)-1].ID)) ||
+		(!snapshot.HasMore && snapshot.NextBeforeID != 0) || snapshot.Truncated != snapshot.HasMore {
+		return fmt.Errorf("invalid session log page metadata")
 	}
 	known := snapshot.SelectedSessionID == ""
 	for _, session := range snapshot.Sessions {

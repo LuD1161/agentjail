@@ -276,7 +276,9 @@ func (gs *grantServer) handleCtlConn(conn net.Conn) {
 	case grantctl.ReqNetworkSnapshot:
 		gs.reply(conn, networkSnapshotResponse(gs.activity, req.ProtocolVersion, now))
 	case grantctl.ReqSessionLogSnapshot:
-		gs.reply(conn, sessionLogSnapshotResponse(gs.activity, req.ProtocolVersion, req.SessionID, now))
+		gs.reply(conn, sessionLogSnapshotResponse(gs.activity, req.ProtocolVersion, grantctl.SessionLogQueryV1{
+			SessionID: req.SessionID, BeforeID: req.BeforeID, Search: req.Search, Actions: req.Actions,
+		}, now))
 	case grantctl.ReqSessionActionDetail:
 		gs.reply(conn, sessionActionDetailResponse(gs.activity, req.ProtocolVersion, req.SessionID, req.ActionID))
 	case grantctl.ReqMCPToolsDiscover:

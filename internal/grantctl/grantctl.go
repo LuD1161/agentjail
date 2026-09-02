@@ -111,6 +111,9 @@ type Request struct {
 	ProtocolVersion ProtocolVersion   `json:"protocol_version,omitempty"`
 	SessionID       string            `json:"session_id,omitempty"`
 	ActionID        int64             `json:"action_id,omitempty"`
+	BeforeID        int64             `json:"before_id,omitempty"`
+	Search          string            `json:"search,omitempty"`
+	Actions         []string          `json:"actions,omitempty"`
 	CWD             string            `json:"cwd,omitempty"`
 	Host            string            `json:"host,omitempty"`
 	TTLMs           int64             `json:"ttl_ms,omitempty"`

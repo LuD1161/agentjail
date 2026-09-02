@@ -20,7 +20,7 @@ import (
 
 type activitySnapshotProjector interface {
 	NetworkSnapshot(context.Context, time.Time) (grantctl.NetworkSnapshotV1, error)
-	SessionLogSnapshot(context.Context, string, time.Time) (grantctl.SessionLogSnapshotV1, error)
+	SessionLogSnapshot(context.Context, grantctl.SessionLogQueryV1, time.Time) (grantctl.SessionLogSnapshotV1, error)
 	SessionActionDetail(context.Context, string, int64) (grantctl.SessionActionDetailV1, error)
 	Close() error
 }
@@ -111,7 +111,7 @@ func (p *localActivityProjector) NetworkSnapshot(ctx context.Context, now time.T
 	return snapshot, nil
 }
 
-func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, requestedSessionID string, now time.Time) (grantctl.SessionLogSnapshotV1, error) {
+func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, query grantctl.SessionLogQueryV1, now time.Time) (grantctl.SessionLogSnapshotV1, error) {
 	sessions, err := p.store.ListSessionsFiltered(ctx, store.SessionFilter{Limit: grantctl.MaxActivitySessions})
 	if err != nil {
 		return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("list activity sessions: %w", err)
@@ -132,7 +132,6 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 		Truncated:         false,
 	}
 	selected := ""
-	selectedDecisionCount := 0
 	for _, session := range sessions {
 		_, isActive := active[session.SessionID]
 		projected := grantctl.ActivitySessionV1{
@@ -144,31 +143,52 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 			projected.EndedAtUnixMs = grantctl.UnixMilliseconds(session.EndTs.UnixMilli())
 		}
 		snapshot.Sessions = append(snapshot.Sessions, projected)
-		if session.SessionID == requestedSessionID {
+		if session.SessionID == query.SessionID {
 			selected = session.SessionID
-			selectedDecisionCount = session.DecisionCount
 		}
 	}
 	if selected == "" && len(sessions) > 0 {
 		selected = sessions[0].SessionID
-		selectedDecisionCount = sessions[0].DecisionCount
 	}
 	if selected == "" {
 		return snapshot, nil
 	}
 	snapshot.SelectedSessionID = activitySessionID(selected)
-	rows, err := p.store.ListDecisions(ctx, store.Filter{
-		ExactSessionID: selected, Limit: grantctl.MaxSessionLogEntries, OrderDesc: true,
-	})
+	filter := store.Filter{
+		ExactSessionID:  selected,
+		ResolvedActions: query.Actions,
+		Search:          store.DecisionSearch(query.Search),
+		OrderDesc:       true,
+	}
+	totalMatches, err := p.store.CountDecisions(ctx, filter)
+	if err != nil {
+		return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("count session actions: %w", err)
+	}
+	snapshot.TotalMatches = int(totalMatches)
+	filter.AfterID = query.BeforeID
+	filter.Limit = grantctl.MaxSessionLogEntries + 1
+	rows, err := p.store.ListDecisions(ctx, filter)
 	if err != nil {
 		return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("list session actions: %w", err)
+	}
+	if len(rows) > 0 {
+		snapshot.HasMore = true
+		snapshot.Truncated = true
+		snapshot.NextBeforeID = rows[0].ID
 	}
 	baseJSON, err := json.Marshal(snapshot)
 	if err != nil {
 		return grantctl.SessionLogSnapshotV1{}, fmt.Errorf("encode session activity base: %w", err)
 	}
+	snapshot.HasMore = false
+	snapshot.Truncated = false
+	snapshot.NextBeforeID = 0
 	entriesBytes := 0
 	for _, row := range rows {
+		if len(snapshot.Entries) >= grantctl.MaxSessionLogEntries {
+			snapshot.HasMore = true
+			break
+		}
 		projected := grantctl.SessionActionV1{
 			ID: row.ID, TimestampUnixMs: grantctl.UnixMilliseconds(row.Ts.UnixMilli()),
 			ToolName: activityText(row.ToolName), Summary: activityText(row.Summary), Action: activityText(row.Action),
@@ -187,15 +207,19 @@ func (p *localActivityProjector) SessionLogSnapshot(ctx context.Context, request
 			separator = 1
 		}
 		if len(baseJSON)-2+entriesBytes+separator+len(encoded) > grantctl.MaxSessionLogSnapshotBytes {
-			snapshot.Truncated = true
+			snapshot.HasMore = true
 			break
 		}
 		snapshot.Entries = append(snapshot.Entries, projected)
 		entriesBytes += separator + len(encoded)
 	}
-	if selectedDecisionCount > len(snapshot.Entries) {
-		snapshot.Truncated = true
+	if len(rows) > len(snapshot.Entries) {
+		snapshot.HasMore = true
 	}
+	if snapshot.HasMore && len(snapshot.Entries) > 0 {
+		snapshot.NextBeforeID = snapshot.Entries[len(snapshot.Entries)-1].ID
+	}
+	snapshot.Truncated = snapshot.HasMore
 	return snapshot, nil
 }
 
@@ -291,24 +315,43 @@ func networkSnapshotResponse(projector activitySnapshotProjector, version grantc
 	return grantctl.Response{OK: true, NetworkSnapshot: &snapshot}
 }
 
-func sessionLogSnapshotResponse(projector activitySnapshotProjector, version grantctl.ProtocolVersion, sessionID string, now time.Time) grantctl.Response {
+func sessionLogSnapshotResponse(projector activitySnapshotProjector, version grantctl.ProtocolVersion, query grantctl.SessionLogQueryV1, now time.Time) grantctl.Response {
 	if version == 0 {
 		return grantctl.Response{OK: false, Error: "session_log_snapshot requires protocol_version"}
 	}
 	if version != grantctl.SessionLogProtocolVersion {
 		return grantctl.Response{OK: false, Error: fmt.Sprintf("unsupported session log protocol version %d", version)}
 	}
-	if len(sessionID) > grantctl.MaxDashboardSessionIDBytes {
-		return grantctl.Response{OK: false, Error: "invalid session_id"}
+	if len(query.SessionID) > grantctl.MaxDashboardSessionIDBytes || query.BeforeID < 0 || len(query.Search) > grantctl.MaxSessionSearchBytes || !validSessionLogActions(query.Actions) {
+		return grantctl.Response{OK: false, Error: "invalid session log query"}
 	}
 	if projector == nil {
 		return grantctl.Response{OK: false, Error: "session log snapshot unavailable"}
 	}
-	snapshot, err := projector.SessionLogSnapshot(context.Background(), sessionID, now)
+	snapshot, err := projector.SessionLogSnapshot(context.Background(), query, now)
 	if err != nil {
 		return grantctl.Response{OK: false, Error: "session log snapshot unavailable"}
 	}
 	return grantctl.Response{OK: true, SessionLogSnapshot: &snapshot}
+}
+
+func validSessionLogActions(actions []string) bool {
+	if len(actions) > 4 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
+		switch action {
+		case "allow", "ask", "deny", "block":
+		default:
+			return false
+		}
+		if _, duplicate := seen[action]; duplicate {
+			return false
+		}
+		seen[action] = struct{}{}
+	}
+	return true
 }
 
 func sessionActionDetailResponse(projector activitySnapshotProjector, version grantctl.ProtocolVersion, sessionID string, actionID int64) grantctl.Response {

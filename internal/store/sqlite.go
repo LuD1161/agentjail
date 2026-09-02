@@ -484,8 +484,7 @@ func (s *sqliteStore) DecisionCount(ctx context.Context) (int64, error) {
 	return s.queries.GetDecisionCount(ctx)
 }
 
-// ListDecisions returns decisions matching f in the requested ID order.
-func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error) {
+func decisionFilterConditions(f Filter) ([]string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -517,9 +516,24 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		}
 		conds = append(conds, "lower(action) IN ("+strings.Join(placeholders, ",")+")")
 	}
+	if len(f.ResolvedActions) > 0 {
+		placeholders := make([]string, len(f.ResolvedActions))
+		for i, action := range f.ResolvedActions {
+			placeholders[i] = "?"
+			args = append(args, strings.ToLower(action))
+		}
+		conds = append(conds, "lower(COALESCE(NULLIF(final_action, ''), NULLIF(effective_action, ''), NULLIF(policy_action, ''), action)) IN ("+strings.Join(placeholders, ",")+")")
+	}
 	if f.Rule != "" {
 		conds = append(conds, "INSTR(lower(rule_id), ?) > 0")
 		args = append(args, strings.ToLower(f.Rule))
+	}
+	if search := strings.TrimSpace(string(f.Search)); search != "" {
+		pattern := literalSearchPattern(search)
+		conds = append(conds, `(lower(tool_name) LIKE ? ESCAPE '\' OR lower(COALESCE(summary, '')) LIKE ? ESCAPE '\' OR lower(COALESCE(rule_id, '')) LIKE ? ESCAPE '\' OR lower(COALESCE(reason, '')) LIKE ? ESCAPE '\' OR lower(COALESCE(impact, '')) LIKE ? ESCAPE '\')`)
+		for range 5 {
+			args = append(args, pattern)
+		}
 	}
 	if f.AfterID > 0 {
 		if f.OrderDesc {
@@ -529,6 +543,31 @@ func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRe
 		}
 		args = append(args, f.AfterID)
 	}
+	return conds, args
+}
+
+func literalSearchPattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + replacer.Replace(strings.ToLower(value)) + "%"
+}
+
+// CountDecisions returns the number of rows matching the typed filter.
+func (s *sqliteStore) CountDecisions(ctx context.Context, f Filter) (int64, error) {
+	conds, args := decisionFilterConditions(f)
+	q := "SELECT COUNT(*) FROM decisions"
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	var count int64
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("store: count decisions: %w", err)
+	}
+	return count, nil
+}
+
+// ListDecisions returns decisions matching f in the requested ID order.
+func (s *sqliteStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error) {
+	conds, args := decisionFilterConditions(f)
 	q := "SELECT id, ts, session_id, agent, tool_name, summary, action, rule_id, reason, impact, elapsed_us, cwd, tool_input_redacted, would_action, policy_action, effective_action, adapter, translation_reason, tool_use_id, final_action, enforcer FROM decisions"
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
@@ -1252,6 +1291,9 @@ type sqliteROStore struct {
 
 func (r *sqliteROStore) ListDecisions(ctx context.Context, f Filter) ([]DecisionRecord, error) {
 	return r.inner.ListDecisions(ctx, f)
+}
+func (r *sqliteROStore) CountDecisions(ctx context.Context, f Filter) (int64, error) {
+	return r.inner.CountDecisions(ctx, f)
 }
 func (r *sqliteROStore) ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditRecord, error) {
 	return r.inner.ListAuditEvents(ctx, f)

@@ -29,9 +29,10 @@ projections:
 
 - `network_snapshot` returns at most 200 newest traffic events from the typed
   `mitm.RequestStore`.
-- `session_log_snapshot` returns at most 50 recent session summaries and 500
-  newest decisions for one exact session identifier, stopping sooner when the
-  serialized projection reaches 56 KiB.
+- `session_log_snapshot` returns at most 50 recent session summaries and one
+  descending keyset page of at most 500 decisions for one exact session
+  identifier, stopping sooner when the serialized projection reaches 56 KiB.
+  The response includes the exact matching count and an older-than cursor.
 - `session_action_detail` returns one exact decision from one exact session
   after the user opens that row.
 
@@ -51,6 +52,15 @@ detail exposes only the `command` field parsed from the already-redacted
 persisted JSON and capped at 4096 bytes. The timeline and detail queries use
 exact identity rather than the CLI's historical substring filter.
 
+Session search executes inside the typed store before pagination and is scoped
+to the exact selected session. It is a literal, case-insensitive match over
+tool name, redacted summary, rule, reason, and impact; it never scans raw or
+redacted tool input. Outcome filtering uses the same final/effective/policy/
+enforced precedence displayed by the app. Consequently, a matching old action
+appears without loading every newer page first. Paging remains byte-bounded and
+uses decision IDs rather than offsets, so live inserts do not shift older-page
+boundaries.
+
 The macOS app polls these small projections only while their destinations are
 visible. The Network page separately consumes the existing setup-health model
 to explain an absent or disabled Network Extension; the activity projection
@@ -62,8 +72,10 @@ does not claim installation authority.
   request metadata, full project path, or unredacted tool input.
 - Live refresh avoids spawning CLI processes and does not trigger dashboard
   token collection.
-- The feed is a bounded recent window, not an unbounded transcript export. The
-  UI says when an item or byte boundary truncates the projected rows.
+- Every transport response remains bounded, while the UI can browse older
+  pages and search the complete selected-session corpus. It reports loaded and
+  total matching counts separately because byte-bounded pages contain a
+  variable number of rows.
 - New projection fields require additive protocol evolution; incompatible
   changes require a new protocol version.
 - The lazy network handle is closed with the daemon control server.
