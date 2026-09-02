@@ -249,10 +249,12 @@ working paths, or raw tool input. If the optional macOS Network Extension is not
 configured, the page says so explicitly and links back to setup while keeping
 any previously recorded history visible. The **Logs** page groups audited file,
 shell, MCP, and policy actions by exact session identity, with outcome filters
-and redacted summaries. Selecting an action opens its decision details; Bash
+and corpus-wide search across redacted summaries and policy metadata. The
+newest byte-bounded page shows its loaded and total counts separately, and an
+older-than cursor loads earlier actions without offset drift. Selecting an action opens its decision details; Bash
 rows fetch the full recorded command on demand after store-boundary secret
 redaction. Commands never ride in the repeating timeline feed. Both feeds are
-item- and byte-bounded and poll only while their page is visible. See
+byte-bounded per response and poll only while their page is visible. See
 [ADR 0149-local-activity-feed](./docs/adr/0149-local-activity-feed.md).
 
 **macOS terminal installer or Linux CLI:**

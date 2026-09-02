@@ -5,6 +5,10 @@ import Foundation
 final class ActivityStore: ObservableObject {
     @Published private(set) var networkSnapshot: NetworkSnapshotV1?
     @Published private(set) var sessionLogSnapshot: SessionLogSnapshotV1?
+    @Published private(set) var sessionEntries: [SessionAction] = []
+    @Published private(set) var logTotalMatches = 0
+    @Published private(set) var logHasMore = false
+    @Published private(set) var isLoadingMoreLogs = false
     @Published private(set) var isRefreshingNetwork = false
     @Published private(set) var isRefreshingLogs = false
     @Published private(set) var networkUnavailable = false
@@ -19,6 +23,10 @@ final class ActivityStore: ObservableObject {
     private var networkTask: Task<Void, Never>?
     private var logTask: Task<Void, Never>?
     private var requestedSessionID: String?
+    private var logSearch = ""
+    private var logOutcomes: [SessionActionOutcome] = []
+    private var nextLogBeforeID: Int64?
+    private var hasLoadedOlderLogPages = false
     private var logGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
 
@@ -79,9 +87,54 @@ final class ActivityStore: ObservableObject {
         logGeneration &+= 1
         requestedSessionID = sessionID
         selectedSessionID = sessionID
+        resetLogCollection()
         logTask?.cancel()
         logTask = nil
         startLogPolling(sessionID: sessionID)
+    }
+
+    func setLogQuery(search: String, outcomes: [SessionActionOutcome]) {
+        let normalized = String(search.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
+        guard normalized != logSearch || outcomes != logOutcomes else { return }
+        clearActionDetail()
+        logGeneration &+= 1
+        logSearch = normalized
+        logOutcomes = outcomes
+        resetLogCollection()
+        logTask?.cancel()
+        logTask = nil
+        startLogPolling(sessionID: requestedSessionID)
+    }
+
+    func loadMoreLogs() async {
+        guard !isLoadingMoreLogs, !isRefreshingLogs, logHasMore,
+              let beforeID = nextLogBeforeID, !selectedSessionID.isEmpty else { return }
+        let generation = logGeneration
+        let query = SessionLogQuery(
+            sessionID: selectedSessionID,
+            beforeID: beforeID,
+            search: logSearch,
+            outcomes: logOutcomes
+        )
+        isLoadingMoreLogs = true
+        defer {
+            if generation == logGeneration { isLoadingMoreLogs = false }
+        }
+        do {
+            let page = try await client.fetchSessionLog(query)
+            guard !Task.isCancelled, generation == logGeneration,
+                  page.selectedSessionID == selectedSessionID else { return }
+            appendUniqueLogEntries(page.entries)
+            logTotalMatches = page.totalMatches
+            logHasMore = page.hasMore
+            nextLogBeforeID = page.nextBeforeID
+            hasLoadedOlderLogPages = true
+            logsUnavailable = false
+        } catch is CancellationError {
+            return
+        } catch {
+            return
+        }
     }
 
     func loadActionDetail(_ entry: SessionAction) async {
@@ -132,6 +185,7 @@ final class ActivityStore: ObservableObject {
     }
 
     func refreshLogs() async {
+        guard !isRefreshingLogs else { return }
         let requested = requestedSessionID
         let generation = logGeneration
         isRefreshingLogs = true
@@ -139,16 +193,49 @@ final class ActivityStore: ObservableObject {
             if generation == logGeneration { isRefreshingLogs = false }
         }
         do {
-            let snapshot = try await client.fetchSessionLog(sessionID: requested)
+            let snapshot = try await client.fetchSessionLog(SessionLogQuery(
+                sessionID: requested,
+                search: logSearch,
+                outcomes: logOutcomes
+            ))
             guard !Task.isCancelled, generation == logGeneration, requested == requestedSessionID else { return }
             sessionLogSnapshot = snapshot
             requestedSessionID = snapshot.selectedSessionID.isEmpty ? nil : snapshot.selectedSessionID
             selectedSessionID = snapshot.selectedSessionID
+            applyFirstLogPage(snapshot)
             logsUnavailable = false
         } catch is CancellationError {
             return
         } catch {
             if generation == logGeneration { logsUnavailable = sessionLogSnapshot == nil }
         }
+    }
+
+    private func applyFirstLogPage(_ snapshot: SessionLogSnapshotV1) {
+        logTotalMatches = snapshot.totalMatches
+        if hasLoadedOlderLogPages, snapshot.totalMatches >= sessionEntries.count {
+            appendUniqueLogEntries(snapshot.entries)
+            return
+        }
+        sessionEntries = snapshot.entries
+        logHasMore = snapshot.hasMore
+        nextLogBeforeID = snapshot.nextBeforeID
+        hasLoadedOlderLogPages = false
+    }
+
+    private func appendUniqueLogEntries(_ entries: [SessionAction]) {
+        var byID = Dictionary(uniqueKeysWithValues: sessionEntries.map { ($0.id, $0) })
+        for entry in entries { byID[entry.id] = entry }
+        sessionEntries = byID.values.sorted { $0.id > $1.id }
+    }
+
+    private func resetLogCollection() {
+        sessionEntries = []
+        logTotalMatches = 0
+        logHasMore = false
+        nextLogBeforeID = nil
+        hasLoadedOlderLogPages = false
+        isRefreshingLogs = false
+        isLoadingMoreLogs = false
     }
 }

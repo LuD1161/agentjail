@@ -70,10 +70,13 @@ days render as zero, and the chart never smooths nonnegative totals below zero.
 Network and Logs are authenticated, versioned daemon projections rather than
 direct database readers. Network displays at most the latest 200 sanitized
 intercept records and states when the optional Network Extension is missing.
-Logs provides a bounded recent-session picker and at most the latest 500 actions
-for one exact session ID. Rows open a detail sheet; Bash details fetch one full
-recorded command on demand from the persisted store-redacted input. The
-repeating timeline remains byte-bounded below the control transport limit. Neither
+Logs provides a bounded recent-session picker and byte-bounded keyset pages for
+one exact session ID. Search and outcome filters run across that session's full
+redacted action corpus before paging; the UI distinguishes loaded rows from
+total matches and can load older actions without offset drift. Rows open a
+detail sheet; Bash details fetch one full recorded command on demand from the
+persisted store-redacted input. Every timeline response remains below the
+control transport limit. Neither
 projection includes headers, bodies, full
 URLs, full working directories, or raw tool input, and each polls only while its
 destination is visible. See ADR 0149-local-activity-feed.

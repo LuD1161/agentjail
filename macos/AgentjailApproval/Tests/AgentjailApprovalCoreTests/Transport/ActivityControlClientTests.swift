@@ -28,15 +28,26 @@ final class ActivityControlClientTests: XCTestCase {
         let snapshot = try await ActivityControlClient(
             tokenLoader: ActivityTokenLoader(token: token),
             transport: transport
-        ).fetchSessionLog(sessionID: "session-1")
+        ).fetchSessionLog(SessionLogQuery(
+            sessionID: "session-1",
+            beforeID: 99,
+            search: "protected path",
+            outcomes: [.deny, .block]
+        ))
 
         XCTAssertEqual(snapshot.selectedSessionID, "session-1")
         XCTAssertEqual(snapshot.entries.first?.toolName, "Bash")
         XCTAssertEqual(snapshot.entries.first?.finalAction, "deny")
         let request = try transport.request()
-        XCTAssertEqual(Set(request.keys), ["type", "ctl_token", "protocol_version", "session_id"])
+        XCTAssertEqual(Set(request.keys), ["type", "ctl_token", "protocol_version", "session_id", "before_id", "search", "actions"])
         XCTAssertEqual(request["type"] as? String, "session_log_snapshot")
         XCTAssertEqual(request["session_id"] as? String, "session-1")
+        XCTAssertEqual(request["before_id"] as? Int, 99)
+        XCTAssertEqual(request["search"] as? String, "protected path")
+        XCTAssertEqual(request["actions"] as? [String], ["deny", "block"])
+        XCTAssertEqual(snapshot.totalMatches, 3)
+        XCTAssertTrue(snapshot.hasMore)
+        XCTAssertEqual(snapshot.nextBeforeID, 11)
     }
 
     func testActionDetailRequestCarriesExactSelectorsAndReturnsRedactedCommand() async throws {
@@ -90,7 +101,7 @@ final class ActivityControlClientTests: XCTestCase {
 
     private func sessionFrame() -> Data {
         Data("""
-        {"ok":true,"session_log_snapshot":{"protocol_version":1,"generated_at_unix_ms":1788020000000,"selected_session_id":"session-1","sessions":[{"session_id":"session-1","agent":"Codex","project":"agentjail","started_at_unix_ms":1788010000000,"audited_calls":1,"active":true}],"entries":[{"id":11,"timestamp_unix_ms":1788020000000,"tool_name":"Bash","summary":"blocked destructive command","action":"deny","rule_id":"command_policy/no-rm-rf","reason":"protected path","elapsed_us":210,"final_action":"deny"}],"truncated":false}}
+        {"ok":true,"session_log_snapshot":{"protocol_version":1,"generated_at_unix_ms":1788020000000,"selected_session_id":"session-1","sessions":[{"session_id":"session-1","agent":"Codex","project":"agentjail","started_at_unix_ms":1788010000000,"audited_calls":3,"active":true}],"entries":[{"id":11,"timestamp_unix_ms":1788020000000,"tool_name":"Bash","summary":"blocked destructive command","action":"deny","rule_id":"command_policy/no-rm-rf","reason":"protected path","elapsed_us":210,"final_action":"deny"}],"total_matches":3,"has_more":true,"next_before_id":11,"truncated":true}}
         """.utf8) + Data([10])
     }
 

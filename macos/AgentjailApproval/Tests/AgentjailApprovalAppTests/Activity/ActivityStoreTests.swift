@@ -94,15 +94,64 @@ final class ActivityStoreTests: XCTestCase {
         XCTAssertEqual(requests.first?.actionID, entry.id)
     }
 
+    func testLoadsOlderPagesWithoutDuplicatingEntries() async throws {
+        let first = try sessionSnapshot(id: "session-1", entryIDs: [30, 29], total: 4, hasMore: true)
+        let second = try sessionSnapshot(id: "session-1", entryIDs: [28, 27], total: 4)
+        let client = PagingActivityClient(network: try networkSnapshot(), first: first, second: second)
+        let store = ActivityStore(client: client)
+        store.startLogPolling(sessionID: "session-1")
+        for _ in 0..<50 where store.sessionEntries.count != 2 { await Task.yield() }
+        store.stopLogPolling()
+
+        await store.loadMoreLogs()
+
+        XCTAssertEqual(store.sessionEntries.map(\.id), [30, 29, 28, 27])
+        XCTAssertEqual(store.logTotalMatches, 4)
+        XCTAssertFalse(store.logHasMore)
+        let queries = await client.queries()
+        XCTAssertEqual(queries.map(\.beforeID), [nil, 29])
+    }
+
+    func testSearchAndOutcomeFilterAreSentToWholeSessionQuery() async throws {
+        let client = ActivityScriptedClient(network: try networkSnapshot(), sessions: [try sessionSnapshot(id: "session-1")])
+        let store = ActivityStore(client: client)
+        store.startLogPolling(sessionID: "session-1")
+        for _ in 0..<50 where store.sessionEntries.isEmpty { await Task.yield() }
+
+        store.setLogQuery(search: "protected path", outcomes: [.deny, .block])
+        for _ in 0..<50 {
+            if await client.requestedQueries().contains(where: { $0.search == "protected path" }) { break }
+            await Task.yield()
+        }
+        store.stopLogPolling()
+
+        let queries = await client.requestedQueries()
+        let query = try XCTUnwrap(queries.last)
+        XCTAssertEqual(query.sessionID, "session-1")
+        XCTAssertEqual(query.search, "protected path")
+        XCTAssertEqual(query.outcomes, [.deny, .block])
+        XCTAssertNil(query.beforeID)
+    }
+
     private func networkSnapshot() throws -> NetworkSnapshotV1 {
         try JSONDecoder().decode(NetworkSnapshotV1.self, from: Data("""
         {"protocol_version":1,"generated_at_unix_ms":1788020000000,"available":true,"events":[{"id":9,"timestamp_unix_ms":1788020000000,"host":"api.example.com","method":"GET","path":"/v1/models","status_code":200,"request_size":12,"response_size":42,"elapsed_ms":18}]}
         """.utf8))
     }
 
-    private func sessionSnapshot(id: String) throws -> SessionLogSnapshotV1 {
-        try JSONDecoder().decode(SessionLogSnapshotV1.self, from: Data("""
-        {"protocol_version":1,"generated_at_unix_ms":1788020000000,"selected_session_id":"\(id)","sessions":[{"session_id":"\(id)","agent":"Codex","project":"agentjail","started_at_unix_ms":1788010000000,"audited_calls":1,"active":true}],"entries":[{"id":11,"timestamp_unix_ms":1788020000000,"tool_name":"Bash","action":"allow","elapsed_us":210}]}
+    private func sessionSnapshot(
+        id: String,
+        entryIDs: [Int64] = [11],
+        total: Int? = nil,
+        hasMore: Bool = false
+    ) throws -> SessionLogSnapshotV1 {
+        let entries = entryIDs.map {
+            "{\"id\":\($0),\"timestamp_unix_ms\":1788020000000,\"tool_name\":\"Bash\",\"action\":\"allow\",\"elapsed_us\":210}"
+        }.joined(separator: ",")
+        let matchCount = total ?? entryIDs.count
+        let cursor = hasMore ? ",\"next_before_id\":\(entryIDs.last ?? 0)" : ""
+        return try JSONDecoder().decode(SessionLogSnapshotV1.self, from: Data("""
+        {"protocol_version":1,"generated_at_unix_ms":1788020000000,"selected_session_id":"\(id)","sessions":[{"session_id":"\(id)","agent":"Codex","project":"agentjail","started_at_unix_ms":1788010000000,"audited_calls":\(matchCount),"active":true}],"entries":[\(entries)],"total_matches":\(matchCount),"has_more":\(hasMore)\(cursor),"truncated":\(hasMore)}
         """.utf8))
     }
 }
@@ -110,7 +159,7 @@ final class ActivityStoreTests: XCTestCase {
 private actor ActivityScriptedClient: ActivityControlling {
     let network: NetworkSnapshotV1
     var sessions: [SessionLogSnapshotV1]
-    var requested: [String] = []
+    var requested: [SessionLogQuery] = []
     var details: [(sessionID: String, actionID: Int64)] = []
 
     init(network: NetworkSnapshotV1, sessions: [SessionLogSnapshotV1]) {
@@ -120,12 +169,13 @@ private actor ActivityScriptedClient: ActivityControlling {
 
     func fetchNetwork() async throws -> NetworkSnapshotV1 { network }
 
-    func fetchSessionLog(sessionID: String?) async throws -> SessionLogSnapshotV1 {
-        requested.append(sessionID ?? "")
-        return sessions.first(where: { $0.selectedSessionID == sessionID }) ?? sessions[0]
+    func fetchSessionLog(_ query: SessionLogQuery) async throws -> SessionLogSnapshotV1 {
+        requested.append(query)
+        return sessions.first(where: { $0.selectedSessionID == query.sessionID }) ?? sessions[0]
     }
 
-    func requestedSessions() -> [String] { requested }
+    func requestedSessions() -> [String] { requested.map { $0.sessionID ?? "" } }
+    func requestedQueries() -> [SessionLogQuery] { requested }
 
     func fetchSessionActionDetail(sessionID: String, actionID: Int64) async throws -> SessionActionDetailV1 {
         details.append((sessionID, actionID))
@@ -139,7 +189,7 @@ private actor ActivityScriptedClient: ActivityControlling {
 
 private struct FailingActivityClient: ActivityControlling {
     func fetchNetwork() async throws -> NetworkSnapshotV1 { throw ActivityTestError.failed }
-    func fetchSessionLog(sessionID: String?) async throws -> SessionLogSnapshotV1 { throw ActivityTestError.failed }
+    func fetchSessionLog(_ query: SessionLogQuery) async throws -> SessionLogSnapshotV1 { throw ActivityTestError.failed }
     func fetchSessionActionDetail(sessionID: String, actionID: Int64) async throws -> SessionActionDetailV1 {
         throw ActivityTestError.failed
     }
@@ -153,9 +203,9 @@ private actor SwitchingActivityClient: ActivityControlling {
 
     func fetchNetwork() async throws -> NetworkSnapshotV1 { network }
 
-    func fetchSessionLog(sessionID: String?) async throws -> SessionLogSnapshotV1 {
+    func fetchSessionLog(_ query: SessionLogQuery) async throws -> SessionLogSnapshotV1 {
         await withCheckedContinuation { continuation in
-            pending[sessionID ?? ""] = continuation
+            pending[query.sessionID ?? ""] = continuation
         }
     }
 
@@ -168,6 +218,32 @@ private actor SwitchingActivityClient: ActivityControlling {
     func resolve(_ snapshot: SessionLogSnapshotV1) {
         pending.removeValue(forKey: snapshot.selectedSessionID)?.resume(returning: snapshot)
     }
+}
+
+private actor PagingActivityClient: ActivityControlling {
+    let network: NetworkSnapshotV1
+    let first: SessionLogSnapshotV1
+    let second: SessionLogSnapshotV1
+    private var recordedQueries: [SessionLogQuery] = []
+
+    init(network: NetworkSnapshotV1, first: SessionLogSnapshotV1, second: SessionLogSnapshotV1) {
+        self.network = network
+        self.first = first
+        self.second = second
+    }
+
+    func fetchNetwork() async throws -> NetworkSnapshotV1 { network }
+
+    func fetchSessionLog(_ query: SessionLogQuery) async throws -> SessionLogSnapshotV1 {
+        recordedQueries.append(query)
+        return query.beforeID == nil ? first : second
+    }
+
+    func fetchSessionActionDetail(sessionID: String, actionID: Int64) async throws -> SessionActionDetailV1 {
+        throw ActivityTestError.failed
+    }
+
+    func queries() -> [SessionLogQuery] { recordedQueries }
 }
 
 private enum ActivityTestError: Error { case failed }

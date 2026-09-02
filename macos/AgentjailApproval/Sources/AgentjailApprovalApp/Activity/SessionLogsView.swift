@@ -33,16 +33,22 @@ struct SessionLogsView: View {
                     )
                 } else {
                     SessionChooser(snapshot: snapshot, store: store)
-                    if let selected = snapshot.sessions.first(where: { $0.sessionID == snapshot.selectedSessionID }) {
-                        SessionSummaryCard(session: selected, visibleCount: snapshot.entries.count)
+                    let selectedID = store.selectedSessionID.isEmpty ? snapshot.selectedSessionID : store.selectedSessionID
+                    if let selected = snapshot.sessions.first(where: { $0.sessionID == selectedID }) {
+                        SessionSummaryCard(
+                            session: selected,
+                            loadedCount: store.sessionEntries.count,
+                            totalMatches: store.logTotalMatches
+                        )
+                        SessionActionTable(
+                            entries: store.sessionEntries,
+                            totalMatches: store.logTotalMatches,
+                            auditedCalls: selected.auditedCalls,
+                            store: store,
+                            searchText: $searchText,
+                            filter: $filter
+                        )
                     }
-                    SessionActionTable(
-                        entries: snapshot.entries,
-                        truncated: snapshot.truncated,
-                        store: store,
-                        searchText: $searchText,
-                        filter: $filter
-                    )
                 }
             } else if store.logsUnavailable {
                 ActivityUnavailableCard(
@@ -55,8 +61,20 @@ struct SessionLogsView: View {
             }
         }
         .task { store.startLogPolling() }
+        .task(id: LogQueryKey(search: searchText, filter: filter)) {
+            if !searchText.isEmpty {
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { return }
+            }
+            store.setLogQuery(search: searchText, outcomes: filter.outcomes)
+        }
         .onDisappear { store.stopLogPolling() }
     }
+}
+
+private struct LogQueryKey: Hashable {
+    let search: String
+    let filter: SessionActionFilter
 }
 
 private struct SessionChooser: View {
@@ -90,7 +108,8 @@ private struct SessionChooser: View {
 
 private struct SessionSummaryCard: View {
     let session: ActivitySession
-    let visibleCount: Int
+    let loadedCount: Int
+    let totalMatches: Int
 
     var body: some View {
         AgentJailCardSurface(padding: 18) {
@@ -111,7 +130,7 @@ private struct SessionSummaryCard: View {
                 Spacer()
                 summaryMetric("Audited actions", value: session.auditedCalls.formatted())
                 Divider().frame(height: 34)
-                summaryMetric("Loaded", value: visibleCount.formatted())
+                summaryMetric("Loaded", value: "\(loadedCount.formatted()) of \(totalMatches.formatted())")
                 Divider().frame(height: 34)
                 summaryMetric("Started", value: startedText)
             }
@@ -145,11 +164,21 @@ private enum SessionActionFilter: String, CaseIterable, Identifiable {
         case .denied: "Denied"
         }
     }
+
+    var outcomes: [SessionActionOutcome] {
+        switch self {
+        case .all: []
+        case .allowed: [.allow]
+        case .asked: [.ask]
+        case .denied: [.deny, .block]
+        }
+    }
 }
 
 private struct SessionActionTable: View {
     let entries: [SessionAction]
-    let truncated: Bool
+    let totalMatches: Int
+    let auditedCalls: Int
     @ObservedObject var store: ActivityStore
     @Binding var searchText: String
     @Binding var filter: SessionActionFilter
@@ -160,14 +189,14 @@ private struct SessionActionTable: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Session actions").font(.title3.bold())
-                    Text(truncated
-                         ? "Newest first · showing a transport-safe recent window"
-                         : "Newest first · commands load when an action is opened")
+                    Text(isFiltering
+                         ? "Newest first · searching all \(auditedCalls.formatted()) audited actions"
+                         : "Newest first · all \(auditedCalls.formatted()) actions are searchable")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("\(visibleEntries.count) actions")
+                Text("\(entries.count.formatted()) of \(totalMatches.formatted()) loaded")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -175,7 +204,7 @@ private struct SessionActionTable: View {
             .padding(.vertical, 13)
             .agentJailTableSectionBackground(Color.primary.opacity(0.018))
             HStack(spacing: 12) {
-                TextField("Filter by tool, summary, rule, or reason", text: $searchText)
+                TextField("Search all \(auditedCalls.formatted()) actions", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 310)
                 Picker("Decision", selection: $filter) {
@@ -192,21 +221,50 @@ private struct SessionActionTable: View {
             Divider()
             SessionActionHeader()
             Divider()
-            if visibleEntries.isEmpty {
-                Text(entries.isEmpty ? "No audited actions were recorded for this session." : "No actions match these filters.")
+            if entries.isEmpty, store.isRefreshingLogs {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(isFiltering ? "Searching all session actions…" : "Loading session actions…")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+                .frame(maxWidth: .infinity, minHeight: 120)
+            } else if entries.isEmpty {
+                Text(totalMatches == 0 && isFiltering ? "No actions match these filters." : "No audited actions were recorded for this session.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(visibleEntries) { entry in
+                    ForEach(entries) { entry in
                         SessionActionRow(entry: entry) {
                             selectedEntry = entry
                             Task { await store.loadActionDetail(entry) }
                         }
-                        if entry.id != visibleEntries.last?.id { Divider().padding(.leading, 16) }
+                        if entry.id != entries.last?.id { Divider().padding(.leading, 16) }
                     }
                 }
+            }
+            if store.logHasMore {
+                Divider()
+                Button {
+                    Task { await store.loadMoreLogs() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if store.isLoadingMoreLogs { ProgressView().controlSize(.small) }
+                        Text(store.isLoadingMoreLogs ? "Loading older actions…" : "Load older actions")
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isLoadingMoreLogs || store.isRefreshingLogs)
+                .agentJailInteractiveHover()
+            } else if !entries.isEmpty {
+                Divider()
+                Label("All \(totalMatches.formatted()) matching actions loaded", systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 42)
             }
         }
         .compositingGroup()
@@ -218,19 +276,8 @@ private struct SessionActionTable: View {
         }
     }
 
-    private var visibleEntries: [SessionAction] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return entries.filter { entry in
-            let outcome = displayAction(entry).lowercased()
-            let matchesFilter: Bool = switch filter {
-            case .all: true
-            case .allowed: outcome == "allow"
-            case .asked: outcome == "ask"
-            case .denied: outcome == "deny" || outcome == "block"
-            }
-            let haystack = "\(entry.toolName) \(entry.summary) \(entry.ruleID) \(entry.reason) \(entry.impact)".lowercased()
-            return matchesFilter && (query.isEmpty || haystack.contains(query))
-        }
+    private var isFiltering: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || filter != .all
     }
 }
 

@@ -14,13 +14,20 @@ public struct ActivityControlClient: ActivityControlling {
 
     public func fetchNetwork() async throws -> NetworkSnapshotV1 {
         let token = try await loadToken()
-        let request = ActivityRequest(type: "network_snapshot", token: token, sessionID: nil, actionID: nil)
+        let request = ActivityRequest(type: "network_snapshot", token: token)
         return try await roundTrip(request, token: token).networkSnapshot()
     }
 
-    public func fetchSessionLog(sessionID: String?) async throws -> SessionLogSnapshotV1 {
+    public func fetchSessionLog(_ query: SessionLogQuery) async throws -> SessionLogSnapshotV1 {
         let token = try await loadToken()
-        let request = ActivityRequest(type: "session_log_snapshot", token: token, sessionID: sessionID, actionID: nil)
+        let request = ActivityRequest(
+            type: "session_log_snapshot",
+            token: token,
+            sessionID: query.sessionID,
+            beforeID: query.beforeID,
+            search: query.search.isEmpty ? nil : query.search,
+            actions: query.outcomes.isEmpty ? nil : query.outcomes.map(\.rawValue)
+        )
         return try await roundTrip(request, token: token).sessionLogSnapshot()
     }
 
@@ -59,10 +66,32 @@ private struct ActivityRequest: Encodable, Sendable {
     let protocolVersion: UInt32 = 1
     let sessionID: String?
     let actionID: Int64?
+    let beforeID: Int64?
+    let search: String?
+    let actions: [String]?
+
+    init(
+        type: String,
+        token: String,
+        sessionID: String? = nil,
+        actionID: Int64? = nil,
+        beforeID: Int64? = nil,
+        search: String? = nil,
+        actions: [String]? = nil
+    ) {
+        self.type = type
+        self.token = token
+        self.sessionID = sessionID
+        self.actionID = actionID
+        self.beforeID = beforeID
+        self.search = search
+        self.actions = actions
+    }
 
     enum CodingKeys: String, CodingKey {
         case type, token = "ctl_token", protocolVersion = "protocol_version"
         case sessionID = "session_id", actionID = "action_id"
+        case beforeID = "before_id", search, actions
     }
 
     func frame() throws -> Data {

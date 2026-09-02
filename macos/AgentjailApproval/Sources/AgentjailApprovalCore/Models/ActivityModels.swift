@@ -84,11 +84,15 @@ public struct SessionLogSnapshotV1: Decodable, Equatable, Sendable {
     public let selectedSessionID: String
     public let sessions: [ActivitySession]
     public let entries: [SessionAction]
+    public let totalMatches: Int
+    public let hasMore: Bool
+    public let nextBeforeID: Int64?
     public let truncated: Bool
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version", generatedAtUnixMs = "generated_at_unix_ms"
         case selectedSessionID = "selected_session_id", sessions, entries, truncated
+        case totalMatches = "total_matches", hasMore = "has_more", nextBeforeID = "next_before_id"
     }
 
     public init(from decoder: Decoder) throws {
@@ -100,10 +104,38 @@ public struct SessionLogSnapshotV1: Decodable, Equatable, Sendable {
         sessions = try values.decode([ActivitySession].self, forKey: .sessions)
         entries = try values.decode([SessionAction].self, forKey: .entries)
         truncated = try values.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        totalMatches = try values.decodeIfPresent(Int.self, forKey: .totalMatches) ?? entries.count
+        hasMore = try values.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        nextBeforeID = try values.decodeIfPresent(Int64.self, forKey: .nextBeforeID)
         guard generatedAtUnixMs > 0, sessions.count <= 50, entries.count <= 500,
+              totalMatches >= entries.count,
+              (!hasMore && nextBeforeID == nil) || (hasMore && nextBeforeID == entries.last?.id),
               selectedSessionID.isEmpty || sessions.contains(where: { $0.sessionID == selectedSessionID }) else {
             throw ActivityModelError.invalidProjection
         }
+    }
+}
+
+public enum SessionActionOutcome: String, Encodable, Equatable, Sendable {
+    case allow, ask, deny, block
+}
+
+public struct SessionLogQuery: Equatable, Sendable {
+    public let sessionID: String?
+    public let beforeID: Int64?
+    public let search: String
+    public let outcomes: [SessionActionOutcome]
+
+    public init(
+        sessionID: String? = nil,
+        beforeID: Int64? = nil,
+        search: String = "",
+        outcomes: [SessionActionOutcome] = []
+    ) {
+        self.sessionID = sessionID
+        self.beforeID = beforeID
+        self.search = String(search.prefix(256))
+        self.outcomes = outcomes
     }
 }
 
@@ -213,7 +245,7 @@ public enum ActivityModelError: Error, Equatable, Sendable {
 
 public protocol ActivityControlling: Sendable {
     func fetchNetwork() async throws -> NetworkSnapshotV1
-    func fetchSessionLog(sessionID: String?) async throws -> SessionLogSnapshotV1
+    func fetchSessionLog(_ query: SessionLogQuery) async throws -> SessionLogSnapshotV1
     func fetchSessionActionDetail(sessionID: String, actionID: Int64) async throws -> SessionActionDetailV1
 }
 
