@@ -158,6 +158,8 @@ const (
 	HostConnectorConsumed            = "host_connector.consumed"
 	HostConnectorExpired             = "host_connector.expired"
 	HostConnectorRevoked             = "host_connector.revoked"
+	CostIndexCompleted               = "cost_index.completed"
+	CostIndexFailed                  = "cost_index.failed"
 )
 
 // Event is one audit log entry.

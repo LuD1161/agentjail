@@ -4,6 +4,21 @@
 
 ## Unreleased
 
+### Added
+
+- **Incremental local cost index**: the daemon performs a resumable startup
+  backfill and reusable daily maintenance, persists content-free typed usage
+  facts and report rows in the existing SQLite store, and makes
+  `agentjail cost` and the local UI query the precomputed projection instead of
+  rescanning multi-gigabyte Claude Code and Codex histories (ADR
+  0142-incremental-cost-index).
+
+### Changed
+
+- **Explicit cost-index readiness**: cost callers now report a building or
+  stale index instead of silently spending tens of seconds rereading source
+  transcripts.
+
 ## v1.7.0 - 2026-08-29
 
 ![v1.7.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.7.0-summary.svg)

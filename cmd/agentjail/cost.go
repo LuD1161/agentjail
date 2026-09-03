@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/costanalytics"
+	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/ui"
 )
 
@@ -23,6 +26,7 @@ func runCost(args []string) int {
 	projectDir := fs.String("project", "", "filter to a specific project directory")
 	jsonOut := fs.Bool("json", false, "output as JSON")
 	noColor := fs.Bool("no-color", false, "disable color output")
+	dbPath := fs.String("db", defaultCostDBPath(), "path to the AgentJail SQLite store")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -46,8 +50,25 @@ func runCost(args []string) int {
 	}
 
 	since := time.Now().Add(-period)
-	sessions, errs := costanalytics.CollectAll(since)
-	for _, e := range errs {
+	indexed, err := store.OpenReadOnly(*dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail cost: open cost index: %v\n", err)
+		return 1
+	}
+	defer indexed.Close()
+	sessions, indexStatus, err := costanalytics.ReadIndexedSessions(context.Background(), indexed, since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail cost: read cost index: %v\n", err)
+		return 1
+	}
+	if !indexStatus.Ready {
+		fmt.Fprintln(os.Stderr, "agentjail cost: the local cost index is not ready; ensure agentjail-daemon is running and retry shortly")
+		return 1
+	}
+	if time.Since(indexStatus.LatestUpdate) > 26*time.Hour {
+		fmt.Fprintf(os.Stderr, "warning: cost index was last refreshed at %s\n", indexStatus.LatestUpdate.Local().Format(time.RFC3339))
+	}
+	for _, e := range costanalytics.PricingWarnings(sessions) {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
@@ -90,6 +111,14 @@ func runCost(args []string) int {
 	printCostReport(report)
 	printBudgetAlerts(budgetStatus)
 	return 0
+}
+
+func defaultCostDBPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".agentjail", "agentjail.db")
+	}
+	return filepath.Join(home, ".agentjail", "agentjail.db")
 }
 
 func printCostReport(r costanalytics.CostReport) {

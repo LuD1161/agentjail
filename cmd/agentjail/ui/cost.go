@@ -11,6 +11,7 @@ import (
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/costanalytics"
+	localstore "github.com/LuD1161/agentjail/internal/store"
 )
 
 // CostQuery is the UI's typed request to the local transcript cost domain.
@@ -26,12 +27,30 @@ type CostProvider interface {
 	Summary(context.Context, CostQuery) (costanalytics.CostReport, []costanalytics.BudgetAlert, error)
 }
 
-type localCostProvider struct{}
+type localCostProvider struct {
+	open func() (localstore.ReadStore, error)
+}
 
-func (localCostProvider) Summary(_ context.Context, query CostQuery) (costanalytics.CostReport, []costanalytics.BudgetAlert, error) {
-	sessions, collectErrs := costanalytics.CollectAll(query.Since)
-	for _, err := range collectErrs {
-		slog.Debug("cost transcript source unavailable", "err", err)
+func (provider localCostProvider) Summary(ctx context.Context, query CostQuery) (costanalytics.CostReport, []costanalytics.BudgetAlert, error) {
+	if provider.open == nil {
+		return costanalytics.CostReport{}, nil, fmt.Errorf("cost index is unavailable")
+	}
+	indexed, err := provider.open()
+	if err != nil {
+		return costanalytics.CostReport{}, nil, err
+	}
+	sessions, indexStatus, err := costanalytics.ReadIndexedSessions(ctx, indexed, query.Since)
+	if err != nil {
+		return costanalytics.CostReport{}, nil, err
+	}
+	if !indexStatus.Ready {
+		return costanalytics.CostReport{}, nil, fmt.Errorf("cost index is still building")
+	}
+	if time.Since(indexStatus.LatestUpdate) > 26*time.Hour {
+		slog.Debug("cost index is stale", "updated_at", indexStatus.LatestUpdate)
+	}
+	for _, warning := range costanalytics.PricingWarnings(sessions) {
+		slog.Debug("cost estimate warning", "err", warning)
 	}
 	reportSessions := sessions
 	if query.Project != "" {

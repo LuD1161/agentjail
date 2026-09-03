@@ -1,61 +1,21 @@
 package costanalytics
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
-func CollectAll(since time.Time) ([]SessionCost, []error) {
-	var all []SessionCost
+// PricingWarnings reports estimates that could not use the most specific
+// offline price dimensions available.
+func PricingWarnings(sessions []SessionCost) []error {
 	var errs []error
-
-	if _, err := GetPricingProvider(); err != nil {
-		errs = append(errs, err)
-	}
-
-	ccReader := NewClaudeCodeReader()
-	if sessions, err := ccReader.ReadSessions(since); err != nil {
-		all = append(all, sessions...)
-		errs = append(errs, err)
-	} else {
-		all = append(all, sessions...)
-	}
-
-	codexReader := NewCodexReader()
-	if sessions, err := codexReader.ReadSessions(since); err != nil {
-		all = append(all, sessions...)
-		errs = append(errs, err)
-	} else {
-		all = append(all, sessions...)
-	}
-
-	ocReader, err := NewOpenCodeReader(DefaultOpenCodeDBPath())
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, err)
-		}
-	} else {
-		sessions, err := ocReader.ReadSessions(since)
-		closeErr := ocReader.Close()
-		if err != nil {
-			errs = append(errs, err)
-		} else {
-			all = append(all, sessions...)
-		}
-		if closeErr != nil {
-			errs = append(errs, closeErr)
-		}
-	}
-	errs = append(errs, missingPricingErrors(all)...)
-	errs = append(errs, incompleteRequestPricingErrors(all)...)
-	errs = append(errs, incompleteCacheWritePricingErrors(all)...)
-
-	return all, errs
+	errs = append(errs, missingPricingErrors(sessions)...)
+	errs = append(errs, incompleteRequestPricingErrors(sessions)...)
+	errs = append(errs, incompleteCacheWritePricingErrors(sessions)...)
+	return errs
 }
 
 func incompleteCacheWritePricingErrors(sessions []SessionCost) []error {
