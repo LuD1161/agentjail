@@ -928,3 +928,273 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 	)
 	return err
 }
+
+const getCostSourceCheckpoint = `-- name: GetCostSourceCheckpoint :one
+SELECT source, source_path, generation, file_identity, size_bytes, mtime_ns,
+       offset_bytes, parser_version, parser_state_json, updated_ts
+FROM cost_source_checkpoints
+WHERE source = ? AND source_path = ?
+`
+
+type GetCostSourceCheckpointParams struct {
+	Source     string `json:"source"`
+	SourcePath string `json:"source_path"`
+}
+
+type GetCostSourceCheckpointRow struct {
+	Source          string `json:"source"`
+	SourcePath      string `json:"source_path"`
+	Generation      string `json:"generation"`
+	FileIdentity    string `json:"file_identity"`
+	SizeBytes       int64  `json:"size_bytes"`
+	MtimeNs         int64  `json:"mtime_ns"`
+	OffsetBytes     int64  `json:"offset_bytes"`
+	ParserVersion   int64  `json:"parser_version"`
+	ParserStateJson string `json:"parser_state_json"`
+	UpdatedTs       string `json:"updated_ts"`
+}
+
+func (q *Queries) GetCostSourceCheckpoint(ctx context.Context, arg GetCostSourceCheckpointParams) (GetCostSourceCheckpointRow, error) {
+	row := q.db.QueryRowContext(ctx, getCostSourceCheckpoint, arg.Source, arg.SourcePath)
+	var i GetCostSourceCheckpointRow
+	err := row.Scan(&i.Source, &i.SourcePath, &i.Generation, &i.FileIdentity, &i.SizeBytes, &i.MtimeNs, &i.OffsetBytes, &i.ParserVersion, &i.ParserStateJson, &i.UpdatedTs)
+	return i, err
+}
+
+const listCostSourceCheckpoints = `-- name: ListCostSourceCheckpoints :many
+SELECT source, source_path, generation, file_identity, size_bytes, mtime_ns,
+       offset_bytes, parser_version, parser_state_json, updated_ts
+FROM cost_source_checkpoints
+WHERE ? = '' OR source = ?
+ORDER BY source ASC, source_path ASC
+`
+
+type ListCostSourceCheckpointsParams struct {
+	Column1 string
+	Source  string
+}
+
+func (q *Queries) ListCostSourceCheckpoints(ctx context.Context, arg ListCostSourceCheckpointsParams) ([]GetCostSourceCheckpointRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCostSourceCheckpoints, arg.Column1, arg.Source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetCostSourceCheckpointRow{}
+	for rows.Next() {
+		var i GetCostSourceCheckpointRow
+		if err := rows.Scan(&i.Source, &i.SourcePath, &i.Generation, &i.FileIdentity, &i.SizeBytes, &i.MtimeNs, &i.OffsetBytes, &i.ParserVersion, &i.ParserStateJson, &i.UpdatedTs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+const upsertCostSourceCheckpoint = `-- name: UpsertCostSourceCheckpoint :exec
+INSERT INTO cost_source_checkpoints
+    (source, source_path, generation, file_identity, size_bytes, mtime_ns,
+     offset_bytes, parser_version, parser_state_json, updated_ts)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source, source_path) DO UPDATE SET
+    generation = excluded.generation, file_identity = excluded.file_identity,
+    size_bytes = excluded.size_bytes, mtime_ns = excluded.mtime_ns,
+    offset_bytes = excluded.offset_bytes, parser_version = excluded.parser_version,
+    parser_state_json = excluded.parser_state_json, updated_ts = excluded.updated_ts
+`
+
+type UpsertCostSourceCheckpointParams struct {
+	Source, SourcePath, Generation, FileIdentity   string
+	SizeBytes, MtimeNs, OffsetBytes, ParserVersion int64
+	ParserStateJson, UpdatedTs                     string
+}
+
+func (q *Queries) UpsertCostSourceCheckpoint(ctx context.Context, a UpsertCostSourceCheckpointParams) error {
+	_, err := q.db.ExecContext(ctx, upsertCostSourceCheckpoint, a.Source, a.SourcePath, a.Generation, a.FileIdentity, a.SizeBytes, a.MtimeNs, a.OffsetBytes, a.ParserVersion, a.ParserStateJson, a.UpdatedTs)
+	return err
+}
+
+const insertCostUsageEvent = `-- name: InsertCostUsageEvent :exec
+INSERT INTO cost_usage_events
+    (source, source_path, generation, event_key, session_id, parent_session_id,
+     ts, agent, model, project, input_tokens, output_tokens, cache_read_tokens,
+     cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+     reasoning_tokens, request_input_tokens, request_output_tokens,
+     request_cache_read_tokens, request_cache_write_tokens, has_request_usage,
+     has_cache_ttl, recorded_cost_usd)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source, source_path, generation, event_key) DO NOTHING
+`
+
+type InsertCostUsageEventParams struct {
+	Source, SourcePath, Generation, EventKey, SessionID, ParentSessionID                     string
+	Ts, Agent, Model, Project                                                                string
+	InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens                             int64
+	CacheWrite5mTokens, CacheWrite1hTokens, ReasoningTokens                                  int64
+	RequestInputTokens, RequestOutputTokens, RequestCacheReadTokens, RequestCacheWriteTokens int64
+	HasRequestUsage, HasCacheTtl                                                             int64
+	RecordedCostUsd                                                                          float64
+}
+
+func (q *Queries) InsertCostUsageEvent(ctx context.Context, a InsertCostUsageEventParams) error {
+	_, err := q.db.ExecContext(ctx, insertCostUsageEvent,
+		a.Source, a.SourcePath, a.Generation, a.EventKey, a.SessionID, a.ParentSessionID,
+		a.Ts, a.Agent, a.Model, a.Project, a.InputTokens, a.OutputTokens,
+		a.CacheReadTokens, a.CacheWriteTokens, a.CacheWrite5mTokens,
+		a.CacheWrite1hTokens, a.ReasoningTokens, a.RequestInputTokens,
+		a.RequestOutputTokens, a.RequestCacheReadTokens, a.RequestCacheWriteTokens,
+		a.HasRequestUsage, a.HasCacheTtl, a.RecordedCostUsd)
+	return err
+}
+
+type DeleteCostGenerationParams struct{ Source, SourcePath, Generation string }
+type DeleteCostGenerationDayParams struct{ Source, SourcePath, Generation, UsageDay string }
+
+const deleteCostUsageEventsGeneration = `DELETE FROM cost_usage_events WHERE source = ? AND source_path = ? AND generation = ?`
+
+func (q *Queries) DeleteCostUsageEventsGeneration(ctx context.Context, a DeleteCostGenerationParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCostUsageEventsGeneration, a.Source, a.SourcePath, a.Generation)
+	return err
+}
+
+const deleteCostDailyUsageGeneration = `DELETE FROM cost_daily_usage WHERE source = ? AND source_path = ? AND generation = ?`
+
+func (q *Queries) DeleteCostDailyUsageGeneration(ctx context.Context, a DeleteCostGenerationParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCostDailyUsageGeneration, a.Source, a.SourcePath, a.Generation)
+	return err
+}
+
+const deleteCostSourceCheckpointGeneration = `DELETE FROM cost_source_checkpoints WHERE source = ? AND source_path = ? AND generation = ?`
+
+func (q *Queries) DeleteCostSourceCheckpointGeneration(ctx context.Context, a DeleteCostGenerationParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCostSourceCheckpointGeneration, a.Source, a.SourcePath, a.Generation)
+	return err
+}
+
+const deleteCostDailyUsageGenerationDay = `DELETE FROM cost_daily_usage WHERE source = ? AND source_path = ? AND generation = ? AND usage_day = ?`
+
+func (q *Queries) DeleteCostDailyUsageGenerationDay(ctx context.Context, a DeleteCostGenerationDayParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCostDailyUsageGenerationDay, a.Source, a.SourcePath, a.Generation, a.UsageDay)
+	return err
+}
+
+const deleteAllCostDailyUsage = `DELETE FROM cost_daily_usage`
+
+func (q *Queries) DeleteAllCostDailyUsage(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAllCostDailyUsage)
+	return err
+}
+
+const insertCostDailyUsage = `INSERT INTO cost_daily_usage
+    (usage_day, source, source_path, generation, session_id, started_ts, agent, model,
+     project, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+     cache_write_5m_tokens, cache_write_1h_tokens, reasoning_tokens, pricing_mode,
+     pricing_revision, cost_usd, event_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+type InsertCostDailyUsageParams struct {
+	UsageDay, Source, SourcePath, Generation, SessionID, StartedTs, Agent, Model, Project string
+	InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens                          int64
+	CacheWrite5mTokens, CacheWrite1hTokens, ReasoningTokens                               int64
+	PricingMode, PricingRevision                                                          string
+	CostUsd                                                                               float64
+	EventCount                                                                            int64
+}
+
+func (q *Queries) InsertCostDailyUsage(ctx context.Context, a InsertCostDailyUsageParams) error {
+	_, err := q.db.ExecContext(ctx, insertCostDailyUsage,
+		a.UsageDay, a.Source, a.SourcePath, a.Generation, a.SessionID, a.StartedTs, a.Agent,
+		a.Model, a.Project, a.InputTokens, a.OutputTokens, a.CacheReadTokens,
+		a.CacheWriteTokens, a.CacheWrite5mTokens, a.CacheWrite1hTokens,
+		a.ReasoningTokens, a.PricingMode, a.PricingRevision, a.CostUsd, a.EventCount)
+	return err
+}
+
+const listCostUsageEventsWindow = `SELECT source, source_path, generation, event_key, session_id,
+       parent_session_id, ts, agent, model, project, input_tokens, output_tokens,
+       cache_read_tokens, cache_write_tokens, cache_write_5m_tokens,
+       cache_write_1h_tokens, reasoning_tokens, request_input_tokens,
+       request_output_tokens, request_cache_read_tokens, request_cache_write_tokens,
+       has_request_usage, has_cache_ttl, recorded_cost_usd
+FROM cost_usage_events WHERE ts >= ? AND ts < ?
+ORDER BY ts ASC, source ASC, session_id ASC, event_key ASC`
+
+type ListCostUsageEventsWindowParams struct{ Ts, Ts_2 string }
+type ListCostUsageEventsWindowRow struct {
+	Source, SourcePath, Generation, EventKey, SessionID, ParentSessionID                     string
+	Ts, Agent, Model, Project                                                                string
+	InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens                             int64
+	CacheWrite5mTokens, CacheWrite1hTokens, ReasoningTokens                                  int64
+	RequestInputTokens, RequestOutputTokens, RequestCacheReadTokens, RequestCacheWriteTokens int64
+	HasRequestUsage, HasCacheTtl                                                             int64
+	RecordedCostUsd                                                                          float64
+}
+
+func (q *Queries) ListCostUsageEventsWindow(ctx context.Context, a ListCostUsageEventsWindowParams) ([]ListCostUsageEventsWindowRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCostUsageEventsWindow, a.Ts, a.Ts_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCostUsageEventsWindowRow{}
+	for rows.Next() {
+		var i ListCostUsageEventsWindowRow
+		if err := rows.Scan(&i.Source, &i.SourcePath, &i.Generation, &i.EventKey, &i.SessionID, &i.ParentSessionID, &i.Ts, &i.Agent, &i.Model, &i.Project, &i.InputTokens, &i.OutputTokens, &i.CacheReadTokens, &i.CacheWriteTokens, &i.CacheWrite5mTokens, &i.CacheWrite1hTokens, &i.ReasoningTokens, &i.RequestInputTokens, &i.RequestOutputTokens, &i.RequestCacheReadTokens, &i.RequestCacheWriteTokens, &i.HasRequestUsage, &i.HasCacheTtl, &i.RecordedCostUsd); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+const listCostDailyUsageWindow = `SELECT usage_day, source, source_path, generation, session_id, started_ts, agent,
+       model, project, input_tokens, output_tokens, cache_read_tokens,
+       cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+       reasoning_tokens, pricing_mode, pricing_revision, cost_usd, event_count
+FROM cost_daily_usage WHERE started_ts >= ? AND started_ts < ?
+ORDER BY usage_day ASC, source ASC, session_id ASC, model ASC`
+
+type ListCostDailyUsageWindowParams struct{ StartedTs, StartedTs_2 string }
+type ListCostDailyUsageWindowRow struct {
+	UsageDay, Source, SourcePath, Generation, SessionID, StartedTs, Agent, Model, Project string
+	InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens                          int64
+	CacheWrite5mTokens, CacheWrite1hTokens, ReasoningTokens                               int64
+	PricingMode, PricingRevision                                                          string
+	CostUsd                                                                               float64
+	EventCount                                                                            int64
+}
+
+func (q *Queries) ListCostDailyUsageWindow(ctx context.Context, a ListCostDailyUsageWindowParams) ([]ListCostDailyUsageWindowRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCostDailyUsageWindow, a.StartedTs, a.StartedTs_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCostDailyUsageWindowRow{}
+	for rows.Next() {
+		var i ListCostDailyUsageWindowRow
+		if err := rows.Scan(&i.UsageDay, &i.Source, &i.SourcePath, &i.Generation, &i.SessionID, &i.StartedTs, &i.Agent, &i.Model, &i.Project, &i.InputTokens, &i.OutputTokens, &i.CacheReadTokens, &i.CacheWriteTokens, &i.CacheWrite5mTokens, &i.CacheWrite1hTokens, &i.ReasoningTokens, &i.PricingMode, &i.PricingRevision, &i.CostUsd, &i.EventCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+const costIndexStatus = `SELECT
+    (SELECT COUNT(*) FROM cost_source_checkpoints) AS checkpoint_count,
+    (SELECT COUNT(*) FROM cost_usage_events) AS event_count,
+    (SELECT COUNT(*) FROM cost_daily_usage) AS daily_row_count,
+    COALESCE((SELECT MAX(updated_ts) FROM cost_source_checkpoints), '') AS latest_update`
+
+type CostIndexStatusRow struct {
+	CheckpointCount, EventCount, DailyRowCount int64
+	LatestUpdate                               string
+}
+
+func (q *Queries) CostIndexStatus(ctx context.Context) (CostIndexStatusRow, error) {
+	row := q.db.QueryRowContext(ctx, costIndexStatus)
+	var i CostIndexStatusRow
+	err := row.Scan(&i.CheckpointCount, &i.EventCount, &i.DailyRowCount, &i.LatestUpdate)
+	return i, err
+}

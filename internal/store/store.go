@@ -20,6 +20,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/redact"
 
 	"github.com/LuD1161/agentjail/internal/audit"
+	"github.com/LuD1161/agentjail/internal/costindex"
 )
 
 // DecisionRecord is one tool-call evaluation. Writes set ToolInput (raw); the
@@ -204,6 +205,22 @@ type ReadOnlyStore interface {
 	CountWouldBlock(ctx context.Context, since time.Time) ([]WouldBlockCount, error)
 	ComputeStats(ctx context.Context, since time.Time) (StatsReport, error)
 	Close() error
+}
+
+// Store composes the established event store with the daemon-only cost index
+// writer. Keeping the cost capability separate avoids forcing unrelated event
+// store fakes to implement it.
+type Store interface {
+	EventStore
+	costindex.Writer
+	costindex.Reader
+}
+
+// ReadStore composes read-only event queries with the cost index reader used
+// by CLI and UI callers.
+type ReadStore interface {
+	ReadOnlyStore
+	costindex.Reader
 }
 
 // StatsReport is the typed aggregate summary rendered by `agentjail stats`.
