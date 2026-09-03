@@ -13,7 +13,7 @@ A safety rail for Claude Code, Codex, and Cursor. <br>
 Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
-&nbsp;![v1.4.1](https://img.shields.io/badge/v1.4.1-released-orange)
+&nbsp;![v1.8.0](https://img.shields.io/badge/v1.8.0-released-orange)
 &nbsp;![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-555)
 &nbsp;[![Follow @agentjail](https://img.shields.io/badge/follow-%40agentjail-1DA1F2?style=flat&logo=x&logoColor=white)](https://twitter.com/agentjail)
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
@@ -43,6 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v1.8.0** | Sep 2, 2026 | Cost reports now read a persistent local index instead of rescanning multi-gigabyte Claude Code and Codex histories. Complete-record checkpoints, fork and replacement handling, startup backfill, reusable daily maintenance, and explicit building or stale status keep the faster path honest and content-free. |
 | **v1.7.0** | Aug 29, 2026 | Claude Code and Codex learn the governed host-access path through an AgentJail-owned instruction block. Exact session-bound runtime grants and configured connector diagnostics establish the next capability boundary, production MCP forwarding remains fail closed, and Codex 0.150.1 command approvals no longer loop on the rewritten broker callback. |
 | **v1.6.0** | Aug 16, 2026 | Generic credentials use arbitrary IDs, labels, tags, and explicit environment or file delivery. macOS gains the native allow-once host proxy, while the release gate now proves real Codex credential, approval, proxy, and strict tunnel paths with no required SKIPs. The CLI release still does not install the macOS Network Extension. |
 | **v1.5.0** | Aug 6, 2026 | Opted-in PATH shims now launch through the transparent tunnel, macOS shielded sessions start and link the local UI, and routine startup stays compact while private session logs retain diagnostics. Linux Landlock config-file grants are corrected. |

@@ -4,20 +4,32 @@
 
 ## Unreleased
 
+## v1.8.0 - 2026-09-02
+
+![v1.8.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.0-summary.svg)
+
+## TL;DR
+
+- **Get cost reports quickly, even with multi-gigabyte agent histories**, because
+  the CLI and local UI no longer rescan every retained transcript for each view.
+- **Keep totals current automatically** while the daemon refreshes new usage in
+  the background after startup and each day.
+- **Trust reports while sessions are still changing**, including active, forked,
+  truncated, replaced, and unusually large transcript files.
+- **See when data is building or stale without giving up local privacy** because
+  the index stores usage facts, never prompts, responses, commands, or tool output.
+
 ### Added
 
-- **Incremental local cost index**: the daemon performs a resumable startup
-  backfill and reusable daily maintenance, persists content-free typed usage
-  facts and report rows in the existing SQLite store, and makes
-  `agentjail cost` and the local UI query the precomputed projection instead of
-  rescanning multi-gigabyte Claude Code and Codex histories (ADR
-  0142-incremental-cost-index).
+- **Fast local cost analytics**: `agentjail cost` and the local UI now read a
+  ready-to-query local index instead of repeatedly scanning retained Claude Code
+  and Codex histories. The daemon keeps it current in the background and stores
+  only typed usage facts (ADR 0142-incremental-cost-index).
 
 ### Changed
 
-- **Explicit cost-index readiness**: cost callers now report a building or
-  stale index instead of silently spending tens of seconds rereading source
-  transcripts.
+- **Visible report readiness**: cost callers now say when data is building or
+  stale instead of leaving users to guess whether a quiet command is working.
 
 ## v1.7.0 - 2026-08-29
 
