@@ -47,6 +47,72 @@ type modelTokens struct {
 	cacheWrite1h int64
 }
 
+// ClaudeParserState is the resumable, content-free state of one Claude JSONL
+// transcript. It is safe to persist between incremental reads.
+type ClaudeParserState struct {
+	SessionID     SessionID `json:"session_id"`
+	Project       Project   `json:"project"`
+	StartedAt     time.Time `json:"started_at"`
+	SeenTimestamp bool      `json:"seen_timestamp,omitempty"`
+}
+
+func NewClaudeParserState(sessionID SessionID, project Project, fallbackStart time.Time) ClaudeParserState {
+	return ClaudeParserState{SessionID: sessionID, Project: project, StartedAt: fallbackStart}
+}
+
+// ApplyClaudeRecord updates state and returns the usage fact, if any, from one
+// decoded record. Malformed and non-usage records are intentionally ignored.
+func ApplyClaudeRecord(state *ClaudeParserState, encoded []byte) (TranscriptUsage, bool) {
+	if state == nil {
+		return TranscriptUsage{}, false
+	}
+	var line transcriptLine
+	if err := json.Unmarshal(encoded, &line); err != nil {
+		return TranscriptUsage{}, false
+	}
+	if line.CWD != "" {
+		state.Project = Project(line.CWD)
+	}
+	timestamp, timestampErr := time.Parse(time.RFC3339Nano, line.Timestamp)
+	if timestampErr == nil && (!state.SeenTimestamp || timestamp.Before(state.StartedAt)) {
+		state.StartedAt = timestamp
+		state.SeenTimestamp = true
+	}
+	if line.Type != "assistant" || line.Message.Usage == nil {
+		return TranscriptUsage{}, false
+	}
+
+	model := Model(line.Message.Model)
+	if model == "" {
+		model = "(unknown)"
+	}
+	cacheWrite5m := line.Message.Usage.CacheCreation.Ephemeral5mInputTokens
+	cacheWrite1h := line.Message.Usage.CacheCreation.Ephemeral1hInputTokens
+	cacheWrite := line.Message.Usage.CacheCreationInputTokens
+	if classified := cacheWrite5m + cacheWrite1h; classified > cacheWrite {
+		cacheWrite = classified
+	}
+	occurredAt := state.StartedAt
+	if timestampErr == nil {
+		occurredAt = timestamp
+	}
+	return TranscriptUsage{
+		Source:     SourceClaudeCode,
+		SessionID:  state.SessionID,
+		Model:      model,
+		Project:    state.Project,
+		OccurredAt: occurredAt,
+		Usage: TokenUsage{
+			Input:        line.Message.Usage.InputTokens,
+			Output:       line.Message.Usage.OutputTokens,
+			CacheRead:    line.Message.Usage.CacheReadInputTokens,
+			CacheWrite:   cacheWrite,
+			CacheWrite5m: cacheWrite5m,
+			CacheWrite1h: cacheWrite1h,
+		},
+	}, true
+}
+
 func NewClaudeCodeReader() *ClaudeCodeReader {
 	home, _ := os.UserHomeDir()
 	return &ClaudeCodeReader{projectsDir: filepath.Join(home, ".claude", "projects")}
@@ -103,52 +169,37 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 	}
 	defer f.Close()
 
-	// Extract session ID from filename (without .jsonl)
-	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-
-	// Extract project name from path: .../projects/<project>/sessions/<file>
-	project := extractProjectFromPath(path)
-	var startedAt time.Time
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat Claude transcript %s: %w", path, err)
+	}
+	state := NewClaudeParserState(
+		SessionID(strings.TrimSuffix(filepath.Base(path), ".jsonl")),
+		Project(extractProjectFromPath(path)),
+		info.ModTime(),
+	)
 
 	// Aggregate tokens per model
 	perModel := make(map[string]*modelTokens)
 
 	scanner := newTranscriptScanner(f)
 	for scanner.Scan() {
-		encoded := scanner.Bytes()
-		var line transcriptLine
-		if err := json.Unmarshal(encoded, &line); err == nil {
-			if line.CWD != "" {
-				project = line.CWD
-			}
-			if ts, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil && (startedAt.IsZero() || ts.Before(startedAt)) {
-				startedAt = ts
-			}
-			if line.Type == "assistant" && line.Message.Usage != nil {
-				model := line.Message.Model
-				if model == "" {
-					model = "(unknown)"
-				}
-
-				mt, ok := perModel[model]
-				if !ok {
-					mt = &modelTokens{}
-					perModel[model] = mt
-				}
-				mt.input += line.Message.Usage.InputTokens
-				mt.output += line.Message.Usage.OutputTokens
-				mt.cacheRead += line.Message.Usage.CacheReadInputTokens
-				cacheWrite5m := line.Message.Usage.CacheCreation.Ephemeral5mInputTokens
-				cacheWrite1h := line.Message.Usage.CacheCreation.Ephemeral1hInputTokens
-				cacheWrite := line.Message.Usage.CacheCreationInputTokens
-				if classified := cacheWrite5m + cacheWrite1h; classified > cacheWrite {
-					cacheWrite = classified
-				}
-				mt.cacheWrite += cacheWrite
-				mt.cacheWrite5m += cacheWrite5m
-				mt.cacheWrite1h += cacheWrite1h
-			}
+		usage, ok := ApplyClaudeRecord(&state, scanner.Bytes())
+		if !ok {
+			continue
 		}
+		model := string(usage.Model)
+		mt, ok := perModel[model]
+		if !ok {
+			mt = &modelTokens{}
+			perModel[model] = mt
+		}
+		mt.input += usage.Usage.Input
+		mt.output += usage.Usage.Output
+		mt.cacheRead += usage.Usage.CacheRead
+		mt.cacheWrite += usage.Usage.CacheWrite
+		mt.cacheWrite5m += usage.Usage.CacheWrite5m
+		mt.cacheWrite1h += usage.Usage.CacheWrite1h
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read Claude transcript %s: %w", path, err)
@@ -158,15 +209,6 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 		return nil, nil
 	}
 
-	// Get file mod time as session start time
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	if startedAt.IsZero() {
-		startedAt = info.ModTime()
-	}
 	models := make([]string, 0, len(perModel))
 	for model := range perModel {
 		models = append(models, model)
@@ -185,10 +227,10 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 		})
 		results = append(results, SessionCost{
 			Source:       SourceClaudeCode,
-			SessionID:    SessionID(sessionID),
+			SessionID:    state.SessionID,
 			Agent:        AgentClaudeCode,
 			Model:        Model(model),
-			Project:      Project(project),
+			Project:      state.Project,
 			CostUSD:      cost,
 			InputTokens:  mt.input,
 			OutputTokens: mt.output,
@@ -197,7 +239,7 @@ func (c *ClaudeCodeReader) parseSessionFile(path string) ([]SessionCost, error) 
 			CacheWrite5m: mt.cacheWrite5m,
 			CacheWrite1h: mt.cacheWrite1h,
 			PricingMode:  pricingMode,
-			StartedAt:    startedAt,
+			StartedAt:    state.StartedAt,
 		})
 	}
 

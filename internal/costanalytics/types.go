@@ -26,12 +26,24 @@ const (
 
 // TokenUsage is the typed pricing input retained from one request or aggregate.
 type TokenUsage struct {
-	Input        int64
-	Output       int64
-	CacheRead    int64
-	CacheWrite   int64
-	CacheWrite5m int64
-	CacheWrite1h int64
+	Input        int64 `json:"input_tokens"`
+	Output       int64 `json:"output_tokens"`
+	CacheRead    int64 `json:"cache_read_tokens"`
+	CacheWrite   int64 `json:"cache_write_tokens"`
+	CacheWrite5m int64 `json:"cache_write_5m_tokens"`
+	CacheWrite1h int64 `json:"cache_write_1h_tokens"`
+}
+
+// TranscriptUsage is the content-free usage fact decoded from one transcript
+// record. Persistent indexers may key it by the JSONL record offset.
+type TranscriptUsage struct {
+	Source     Source     `json:"source"`
+	SessionID  SessionID  `json:"session_id"`
+	Model      Model      `json:"model"`
+	Project    Project    `json:"project"`
+	OccurredAt time.Time  `json:"occurred_at"`
+	Usage      TokenUsage `json:"usage"`
+	Reasoning  int64      `json:"reasoning_tokens,omitempty"`
 }
 
 const (

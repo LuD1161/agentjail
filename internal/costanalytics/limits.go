@@ -48,6 +48,128 @@ type transcriptScanner struct {
 	done   bool
 }
 
+// JSONLCursorState is the durable position of an incremental transcript read.
+type JSONLCursorState struct {
+	Offset              int64 `json:"offset"`
+	DiscardingOversized bool  `json:"discarding_oversized,omitempty"`
+}
+
+// JSONLRecord is one complete newline-terminated transcript record.
+type JSONLRecord struct {
+	Offset int64
+	Bytes  []byte
+}
+
+// JSONLCursor reads only complete records and leaves an incomplete final record
+// uncheckpointed so an active transcript can finish it on a later pass.
+type JSONLCursor struct {
+	reader *bufio.Reader
+	state  JSONLCursorState
+	record JSONLRecord
+	err    error
+	done   bool
+}
+
+func NewJSONLCursor(r io.ReadSeeker, state JSONLCursorState) (*JSONLCursor, error) {
+	if state.Offset < 0 {
+		return nil, fmt.Errorf("negative JSONL cursor offset %d", state.Offset)
+	}
+	if _, err := r.Seek(state.Offset, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek JSONL cursor to %d: %w", state.Offset, err)
+	}
+	return &JSONLCursor{
+		reader: bufio.NewReaderSize(r, 64*1024),
+		state:  state,
+	}, nil
+}
+
+func (c *JSONLCursor) Scan() bool {
+	if c.done {
+		return false
+	}
+
+	for {
+		if c.state.DiscardingOversized {
+			if !c.discardOversized() {
+				return false
+			}
+		}
+
+		start := c.state.Offset
+		line := make([]byte, 0, 64*1024)
+		oversized := false
+		consumed := int64(0)
+
+		for {
+			fragment, err := c.reader.ReadSlice('\n')
+			consumed += int64(len(fragment))
+			if !oversized {
+				contentLen := len(fragment)
+				if err == nil && contentLen > 0 {
+					contentLen--
+				}
+				if len(line)+contentLen > maxTranscriptLineBytes {
+					line = nil
+					oversized = true
+				} else {
+					line = append(line, fragment...)
+				}
+			}
+
+			switch {
+			case err == nil:
+				c.state.Offset = start + consumed
+				if oversized {
+					break
+				}
+				c.record = JSONLRecord{Offset: start, Bytes: bytesTrimLineEnding(line)}
+				return true
+			case errors.Is(err, bufio.ErrBufferFull):
+				continue
+			case errors.Is(err, io.EOF):
+				c.done = true
+				if oversized {
+					c.state.Offset = start + consumed
+					c.state.DiscardingOversized = true
+				}
+				return false
+			default:
+				c.err = err
+				c.done = true
+				return false
+			}
+			break
+		}
+	}
+}
+
+func (c *JSONLCursor) discardOversized() bool {
+	for {
+		fragment, err := c.reader.ReadSlice('\n')
+		c.state.Offset += int64(len(fragment))
+		switch {
+		case err == nil:
+			c.state.DiscardingOversized = false
+			return true
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			c.done = true
+			return false
+		default:
+			c.err = err
+			c.done = true
+			return false
+		}
+	}
+}
+
+func (c *JSONLCursor) Record() JSONLRecord { return c.record }
+
+func (c *JSONLCursor) State() JSONLCursorState { return c.state }
+
+func (c *JSONLCursor) Err() error { return c.err }
+
 func newTranscriptScanner(r io.Reader) *transcriptScanner {
 	return &transcriptScanner{reader: bufio.NewReaderSize(r, 64*1024)}
 }

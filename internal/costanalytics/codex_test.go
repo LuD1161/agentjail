@@ -1,6 +1,7 @@
 package costanalytics
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -8,6 +9,63 @@ import (
 	"testing"
 	"time"
 )
+
+func TestCodexParserStateResumesCumulativeUsageAcrossModelChange(t *testing.T) {
+	fallback := time.Date(2026, 8, 3, 18, 0, 0, 0, time.UTC)
+	state := NewCodexParserState("rollout-file", fallback)
+	records := []string{
+		`{"timestamp":"2026-08-03T17:00:00Z","type":"session_meta","payload":{"id":"session-resume","forked_from_id":"parent","cwd":"/work/project"}}`,
+		`{"type":"turn_context","payload":{"model":"gpt-5.6-luna"}}`,
+		`{"timestamp":"2026-08-03T17:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}}`,
+	}
+	var first CodexUsageEvent
+	for _, record := range records {
+		if event, ok := ApplyCodexRecord(&state, []byte(record)); ok {
+			first = event
+		}
+	}
+	if first.Model != "gpt-5.6-luna" || first.Delta.InputTokens != 100 || first.Usage.Input != 80 {
+		t.Fatalf("first event = %+v", first)
+	}
+
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resumed CodexParserState
+	if err := json.Unmarshal(encoded, &resumed); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ApplyCodexRecord(&resumed, []byte(`{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}`)); ok {
+		t.Fatal("turn context produced usage")
+	}
+	second, ok := ApplyCodexRecord(&resumed, []byte(`{"timestamp":"2026-08-03T17:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":400,"cached_input_tokens":120,"output_tokens":30},"last_token_usage":{"input_tokens":300,"cached_input_tokens":100,"output_tokens":20}}}}`))
+	if !ok {
+		t.Fatal("appended cumulative usage was not decoded")
+	}
+	if second.SessionID != "session-resume" || second.Project != "/work/project" || second.Model != "gpt-5.6-sol" {
+		t.Fatalf("second identity = %+v", second.TranscriptUsage)
+	}
+	if second.Delta.InputTokens != 300 || second.Delta.CachedInputTokens != 100 || second.Delta.OutputTokens != 20 {
+		t.Fatalf("second delta = %+v", second.Delta)
+	}
+	if second.Usage.Input != 200 || second.Usage.CacheRead != 100 || second.Usage.Output != 20 {
+		t.Fatalf("second pricing usage = %+v", second.Usage)
+	}
+	if second.Last == nil || second.Last.InputTokens != 300 || resumed.MaxTotal != 430 || resumed.ForkedFrom != "parent" {
+		t.Fatalf("resumed state = %+v last=%+v", resumed, second.Last)
+	}
+}
+
+func TestCodexParserStatePersistsUnsplitCumulativeBaseline(t *testing.T) {
+	state := NewCodexParserState("session", time.Time{})
+	if event, ok := ApplyCodexRecord(&state, []byte(`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"output_tokens":5}}}}`)); ok {
+		t.Fatalf("usage without a model produced split event: %+v", event)
+	}
+	if state.CanSplit || state.MaxTotal != 45 || state.Usage.InputTokens != 40 {
+		t.Fatalf("state = %+v, want unsplit cumulative fallback", state)
+	}
+}
 
 func TestCodexReaderUsesFinalCumulativeUsage(t *testing.T) {
 	root := t.TempDir()
