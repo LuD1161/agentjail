@@ -42,13 +42,129 @@ type codexEvent struct {
 	} `json:"info"`
 }
 
-type codexTokenUsage struct {
+type CodexTokenUsage struct {
 	InputTokens       int64 `json:"input_tokens"`
 	CachedInputTokens int64 `json:"cached_input_tokens"`
 	CacheWriteTokens  int64 `json:"cache_write_input_tokens"`
 	OutputTokens      int64 `json:"output_tokens"`
 	ReasoningOutput   int64 `json:"reasoning_output_tokens"`
 	TotalTokens       int64 `json:"total_tokens"`
+}
+
+type codexTokenUsage = CodexTokenUsage
+
+// CodexParserState is the resumable, content-free state of one Codex JSONL
+// transcript. It retains the cumulative baseline needed to price only a suffix.
+type CodexParserState struct {
+	SessionID       SessionID       `json:"session_id"`
+	Model           Model           `json:"model"`
+	Project         Project         `json:"project"`
+	StartedAt       time.Time       `json:"started_at"`
+	Usage           CodexTokenUsage `json:"usage"`
+	MaxTotal        int64           `json:"max_total"`
+	ForkedFrom      SessionID       `json:"forked_from,omitempty"`
+	CanSplit        bool            `json:"can_split"`
+	SeenTimestamp   bool            `json:"seen_timestamp,omitempty"`
+	SeenSessionMeta bool            `json:"seen_session_meta,omitempty"`
+}
+
+// CodexUsageEvent is one cumulative usage advance attributed to the model that
+// was active at that record. Cumulative is also its fork-deduplication identity.
+type CodexUsageEvent struct {
+	TranscriptUsage
+	Cumulative CodexTokenUsage  `json:"cumulative"`
+	Delta      CodexTokenUsage  `json:"delta"`
+	Last       *CodexTokenUsage `json:"last,omitempty"`
+}
+
+func NewCodexParserState(sessionID SessionID, fallbackStart time.Time) CodexParserState {
+	return CodexParserState{SessionID: sessionID, StartedAt: fallbackStart, CanSplit: true}
+}
+
+// ApplyCodexRecord updates state and returns a new cumulative usage event, if
+// any. Malformed, unknown, duplicate, and non-usage records are ignored.
+func ApplyCodexRecord(state *CodexParserState, encoded []byte) (CodexUsageEvent, bool) {
+	if state == nil {
+		return CodexUsageEvent{}, false
+	}
+	var envelope codexEnvelope
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		return CodexUsageEvent{}, false
+	}
+	timestamp, timestampErr := time.Parse(time.RFC3339Nano, envelope.Timestamp)
+	if !state.SeenSessionMeta && timestampErr == nil && (!state.SeenTimestamp || timestamp.Before(state.StartedAt)) {
+		state.StartedAt = timestamp
+		state.SeenTimestamp = true
+	}
+
+	switch envelope.Type {
+	case "session_meta":
+		var meta codexSessionMeta
+		if state.SeenSessionMeta || json.Unmarshal(envelope.Payload, &meta) != nil {
+			return CodexUsageEvent{}, false
+		}
+		state.SeenSessionMeta = true
+		if timestampErr == nil {
+			state.StartedAt = timestamp
+			state.SeenTimestamp = true
+		}
+		if meta.ID != "" {
+			state.SessionID = SessionID(meta.ID)
+		} else if meta.SessionID != "" {
+			state.SessionID = SessionID(meta.SessionID)
+		}
+		if meta.CWD != "" {
+			state.Project = Project(meta.CWD)
+		}
+		state.ForkedFrom = SessionID(meta.ForkedFromID)
+	case "turn_context":
+		var turn codexTurnContext
+		if json.Unmarshal(envelope.Payload, &turn) == nil && turn.Model != "" {
+			state.Model = Model(turn.Model)
+		}
+	case "event_msg":
+		var event codexEvent
+		if json.Unmarshal(envelope.Payload, &event) != nil || event.Type != "token_count" || event.Info == nil || event.Info.TotalTokenUsage == nil {
+			return CodexUsageEvent{}, false
+		}
+		usage := *event.Info.TotalTokenUsage
+		total := usage.InputTokens + usage.OutputTokens
+		var decoded CodexUsageEvent
+		produced := false
+		if total > state.MaxTotal {
+			if state.Model == "" || !codexUsageAtLeast(usage, state.Usage) {
+				state.CanSplit = false
+			} else {
+				var last *CodexTokenUsage
+				if event.Info.LastTokenUsage != nil {
+					copy := *event.Info.LastTokenUsage
+					last = &copy
+				}
+				occurredAt := state.StartedAt
+				if timestampErr == nil {
+					occurredAt = timestamp
+				}
+				delta := subtractCodexUsage(usage, state.Usage)
+				decoded = CodexUsageEvent{
+					TranscriptUsage: TranscriptUsage{
+						Source: SourceCodex, SessionID: state.SessionID, Model: state.Model,
+						Project: state.Project, OccurredAt: occurredAt,
+						Usage: codexUsageForPricing(delta), Reasoning: delta.ReasoningOutput,
+					},
+					Cumulative: usage,
+					Delta:      delta,
+					Last:       last,
+				}
+				produced = true
+			}
+		}
+		if total >= state.MaxTotal {
+			state.Usage = usage
+			state.MaxTotal = total
+		}
+		return decoded, produced
+	}
+	return CodexUsageEvent{}, false
 }
 
 type codexSessionUsage struct {
@@ -174,71 +290,46 @@ func parseCodexSession(path string) (*codexSessionUsage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat Codex transcript %s: %w", path, err)
 	}
+	parser := NewCodexParserState(SessionID(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))), info.ModTime())
 	state := &codexSessionUsage{
-		sessionID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
-		startedAt: info.ModTime(),
-		byModel:   make(map[string]*codexModelUsage),
-		events:    make(map[codexUsageKey]codexUsageEvent),
-		canSplit:  true,
+		byModel:  make(map[string]*codexModelUsage),
+		events:   make(map[codexUsageKey]codexUsageEvent),
+		canSplit: true,
 	}
-	seenTimestamp := false
-	seenSessionMeta := false
 	scanner := newTranscriptScanner(file)
 	for scanner.Scan() {
-		encoded := scanner.Bytes()
-		var envelope codexEnvelope
-		if json.Unmarshal(encoded, &envelope) == nil {
-			timestamp, timestampErr := time.Parse(time.RFC3339Nano, envelope.Timestamp)
-			if !seenSessionMeta && timestampErr == nil && (!seenTimestamp || timestamp.Before(state.startedAt)) {
-				state.startedAt = timestamp
-				seenTimestamp = true
-			}
-			switch envelope.Type {
-			case "session_meta":
-				var meta codexSessionMeta
-				if !seenSessionMeta && json.Unmarshal(envelope.Payload, &meta) == nil {
-					seenSessionMeta = true
-					if timestampErr == nil {
-						state.startedAt = timestamp
-						seenTimestamp = true
-					}
-					if meta.ID != "" {
-						state.sessionID = meta.ID
-					} else if meta.SessionID != "" {
-						state.sessionID = meta.SessionID
-					}
-					if meta.CWD != "" {
-						state.project = meta.CWD
-					}
-					state.forkedFrom = meta.ForkedFromID
-				}
-			case "turn_context":
-				var context codexTurnContext
-				if json.Unmarshal(envelope.Payload, &context) == nil && context.Model != "" {
-					state.model = context.Model
-				}
-			case "event_msg":
-				var event codexEvent
-				if json.Unmarshal(envelope.Payload, &event) == nil && event.Type == "token_count" && event.Info != nil && event.Info.TotalTokenUsage != nil {
-					usage := *event.Info.TotalTokenUsage
-					// The serialized total has changed semantics across Codex versions;
-					// input + output is the stable cumulative ordering key. See ADR 0123-supplemental-model-pricing.
-					total := usage.InputTokens + usage.OutputTokens
-					if total > state.maxTotal {
-						state.addCumulativeUsage(usage, event.Info.LastTokenUsage)
-					}
-					if total >= state.maxTotal {
-						state.usage = usage
-						state.maxTotal = total
-					}
-				}
-			}
+		usage, ok := ApplyCodexRecord(&parser, scanner.Bytes())
+		if ok {
+			state.addUsageEvent(usage)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read Codex transcript %s: %w", path, err)
 	}
+	state.sessionID = string(parser.SessionID)
+	state.model = string(parser.Model)
+	state.project = string(parser.Project)
+	state.startedAt = parser.StartedAt
+	state.usage = parser.Usage
+	state.maxTotal = parser.MaxTotal
+	state.forkedFrom = string(parser.ForkedFrom)
+	state.canSplit = parser.CanSplit
 	return state, nil
+}
+
+func (session *codexSessionUsage) addUsageEvent(event CodexUsageEvent) {
+	model := string(event.Model)
+	modelUsage := session.byModel[model]
+	if modelUsage == nil {
+		modelUsage = &codexModelUsage{}
+		session.byModel[model] = modelUsage
+	}
+	session.events[codexKey(event.Cumulative)] = codexUsageEvent{model: model, delta: event.Delta, last: event.Last}
+	addCodexUsage(&modelUsage.usage, event.Delta)
+	if event.Last != nil && HasPricing(event.Model) {
+		modelUsage.requestCost += ComputeRequestCost(event.Model, codexUsageForPricing(*event.Last))
+		addCodexUsage(&modelUsage.pricedUsage, *event.Last)
+	}
 }
 
 func mergeCodexSession(sessions map[string]*codexSessionUsage, candidate *codexSessionUsage) {
@@ -273,30 +364,6 @@ func mergeCodexSession(sessions map[string]*codexSessionUsage, candidate *codexS
 	}
 	if current.model == "" {
 		current.model = candidate.model
-	}
-}
-
-func (session *codexSessionUsage) addCumulativeUsage(usage codexTokenUsage, last *codexTokenUsage) {
-	if session.model == "" || !codexUsageAtLeast(usage, session.usage) {
-		session.canSplit = false
-		return
-	}
-	modelUsage := session.byModel[session.model]
-	if modelUsage == nil {
-		modelUsage = &codexModelUsage{}
-		session.byModel[session.model] = modelUsage
-	}
-	delta := subtractCodexUsage(usage, session.usage)
-	var retainedLast *codexTokenUsage
-	if last != nil {
-		copy := *last
-		retainedLast = &copy
-	}
-	session.events[codexKey(usage)] = codexUsageEvent{model: session.model, delta: delta, last: retainedLast}
-	addCodexUsage(&modelUsage.usage, delta)
-	if last != nil && HasPricing(Model(session.model)) {
-		modelUsage.requestCost += ComputeRequestCost(Model(session.model), codexUsageForPricing(*last))
-		addCodexUsage(&modelUsage.pricedUsage, *last)
 	}
 }
 

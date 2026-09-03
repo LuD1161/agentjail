@@ -458,14 +458,22 @@ The same locally computed report is available as a terminal dashboard:
 agentjail cost --period 7d
 ```
 
-`agentjail cost --help` lists the period, project filter, and JSON flags. The
+`agentjail cost --help` lists the period, project filter, JSON, and index-store
+flags. The
 same complete local-flag help is available on reporting, replay, UI,
 installation, MCP inventory, skill-policy, and shielded-launch commands.
 Duration flags name the accepted forms, such as `30m`, `24h`, and `7d`.
 Every user-facing command and nested subcommand also includes copyable examples.
 
-Each run recalculates eligible historical Claude Code and Codex sessions from
-their local token totals, so newly supported model prices apply retroactively.
+The daemon incrementally indexes usage metadata after startup and at each local
+midnight. The first upgrade performs a resumable background backfill; later
+runs read only appended complete transcript records. `agentjail cost` and the
+Cost tab query the precomputed SQLite projection and never rescan transcript
+history. If the first backfill is still running, or the index is stale, the
+caller says so explicitly rather than appearing hung. Pricing revisions can
+rebuild historical estimates from retained typed usage facts without storing
+conversation or tool-result content.
+
 Model rows disclose uncached input, cache-read, cache-write, and output tokens;
 all four categories contribute to the API-equivalent estimate, even though a
 high cache-hit workload can make output tokens look small beside its total cost.

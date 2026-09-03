@@ -88,3 +88,82 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity);
 CREATE INDEX IF NOT EXISTS idx_audit_log_session ON audit_log(session_id);
+
+-- Incremental local cost index. Parser state is metadata-only JSON; transcript
+-- content is never persisted. See ADR 0142-incremental-cost-index.
+CREATE TABLE IF NOT EXISTS cost_source_checkpoints (
+    source            TEXT    NOT NULL,
+    source_path       TEXT    NOT NULL,
+    generation        TEXT    NOT NULL,
+    file_identity     TEXT    NOT NULL,
+    size_bytes        INTEGER NOT NULL,
+    mtime_ns          INTEGER NOT NULL,
+    offset_bytes      INTEGER NOT NULL,
+    parser_version    INTEGER NOT NULL,
+    parser_state_json TEXT    NOT NULL,
+    updated_ts        TEXT    NOT NULL,
+    PRIMARY KEY(source, source_path)
+);
+
+CREATE TABLE IF NOT EXISTS cost_usage_events (
+    source                     TEXT    NOT NULL,
+    source_path                TEXT    NOT NULL,
+    generation                 TEXT    NOT NULL,
+    event_key                  TEXT    NOT NULL,
+    session_id                 TEXT    NOT NULL,
+    parent_session_id          TEXT    NOT NULL DEFAULT '',
+    ts                         TEXT    NOT NULL,
+    agent                      TEXT    NOT NULL,
+    model                      TEXT    NOT NULL,
+    project                    TEXT    NOT NULL,
+    input_tokens               INTEGER NOT NULL,
+    output_tokens              INTEGER NOT NULL,
+    cache_read_tokens          INTEGER NOT NULL,
+    cache_write_tokens         INTEGER NOT NULL,
+    cache_write_5m_tokens      INTEGER NOT NULL,
+    cache_write_1h_tokens      INTEGER NOT NULL,
+    reasoning_tokens           INTEGER NOT NULL,
+    request_input_tokens       INTEGER NOT NULL,
+    request_output_tokens      INTEGER NOT NULL,
+    request_cache_read_tokens  INTEGER NOT NULL,
+    request_cache_write_tokens INTEGER NOT NULL,
+    has_request_usage          INTEGER NOT NULL,
+    has_cache_ttl              INTEGER NOT NULL,
+    recorded_cost_usd          REAL    NOT NULL,
+    PRIMARY KEY(source, source_path, generation, event_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_usage_events_ts ON cost_usage_events(ts);
+CREATE INDEX IF NOT EXISTS idx_cost_usage_events_session ON cost_usage_events(source, session_id);
+CREATE INDEX IF NOT EXISTS idx_cost_usage_events_project_ts ON cost_usage_events(project, ts);
+CREATE INDEX IF NOT EXISTS idx_cost_usage_events_model_ts ON cost_usage_events(model, ts);
+
+CREATE TABLE IF NOT EXISTS cost_daily_usage (
+    usage_day         TEXT    NOT NULL,
+    source            TEXT    NOT NULL,
+    source_path       TEXT    NOT NULL,
+    generation        TEXT    NOT NULL,
+    session_id        TEXT    NOT NULL,
+    started_ts        TEXT    NOT NULL,
+    agent             TEXT    NOT NULL,
+    model             TEXT    NOT NULL,
+    project           TEXT    NOT NULL,
+    input_tokens      INTEGER NOT NULL,
+    output_tokens     INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_tokens INTEGER NOT NULL,
+    cache_write_5m_tokens INTEGER NOT NULL,
+    cache_write_1h_tokens INTEGER NOT NULL,
+    reasoning_tokens  INTEGER NOT NULL,
+    pricing_mode      TEXT    NOT NULL,
+    pricing_revision  TEXT    NOT NULL,
+    cost_usd          REAL    NOT NULL,
+    event_count       INTEGER NOT NULL,
+    PRIMARY KEY(usage_day, source, source_path, generation, session_id, model, project, pricing_mode, pricing_revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_daily_usage_day ON cost_daily_usage(usage_day);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_usage_started_ts ON cost_daily_usage(started_ts);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_usage_project_day ON cost_daily_usage(project, usage_day);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_usage_model_day ON cost_daily_usage(model, usage_day);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_usage_session_day ON cost_daily_usage(source, session_id, usage_day);

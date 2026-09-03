@@ -408,12 +408,20 @@ See [ADR 0033](adr/0033-unified-audit-log.md) for the full decision record.
 
 ## Cost Analytics
 
-`agentjail cost` and the local UI summarize spend from typed, read-only source
-adapters. Claude Code usage is parsed from `~/.claude/projects/*/*.jsonl`, Codex
-usage from `~/.codex/sessions`, and OpenCode usage from its separate SQLite
-database. The readers retain only session identity, project/model attribution,
-token totals, recorded or
-computed cost, and start time—never conversation content.
+The daemon maintains a typed cost index in the existing AgentJail SQLite store.
+It runs once after daemon readiness and then at each next local calendar
+midnight. Durable per-file checkpoints make missed invocations harmless and
+let later runs read only appended, newline-complete Claude Code and Codex JSONL
+records. OpenCode remains an external typed SQLite source. `agentjail cost` and
+the local UI use the singleton store's read-only interface and never scan raw
+transcripts on a request. See ADR 0142-incremental-cost-index.
+
+The index retains only source/session identity, project/model attribution,
+timestamps, token and request-pricing dimensions, fork lineage, and recorded or
+computed cost—never conversation or tool-result content. Normalized lineage
+facts outlive the 90-day report window because a new Codex fork can inherit an
+older parent's cumulative history. Report rows are grouped by UTC session-start
+day so existing whole-session `--period` semantics remain stable.
 
 The shared per-model summary exposes uncached input, cache-read, cache-write,
 and output totals. Pricing includes every category, so CLI and UI consumers do
@@ -433,9 +441,8 @@ ADR 0121-current-model-pricing and ADR 0123-supplemental-model-pricing).
 AgentJail sends no transcript or usage data to Gryph. Supplemental pricing
 semantics overlay a resolved Gryph base rate so a catalog update cannot silently
 remove TTL or long-context rules. OpenCode's own non-zero recorded cost takes
-precedence. Reports
-are recomputed from local token totals on every request, including historical
-sessions; no computed Claude or Codex cost is persisted.
+precedence. Pricing revisions rebuild the derived projection from retained
+typed facts; request-time reporting reads that projection without source I/O.
 Missing optional sources are ignored; malformed available sources are reported
 as warnings without affecting enforcement. Oversized JSONL content records are
 discarded individually within a fixed memory bound so later usage records in

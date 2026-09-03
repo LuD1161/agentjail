@@ -149,3 +149,100 @@ WHERE ts >= ? GROUP BY day ORDER BY day ASC;
 -- name: ShieldDaysSince :many
 SELECT CAST(substr(ts, 1, 10) AS TEXT) AS day, COUNT(*) AS count FROM audit_log
 WHERE event_type = 'shield.activated' AND ts >= ? GROUP BY day ORDER BY day ASC;
+
+-- Cost index. All writes use these typed queries from the daemon-owned store;
+-- CLI/UI callers use the same database through OpenReadOnly.
+
+-- name: GetCostSourceCheckpoint :one
+SELECT source, source_path, generation, file_identity, size_bytes, mtime_ns,
+       offset_bytes, parser_version, parser_state_json, updated_ts
+FROM cost_source_checkpoints
+WHERE source = ? AND source_path = ?;
+
+-- name: ListCostSourceCheckpoints :many
+SELECT source, source_path, generation, file_identity, size_bytes, mtime_ns,
+       offset_bytes, parser_version, parser_state_json, updated_ts
+FROM cost_source_checkpoints
+WHERE ? = '' OR source = ?
+ORDER BY source ASC, source_path ASC;
+
+-- name: UpsertCostSourceCheckpoint :exec
+INSERT INTO cost_source_checkpoints
+    (source, source_path, generation, file_identity, size_bytes, mtime_ns,
+     offset_bytes, parser_version, parser_state_json, updated_ts)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source, source_path) DO UPDATE SET
+    generation = excluded.generation,
+    file_identity = excluded.file_identity,
+    size_bytes = excluded.size_bytes,
+    mtime_ns = excluded.mtime_ns,
+    offset_bytes = excluded.offset_bytes,
+    parser_version = excluded.parser_version,
+    parser_state_json = excluded.parser_state_json,
+    updated_ts = excluded.updated_ts;
+
+-- name: InsertCostUsageEvent :exec
+INSERT INTO cost_usage_events
+    (source, source_path, generation, event_key, session_id, parent_session_id,
+     ts, agent, model, project, input_tokens, output_tokens, cache_read_tokens,
+     cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+     reasoning_tokens, request_input_tokens, request_output_tokens,
+     request_cache_read_tokens, request_cache_write_tokens, has_request_usage,
+     has_cache_ttl, recorded_cost_usd)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source, source_path, generation, event_key) DO NOTHING;
+
+-- name: DeleteCostUsageEventsGeneration :exec
+DELETE FROM cost_usage_events
+WHERE source = ? AND source_path = ? AND generation = ?;
+
+-- name: DeleteCostDailyUsageGeneration :exec
+DELETE FROM cost_daily_usage
+WHERE source = ? AND source_path = ? AND generation = ?;
+
+-- name: DeleteCostSourceCheckpointGeneration :exec
+DELETE FROM cost_source_checkpoints
+WHERE source = ? AND source_path = ? AND generation = ?;
+
+-- name: DeleteCostDailyUsageGenerationDay :exec
+DELETE FROM cost_daily_usage
+WHERE source = ? AND source_path = ? AND generation = ? AND usage_day = ?;
+
+-- name: DeleteAllCostDailyUsage :exec
+DELETE FROM cost_daily_usage;
+
+-- name: InsertCostDailyUsage :exec
+INSERT INTO cost_daily_usage
+    (usage_day, source, source_path, generation, session_id, started_ts, agent, model,
+     project, input_tokens, output_tokens, cache_read_tokens,
+     cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+     reasoning_tokens, pricing_mode, pricing_revision, cost_usd, event_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListCostUsageEventsWindow :many
+SELECT source, source_path, generation, event_key, session_id,
+       parent_session_id, ts, agent, model, project, input_tokens,
+       output_tokens, cache_read_tokens, cache_write_tokens,
+       cache_write_5m_tokens, cache_write_1h_tokens, reasoning_tokens,
+       request_input_tokens, request_output_tokens, request_cache_read_tokens,
+       request_cache_write_tokens, has_request_usage, has_cache_ttl,
+       recorded_cost_usd
+FROM cost_usage_events
+WHERE ts >= ? AND ts < ?
+ORDER BY ts ASC, source ASC, session_id ASC, event_key ASC;
+
+-- name: ListCostDailyUsageWindow :many
+SELECT usage_day, source, source_path, generation, session_id, started_ts, agent, model,
+       project, input_tokens, output_tokens, cache_read_tokens,
+       cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+       reasoning_tokens, pricing_mode, pricing_revision, cost_usd, event_count
+FROM cost_daily_usage
+WHERE started_ts >= ? AND started_ts < ?
+ORDER BY usage_day ASC, source ASC, session_id ASC, model ASC;
+
+-- name: CostIndexStatus :one
+SELECT
+    (SELECT COUNT(*) FROM cost_source_checkpoints) AS checkpoint_count,
+    (SELECT COUNT(*) FROM cost_usage_events) AS event_count,
+    (SELECT COUNT(*) FROM cost_daily_usage) AS daily_row_count,
+    COALESCE((SELECT MAX(updated_ts) FROM cost_source_checkpoints), '') AS latest_update;

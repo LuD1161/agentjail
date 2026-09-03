@@ -55,6 +55,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/approvalexec"
 	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/buildinfo"
+	"github.com/LuD1161/agentjail/internal/costanalytics"
 	"github.com/LuD1161/agentjail/internal/custompolicy"
 	"github.com/LuD1161/agentjail/internal/grant"
 	"github.com/LuD1161/agentjail/internal/grantapproval"
@@ -66,6 +67,7 @@ import (
 	"github.com/LuD1161/agentjail/internal/mitm"
 	"github.com/LuD1161/agentjail/internal/policyeval"
 	"github.com/LuD1161/agentjail/internal/procutil"
+	"github.com/LuD1161/agentjail/internal/schedule"
 	"github.com/LuD1161/agentjail/internal/selfupdate"
 	"github.com/LuD1161/agentjail/internal/store"
 	"github.com/LuD1161/agentjail/internal/telemetry"
@@ -107,8 +109,10 @@ type server struct {
 	// (fail-open on logging, never on policy). decCh is a bounded buffer
 	// drained by a goroutine so a DB write never wedges a decision.
 	eventStore store.EventStore
+	costStore  store.Store
 	decCh      chan store.DecisionRecord
 	decWg      sync.WaitGroup
+	costWg     sync.WaitGroup
 
 	// decDropped counts decisions the writer could not persist. Incremented
 	// on the hot path (atomic, no IO); flushed to a decisions.dropped audit
@@ -1710,6 +1714,7 @@ func Run(args []string) int {
 	// drain goroutine.
 	if st, serr := store.Open(*dbPath); serr == nil {
 		srv.eventStore = st
+		srv.costStore = st
 		if grantErr := srv.wireRuntimeGrantServices(st, cfg); grantErr != nil {
 			slog.Warn("runtime grants unavailable; Codex shell approval will fail closed", "err", grantErr)
 		}
@@ -1837,6 +1842,32 @@ func Run(args []string) int {
 	}
 
 	slog.Info("listening", "socket", *socketPath)
+
+	// Cost indexing is intentionally off the enforcement path. The scheduler
+	// supplies cadence; checkpoints own durable catch-up. See ADR 0142-incremental-cost-index.
+	if srv.costStore != nil {
+		indexer := costanalytics.NewIndexer(srv.costStore, costanalytics.DefaultIndexPaths())
+		srv.costWg.Add(1)
+		go func() {
+			defer srv.costWg.Done()
+			schedule.Daily(ctx, func(jobCtx context.Context) {
+				started := time.Now()
+				if err := indexer.Refresh(jobCtx); err != nil {
+					slog.Warn("cost index refresh failed", "err", err, "elapsed", time.Since(started))
+					_ = srv.eventStore.Emit(jobCtx, audit.Event{EventType: audit.CostIndexFailed, Actor: "daemon", Detail: map[string]string{"class": "refresh_failed"}})
+					return
+				}
+				status, err := srv.costStore.CostIndexStatus(jobCtx)
+				if err != nil {
+					slog.Warn("cost index status unavailable", "err", err)
+					_ = srv.eventStore.Emit(jobCtx, audit.Event{EventType: audit.CostIndexFailed, Actor: "daemon", Detail: map[string]string{"class": "status_failed"}})
+					return
+				}
+				slog.Info("cost index refreshed", "events", status.EventCount, "rows", status.DailyRowCount, "elapsed", time.Since(started))
+				_ = srv.eventStore.Emit(jobCtx, audit.Event{EventType: audit.CostIndexCompleted, Actor: "daemon", Detail: map[string]string{"events": strconv.FormatInt(status.EventCount, 10), "rows": strconv.FormatInt(status.DailyRowCount, 10)}})
+			})
+		}()
+	}
 
 	// Remove the fail-open warning sentinel (U2). agentjail-hook writes
 	// ~/.agentjail/fail-open-warned the first time it fails open (daemon
@@ -1977,7 +2008,19 @@ func Run(args []string) int {
 			case <-time.After(3 * time.Second):
 				slog.Warn("store drain timeout; forcing exit")
 			}
-			if srv.eventStore != nil {
+			costDone := make(chan struct{})
+			go func() {
+				srv.costWg.Wait()
+				close(costDone)
+			}()
+			costStopped := false
+			select {
+			case <-costDone:
+				costStopped = true
+			case <-time.After(3 * time.Second):
+				slog.Warn("cost index shutdown timeout; process exit will release the store")
+			}
+			if srv.eventStore != nil && costStopped {
 				_ = srv.eventStore.Close()
 			}
 			if srv.grantSrv != nil {

@@ -697,6 +697,18 @@ single-session tests.
   fork that diverges onto another model. See ADR 0123-supplemental-model-pricing
   and AGE-272.
 
+## 49a. A bounded query can still hide an unbounded ingest
+
+The cost command accepted a 24-hour or 7-day window, but the Codex reader
+applied that window only after parsing every retained transcript. Small fixtures
+and green limit tests hid a 5.8 GB synchronous scan, so a correct report looked
+like a hung CLI before it printed its first byte.
+
+- **Rule:** separate ingestion from querying. Checkpoint append-only sources at
+  complete record boundaries, do durable aggregation off the command path, and
+  make freshness visible rather than silently rescanning source history.
+  See ADR 0142-incremental-cost-index.
+
 ## 50. An unreadable credential directory is not an empty one
 
 The SSH diagnostic used an empty key-path list for both an absent `~/.ssh`

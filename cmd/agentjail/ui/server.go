@@ -74,7 +74,7 @@ type Server struct {
 
 	// Cached read-only SQLite connection (lazily opened, shared across requests).
 	dbMu   sync.Mutex
-	dbConn localstore.ReadOnlyStore
+	dbConn localstore.ReadStore
 
 	// network.db is a separate database from agentjail.db, so it needs its own
 	// handle. Read-only: the UI must never write the transcript store.
@@ -112,17 +112,18 @@ type RuleInfo struct {
 
 // NewServer constructs (but does not start) the web UI server.
 func NewServer(addr, logPath, dbPath string, editPolicy bool, store *Store, version string) *Server {
-	return &Server{
-		addr:         addr,
-		logPath:      logPath,
-		dbPath:       dbPath,
-		editPolicy:   editPolicy,
-		version:      version,
-		store:        store,
-		subs:         make(map[chan string]struct{}),
-		costProvider: localCostProvider{},
-		now:          time.Now,
+	server := &Server{
+		addr:       addr,
+		logPath:    logPath,
+		dbPath:     dbPath,
+		editPolicy: editPolicy,
+		version:    version,
+		store:      store,
+		subs:       make(map[chan string]struct{}),
+		now:        time.Now,
 	}
+	server.costProvider = localCostProvider{open: server.openSQLite}
+	return server
 }
 
 // SetTrustedHosts allow-lists non-loopback hostnames for the rebinding guard.
@@ -1717,7 +1718,7 @@ func (s *Server) keys() mitm.KeyWrapper {
 	return s.bodyKeys
 }
 
-func (s *Server) openSQLite() (localstore.ReadOnlyStore, error) {
+func (s *Server) openSQLite() (localstore.ReadStore, error) {
 	s.dbMu.Lock()
 	defer s.dbMu.Unlock()
 	if s.dbConn != nil {
