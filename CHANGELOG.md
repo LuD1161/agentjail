@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-## v1.8.0 - 2026-09-02
+## v1.8.0 - 2026-09-03
 
 ![v1.8.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.0-summary.svg)
 
@@ -18,6 +18,9 @@
   truncated, replaced, and unusually large transcript files.
 - **See when data is building or stale without giving up local privacy** because
   the index stores usage facts, never prompts, responses, commands, or tool output.
+- **Review why an agent needs host access before approving it** because
+  `agentjail proxy` now requires a reason that is shown and bound to the native
+  Codex approval.
 
 ### Added
 
@@ -25,6 +28,9 @@
   ready-to-query local index instead of repeatedly scanning retained Claude Code
   and Codex histories. The daemon keeps it current in the background and stores
   only typed usage facts (ADR 0142-incremental-cost-index).
+- **Reason-aware host approvals**: protected agents must call
+  `agentjail proxy --reason "…" -- <command>`. The bounded reason appears in
+  Codex's native prompt and is bound to the one-use challenge and host execution.
 
 ### Changed
 

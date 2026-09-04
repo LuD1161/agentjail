@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var challengePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -20,6 +22,7 @@ type SessionID string
 type TurnID string
 type ToolUseID string
 type Command string
+type Reason string
 type State string
 type Operation string
 
@@ -32,6 +35,7 @@ const (
 	StatePromptObserved  State = "prompt_observed"
 	DefaultPendingTTL          = 30 * time.Second
 	DefaultObservedTTL         = 5 * time.Minute
+	MaxReasonBytes             = 512
 	maxChallenges              = 1024
 	maxSessionChallenges       = 16
 )
@@ -55,12 +59,14 @@ type MintRequest struct {
 	CWD       string
 	AgentPID  int
 	RuleID    string
+	Reason    Reason
 	Now       time.Time
 }
 
 type ObserveRequest struct {
 	ChallengeID ChallengeID
 	Operation   Operation
+	Reason      Reason
 	SessionID   SessionID
 	TurnID      TurnID
 	CWD         string
@@ -77,6 +83,7 @@ type Metadata struct {
 	CWD         string
 	AgentPID    int
 	RuleID      string
+	Reason      Reason
 	State       State
 	FreshAfter  uint64
 }
@@ -84,6 +91,7 @@ type Metadata struct {
 type RedeemRequest struct {
 	ChallengeID     ChallengeID
 	Operation       Operation
+	Reason          Reason
 	VerifiedSession SessionID
 	PeerChainFresh  bool
 	CurrentEpoch    uint64
@@ -93,17 +101,19 @@ type RedeemRequest struct {
 type Redemption struct {
 	Operation Operation
 	Command   Command
+	Reason    Reason
 	CWD       string
 	ToolUseID ToolUseID
 	SessionID SessionID
 	RuleID    string
 }
 
-// BrokerInvocation is the exact, static command shape Codex's managed rule
-// may prompt for. It never includes the original shell command.
+// BrokerInvocation is the exact command shape Codex's managed rule may prompt
+// for. It includes the bounded reason, never the original shell command.
 type BrokerInvocation struct {
 	Operation   Operation
 	ChallengeID ChallengeID
+	Reason      Reason
 }
 
 func validOperation(operation Operation) bool {
@@ -173,7 +183,7 @@ func (m *Manager) CurrentEpoch(sessionID SessionID) uint64 {
 func (m *Manager) Mint(req MintRequest) (Metadata, error) {
 	if req.SessionID == "" || req.TurnID == "" || req.ToolUseID == "" ||
 		!validOperation(req.Operation) ||
-		req.Command == "" || req.CWD == "" || req.AgentPID <= 0 {
+		req.Command == "" || req.CWD == "" || req.AgentPID <= 0 || !validReason(req.Reason) {
 		return Metadata{}, fmt.Errorf("mint approval challenge: %w", ErrBinding)
 	}
 	var raw [32]byte
@@ -209,6 +219,7 @@ func (m *Manager) Mint(req MintRequest) (Metadata, error) {
 		CWD:         req.CWD,
 		AgentPID:    req.AgentPID,
 		RuleID:      req.RuleID,
+		Reason:      req.Reason,
 		State:       StatePending,
 	}
 	m.challenges[id] = &challenge{
@@ -242,7 +253,7 @@ func (m *Manager) ObservePrompt(req ObserveRequest) (Metadata, error) {
 	if ch.State != StatePending {
 		return Metadata{}, ErrInvalidState
 	}
-	if ch.Operation != req.Operation || ch.SessionID != req.SessionID || ch.TurnID != req.TurnID ||
+	if ch.Operation != req.Operation || ch.Reason != req.Reason || ch.SessionID != req.SessionID || ch.TurnID != req.TurnID ||
 		ch.CWD != req.CWD || req.FreshAfter == 0 {
 		delete(m.challenges, req.ChallengeID)
 		return Metadata{}, ErrBinding
@@ -291,7 +302,7 @@ func (m *Manager) Redeem(req RedeemRequest) (Redemption, error) {
 	if ch.State != StatePromptObserved {
 		return Redemption{}, ErrInvalidState
 	}
-	if ch.Operation != req.Operation || ch.SessionID != req.VerifiedSession || ch.epoch != req.CurrentEpoch {
+	if ch.Operation != req.Operation || ch.Reason != req.Reason || ch.SessionID != req.VerifiedSession || ch.epoch != req.CurrentEpoch {
 		return Redemption{}, ErrBinding
 	}
 	if !req.PeerChainFresh {
@@ -299,20 +310,87 @@ func (m *Manager) Redeem(req RedeemRequest) (Redemption, error) {
 	}
 	return Redemption{
 		Operation: ch.Operation, Command: ch.command, CWD: ch.CWD, ToolUseID: ch.ToolUseID,
-		SessionID: ch.SessionID, RuleID: ch.RuleID,
+		SessionID: ch.SessionID, RuleID: ch.RuleID, Reason: ch.Reason,
 	}, nil
 }
 
 func BrokerCommand(invocation BrokerInvocation) string {
-	return "agentjail approval-exec --operation " + string(invocation.Operation) + " --challenge " + string(invocation.ChallengeID)
+	return "agentjail approval-exec --operation " + string(invocation.Operation) + " --challenge " + string(invocation.ChallengeID) + " --reason " + quoteReason(invocation.Reason)
 }
 
 func ParseBrokerCommand(command string) (BrokerInvocation, bool) {
-	fields := strings.Fields(command)
+	parts := strings.SplitN(command, " --reason ", 2)
+	if len(parts) != 2 {
+		return BrokerInvocation{}, false
+	}
+	fields := strings.Fields(parts[0])
 	if len(fields) != 6 || fields[0] != "agentjail" || fields[1] != "approval-exec" ||
 		fields[2] != "--operation" || !validOperation(Operation(fields[3])) ||
 		fields[4] != "--challenge" || !challengePattern.MatchString(fields[5]) {
 		return BrokerInvocation{}, false
 	}
-	return BrokerInvocation{Operation: Operation(fields[3]), ChallengeID: ChallengeID(fields[5])}, true
+	reason, ok := unquoteReason(parts[1])
+	if !ok {
+		return BrokerInvocation{}, false
+	}
+	invocation := BrokerInvocation{Operation: Operation(fields[3]), ChallengeID: ChallengeID(fields[5]), Reason: reason}
+	if BrokerCommand(invocation) != command {
+		return BrokerInvocation{}, false
+	}
+	return invocation, true
+}
+
+func PrepareReason(value string) Reason {
+	value = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value))
+	for len(value) > MaxReasonBytes {
+		_, size := utf8.DecodeLastRuneInString(value)
+		value = value[:len(value)-size]
+	}
+	return Reason(strings.TrimSpace(value))
+}
+
+func validReason(reason Reason) bool {
+	value := string(reason)
+	if value == "" || len(value) > MaxReasonBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func quoteReason(reason Reason) string {
+	value := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "\\$", "`", "\\`").Replace(string(reason))
+	return `"` + value + `"`
+}
+
+func unquoteReason(value string) (Reason, bool) {
+	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
+		return "", false
+	}
+	var decoded strings.Builder
+	for i := 1; i < len(value)-1; i++ {
+		if value[i] != '\\' {
+			if value[i] == '"' || value[i] == '$' || value[i] == '`' {
+				return "", false
+			}
+			decoded.WriteByte(value[i])
+			continue
+		}
+		i++
+		if i >= len(value)-1 || !strings.ContainsRune(`\\"$`+"`", rune(value[i])) {
+			return "", false
+		}
+		decoded.WriteByte(value[i])
+	}
+	reason := Reason(decoded.String())
+	return reason, validReason(reason)
 }

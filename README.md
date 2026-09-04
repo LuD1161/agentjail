@@ -43,7 +43,7 @@ brew install LuD1161/tap/agentjail
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v1.8.0** | Sep 2, 2026 | Cost reports now read a persistent local index instead of rescanning multi-gigabyte Claude Code and Codex histories. Complete-record checkpoints, fork and replacement handling, startup backfill, reusable daily maintenance, and explicit building or stale status keep the faster path honest and content-free. |
+| **v1.8.0** | Sep 3, 2026 | Cost reports now read a resumable local index instead of rescanning multi-gigabyte histories. Host CLI approvals also require a concise reason that is shown and cryptographically bound to the native Codex prompt. |
 | **v1.7.0** | Aug 29, 2026 | Claude Code and Codex learn the governed host-access path through an AgentJail-owned instruction block. Exact session-bound runtime grants and configured connector diagnostics establish the next capability boundary, production MCP forwarding remains fail closed, and Codex 0.150.1 command approvals no longer loop on the rewritten broker callback. |
 | **v1.6.0** | Aug 16, 2026 | Generic credentials use arbitrary IDs, labels, tags, and explicit environment or file delivery. macOS gains the native allow-once host proxy, while the release gate now proves real Codex credential, approval, proxy, and strict tunnel paths with no required SKIPs. The CLI release still does not install the macOS Network Extension. |
 | **v1.5.0** | Aug 6, 2026 | Opted-in PATH shims now launch through the transparent tunnel, macOS shielded sessions start and link the local UI, and routine startup stays compact while private session logs retain diagnostics. Linux Landlock config-file grants are corrected. |
@@ -222,7 +222,9 @@ command; cancel, expiry, replay, `--ignore-rules`, or an unverifiable Codex
 process chain denies it. AgentJail shows `🔐 AgentJail approval required for:`
 and the redacted effective shell command immediately before Codex's native
 prompt; the fixed `--operation shell-command` command inside the prompt carries
-no original shell text. This transport follows the `ask` action rather than a
+a bounded, shell-escaped explanation but no original shell text. The explanation
+is bound to the one-use challenge, so it cannot be changed after review. This
+transport follows the `ask` action rather than a
 built-in rule list,
 so user-authored Bash policies get the same approval path. Git remote updates are
 recognized from parsed executable arguments, including global options such as
@@ -236,12 +238,14 @@ On Linux and macOS, a shielded Codex session can request one bounded host-side
 CLI run:
 
 ```sh
-agentjail proxy -- rdt --help
+agentjail proxy --reason "inspect the local release state" -- rdt --help
 ```
 
-Eligible executables open Codex's native allow-once prompt for the exact command.
-Approval authorizes one execution from the registered project root; rejection,
-expiry, replay, changed arguments or cwd, and direct proxy/socket calls fail closed.
+The reason is mandatory and appears in Codex's native allow-once prompt for the
+exact command. AgentJail binds it to both approval stages; a missing, changed, or
+oversized reason fails closed before host execution. Approval authorizes one
+execution from the registered project root; rejection, expiry, replay, changed
+arguments, reason or cwd, and direct proxy/socket calls fail closed.
 Git/GitHub, cloud and infrastructure clients, AgentJail control binaries, shells,
 direct interpreters, and generic/runtime wrappers such as `env`, `xargs`, `sudo`,
 `npx`, and `uv` are always denied. Symlinks are resolved before this check. This is a UX guardrail for accidental footguns, not a
@@ -301,7 +305,7 @@ is reachable, the status line includes a clickable `📊 UI` link to
 
 Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the persistent AgentJail badge. Instead, AgentJail's `SessionStart` and `Stop` hooks display one of `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive`; `agentjail status` and `agentjail doctor` remain available for an on-demand check.
 
-When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. For any Bash `ask`, including a user-authored custom policy, AgentJail prints the redacted effective command immediately before Codex's native prompt, while the broker command inside the prompt carries only `--operation shell-command` and an opaque challenge. This does not re-enable sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md)).
+When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. For any Bash `ask`, including a user-authored custom policy, AgentJail prints the redacted effective command immediately before Codex's native prompt, while the broker command inside the prompt carries `--operation shell-command`, an opaque challenge, and the bounded approval reason. This does not re-enable sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md)).
 
 <details>
 <summary><b>More install options</b></summary>

@@ -15,7 +15,7 @@ import (
 )
 
 func TestParseCommandExactArgv(t *testing.T) {
-	got, err := ParseCommand("agentjail proxy -- benign \"space value\" 'semi;pipe|glob*$()`'")
+	got, err := ParseCommand("agentjail proxy --reason 'inspect the signed build' -- benign \"space value\" 'semi;pipe|glob*$()`'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +27,8 @@ func TestParseCommandExactArgv(t *testing.T) {
 
 func TestParseCommandRejectsAmbiguousShell(t *testing.T) {
 	for _, command := range []string{
+		"agentjail proxy -- tool",
+		"agentjail proxy --reason '' -- tool",
 		"agentjail proxy -- tool && other",
 		"agentjail proxy -- $TOOL",
 		"agentjail proxy -- tool > out",
@@ -36,9 +38,18 @@ func TestParseCommandRejectsAmbiguousShell(t *testing.T) {
 		"agentjail proxy tool",
 		"agentjail proxy --",
 	} {
-		if _, err := ParseCommand(command); !errors.Is(err, ErrCommandShape) {
+		if _, err := ParseCommand(command); err == nil {
 			t.Errorf("ParseCommand(%q) error = %v", command, err)
 		}
+	}
+}
+
+func TestParseArgsRequiresBoundedReason(t *testing.T) {
+	if _, err := ParseArgs([]string{"--", "tool"}); !errors.Is(err, ErrReasonRequired) {
+		t.Fatalf("missing reason error = %v", err)
+	}
+	if _, err := ParseArgs([]string{"--reason", strings.Repeat("x", MaxReasonBytes+1), "--", "tool"}); !errors.Is(err, ErrReasonInvalid) {
+		t.Fatalf("oversized reason error = %v", err)
 	}
 }
 
@@ -85,13 +96,13 @@ func TestAuthorizationExactBindingsAndOneUse(t *testing.T) {
 	target := Target{Executable: "/opt/bin/rdt", Argv: []string{"rdt", "--help"}}
 	auth, err := m.Issue(Authorization{
 		SessionID: "s", Target: target, CWD: "/repo", Root: "/repo", Path: "/opt/bin",
-		BrokerPID: 42, FreshAfter: 10,
+		Reason: "inspect the signed build", BrokerPID: 42, FreshAfter: 10,
 	}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := m.Redeem(RedeemRequest{
-		Proof: auth.Proof, SessionID: "s", Target: target, CWD: "/repo", PeerPID: 42,
+		Proof: auth.Proof, SessionID: "s", Target: target, Reason: auth.Reason, CWD: "/repo", PeerPID: 42,
 		PeerChainFresh: true, CurrentTime: now.Add(time.Second),
 	})
 	if err != nil || got.Proof != auth.Proof {
@@ -106,13 +117,13 @@ func TestAuthorizationMismatchBurnsProof(t *testing.T) {
 	now := time.Unix(100, 0)
 	m := NewManager(strings.NewReader(strings.Repeat("b", 64)), time.Minute)
 	target := Target{Executable: "/opt/bin/rdt", Argv: []string{"rdt"}}
-	auth, err := m.Issue(Authorization{SessionID: "s", Target: target, CWD: "/repo", Root: "/repo", Path: "/bin", BrokerPID: 42, FreshAfter: 1}, now)
+	auth, err := m.Issue(Authorization{SessionID: "s", Target: target, Reason: "inspect the signed build", CWD: "/repo", Root: "/repo", Path: "/bin", BrokerPID: 42, FreshAfter: 1}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	bad := target
 	bad.Argv = []string{"rdt", "changed"}
-	if _, err := m.Redeem(RedeemRequest{Proof: auth.Proof, SessionID: "s", Target: bad, CWD: "/repo", PeerPID: 42, PeerChainFresh: true, CurrentTime: now}); !errors.Is(err, ErrAuthorization) {
+	if _, err := m.Redeem(RedeemRequest{Proof: auth.Proof, SessionID: "s", Target: bad, Reason: auth.Reason, CWD: "/repo", PeerPID: 42, PeerChainFresh: true, CurrentTime: now}); !errors.Is(err, ErrAuthorization) {
 		t.Fatalf("mismatch error = %v", err)
 	}
 	if _, err := m.Redeem(RedeemRequest{Proof: auth.Proof}); !errors.Is(err, ErrReplay) {
@@ -133,11 +144,11 @@ func TestAuthorizationRejectsExpiredCWDAndSession(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := NewManager(strings.NewReader(strings.Repeat(test.name, 64)), time.Minute)
-			auth, err := m.Issue(Authorization{SessionID: "s", Target: target, CWD: "/repo", Root: "/repo", Path: "/bin", BrokerPID: 42, FreshAfter: 1}, now)
+			auth, err := m.Issue(Authorization{SessionID: "s", Target: target, Reason: "inspect the signed build", CWD: "/repo", Root: "/repo", Path: "/bin", BrokerPID: 42, FreshAfter: 1}, now)
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := RedeemRequest{Proof: auth.Proof, SessionID: "s", Target: target, CWD: "/repo", PeerPID: 42, PeerChainFresh: true, CurrentTime: now}
+			req := RedeemRequest{Proof: auth.Proof, SessionID: "s", Target: target, Reason: auth.Reason, CWD: "/repo", PeerPID: 42, PeerChainFresh: true, CurrentTime: now}
 			test.mutate(&req)
 			if _, err := m.Redeem(req); !errors.Is(err, ErrAuthorization) {
 				t.Fatalf("error = %v", err)

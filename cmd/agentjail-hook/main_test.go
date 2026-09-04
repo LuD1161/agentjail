@@ -596,6 +596,7 @@ func TestCodexHook_AskBlocks(t *testing.T) {
 func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 	challenge := strings.Repeat("A", 43)
 	display := "git -C /tmp/work push origin HEAD:refs/heads/topic"
+	reason := approvalexec.Reason("publishing updates the shared remote")
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -607,7 +608,7 @@ func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 		_ = read.Close()
 		_ = write.Close()
 	})
-	if !writeCodexApprovalRewrite("shell-command", approvalexec.ChallengeID(challenge), display) {
+	if !writeCodexApprovalRewrite("shell-command", approvalexec.ChallengeID(challenge), reason, display) {
 		t.Fatal("writeCodexApprovalRewrite rejected valid operation and challenge")
 	}
 	if err := write.Close(); err != nil {
@@ -624,7 +625,7 @@ func TestCodexHook_AskBridgeRewritesToOpaqueBroker(t *testing.T) {
 	if out.HookSpecificOutput.HookEventName != canonicalPreToolUse || out.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Fatalf("rewrite metadata = %#v", out.HookSpecificOutput)
 	}
-	if got := out.HookSpecificOutput.UpdatedInput["command"]; got != "agentjail approval-exec --operation shell-command --challenge "+challenge {
+	if got := out.HookSpecificOutput.UpdatedInput["command"]; got != "agentjail approval-exec --operation shell-command --challenge "+challenge+" --reason \"publishing updates the shared remote\"" {
 		t.Fatalf("rewrite command = %#v", got)
 	}
 	if got := out.HookSpecificOutput.UpdatedInput["command"].(string); strings.Contains(got, display) {
@@ -653,16 +654,16 @@ func TestCodexApprovalOperationUsesExplicitValueOrLegacyGitFallback(t *testing.T
 			}
 		})
 	}
-	if _, ok := codexApprovalBrokerCommand("shell-command", challenge); !ok {
+	if _, ok := codexApprovalBrokerCommand("shell-command", challenge, "review the command"); !ok {
 		t.Fatal("generic broker command rejected valid inputs")
 	}
-	if _, ok := codexApprovalBrokerCommand("package; publish", challenge); ok {
+	if _, ok := codexApprovalBrokerCommand("package; publish", challenge, "review the command"); ok {
 		t.Fatal("broker command accepted shell syntax in operation")
 	}
 }
 
 func TestCodexHostProxyApprovalStatesBoundary(t *testing.T) {
-	display := "agentjail proxy -- rdt --help"
+	display := "agentjail proxy --reason 'inspect local release metadata' -- rdt --help"
 	got := codexApprovalSystemMessage(string(approvalexec.HostProxyOperation), display)
 	for _, want := range []string{display, "outside the AgentJail shield", "normal host filesystem", "network", "credentials"} {
 		if !strings.Contains(got, want) {

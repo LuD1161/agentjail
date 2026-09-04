@@ -12,6 +12,12 @@ const (
 
 type SessionID string
 type Proof string
+type Reason string
+
+type Intent struct {
+	Reason Reason
+	Argv   []string
+}
 
 type Target struct {
 	Executable string   `json:"executable"`
@@ -22,6 +28,7 @@ type Request struct {
 	Proof  Proof  `json:"proof"`
 	Target Target `json:"target"`
 	CWD    string `json:"cwd"`
+	Reason Reason `json:"reason"`
 }
 
 type Result struct {
@@ -42,6 +49,7 @@ const (
 	MaxResponseBytes      = 2 * 1024 * 1024
 	ProofEnvironmentName  = "AGENTJAIL_HOST_PROXY_PROOF"
 	TargetEnvironmentName = "AGENTJAIL_HOST_PROXY_EXECUTABLE"
+	MaxReasonBytes        = 512
 )
 
 type WireRequest struct {

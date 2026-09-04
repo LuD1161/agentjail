@@ -35,7 +35,7 @@ func TestHostProxyHandlerExecutesExactApprovedRequest(t *testing.T) {
 	manager := hostproxy.NewManager(nil, time.Minute)
 	auth, err := manager.Issue(hostproxy.Authorization{
 		SessionID: "session", Target: target, CWD: cwd, Root: cwd, Path: filepath.Dir(helper),
-		BrokerPID: os.Getpid(), FreshAfter: 1,
+		Reason: "inspect the requested local file", BrokerPID: os.Getpid(), FreshAfter: 1,
 	}, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestHostProxyHandlerExecutesExactApprovedRequest(t *testing.T) {
 
 	response := runHostProxyHandler(t, srv, hostproxy.WireRequest{
 		Type:    hostproxy.RequestType,
-		Request: hostproxy.Request{Proof: auth.Proof, Target: target, CWD: cwd},
+		Request: hostproxy.Request{Proof: auth.Proof, Target: target, Reason: auth.Reason, CWD: cwd},
 	})
 	if !response.OK || response.Result.ExitCode != 42 || string(response.Result.Stdout) != "literal;$(nope)|*" || string(response.Result.Stderr) != "err" {
 		t.Fatalf("response = %+v", response)
@@ -82,6 +82,7 @@ func TestHostProxyHandlerExecutesExactApprovedRequest(t *testing.T) {
 		{name: "changed argv", sessionID: "session", mutate: func(req *hostproxy.Request) { req.Target.Argv[1] = "changed" }},
 		{name: "changed executable", sessionID: "session", mutate: func(req *hostproxy.Request) { req.Target.Executable = "/usr/bin/true" }},
 		{name: "changed cwd", sessionID: "session", mutate: func(req *hostproxy.Request) { req.CWD = filepath.Dir(cwd) }},
+		{name: "changed reason", sessionID: "session", mutate: func(req *hostproxy.Request) { req.Reason = "something else" }},
 		{name: "wrong session", sessionID: "other", mutate: func(*hostproxy.Request) {}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -89,14 +90,14 @@ func TestHostProxyHandlerExecutesExactApprovedRequest(t *testing.T) {
 			caseTarget := hostproxy.Target{Executable: helper, Argv: []string{"benign-helper", "literal", caseMarker}}
 			caseAuth, err := manager.Issue(hostproxy.Authorization{
 				SessionID: test.sessionID, Target: caseTarget, CWD: cwd, Root: cwd, Path: filepath.Dir(helper),
-				BrokerPID: os.Getpid(), FreshAfter: 1,
+				Reason: "inspect the requested local file", BrokerPID: os.Getpid(), FreshAfter: 1,
 			}, time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}
 			requestTarget := caseTarget
 			requestTarget.Argv = append([]string(nil), caseTarget.Argv...)
-			request := hostproxy.Request{Proof: caseAuth.Proof, Target: requestTarget, CWD: cwd}
+			request := hostproxy.Request{Proof: caseAuth.Proof, Target: requestTarget, Reason: caseAuth.Reason, CWD: cwd}
 			test.mutate(&request)
 			response := runHostProxyHandler(t, srv, hostproxy.WireRequest{Type: hostproxy.RequestType, Request: request})
 			if response.OK {

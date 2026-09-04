@@ -16,6 +16,7 @@ const CodexAdapterID AdapterID = "codex"
 type CodexShellRequest struct {
 	Intent   Intent
 	Command  approvalexec.Command
+	Reason   approvalexec.Reason
 	CWD      string
 	AgentPID int
 	Now      time.Time
@@ -96,6 +97,7 @@ func (a *CodexAdapter) Begin(ctx context.Context, request CodexShellRequest) Cod
 		ToolUseID: approvalexec.ToolUseID(request.Intent.Binding().ToolUse()),
 		Operation: approvalexec.ShellCommandOperation,
 		Command:   request.Command,
+		Reason:    request.Reason,
 		CWD:       request.CWD,
 		AgentPID:  request.AgentPID,
 		RuleID:    string(request.Intent.Request()),
@@ -108,7 +110,7 @@ func (a *CodexAdapter) Begin(ctx context.Context, request CodexShellRequest) Cod
 	a.mu.Lock()
 	a.pending[nonce] = codexPending{intent: request.Intent, meta: meta}
 	a.mu.Unlock()
-	invocation := approvalexec.BrokerInvocation{Operation: meta.Operation, ChallengeID: meta.ChallengeID}
+	invocation := approvalexec.BrokerInvocation{Operation: meta.Operation, ChallengeID: meta.ChallengeID, Reason: meta.Reason}
 	return CodexPrompt{Prompt: prompt, Challenge: nonce, Command: approvalexec.BrokerCommand(invocation), Outcome: OutcomePending}
 }
 
@@ -130,6 +132,7 @@ func (a *CodexAdapter) Observe(ctx context.Context, evidence Evidence, now time.
 	_, err := a.manager.ObservePrompt(approvalexec.ObserveRequest{
 		ChallengeID: pending.meta.ChallengeID,
 		Operation:   approvalexec.ShellCommandOperation,
+		Reason:      pending.meta.Reason,
 		SessionID:   approvalexec.SessionID(evidence.Principal().Session()),
 		TurnID:      approvalexec.TurnID(evidence.Binding().Turn()),
 		CWD:         pending.meta.CWD,
@@ -161,6 +164,7 @@ func (a *CodexAdapter) Redeem(ctx context.Context, evidence Evidence, now time.T
 	redemption, err := a.manager.Redeem(approvalexec.RedeemRequest{
 		ChallengeID:     pending.meta.ChallengeID,
 		Operation:       approvalexec.ShellCommandOperation,
+		Reason:          pending.meta.Reason,
 		VerifiedSession: approvalexec.SessionID(evidence.Principal().Session()),
 		PeerChainFresh:  evidence.Freshness().PeerFresh(),
 		CurrentEpoch:    evidence.Freshness().ToolCallEpoch(),

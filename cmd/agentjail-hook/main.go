@@ -434,8 +434,8 @@ func writeCodexSystemMessage(msg string) {
 	_ = enc.Encode(codexSystemMessageOutput{SystemMessage: msg})
 }
 
-func writeCodexApprovalRewrite(operation string, challenge approvalexec.ChallengeID, display string) bool {
-	command, ok := codexApprovalBrokerCommand(operation, challenge)
+func writeCodexApprovalRewrite(operation string, challenge approvalexec.ChallengeID, reason approvalexec.Reason, display string) bool {
+	command, ok := codexApprovalBrokerCommand(operation, challenge, reason)
 	if !ok {
 		return false
 	}
@@ -480,10 +480,11 @@ func legacyCodexGitApprovalRule(ruleID string) bool {
 	}
 }
 
-func codexApprovalBrokerCommand(operation string, challenge approvalexec.ChallengeID) (string, bool) {
+func codexApprovalBrokerCommand(operation string, challenge approvalexec.ChallengeID, reason approvalexec.Reason) (string, bool) {
 	invocation := approvalexec.BrokerInvocation{
 		Operation:   approvalexec.Operation(operation),
 		ChallengeID: challenge,
+		Reason:      reason,
 	}
 	if !approvalexec.ValidOperation(invocation.Operation) {
 		return "", false
@@ -992,8 +993,8 @@ func runClaude(agent string) {
 	printPolicyEval(noColor, input.ToolName, resp.Action, resp.RuleID, resp.Reason, evalMs)
 	if agent == "codex" && resp.CodexApprovalBridge && resp.PolicyAction == "ask" {
 		operation := codexApprovalOperation(resp)
-		if resp.ApprovalChallenge != "" && resp.ApprovalDisplay != "" &&
-			writeCodexApprovalRewrite(operation, approvalexec.ChallengeID(resp.ApprovalChallenge), resp.ApprovalDisplay) {
+		if resp.ApprovalChallenge != "" && resp.ApprovalDisplay != "" && resp.ApprovalReason != "" &&
+			writeCodexApprovalRewrite(operation, approvalexec.ChallengeID(resp.ApprovalChallenge), approvalexec.Reason(resp.ApprovalReason), resp.ApprovalDisplay) {
 			return
 		}
 		resp.EffectiveAction = "deny"

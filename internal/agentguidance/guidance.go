@@ -15,7 +15,7 @@ const (
 	MarkerEnd   = "<!-- END AGENTJAIL MANAGED BLOCK -->"
 
 	Guidance = "This session runs inside AgentJail's OS-native safety sandbox, which governs host files and CLIs, MCP tools, credentials, and network access.\n" +
-		"For required host file or CLI access, consult `agentjail proxy --help`; use MCP and credential tools normally so AgentJail can apply their approval flow, and stop if denied or rejected."
+		"For required host file or CLI access, consult `agentjail proxy --help` and include a concise `--reason` for the human approver; use MCP and credential tools normally so AgentJail can apply their approval flow, and stop if denied or rejected."
 
 	ReconcileCommand = "_reconcile-guidance"
 )

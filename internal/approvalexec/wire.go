@@ -6,6 +6,7 @@ type WireRedeemRequest struct {
 	Type        string      `json:"type"`
 	ChallengeID ChallengeID `json:"challenge_id"`
 	Operation   Operation   `json:"operation"`
+	Reason      Reason      `json:"reason"`
 }
 
 type WireRedeemResponse struct {
@@ -17,4 +18,5 @@ type WireRedeemResponse struct {
 	HostProxyProof      string    `json:"host_proxy_proof,omitempty"`
 	HostProxyExecutable string    `json:"host_proxy_executable,omitempty"`
 	HostProxyArgv       []string  `json:"host_proxy_argv,omitempty"`
+	HostProxyReason     string    `json:"host_proxy_reason,omitempty"`
 }

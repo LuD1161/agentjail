@@ -18,6 +18,7 @@ type Authorization struct {
 	Proof      Proof
 	SessionID  SessionID
 	Target     Target
+	Reason     Reason
 	CWD        string
 	Root       string
 	Path       string
@@ -30,6 +31,7 @@ type RedeemRequest struct {
 	Proof          Proof
 	SessionID      SessionID
 	Target         Target
+	Reason         Reason
 	CWD            string
 	PeerPID        int
 	PeerChainFresh bool
@@ -54,7 +56,7 @@ func NewManager(random io.Reader, ttl time.Duration) *Manager {
 }
 
 func (m *Manager) Issue(auth Authorization, now time.Time) (Authorization, error) {
-	if auth.SessionID == "" || auth.Target.Executable == "" || len(auth.Target.Argv) == 0 ||
+	if auth.SessionID == "" || auth.Target.Executable == "" || len(auth.Target.Argv) == 0 || !validReason(auth.Reason) ||
 		auth.CWD == "" || auth.Root == "" || auth.Path == "" || auth.BrokerPID <= 1 || auth.FreshAfter == 0 {
 		return Authorization{}, ErrAuthorization
 	}
@@ -89,6 +91,7 @@ func (m *Manager) Redeem(req RedeemRequest) (Authorization, error) {
 	delete(m.records, req.Proof)
 	if !req.CurrentTime.Before(auth.ExpiresAt) || auth.SessionID != req.SessionID ||
 		auth.CWD != req.CWD || auth.BrokerPID != req.PeerPID || !req.PeerChainFresh ||
+		auth.Reason != req.Reason ||
 		auth.Target.Executable != req.Target.Executable || !equalStrings(auth.Target.Argv, req.Target.Argv) {
 		return Authorization{}, ErrAuthorization
 	}

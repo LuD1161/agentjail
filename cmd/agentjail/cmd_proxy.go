@@ -14,13 +14,16 @@ import (
 )
 
 var proxyCmd = &cobra.Command{
-	Use:                "proxy -- <command> [args...]",
+	Use:                "proxy --reason <explanation> -- <command> [args...]",
 	Short:              "Run one approved non-interactive command outside the shield",
 	DisableFlagParsing: true,
 	Long: `Run one exact command through the unsandboxed AgentJail daemon on Linux or
 macOS after a native allow-once approval. The command receives no stdin or TTY.
 It runs with the daemon service environment, not your interactive login-shell
-environment. Unsupported platforms and missing approval/session state fail closed.`,
+environment. --reason is required so the native Codex prompt explains why the
+agent needs host access. Unsupported platforms and missing approval/session state
+fail closed.`,
+	Example: `  agentjail proxy --reason "inspect the local release signature" -- rdt verify ./dist`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if helpRequested(cmd, args) {
 			return
@@ -32,17 +35,15 @@ environment. Unsupported platforms and missing approval/session state fail close
 func init() { rootCmd.AddCommand(proxyCmd) }
 
 func runHostProxy(cmd *cobra.Command, args []string) int {
-	if len(args) > 0 && args[0] == "--" {
-		args = args[1:]
-	}
-	if len(args) == 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(), "agentjail proxy: command is required after --")
+	intent, err := hostproxy.ParseArgs(args)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "agentjail proxy: %v\n", err)
 		return 2
 	}
 	proof := hostproxy.Proof(os.Getenv(hostproxy.ProofEnvironmentName))
 	executable := os.Getenv(hostproxy.TargetEnvironmentName)
 	if proof == "" || executable == "" {
-		reportMissingHostProxyApproval(args)
+		reportMissingHostProxyApproval(intent)
 		fmt.Fprintln(cmd.ErrOrStderr(), "agentjail proxy: no native one-time approval is available")
 		return 1
 	}
@@ -51,7 +52,7 @@ func runHostProxy(cmd *cobra.Command, args []string) int {
 		fmt.Fprintf(cmd.ErrOrStderr(), "agentjail proxy: working directory: %v\n", err)
 		return 1
 	}
-	target := hostproxy.Target{Executable: executable, Argv: append([]string(nil), args...)}
+	target := hostproxy.Target{Executable: executable, Argv: append([]string(nil), intent.Argv...)}
 	if decision := hostproxy.Evaluate(target); decision.Action != hostproxy.ActionAsk {
 		fmt.Fprintf(cmd.ErrOrStderr(), "agentjail proxy: %s\n", decision.Reason)
 		return 1
@@ -65,7 +66,7 @@ func runHostProxy(cmd *cobra.Command, args []string) int {
 	_ = conn.SetDeadline(time.Now().Add(hostproxy.DefaultTimeout + 5*time.Second))
 	if err := json.NewEncoder(conn).Encode(hostproxy.WireRequest{
 		Type:    hostproxy.RequestType,
-		Request: hostproxy.Request{Proof: proof, Target: target, CWD: cwd},
+		Request: hostproxy.Request{Proof: proof, Target: target, CWD: cwd, Reason: intent.Reason},
 	}); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "agentjail proxy: request: %v\n", err)
 		return 1
@@ -98,7 +99,7 @@ func runHostProxy(cmd *cobra.Command, args []string) int {
 
 // Missing proof is still sent to the daemon so the fail-closed denial reaches
 // the unified audit store. See ADR 0118-codex-approval-broker.
-func reportMissingHostProxyApproval(args []string) {
+func reportMissingHostProxyApproval(intent hostproxy.Intent) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return
@@ -112,8 +113,9 @@ func reportMissingHostProxyApproval(args []string) {
 	request := hostproxy.WireRequest{
 		Type: hostproxy.RequestType,
 		Request: hostproxy.Request{
-			Target: hostproxy.Target{Argv: append([]string(nil), args...)},
+			Target: hostproxy.Target{Argv: append([]string(nil), intent.Argv...)},
 			CWD:    cwd,
+			Reason: intent.Reason,
 		},
 	}
 	if json.NewEncoder(conn).Encode(request) != nil {

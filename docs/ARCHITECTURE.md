@@ -100,11 +100,12 @@ response is unavailable because the hook cannot yet distinguish a canonical
 allow from an approval-requiring ask. A broker invocation likewise cannot
 execute while its authorization service is unavailable.
 
-The broker command contains an opaque challenge rather than the original shell
-text. AgentJail uses Codex's supported `systemMessage` field to show the redacted
-effective shell command immediately before the native prompt, while the fixed
-command inside Codex's prompt identifies only the `shell-command` approval
-operation. The transport follows every effective Codex Bash `ask`, including
+The broker command contains an opaque challenge and bounded approval reason
+rather than the original shell text. The reason is shell-escaped and bound to
+minting, prompt observation, and redemption, so a caller cannot change it after
+the user reviews the native prompt. AgentJail uses Codex's supported
+`systemMessage` field to show the redacted effective shell command immediately
+before that prompt. The transport follows every effective Codex Bash `ask`, including
 user-authored custom rules, rather than enumerating policy rule IDs. Non-Bash
 Codex `ask` decisions retain their fail-closed adapter behavior because Codex
 cannot initiate an equivalent prompt for those tools. The normal redacted

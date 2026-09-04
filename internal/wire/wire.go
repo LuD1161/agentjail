@@ -82,6 +82,7 @@ type Response struct {
 	ApprovalChallenge       string `json:"approval_challenge,omitempty"`
 	ApprovalOperation       string `json:"approval_operation,omitempty"`
 	ApprovalDisplay         string `json:"approval_display,omitempty"`
+	ApprovalReason          string `json:"approval_reason,omitempty"`
 }
 
 const (

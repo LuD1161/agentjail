@@ -695,9 +695,10 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			bridgeEligible := translation.CodexApprovalBridge
 			approvalOperation := codexApprovalOperationFor(req.Capabilities)
 			var preparedHostProxyTarget hostproxy.Target
+			var preparedHostProxyIntent hostproxy.Intent
 			if resp.RuleID == "command_policy/confirm-host-proxy" {
 				var prepErr error
-				if preparedHostProxyTarget, prepErr = s.prepareHostProxy(req); prepErr != nil {
+				if preparedHostProxyTarget, preparedHostProxyIntent, prepErr = s.prepareHostProxy(req); prepErr != nil {
 					resp.Action = "deny"
 					resp.PolicyAction = "deny"
 					resp.EffectiveAction = "deny"
@@ -721,12 +722,16 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 				// Host-proxy and legacy Git broker operations return typed proxy or
 				// compatibility authority, not executable shell grants (ADR 0141-runtime-grants).
 				command, _ := req.ToolInput["command"].(string)
+				approvalReason := approvalexec.PrepareReason(store.RedactText(resp.Reason))
+				if approvalOperation == approvalexec.HostProxyOperation {
+					approvalReason = approvalexec.PrepareReason(string(preparedHostProxyIntent.Reason))
+				}
 				meta, mintErr := s.approvals.Mint(approvalexec.MintRequest{
 					SessionID: approvalexec.SessionID(req.SessionID),
 					TurnID:    approvalexec.TurnID(req.TurnID),
 					ToolUseID: approvalexec.ToolUseID(req.ToolUseID),
 					Operation: approvalOperation, Command: approvalexec.Command(command), CWD: req.CWD,
-					AgentPID: req.AgentPID, RuleID: resp.RuleID, Now: time.Now(),
+					AgentPID: req.AgentPID, RuleID: resp.RuleID, Reason: approvalReason, Now: time.Now(),
 				})
 				if mintErr != nil {
 					resp.CodexApprovalBridge = false
@@ -740,6 +745,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 					resp.ApprovalChallenge = string(meta.ChallengeID)
 					resp.ApprovalOperation = string(meta.Operation)
 					resp.ApprovalDisplay = approvalDisplayCommand(req.ToolInput)
+					resp.ApprovalReason = string(meta.Reason)
 					slog.Info("codex approval challenge minted", "session_id", req.SessionID, "rule_id", resp.RuleID)
 					s.emitApprovalAudit(ctx, audit.CodexApprovalMinted, meta)
 					if approvalOperation == approvalexec.HostProxyOperation {
@@ -930,6 +936,9 @@ func (s *server) handleApprovalPrompt(
 ) {
 	meta, err := s.approvals.Inspect(invocation.ChallengeID, time.Now())
 	pending, generic := s.grantPending.get(invocation.ChallengeID)
+	if err == nil && meta.Reason != invocation.Reason {
+		err = approvalexec.ErrBinding
+	}
 	if err == nil {
 		peerUID, uidErr := extractPeerUID(conn)
 		peerPID, pidErr := extractPeerPID(conn)
@@ -964,6 +973,7 @@ func (s *server) handleApprovalPrompt(
 			_, err = s.approvals.ObservePrompt(approvalexec.ObserveRequest{
 				ChallengeID: invocation.ChallengeID,
 				Operation:   invocation.Operation,
+				Reason:      invocation.Reason,
 				SessionID:   approvalexec.SessionID(req.SessionID),
 				TurnID:      approvalexec.TurnID(req.TurnID),
 				CWD:         req.CWD,
@@ -1001,7 +1011,7 @@ func (s *server) pendingBrokerPreTool(req policyeval.Request, invocation approva
 	}
 	meta, err := s.approvals.Inspect(invocation.ChallengeID, now)
 	return err == nil && meta.State == approvalexec.StatePending &&
-		meta.Operation == invocation.Operation && meta.SessionID == approvalexec.SessionID(req.SessionID) &&
+		meta.Operation == invocation.Operation && meta.Reason == invocation.Reason && meta.SessionID == approvalexec.SessionID(req.SessionID) &&
 		meta.TurnID == approvalexec.TurnID(req.TurnID) && meta.CWD == req.CWD && meta.AgentPID == verifiedCodexPID
 }
 
@@ -1042,7 +1052,9 @@ func (s *server) handleApprovalRedeem(
 	}
 	var redeemed approvalexec.Redemption
 	if err == nil && generic {
-		if s.grantApprovals == nil || s.grantAuthority == nil || pending.intent.PolicyEpoch() != s.runtimePolicyEpoch() {
+		if meta.Reason != req.Reason {
+			err = approvalexec.ErrBinding
+		} else if s.grantApprovals == nil || s.grantAuthority == nil || pending.intent.PolicyEpoch() != s.runtimePolicyEpoch() {
 			err = grant.ErrStalePolicyEpoch
 		} else {
 			now := time.Now()
@@ -1063,7 +1075,7 @@ func (s *server) handleApprovalRedeem(
 		// Redeem owns the burn. Even an invalid peer reaches this one-use state
 		// transition with empty verification fields. See ADR 0118-codex-approval-broker.
 		redeemed, err = s.approvals.Redeem(approvalexec.RedeemRequest{
-			ChallengeID: req.ChallengeID, Operation: req.Operation, VerifiedSession: verifiedSession,
+			ChallengeID: req.ChallengeID, Operation: req.Operation, Reason: req.Reason, VerifiedSession: verifiedSession,
 			PeerChainFresh: peerFresh,
 			CurrentEpoch:   s.approvals.CurrentEpoch(meta.SessionID),
 			Now:            time.Now(),
@@ -1110,7 +1122,7 @@ func (s *server) handleApprovalRedeem(
 		_ = enc.Encode(approvalexec.WireRedeemResponse{
 			OK: true, CWD: redeemed.CWD, ToolUseID: redeemed.ToolUseID,
 			HostProxyProof: string(proxyAuth.Proof), HostProxyExecutable: proxyAuth.Target.Executable,
-			HostProxyArgv: proxyAuth.Target.Argv,
+			HostProxyArgv: proxyAuth.Target.Argv, HostProxyReason: string(proxyAuth.Reason),
 		})
 		return
 	}
@@ -1120,32 +1132,32 @@ func (s *server) handleApprovalRedeem(
 	})
 }
 
-func (s *server) prepareHostProxy(req policyeval.Request) (hostproxy.Target, error) {
+func (s *server) prepareHostProxy(req policyeval.Request) (hostproxy.Target, hostproxy.Intent, error) {
 	if s.activeSessions == nil {
-		return hostproxy.Target{}, errors.New("host proxy session metadata unavailable")
+		return hostproxy.Target{}, hostproxy.Intent{}, errors.New("host proxy session metadata unavailable")
 	}
 	state, ok := s.activeSessions.metadata(req.SessionID)
 	if !ok {
-		return hostproxy.Target{}, errors.New("host proxy requires an authenticated shield launch")
+		return hostproxy.Target{}, hostproxy.Intent{}, errors.New("host proxy requires an authenticated shield launch")
 	}
 	cwd := policyeval.CanonicalizeCWD(req.CWD)
 	if !hostproxy.WithinRoot(state.Root, cwd) {
-		return hostproxy.Target{}, errors.New("host proxy working directory is outside the registered session root")
+		return hostproxy.Target{}, hostproxy.Intent{}, errors.New("host proxy working directory is outside the registered session root")
 	}
 	command, _ := req.ToolInput["command"].(string)
-	argv, err := hostproxy.ParseCommand(command)
+	intent, err := hostproxy.ParseIntent(command)
 	if err != nil {
-		return hostproxy.Target{}, err
+		return hostproxy.Target{}, hostproxy.Intent{}, err
 	}
-	target, err := hostproxy.Resolve(state.Path, cwd, argv)
+	target, err := hostproxy.Resolve(state.Path, cwd, intent.Argv)
 	if err != nil {
-		return hostproxy.Target{}, err
+		return hostproxy.Target{}, hostproxy.Intent{}, err
 	}
 	decision := hostproxy.Evaluate(target)
 	if decision.Action != hostproxy.ActionAsk {
-		return hostproxy.Target{}, errors.New(decision.Reason)
+		return hostproxy.Target{}, hostproxy.Intent{}, errors.New(decision.Reason)
 	}
-	return target, nil
+	return target, intent, nil
 }
 
 func (s *server) issueHostProxyAuthorization(redeemed approvalexec.Redemption, meta approvalexec.Metadata, peerPID int) (hostproxy.Authorization, error) {
@@ -1156,15 +1168,18 @@ func (s *server) issueHostProxyAuthorization(redeemed approvalexec.Redemption, m
 	if !ok {
 		return hostproxy.Authorization{}, errors.New("host proxy session metadata unavailable")
 	}
-	argv, err := hostproxy.ParseCommand(string(redeemed.Command))
+	intent, err := hostproxy.ParseIntent(string(redeemed.Command))
 	if err != nil {
 		return hostproxy.Authorization{}, err
+	}
+	if string(intent.Reason) != string(redeemed.Reason) {
+		return hostproxy.Authorization{}, approvalexec.ErrBinding
 	}
 	cwd := policyeval.CanonicalizeCWD(redeemed.CWD)
 	if !hostproxy.WithinRoot(state.Root, cwd) {
 		return hostproxy.Authorization{}, errors.New("host proxy working directory is outside the registered session root")
 	}
-	target, err := hostproxy.Resolve(state.Path, cwd, argv)
+	target, err := hostproxy.Resolve(state.Path, cwd, intent.Argv)
 	if err != nil {
 		return hostproxy.Authorization{}, err
 	}
@@ -1173,7 +1188,8 @@ func (s *server) issueHostProxyAuthorization(redeemed approvalexec.Redemption, m
 	}
 	return s.hostProxyApprovals.Issue(hostproxy.Authorization{
 		SessionID: hostproxy.SessionID(redeemed.SessionID), Target: target,
-		CWD: cwd, Root: state.Root, Path: state.Path, BrokerPID: peerPID,
+		Reason: hostproxy.Reason(redeemed.Reason),
+		CWD:    cwd, Root: state.Root, Path: state.Path, BrokerPID: peerPID,
 		FreshAfter: meta.FreshAfter,
 	}, time.Now())
 }
@@ -1217,7 +1233,8 @@ func (s *server) handleHostProxyExec(ctx context.Context, conn net.Conn, enc *js
 	}
 	auth, err = s.hostProxyApprovals.Redeem(hostproxy.RedeemRequest{
 		Proof: wireReq.Request.Proof, SessionID: hostproxy.SessionID(sessionID), Target: wireReq.Request.Target,
-		CWD: verifiedCWD, PeerPID: peerPID, PeerChainFresh: peerFresh, CurrentTime: time.Now(),
+		Reason: wireReq.Request.Reason,
+		CWD:    verifiedCWD, PeerPID: peerPID, PeerChainFresh: peerFresh, CurrentTime: time.Now(),
 	})
 	if err != nil {
 		deny("redeem")

@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const testReason Reason = "publish the reviewed change"
+
 func mintFixture(t *testing.T) (*Manager, Metadata, time.Time) {
 	t.Helper()
 	now := time.Unix(100, 0)
@@ -16,7 +18,7 @@ func mintFixture(t *testing.T) (*Manager, Metadata, time.Time) {
 	m.BeginToolCall("session")
 	meta, err := m.Mint(MintRequest{
 		SessionID: "session", TurnID: "turn", ToolUseID: "tool",
-		Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, RuleID: "git_push", Now: now,
+		Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, RuleID: "git_push", Reason: testReason, Now: now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,13 +29,13 @@ func mintFixture(t *testing.T) (*Manager, Metadata, time.Time) {
 func TestManagerHappyPathAndReplay(t *testing.T) {
 	m, meta, now := mintFixture(t)
 	if _, err := m.ObservePrompt(ObserveRequest{
-		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, SessionID: "session", TurnID: "turn",
+		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, SessionID: "session", TurnID: "turn",
 		CWD: "/repo", FreshAfter: 10, Now: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := m.Redeem(RedeemRequest{
-		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, VerifiedSession: "session",
+		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, VerifiedSession: "session",
 		PeerChainFresh: true, CurrentEpoch: 1, Now: now,
 	})
 	if err != nil {
@@ -61,7 +63,7 @@ func TestManagerRejectsPendingAndBurnsIt(t *testing.T) {
 func TestManagerRejectsForgedPromptAndBurnsChallenge(t *testing.T) {
 	m, meta, now := mintFixture(t)
 	_, err := m.ObservePrompt(ObserveRequest{
-		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, SessionID: "other-session", TurnID: "turn",
+		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, SessionID: "other-session", TurnID: "turn",
 		CWD: "/repo", FreshAfter: 10, Now: now,
 	})
 	if !errors.Is(err, ErrBinding) {
@@ -84,7 +86,7 @@ func TestManagerRejectsOperationMismatchAndBurnsChallenge(t *testing.T) {
 			m, meta, now := mintFixture(t)
 			if tc.stage == "prompt" {
 				_, err := m.ObservePrompt(ObserveRequest{
-					ChallengeID: meta.ChallengeID, Operation: ShellCommandOperation,
+					ChallengeID: meta.ChallengeID, Operation: ShellCommandOperation, Reason: testReason,
 					SessionID: "session", TurnID: "turn", CWD: "/repo", FreshAfter: 10, Now: now,
 				})
 				if !errors.Is(err, ErrBinding) {
@@ -92,13 +94,13 @@ func TestManagerRejectsOperationMismatchAndBurnsChallenge(t *testing.T) {
 				}
 			} else {
 				if _, err := m.ObservePrompt(ObserveRequest{
-					ChallengeID: meta.ChallengeID, Operation: GitPushOperation,
+					ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason,
 					SessionID: "session", TurnID: "turn", CWD: "/repo", FreshAfter: 10, Now: now,
 				}); err != nil {
 					t.Fatal(err)
 				}
 				_, err := m.Redeem(RedeemRequest{
-					ChallengeID: meta.ChallengeID, Operation: ShellCommandOperation,
+					ChallengeID: meta.ChallengeID, Operation: ShellCommandOperation, Reason: testReason,
 					VerifiedSession: "session", PeerChainFresh: true, CurrentEpoch: 1, Now: now,
 				})
 				if !errors.Is(err, ErrBinding) {
@@ -127,11 +129,47 @@ func TestManagerRejectsUnknownOperation(t *testing.T) {
 func TestBrokerCommandRoundTripsSupportedOperations(t *testing.T) {
 	valid := ChallengeID("A" + strings.Repeat("B", 42))
 	for _, operation := range []Operation{GitPushOperation, ShellCommandOperation, HostProxyOperation} {
-		invocation := BrokerInvocation{Operation: operation, ChallengeID: valid}
+		invocation := BrokerInvocation{Operation: operation, ChallengeID: valid, Reason: testReason}
 		got, ok := ParseBrokerCommand(BrokerCommand(invocation))
 		if !ok || got != invocation {
 			t.Fatalf("canonical broker command = %#v, %v", got, ok)
 		}
+	}
+}
+
+func TestBrokerCommandEscapesReasonWithoutShellExpansion(t *testing.T) {
+	invocation := BrokerInvocation{
+		Operation:   ShellCommandOperation,
+		ChallengeID: ChallengeID("A" + strings.Repeat("B", 42)),
+		Reason:      `review "$HOME" and $(whoami) before deploy`,
+	}
+	command := BrokerCommand(invocation)
+	if !strings.Contains(command, `\"\$HOME\"`) || !strings.Contains(command, `\$(whoami)`) {
+		t.Fatalf("broker reason was not shell escaped: %q", command)
+	}
+	if got, ok := ParseBrokerCommand(command); !ok || got != invocation {
+		t.Fatalf("round trip = %#v, %v", got, ok)
+	}
+}
+
+func TestManagerRejectsChangedReasonAndBurnsChallenge(t *testing.T) {
+	m, meta, now := mintFixture(t)
+	_, err := m.ObservePrompt(ObserveRequest{
+		ChallengeID: meta.ChallengeID, Operation: meta.Operation, Reason: "different reason",
+		SessionID: meta.SessionID, TurnID: meta.TurnID, CWD: meta.CWD, FreshAfter: 10, Now: now,
+	})
+	if !errors.Is(err, ErrBinding) {
+		t.Fatalf("changed reason error = %v", err)
+	}
+	if _, err := m.Inspect(meta.ChallengeID, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("changed reason left challenge usable: %v", err)
+	}
+}
+
+func TestPrepareReasonBoundsAndNormalizesDisplayText(t *testing.T) {
+	got := PrepareReason("  review\n" + strings.Repeat("界", MaxReasonBytes) + "  ")
+	if got == "" || len(got) > MaxReasonBytes || strings.ContainsRune(string(got), '\n') {
+		t.Fatalf("prepared reason = %q (%d bytes)", got, len(got))
 	}
 }
 
@@ -164,7 +202,7 @@ func TestManagerRejectsLaterToolCallAndStaleProcess(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, meta, now := mintFixture(t)
 			if _, err := m.ObservePrompt(ObserveRequest{
-				ChallengeID: meta.ChallengeID, Operation: GitPushOperation, SessionID: "session", TurnID: "turn",
+				ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, SessionID: "session", TurnID: "turn",
 				CWD: "/repo", FreshAfter: 10, Now: now,
 			}); err != nil {
 				t.Fatal(err)
@@ -174,7 +212,7 @@ func TestManagerRejectsLaterToolCallAndStaleProcess(t *testing.T) {
 				epoch = m.BeginToolCall("session")
 			}
 			_, err := m.Redeem(RedeemRequest{
-				ChallengeID: meta.ChallengeID, Operation: GitPushOperation, VerifiedSession: "session",
+				ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, VerifiedSession: "session",
 				PeerChainFresh: tc.fresh, CurrentEpoch: epoch, Now: now,
 			})
 			if !errors.Is(err, tc.want) {
@@ -187,7 +225,7 @@ func TestManagerRejectsLaterToolCallAndStaleProcess(t *testing.T) {
 func TestManagerConcurrentRedeemHasOneWinner(t *testing.T) {
 	m, meta, now := mintFixture(t)
 	if _, err := m.ObservePrompt(ObserveRequest{
-		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, SessionID: "session", TurnID: "turn",
+		ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, SessionID: "session", TurnID: "turn",
 		CWD: "/repo", FreshAfter: 10, Now: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -200,7 +238,7 @@ func TestManagerConcurrentRedeemHasOneWinner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			if _, err := m.Redeem(RedeemRequest{
-				ChallengeID: meta.ChallengeID, Operation: GitPushOperation, VerifiedSession: "session",
+				ChallengeID: meta.ChallengeID, Operation: GitPushOperation, Reason: testReason, VerifiedSession: "session",
 				PeerChainFresh: true, CurrentEpoch: 1, Now: now,
 			}); err == nil {
 				mu.Lock()
@@ -223,20 +261,20 @@ func TestManagerBoundsPendingChallengesPerSession(t *testing.T) {
 		if _, err := m.Mint(MintRequest{
 			SessionID: "session", TurnID: TurnID("turn-" + string(rune('a'+i))),
 			ToolUseID: ToolUseID("tool-" + string(rune('a'+i))),
-			Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, Now: now,
+			Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, Reason: testReason, Now: now,
 		}); err != nil {
 			t.Fatalf("mint %d: %v", i, err)
 		}
 	}
 	if _, err := m.Mint(MintRequest{
 		SessionID: "session", TurnID: "overflow", ToolUseID: "overflow",
-		Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, Now: now,
+		Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, Reason: testReason, Now: now,
 	}); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("overflow error = %v, want capacity", err)
 	}
 	if _, err := m.Mint(MintRequest{
 		SessionID: "session", TurnID: "after-expiry", ToolUseID: "after-expiry",
-		Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, Now: now.Add(2 * time.Second),
+		Operation: GitPushOperation, Command: "git push", CWD: "/repo", AgentPID: 42, Reason: testReason, Now: now.Add(2 * time.Second),
 	}); err != nil {
 		t.Fatalf("expired entries were not reaped: %v", err)
 	}

@@ -43,11 +43,13 @@ The typed broker operation is `shell-command`. The rewritten input has exactly
 this form:
 
 ```text
-agentjail approval-exec --operation shell-command --challenge <opaque-id>
+agentjail approval-exec --operation shell-command --challenge <opaque-id> --reason "<bounded explanation>"
 ```
 
-The parser accepts only that canonical argv shape. The operation is bound into
-challenge minting, prompt observation, and redemption alongside the Codex
+The parser accepts only that canonical argv shape. The policy-authored reason is
+made single-line, bounded to 512 UTF-8 bytes, and shell-escaped before it enters
+the broker argv. The operation and exact reason are bound into challenge minting,
+prompt observation, and redemption alongside the Codex
 session, turn, tool-use correlation, working directory, policy rule, tool-call
 epoch, and kernel-verified Codex process ancestry. An operation mismatch,
 unexpected argument, replay, expiry, later tool call, stale process chain, or
@@ -56,7 +58,8 @@ original command.
 
 Keep the original command only in daemon memory. The hook shows its bounded,
 printable, store-redacted form immediately before the prompt. Broker argv,
-structured logs, and audit detail contain no original command. Approval
+structured logs, and audit detail contain no original command; the broker argv
+does contain the user-visible reason. Approval
 executes the exact in-memory command once from its original working directory,
 preserving the broker process's environment and the session's absolute login
 shell behavior.

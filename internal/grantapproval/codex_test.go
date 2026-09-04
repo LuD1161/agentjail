@@ -66,7 +66,7 @@ func codexFixture(t *testing.T) (*CodexAdapter, Intent, time.Time) {
 func begin(t *testing.T, adapter *CodexAdapter, intent Intent, now time.Time) CodexPrompt {
 	t.Helper()
 	prompt := adapter.Begin(context.Background(), CodexShellRequest{
-		Intent: intent, Command: "git push origin topic", CWD: "/repo", AgentPID: 42, Now: now,
+		Intent: intent, Command: "git push origin topic", Reason: "publish the reviewed change", CWD: "/repo", AgentPID: 42, Now: now,
 	})
 	if prompt.Outcome != OutcomePending {
 		t.Fatalf("Begin() outcome = %q", prompt.Outcome)
@@ -340,7 +340,7 @@ func TestCodexBeginReapsExpiredPendingMirror(t *testing.T) {
 	}
 	adapter.mu.Unlock()
 	second := adapter.Begin(context.Background(), CodexShellRequest{
-		Intent: intent, Command: "git push origin topic", CWD: "/repo", AgentPID: 42, Now: now.Add(2 * time.Second),
+		Intent: intent, Command: "git push origin topic", Reason: "publish the reviewed change", CWD: "/repo", AgentPID: 42, Now: now.Add(2 * time.Second),
 	})
 	if second.Outcome != OutcomePending {
 		t.Fatalf("second Begin() = %#v", second)
@@ -408,7 +408,7 @@ func TestBurnInvalidatesApprovalExecChallenge(t *testing.T) {
 	manager := approvalexec.NewManager(bytes.NewReader(make([]byte, 64)), time.Second, time.Minute)
 	manager.BeginToolCall("session")
 	now := time.Unix(100, 0)
-	meta, err := manager.Mint(approvalexec.MintRequest{SessionID: "session", TurnID: "turn", ToolUseID: "tool", Operation: approvalexec.ShellCommandOperation, Command: "echo", CWD: "/repo", AgentPID: 1, Now: now})
+	meta, err := manager.Mint(approvalexec.MintRequest{SessionID: "session", TurnID: "turn", ToolUseID: "tool", Operation: approvalexec.ShellCommandOperation, Command: "echo", CWD: "/repo", AgentPID: 1, Reason: "run the reviewed command", Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

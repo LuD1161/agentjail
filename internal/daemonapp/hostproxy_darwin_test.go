@@ -29,7 +29,7 @@ func TestDarwinHostProxyHandlerExecutesExactApprovedRequest(t *testing.T) {
 	manager := hostproxy.NewManager(nil, time.Minute)
 	auth, err := manager.Issue(hostproxy.Authorization{
 		SessionID: "session", Target: target, CWD: cwd, Root: cwd, Path: cwd,
-		BrokerPID: os.Getpid(), FreshAfter: 1,
+		Reason: "inspect the requested local file", BrokerPID: os.Getpid(), FreshAfter: 1,
 	}, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestDarwinHostProxyHandlerExecutesExactApprovedRequest(t *testing.T) {
 	srv := &server{hostProxyApprovals: manager, hostProxyExecutor: hostproxy.NewExecutor(), activeSessions: tracker, eventStore: st}
 
 	response := runDarwinHostProxyHandler(t, srv, hostproxy.WireRequest{
-		Type: hostproxy.RequestType, Request: hostproxy.Request{Proof: auth.Proof, Target: target, CWD: cwd},
+		Type: hostproxy.RequestType, Request: hostproxy.Request{Proof: auth.Proof, Target: target, Reason: auth.Reason, CWD: cwd},
 	})
 	if !response.OK || response.Result.ExitCode != 42 || string(response.Result.Stdout) != "literal;$(nope)|*" || string(response.Result.Stderr) != "err" {
 		t.Fatalf("response = %+v", response)

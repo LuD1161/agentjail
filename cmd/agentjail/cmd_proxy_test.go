@@ -45,7 +45,7 @@ func TestRunHostProxyReportsMissingApprovalToDaemon(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetErr(&stderr)
-	code := runHostProxy(cmd, []string{"--", "/bin/true"})
+	code := runHostProxy(cmd, []string{"--reason", "verify the local binary", "--", "/bin/true"})
 	if code == 0 || !strings.Contains(stderr.String(), "no native one-time approval") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -55,5 +55,20 @@ func TestRunHostProxyReportsMissingApprovalToDaemon(t *testing.T) {
 	}
 	if len(request.Request.Target.Argv) != 1 || request.Request.Target.Argv[0] != "/bin/true" {
 		t.Fatalf("argv = %#v", request.Request.Target.Argv)
+	}
+	if request.Request.Reason != "verify the local binary" {
+		t.Fatalf("reason = %q", request.Request.Reason)
+	}
+}
+
+func TestRunHostProxyRequiresReasonBeforeDaemonAccess(t *testing.T) {
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&stderr)
+	if code := runHostProxy(cmd, []string{"--", "/bin/true"}); code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "requires --reason") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

@@ -15,7 +15,7 @@ func TestPendingBrokerPreToolAllowsOnlyBoundPendingTransport(t *testing.T) {
 	manager.BeginToolCall("session")
 	meta, err := manager.Mint(approvalexec.MintRequest{
 		SessionID: "session", TurnID: "turn", ToolUseID: "tool", Operation: approvalexec.HostProxyOperation,
-		Command: "agentjail proxy -- cat /outside/data.csv", CWD: "/project", AgentPID: 42,
+		Command: "agentjail proxy --reason 'read the requested report' -- cat /outside/data.csv", Reason: "read the requested report", CWD: "/project", AgentPID: 42,
 		RuleID: "command_policy/confirm-host-proxy", Now: now,
 	})
 	if err != nil {
@@ -23,7 +23,7 @@ func TestPendingBrokerPreToolAllowsOnlyBoundPendingTransport(t *testing.T) {
 	}
 	srv := &server{approvals: manager}
 	req := policyeval.Request{SessionID: "session", TurnID: "turn", CWD: "/project"}
-	invocation := approvalexec.BrokerInvocation{Operation: meta.Operation, ChallengeID: meta.ChallengeID}
+	invocation := approvalexec.BrokerInvocation{Operation: meta.Operation, ChallengeID: meta.ChallengeID, Reason: meta.Reason}
 	epoch := manager.CurrentEpoch("session")
 
 	if !srv.pendingBrokerPreTool(req, invocation, 42, now) {
@@ -61,20 +61,20 @@ func TestPendingBrokerPreToolRejectsObservedChallenge(t *testing.T) {
 	manager.BeginToolCall("session")
 	meta, err := manager.Mint(approvalexec.MintRequest{
 		SessionID: "session", TurnID: "turn", ToolUseID: "tool", Operation: approvalexec.HostProxyOperation,
-		Command: "agentjail proxy -- cat /outside/data.csv", CWD: "/project", AgentPID: 42,
+		Command: "agentjail proxy --reason 'read the requested report' -- cat /outside/data.csv", Reason: "read the requested report", CWD: "/project", AgentPID: 42,
 		RuleID: "command_policy/confirm-host-proxy", Now: now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.ObservePrompt(approvalexec.ObserveRequest{
-		ChallengeID: meta.ChallengeID, Operation: meta.Operation, SessionID: meta.SessionID,
+		ChallengeID: meta.ChallengeID, Operation: meta.Operation, Reason: meta.Reason, SessionID: meta.SessionID,
 		TurnID: meta.TurnID, CWD: meta.CWD, FreshAfter: 1, Now: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	srv := &server{approvals: manager}
-	invocation := approvalexec.BrokerInvocation{Operation: meta.Operation, ChallengeID: meta.ChallengeID}
+	invocation := approvalexec.BrokerInvocation{Operation: meta.Operation, ChallengeID: meta.ChallengeID, Reason: meta.Reason}
 	if srv.pendingBrokerPreTool(policyeval.Request{SessionID: "session", TurnID: "turn", CWD: "/project"}, invocation, 42, now) {
 		t.Fatal("observed challenge was allowed through PreToolUse again")
 	}

@@ -312,7 +312,7 @@ func (s *server) beginCodexRuntimeGrant(ctx context.Context, req policyeval.Requ
 		return false
 	}
 	prompt := s.grantApprovals.Begin(ctx, grantapproval.CodexShellRequest{
-		Intent: intent, Command: approvalexec.Command(command), CWD: req.CWD, AgentPID: agentPID, Now: time.Now(),
+		Intent: intent, Command: approvalexec.Command(command), Reason: approvalexec.PrepareReason(resp.Reason), CWD: req.CWD, AgentPID: agentPID, Now: time.Now(),
 	})
 	if prompt.Outcome != grantapproval.OutcomePending || prompt.Challenge == "" {
 		s.cancelCodexRuntimeGrant("", codexGrantPending{grant: runtimeGrant})
@@ -333,6 +333,7 @@ func (s *server) beginCodexRuntimeGrant(ctx context.Context, req policyeval.Requ
 	resp.ApprovalChallenge = string(challenge)
 	resp.ApprovalOperation = string(meta.Operation)
 	resp.ApprovalDisplay = approvalDisplayCommand(req.ToolInput)
+	resp.ApprovalReason = string(meta.Reason)
 	slog.Info("codex runtime grant requested", "session_id", req.SessionID, "rule_ref", runtimeGrantReference(resp.RuleID))
 	return true
 }

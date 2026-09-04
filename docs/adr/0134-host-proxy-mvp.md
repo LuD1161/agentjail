@@ -28,7 +28,10 @@ behavior recorded below.
 
 ## Decision
 
-On Linux, `agentjail proxy -- <argv...>` is a typed command intent. It is eligible
+On Linux, `agentjail proxy --reason "<explanation>" -- <argv...>` is a typed
+command intent. The concise reason is mandatory, single-line, valid UTF-8, and
+bounded to 512 bytes so the coding agent must explain the requested host access
+before AgentJail opens a prompt. It is eligible
 only from an authenticated shield launch whose control-token registration pins a
 canonical session root and sanitized PATH. The daemon resolves the top-level
 executable through that PATH, follows symlinks, and denies sensitive clients,
@@ -36,12 +39,14 @@ AgentJail control binaries, shells, direct interpreters (including versioned run
 names), and generic/package-runtime wrappers. Every other executable requires
 a native Codex allow-once decision.
 
-The existing approval challenge uses the typed `host-proxy` operation. Prompt
+The existing approval challenge uses the typed `host-proxy` operation. The exact
+reason is included in the native Codex prompt and bound to challenge minting,
+prompt observation, and redemption. Prompt
 observation arms that challenge and records a fresh process-start boundary. Native
 approval starts the fixed `approval-exec` broker; rejection starts no broker. The
 daemon verifies and burns the first challenge, then issues a second short-lived,
 one-use proof bound to the authenticated session, canonical executable, exact argv,
-canonical cwd, registered root and PATH, broker PID, and fresh descendant chain.
+canonical cwd, registered root and PATH, exact reason, broker PID, and fresh descendant chain.
 The broker preserves its PID while replacing itself with `agentjail proxy`, so a
 same-UID direct socket caller cannot redeem the proof. Mismatch, expiry, replay, or
 missing ancestry burns or refuses it.
