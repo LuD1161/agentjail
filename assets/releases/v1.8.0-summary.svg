@@ -4,28 +4,28 @@
   <rect y="12" width="720" height="36" fill="#161b22"/>
   <circle cx="24" cy="24" r="6" fill="#3fb950"/>
   <text x="44" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v1.8.0</text>
-  <text x="214" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Fast costs. Clearer approvals.</text>
+  <text x="214" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="14" fill="#8b949e">Clearer approvals. Faster cost reports.</text>
 
   <rect x="20" y="60" width="216" height="142" rx="8" fill="#1c2128" stroke="#f0883e44"/>
-  <text x="36" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f0883e">FAST REPORTS</text>
-  <text x="36" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">Large histories stay usable</text>
-  <text x="36" y="130" font-family="monospace" font-size="10" fill="#8b949e">No full rescan per view</text>
-  <text x="36" y="150" font-family="monospace" font-size="10" fill="#8b949e">CLI + local UI</text>
-  <text x="36" y="180" font-family="monospace" font-size="10" fill="#6e7681">report instead of waiting</text>
+  <text x="36" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f0883e">EXPLAIN THE ACCESS</text>
+  <text x="36" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">--reason is required</text>
+  <text x="36" y="130" font-family="monospace" font-size="10" fill="#8b949e">Visible in Codex approval</text>
+  <text x="36" y="150" font-family="monospace" font-size="10" fill="#8b949e">Bound to one-use execution</text>
+  <text x="36" y="180" font-family="monospace" font-size="10" fill="#6e7681">review why, then decide</text>
 
   <rect x="252" y="60" width="216" height="142" rx="8" fill="#1c2128" stroke="#58a6ff44"/>
-  <text x="268" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#58a6ff">STAYS CURRENT</text>
-  <text x="268" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">Background refresh</text>
-  <text x="268" y="130" font-family="monospace" font-size="10" fill="#8b949e">Catches up after downtime</text>
-  <text x="268" y="150" font-family="monospace" font-size="10" fill="#8b949e">Building + stale status</text>
-  <text x="268" y="180" font-family="monospace" font-size="10" fill="#6e7681">nothing hidden behind a spinner</text>
+  <text x="268" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#58a6ff">REPORT, DON'T RESCAN</text>
+  <text x="268" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">Multi-GB histories stay usable</text>
+  <text x="268" y="130" font-family="monospace" font-size="10" fill="#8b949e">Incremental local index</text>
+  <text x="268" y="150" font-family="monospace" font-size="10" fill="#8b949e">CLI + local UI</text>
+  <text x="268" y="180" font-family="monospace" font-size="10" fill="#6e7681">query the ready projection</text>
 
   <rect x="484" y="60" width="216" height="142" rx="8" fill="#1c2128" stroke="#3fb95044"/>
-  <text x="500" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950">EXPLAIN THE ACCESS</text>
-  <text x="500" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">--reason is required</text>
-  <text x="500" y="130" font-family="monospace" font-size="10" fill="#8b949e">Visible in Codex approval</text>
-  <text x="500" y="150" font-family="monospace" font-size="10" fill="#8b949e">Bound to one-use proof</text>
-  <text x="500" y="180" font-family="monospace" font-size="10" fill="#6e7681">review why, then decide</text>
+  <text x="500" y="82" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950">LOCAL AND CURRENT</text>
+  <text x="500" y="108" font-family="monospace" font-size="10" fill="#f0f6fc">Startup + daily refresh</text>
+  <text x="500" y="130" font-family="monospace" font-size="10" fill="#8b949e">Catches up after downtime</text>
+  <text x="500" y="150" font-family="monospace" font-size="10" fill="#8b949e">Building + stale status</text>
+  <text x="500" y="180" font-family="monospace" font-size="10" fill="#6e7681">usage facts, not transcripts</text>
 
-  <text x="360" y="225" text-anchor="middle" font-family="monospace" font-size="10" fill="#8b949e">Fast local answers for spend. Better context for risky access.</text>
+  <text x="360" y="225" text-anchor="middle" font-family="monospace" font-size="10" fill="#8b949e">Better context for risky access. Fast local answers for spend.</text>
 </svg>

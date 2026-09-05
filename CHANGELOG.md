@@ -4,38 +4,64 @@
 
 ## Unreleased
 
-## v1.8.0 - 2026-09-03
+## v1.8.0 - 2026-09-05
 
 ![v1.8.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.0-summary.svg)
 
 ## TL;DR
 
-- **Get cost reports quickly, even with multi-gigabyte agent histories**, because
-  the CLI and local UI no longer rescan every retained transcript for each view.
-- **Keep totals current automatically** while the daemon refreshes new usage in
-  the background after startup and each day.
-- **Trust reports while sessions are still changing**, including active, forked,
-  truncated, replaced, and unusually large transcript files.
-- **See when data is building or stale without giving up local privacy** because
-  the index stores usage facts, never prompts, responses, commands, or tool output.
-- **Review why an agent needs host access before approving it** because
-  `agentjail proxy` now requires a reason that is shown and bound to the native
-  Codex approval.
+- **Review why an agent needs host access before approving it.** `agentjail
+  proxy` now requires a bounded reason, shows it in Codex's native approval, and
+  binds it to the one-use execution.
+- **Open local cost reports without rescanning multi-gigabyte histories.** The
+  CLI and local UI now query a ready-to-read SQLite index.
+- **Keep totals current automatically.** The daemon refreshes usage after
+  startup and at local midnight, then catches up safely after sleep or downtime.
+- **See when a report is still building or stale.** The index stores typed usage
+  facts, never prompts, responses, commands, or tool output.
 
 ### Added
 
+- **Reason-aware host approvals**: protected agents must call
+  `agentjail proxy --reason "…" -- <command>`. The bounded reason appears in
+  Codex's native prompt and is bound to the one-use challenge and host execution.
 - **Fast local cost analytics**: `agentjail cost` and the local UI now read a
   ready-to-query local index instead of repeatedly scanning retained Claude Code
   and Codex histories. The daemon keeps it current in the background and stores
   only typed usage facts (ADR 0142-incremental-cost-index).
-- **Reason-aware host approvals**: protected agents must call
-  `agentjail proxy --reason "…" -- <command>`. The bounded reason appears in
-  Codex's native prompt and is bound to the one-use challenge and host execution.
+- **Reusable daily maintenance runner**: the daemon runs cost maintenance after
+  readiness and at the next local midnight. Each job owns its checkpoints and
+  catches up after missed days.
 
 ### Changed
 
-- **Visible report readiness**: cost callers now say when data is building or
+- **Incremental cost refresh**: after the first resumable backfill, AgentJail
+  reads only newly appended complete transcript records.
+- **Visible report readiness**: CLI and UI callers say when data is building or
   stale instead of leaving users to guess whether a quiet command is working.
+- **Local pricing rebuilds**: retained request-level usage dimensions let
+  AgentJail recalculate derived totals when bundled pricing changes, without
+  rereading provider transcripts.
+
+### Fixed
+
+- **Recoverable active transcripts**: partial trailing records remain
+  unacknowledged, while replacement or truncation starts a new generation
+  without corrupting prior sources.
+- **Correct Codex fork costs**: lineage stays available independently of the
+  report window so copied ancestor usage is not charged twice.
+- **Indexed report filters**: long period and project windows no longer force a
+  full history scan.
+
+### Security
+
+- **Fail-closed approval reasons**: missing, changed, multiline, or oversized
+  reasons fail closed. The accepted reason is bound to the command, session,
+  arguments, working directory, and one-use challenge.
+- **Usage metadata only**: the cost index does not retain prompts, responses,
+  commands, or tool output.
+- **Informational maintenance**: cost refresh failures are visible but cannot
+  block or relax policy enforcement.
 
 ## v1.7.0 - 2026-08-29
 
