@@ -61,7 +61,34 @@ func TestRunHostProxyReportsMissingApprovalToDaemon(t *testing.T) {
 	}
 }
 
-func TestRunHostProxyRequiresReasonBeforeDaemonAccess(t *testing.T) {
+func TestRunHostProxyRequiresReasonAndReportsMalformedDenial(t *testing.T) {
+	home := shortHomeDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv(hostproxy.ProofEnvironmentName, "")
+	t.Setenv(hostproxy.TargetEnvironmentName, "")
+	if err := os.MkdirAll(filepath.Dir(wire.DefaultSocketPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", wire.DefaultSocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	received := make(chan hostproxy.WireRequest, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		var request hostproxy.WireRequest
+		if json.NewDecoder(conn).Decode(&request) == nil {
+			received <- request
+		}
+		_ = json.NewEncoder(conn).Encode(hostproxy.WireResponse{Error: "malformed host proxy request"})
+	}()
+
 	var stderr bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetErr(&stderr)
@@ -70,5 +97,12 @@ func TestRunHostProxyRequiresReasonBeforeDaemonAccess(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "requires --reason") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+	request := <-received
+	if request.Type != hostproxy.RequestType || request.Request.Proof != "" || request.Request.Reason != "" {
+		t.Fatalf("request = %#v", request)
+	}
+	if len(request.Request.Target.Argv) != 0 {
+		t.Fatalf("malformed argv escaped into audit request: %#v", request.Request.Target.Argv)
 	}
 }

@@ -37,13 +37,14 @@ func init() { rootCmd.AddCommand(proxyCmd) }
 func runHostProxy(cmd *cobra.Command, args []string) int {
 	intent, err := hostproxy.ParseArgs(args)
 	if err != nil {
+		reportUnapprovedHostProxyInvocation(hostproxy.Intent{})
 		fmt.Fprintf(cmd.ErrOrStderr(), "agentjail proxy: %v\n", err)
 		return 2
 	}
 	proof := hostproxy.Proof(os.Getenv(hostproxy.ProofEnvironmentName))
 	executable := os.Getenv(hostproxy.TargetEnvironmentName)
 	if proof == "" || executable == "" {
-		reportMissingHostProxyApproval(intent)
+		reportUnapprovedHostProxyInvocation(intent)
 		fmt.Fprintln(cmd.ErrOrStderr(), "agentjail proxy: no native one-time approval is available")
 		return 1
 	}
@@ -97,9 +98,9 @@ func runHostProxy(cmd *cobra.Command, args []string) int {
 	return response.Result.ExitCode
 }
 
-// Missing proof is still sent to the daemon so the fail-closed denial reaches
-// the unified audit store. See ADR 0118-codex-approval-broker.
-func reportMissingHostProxyApproval(intent hostproxy.Intent) {
+// Invalid or unapproved attempts still reach the unified denial audit.
+// See ADR 0118-codex-approval-broker.
+func reportUnapprovedHostProxyInvocation(intent hostproxy.Intent) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return

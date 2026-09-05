@@ -636,7 +636,7 @@ fi
 
 HOST_PROXY_APPROVED_REF="$(host_proxy_ref "$HOST_PROXY_HELPER" "$HOST_PROXY_HELPER" "$HOST_PROXY_APPROVED" hostproxy-approved)"
 EXPECTED_CONTEXT="hostproxy-approved"
-if start_and_wait_for_approval "agentjail proxy --reason 'verify host-side approval execution' -- $HOST_PROXY_HELPER $HOST_PROXY_APPROVED hostproxy-approved"; then
+if start_and_wait_for_approval "agentjail proxy --reason \"verify host-side approval execution\" -- $HOST_PROXY_HELPER $HOST_PROXY_APPROVED hostproxy-approved"; then
     scn_ok "host proxy shows its exact outside-shield boundary in a native prompt"
     tmux send-keys -t "$SESSION:0.0" "1" Enter
 else
@@ -663,7 +663,7 @@ preserve_raw_log hostproxy-approved "$PANE_LOG"
 HOST_PROXY_REJECTED_REF="$(host_proxy_ref "$HOST_PROXY_HELPER" "$HOST_PROXY_HELPER" "$HOST_PROXY_REJECTED" hostproxy-rejected)"
 REJECTED_AUDIT_BEFORE="$(sqlite3 "$AUDIT_DB" 'select coalesce(max(id),0) from audit_log;' 2>/dev/null || echo 0)"
 EXPECTED_CONTEXT="hostproxy-rejected"
-if start_and_wait_for_approval "agentjail proxy --reason 'verify rejected host-side execution' -- $HOST_PROXY_HELPER $HOST_PROXY_REJECTED hostproxy-rejected"; then
+if start_and_wait_for_approval "agentjail proxy --reason \"verify rejected host-side execution\" -- $HOST_PROXY_HELPER $HOST_PROXY_REJECTED hostproxy-rejected"; then
     scn_ok "host proxy rejection reaches the same native prompt"
     tmux send-keys -t "$SESSION:0.0" Escape
     sleep 1

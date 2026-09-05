@@ -1254,6 +1254,17 @@ Unit tests for rewrite shape, prompt observation, and redemption all stayed gree
   pending state and does not advance the original operation's epoch. See ADR
   0118-codex-approval-broker and AGE-297.
 
+## 94. A required flag changes the negative path too
+
+Host-proxy reasons passed every unit test, but the clean-box gate exposed two
+gaps. Invalid CLI input returned before emitting the denial audit, and the live
+fixture nested a single-quoted reason inside a single-quoted Codex prompt, so
+Codex parsed part of the prompt as its own argument.
+
+- **Rule:** when a required field is added, preserve fail-closed audit evidence
+  before parsing returns, and exercise its exact shell representation through
+  the real agent launcher. See ADR 0118-codex-approval-broker.
+
 ---
 
 ## Testing gotchas
