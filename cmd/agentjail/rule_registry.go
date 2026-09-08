@@ -119,11 +119,6 @@ var ruleRegistry = []RuleEntry{
 		Description: "Block systemctl stop/disable/mask on critical services",
 	},
 	{
-		ID:          "command_policy/no-bash-touch-sensitive-path",
-		Source:      RuleSourceCore,
-		Description: "Block Bash access to sensitive paths",
-	},
-	{
 		ID:          "command_policy/confirm-curl-download",
 		Source:      RuleSourceCore,
 		Description: "Ask before downloading via curl (non-pipe)",

@@ -1318,6 +1318,21 @@ Reproduce by hand before filing.
 
 ---
 
+## Retired sensitive-path regex: a mention is not file access
+
+The old `command_policy/no-bash-touch-sensitive-path` tests passed while
+asserting that secret-looking shell text was denied. Real repository searches,
+documentation commands, and certificate inspection were blocked without
+attempting protected file access. Exempting Git commit messages only treated
+one symptom. The rule and its default-allow exclusion are now retired; the
+sandbox owns configured filesystem restrictions and native file-tool policies
+remain active. Removing only the deny candidate would leave the matcher
+suppressing default-allow and turn false denies into asks. Test the final policy
+decision for harmless workflows, and distinguish policy permission from the
+actual execution outcome. See ADR 0143-retire-path-heuristic.
+
+---
+
 ## Adding to this file
 
 When you fix something that was invisible to a green suite, add an entry: what

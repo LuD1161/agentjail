@@ -9,6 +9,11 @@
 
 ## Context
 
+**Update:** The sensitive-path shell-text guard discussed below is retired by
+[ADR 0143-retire-path-heuristic](0143-retire-path-heuristic.md). The sandbox
+remains the filesystem boundary; the historical guard and its Git-message
+exception are no longer active.
+
 Tier 1 enforcement is **cooperative**: Claude Code voluntarily calls our
 PreToolUse hook before each tool call, and we decide allow/deny/ask. This
 works as long as the agent (a) calls the hook reliably and (b) the rule we're

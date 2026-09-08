@@ -3,6 +3,10 @@
 ## Status
 Superseded — reverted before release.
 
+**Current decision:** ADR 0143-retire-path-heuristic retires
+`command_policy/no-bash-touch-sensitive-path` entirely. The retained-deny
+decision below is historical; the other rules discussed here are unchanged.
+
 The downgrade traded truthfulness for friction reduction: it made policy
 return `allow` for a command the sandbox then blocked, which reads as "the
 secret was read" when it was not. The friction it targeted comes from a

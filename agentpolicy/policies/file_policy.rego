@@ -716,7 +716,7 @@ candidate contains r if {
 #
 # Safety layering:
 #  - Dangerous Bash patterns  → command_policy deny/ask candidates
-#  - Bash touching sensitive paths → command_policy no-bash-touch-sensitive-path
+#  - Bash file access → configured OS sandbox restrictions (ADR 0143-retire-path-heuristic)
 #  - File tools to ~/.agentjail/ → file_policy/agentjail_self (rule 0, LOCKED)
 #  - File tools to protected cred paths → file_policy/sensitive_credential (rule 1)
 #  - File tools to sensitive basename outside project → file_policy/sensitive_credential (rule 3)
