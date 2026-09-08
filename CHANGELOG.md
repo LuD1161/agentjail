@@ -35,6 +35,11 @@
 - Hook-only launches lose the retired heuristic. Sandbox coverage varies by platform and does not deny every secret-looking filename in an allowed workspace.
 - A failed core-policy refresh stops daemon startup before it serves requests with stale policies.
 
+### Validation
+
+- Build, vet, 458 OPA tests, policy parity, and focused upgrade/startup regression tests passed.
+- Published at the maintainer's request with the clean-VM release gate incomplete: 4.1 GiB RAM was available against its 6.0 GiB requirement. Broad host integration checks also remain incomplete because host-proxy approval was unavailable in the build session.
+
 ## v1.8.1 - 2026-09-07
 
 ![v1.8.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.1-summary.svg)
