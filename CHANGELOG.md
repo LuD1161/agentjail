@@ -4,6 +4,37 @@
 
 ## Unreleased
 
+## v1.8.2 - 2026-09-08
+
+![v1.8.2 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.2-summary.svg)
+
+## TL;DR
+
+- **Search and document secret-looking paths without false command denials.** The legacy sensitive-path shell-text regex is retired.
+- **Refresh installed core policies when the updated daemon starts.** Old rule files cannot keep firing after a binary update.
+- **Keep hooks, OPA policies, and sandbox enforcement active.** Actual file access remains governed by the configured sandbox and native file-tool policies.
+
+### Added
+
+- Archived the retired rule as reference-only legacy documentation outside the installed policy bundle.
+- Added regression coverage for harmless path mentions, retained policy checks, stale installed policy replacement, and startup refresh failures.
+
+### Changed
+
+- Removed `command_policy/no-bash-touch-sensitive-path` and its default-allow exclusion from source and embedded policies and removed it from the active rule registry.
+- Both daemon launch forms refresh managed core policies from the running binary before loading OPA. Custom rules, enabled library policies, and explicit development bundles are preserved.
+
+### Fixed
+
+- Harmless source searches, documentation commands, and certificate inspection no longer receive a sensitive-path denial solely from their shell text.
+- Binary-only updates no longer leave stale managed core policy files active in the restarted daemon.
+
+### Security
+
+- The sandbox enforces its configured filesystem restrictions at actual access. Other command rules, approvals, MCP policies, native file-tool rules, and historical audit rendering remain unchanged.
+- Hook-only launches lose the retired heuristic. Sandbox coverage varies by platform and does not deny every secret-looking filename in an allowed workspace.
+- A failed core-policy refresh stops daemon startup before it serves requests with stale policies.
+
 ## v1.8.1 - 2026-09-07
 
 ![v1.8.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.1-summary.svg)

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img" aria-labelledby="title desc">
+  <title id="title">AgentJail v1.8.2: fewer false blocks, current policies</title>
+  <desc id="desc">Retire sensitive-path shell-text matching, refresh installed policies on daemon startup, and retain sandbox enforcement.</desc>
+  <rect width="720" height="240" rx="12" fill="#0d1117"/>
+  <path d="M12 0H708Q720 0 720 12V48H0V12Q0 0 12 0" fill="#161b22"/>
+  <circle cx="24" cy="24" r="6" fill="#3fb950"/>
+  <g font-family="system-ui,-apple-system,sans-serif">
+    <text x="44" y="30" font-size="16" font-weight="700" fill="#f0f6fc">agentjail v1.8.2</text>
+    <text x="210" y="30" font-size="14" fill="#8b949e">Fewer false blocks. Current policies.</text>
+    <rect x="20" y="64" width="216" height="136" rx="8" fill="#1c2128" stroke="#30363d"/>
+    <rect x="252" y="64" width="216" height="136" rx="8" fill="#1c2128" stroke="#30363d"/>
+    <rect x="484" y="64" width="216" height="136" rx="8" fill="#1c2128" stroke="#30363d"/>
+    <g font-size="11" font-weight="700">
+      <text x="36" y="88" fill="#f0883e">RETIRE THE TEXT HEURISTIC</text>
+      <text x="268" y="88" fill="#58a6ff">REFRESH ON STARTUP</text>
+      <text x="500" y="88" fill="#3fb950">KEEP THE BOUNDARY</text>
+    </g>
+    <g font-size="13" fill="#f0f6fc">
+      <text x="36" y="117">Mentioning a secret path</text>
+      <text x="268" y="117">Updated binary, current rules</text>
+      <text x="500" y="117">Actual file access governed</text>
+    </g>
+    <g font-size="12" fill="#8b949e">
+      <text x="36" y="143">Searches and documentation</text>
+      <text x="36" y="162">stop hitting false denials.</text>
+      <text x="268" y="143">Stale core rules are replaced.</text>
+      <text x="268" y="162">Custom policies are preserved.</text>
+      <text x="500" y="143">Configured sandbox restrictions,</text>
+      <text x="500" y="162">OPA policies, and approvals.</text>
+    </g>
+    <text x="360" y="224" text-anchor="middle" font-size="11" fill="#8b949e">Hook-only mode loses the retired heuristic. Sandbox coverage varies by platform.</text>
+  </g>
+</svg>
