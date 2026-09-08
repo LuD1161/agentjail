@@ -4,6 +4,35 @@
 
 ## Unreleased
 
+## v1.8.1 - 2026-09-07
+
+![v1.8.1 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.1-summary.svg)
+
+## TL;DR
+
+- **Keep AgentJail approvals available when launching Codex with its native bypass flag.** The explicit launcher now applies the same rule-approval configuration as the PATH shim.
+- **Find command options in consistently styled help.** Subcommands share the root CLI presentation, including nested commands and global flags.
+- **Launch with fewer surprises.** Examples use current Codex flags, `run help` works, and help explains when to use the optional `--` separator.
+
+### Added
+
+- `agentjail run help` as an alias for launch help.
+- `--require-tunnel` in the launch help's flag list.
+
+### Changed
+
+- All command help inherits the shared CLI styling. Piped output and explicit no-color output remain plain.
+- Launch help documents both `agentjail run codex` and `agentjail run -- codex`, with `agentjail run -- codex --help` forwarding help to the child.
+
+### Fixed
+
+- Replaced the removed Codex `--approval-mode full-auto` example with the native `--dangerously-bypass-approvals-and-sandbox` spelling.
+- Applied leading Codex `--yolo` and `--dangerously-bypass-approvals-and-sandbox` compatibility in the canonical shielded launcher, which intentionally resolves past PATH shims.
+
+### Security
+
+- Shielded Codex bypass launches retain user-reviewed execpolicy-rule approvals while Codex's own sandbox is disabled. AgentJail's outer shield remains active; explicit `--no-sandbox` launches preserve native child arguments.
+
 ## v1.8.0 - 2026-09-05
 
 ![v1.8.0 summary](https://raw.githubusercontent.com/LuD1161/agentjail/main/assets/releases/v1.8.0-summary.svg)
