@@ -117,6 +117,11 @@ check. Sandbox coverage varies by platform and does not block every
 secret-looking filename; see [the retirement decision](docs/adr/0143-retire-path-heuristic.md)
 and [the old rule](docs/legacy/sensitive-path-rule.md).
 
+Starting with v1.8.2, the installed daemon refreshes its managed core policies
+from the running binary before loading OPA. A binary update therefore replaces
+the old rule on restart; custom and enabled library policies are preserved.
+Refresh failure stops startup. See [ADR 0144-refresh-installed-policies](docs/adr/0144-refresh-installed-policies.md).
+
 | | Agent does this | Verdict | Rule |
 |--|--|--|--|
 | 🧹 | `rm -rf ~/Downloads/*` | ❌ DENY | `command_policy/no-rm-rf` |

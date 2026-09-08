@@ -1333,6 +1333,17 @@ actual execution outcome. See ADR 0143-retire-path-heuristic.
 
 ---
 
+## Binary updates can leave old policies active
+
+The installer tests correctly proved that core files were replaced, but the
+manual and background updaters only swapped binaries and restarted the daemon.
+The new process still loaded old Rego files from disk. Daemon startup now
+refreshes the installed core bundle before loading it, and stops on refresh
+failure. Test upgrades from stale on-disk state, not only fresh installation.
+See ADR 0144-refresh-installed-policies.
+
+---
+
 ## Adding to this file
 
 When you fix something that was invisible to a green suite, add an entry: what

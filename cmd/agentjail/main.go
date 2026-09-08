@@ -8,7 +8,6 @@ import (
 	"sort"
 
 	"github.com/LuD1161/agentjail/internal/buildinfo"
-	"github.com/LuD1161/agentjail/internal/daemonapp"
 	"github.com/LuD1161/agentjail/internal/netproxyapp"
 	"github.com/LuD1161/agentjail/internal/secretsapp"
 	"github.com/LuD1161/agentjail/internal/shieldapp"
@@ -25,7 +24,7 @@ func main() {
 	// (cmd_role.go) covers the non-symlinked case.
 	switch filepath.Base(os.Args[0]) {
 	case "agentjail-daemon":
-		os.Exit(daemonapp.Run(os.Args[1:]))
+		os.Exit(runDaemonRole(os.Args[1:]))
 	case "agentjail-shield":
 		os.Exit(shieldapp.Run(os.Args[1:]))
 	case "agentjail-netproxy":

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/LuD1161/agentjail/internal/ctlauth"
 	"github.com/LuD1161/agentjail/internal/daemonapp"
@@ -43,7 +44,20 @@ func runDaemonRole(args []string) int {
 		fmt.Fprintln(os.Stdout, "agentjail daemon restarted")
 		return 0
 	}
-	return daemonapp.Run(args)
+	return daemonapp.RunWithCorePolicySync(args, refreshInstalledCoreRules)
+}
+
+// Only the installed directory is managed; explicit development bundles stay intact.
+// See ADR 0144-refresh-installed-policies.
+func refreshInstalledCoreRules(rulesDir string) error {
+	home, err := roleUserHomeDir()
+	if err != nil {
+		return fmt.Errorf("determine installed policy directory: %w", err)
+	}
+	if filepath.Clean(rulesDir) != filepath.Join(home, ".agentjail", "rules") {
+		return nil
+	}
+	return installCoreRules(rulesDir)
 }
 
 func authorizeDaemonRestart(home string) error {

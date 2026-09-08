@@ -1599,6 +1599,12 @@ func defaultDBPath() string {
 // Run executes the agentjail-daemon entrypoint with the given args (i.e.
 // os.Args[1:]) and returns a process exit code.
 func Run(args []string) int {
+	return RunWithCorePolicySync(args, nil)
+}
+
+// RunWithCorePolicySync refreshes managed policies after locking and before loading.
+// See ADR 0144-refresh-installed-policies.
+func RunWithCorePolicySync(args []string, syncCore func(string) error) int {
 	fs := flag.NewFlagSet("agentjail-daemon", flag.ContinueOnError)
 	socketPath := fs.String("socket", defaultSocketPath(), "path to Unix domain socket")
 	policyPath := fs.String("policy", defaultPolicyPath(), "path to policy.yaml (data overlay for OPA)")
@@ -1658,6 +1664,13 @@ func Run(args []string) int {
 		return 0
 	}
 	defer func() { _ = instanceLock.Close() }()
+
+	if syncCore != nil && *rulesDir != "" {
+		if err := syncCore(*rulesDir); err != nil {
+			slog.Error("refresh installed core policies", "err", err)
+			return 1
+		}
+	}
 
 	// Load initial policy config — merge policy.yaml over Default(), inject temp roots.
 	cfg, err := loadConfig(*policyPath)
