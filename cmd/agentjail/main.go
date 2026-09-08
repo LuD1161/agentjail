@@ -133,7 +133,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, u.Section("Examples"))
 	examples := []string{
 		"agentjail run -- claude",
-		"agentjail run -- codex --approval-mode full-auto",
+		"agentjail run -- codex --dangerously-bypass-approvals-and-sandbox",
 		"agentjail install --all",
 		"agentjail install --for vscode",
 		"agentjail doctor",

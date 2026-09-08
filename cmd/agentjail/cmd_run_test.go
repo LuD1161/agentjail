@@ -48,6 +48,32 @@ func TestParseRunOptionsRejectsMissingCredentialID(t *testing.T) {
 	}
 }
 
+func TestRewriteCodexBypassForShield(t *testing.T) {
+	got := rewriteCodexBypassForShield(runOptions{}, []string{
+		"codex", "--yolo", "--search",
+	})
+	want := []string{
+		"codex",
+		"--sandbox", "danger-full-access",
+		"-c", "approval_policy={ granular = { sandbox_approval = false, rules = true, mcp_elicitations = false, request_permissions = false, skill_approval = false } }",
+		"-c", `approvals_reviewer="user"`,
+		"--search",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("argv = %q, want %q", got, want)
+		}
+	}
+
+	unchanged := rewriteCodexBypassForShield(runOptions{noSandbox: true}, []string{"codex", "--yolo"})
+	if len(unchanged) != 2 || unchanged[1] != "--yolo" {
+		t.Fatalf("unsandboxed argv = %q, want native bypass unchanged", unchanged)
+	}
+}
+
 // TestResolveRealAgent_SkipsShimDir verifies that resolveRealAgent finds the
 // real binary even when the agentjail shim dir (~/.agentjail/bin) is FIRST on
 // PATH -- the ordering transparent interception needs. A naive exec.LookPath

@@ -44,6 +44,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.SetHelpFunc(styledCommandHelp)
 	rootCmd.PersistentFlags().BoolVar(&noColorOutput, "no-color", false, "Disable color in human-readable output")
 
 	// Show the legacy styled usage when the user runs `agentjail` with no

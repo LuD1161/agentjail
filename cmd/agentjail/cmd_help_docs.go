@@ -3,7 +3,7 @@ package main
 // Command examples are kept together so the complete user-facing tree can be
 // audited as one help contract. See ADR 0027-cobra-cli-framework.
 func init() {
-	rootCmd.Example = `  agentjail run -- codex
+	rootCmd.Example = `  agentjail run -- codex --dangerously-bypass-approvals-and-sandbox
   agentjail stats --since 7d
   agentjail doctor`
 
@@ -113,10 +113,13 @@ func init() {
 	replayCmd.Example = `  agentjail sessions --since 24h
   agentjail replay --session 625d86f1
   agentjail replay --session 625d86f1 --follow --verbose`
-	runCmd.Example = `  agentjail run -- claude
+	runCmd.Example = `  agentjail run claude
+  agentjail run codex
+  agentjail run help
+  agentjail run -- codex --help
   agentjail run --verbose -- codex
   agentjail run --git-ssh -- codex
-	agentjail run --credential aws-read-only-cred-dev -- claude`
+  agentjail run --credential aws-read-only-cred-dev -- claude`
 	claudeCmd.Example = `  agentjail claude
   agentjail claude --verbose
   agentjail claude --git-ssh`

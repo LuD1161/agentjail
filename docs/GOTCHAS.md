@@ -1269,6 +1269,17 @@ Codex parsed part of the prompt as its own argument.
 
 ## Testing gotchas
 
+### Wrapper help and launch paths must agree
+
+Root help passed its structure tests while advertising a removed Codex flag.
+The PATH shim preserved native rule approvals for a leading bypass flag, but
+`agentjail run` deliberately resolves past that shim and skipped the fix.
+
+- **Rule:** verify public examples against the installed child CLI, and apply
+  compatibility behavior in the canonical launcher as well as the shim. Test
+  the advertised invocation through the real installed path. See ADR
+  0118-codex-approval-broker.
+
 These made our own e2e suite lie to us.
 
 ### A 403 is not proof your policy fired

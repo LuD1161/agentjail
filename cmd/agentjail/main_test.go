@@ -121,6 +121,26 @@ func TestUsagePremiumStructure(t *testing.T) {
 	}
 }
 
+func TestUsageUsesNativeCodexBypassFlag(t *testing.T) {
+	var buf bytes.Buffer
+	usage(&buf)
+	out := stripANSI(buf.String())
+
+	const example = "agentjail run -- codex --dangerously-bypass-approvals-and-sandbox"
+	if !strings.Contains(out, example) {
+		t.Fatalf("usage() output missing native Codex bypass flag\nfull output:\n%s", out)
+	}
+	if !strings.Contains(rootCmd.Example, example) {
+		t.Fatalf("root command help missing native Codex bypass flag\nexamples:\n%s", rootCmd.Example)
+	}
+	if strings.Contains(out, "--approval-mode") {
+		t.Fatalf("usage() output contains a removed Codex flag\nfull output:\n%s", out)
+	}
+	if strings.Contains(rootCmd.Example, "--approval-mode") {
+		t.Fatalf("root command help contains a removed Codex flag\nexamples:\n%s", rootCmd.Example)
+	}
+}
+
 // stripANSI removes ESC[…m escape sequences for plain-text comparison.
 func stripANSI(s string) string {
 	var out strings.Builder

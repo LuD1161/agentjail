@@ -78,6 +78,11 @@ and tested platform.
 The later command hierarchy and compatibility policy are defined by ADR
 0132-cli-command-surface.
 
+All command help uses an inherited Cobra help function rendered with the shared
+CLI UI styles. Command descriptions, examples, and flag sets remain sourced
+from Cobra. The launcher also accepts `run help`; an explicit `--` preserves
+child arguments, including a child command named `help`.
+
 ### What does NOT change
 
 - The initial migration preserves command names and behavior; later cleanup is

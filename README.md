@@ -305,7 +305,7 @@ is reachable, the status line includes a clickable `📊 UI` link to
 
 Cursor's command-based status line is installed in `~/.cursor/cli-config.json`; an existing command is chained and restored on uninstall ([ADR 0113](./docs/adr/0113-cursor-status-line.md)). Codex's `/statusline` currently selects only built-in fields and cannot execute the persistent AgentJail badge. Instead, AgentJail's `SessionStart` and `Stop` hooks display one of `sandbox + policy active`, `sandbox active, policy daemon offline`, or `OS sandbox inactive`; `agentjail status` and `agentjail doctor` remain available for an on-demand check.
 
-When Codex is launched through the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. For any Bash `ask`, including a user-authored custom policy, AgentJail prints the redacted effective command immediately before Codex's native prompt, while the broker command inside the prompt carries `--operation shell-command`, an opaque challenge, and the bounded approval reason. This does not re-enable sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so the shim can preserve these separate semantics ([ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md)).
+When Codex is launched through `agentjail run` or the opt-in PATH shim with `--dangerously-bypass-approvals-and-sandbox` (or `--yolo`), AgentJail keeps Codex at `danger-full-access` but leaves only execpolicy-rule approvals interactive. For any Bash `ask`, including a user-authored custom policy, AgentJail prints the redacted effective command immediately before Codex's native prompt, while the broker command inside the prompt carries `--operation shell-command`, an opaque challenge, and the bounded approval reason. This does not re-enable sandbox, MCP, `request_permissions`, or skill-script prompts. Invoke the bypass flag as the leading Codex option so AgentJail can preserve these separate semantics ([ADR 0119-command-approval-transport](./docs/adr/0119-command-approval-transport.md)).
 
 <details>
 <summary><b>More install options</b></summary>
@@ -462,6 +462,12 @@ The same locally computed report is available as a terminal dashboard:
 ```sh
 agentjail cost --period 7d
 ```
+
+Command help shares the root screen's terminal styling and stays plain when
+piped or color is disabled. `agentjail run help`, `agentjail run --help`, and
+`agentjail help run` show the same launch options. The separator is optional
+in `agentjail run codex`; use `agentjail run -- codex --help` to forward help
+to Codex instead of showing AgentJail help.
 
 `agentjail cost --help` lists the period, project filter, JSON, and index-store
 flags. The

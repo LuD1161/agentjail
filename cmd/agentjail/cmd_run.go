@@ -11,11 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LuD1161/agentjail/internal/pathshim"
 	"github.com/spf13/cobra"
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run [flags] -- <command> [args...]",
+	Use:   "run [flags] [--] <command> [args...]",
 	Short: "Run a command inside the agentjail shield",
 	Long: `Run any coding agent inside the agentjail OS-native sandbox.
 The agent inherits Landlock (Linux) or Seatbelt (macOS) restrictions
@@ -23,14 +24,25 @@ that prevent access to credentials, host processes, and unrestricted network.
 
 Use --git-ssh to delegate loaded SSH-agent identities for the session, or
 --no-git-ssh to override a policy default that enables delegation. AgentJail
-launch flags must appear before --; everything after -- is passed unchanged to
-the child command. --require-tunnel makes tunnel setup fail closed instead of
+launch flags must appear before the child command. The -- separator is optional;
+use it to explicitly end AgentJail options, especially to forward child --help.
+Both 'agentjail run codex' and 'agentjail run -- codex' work.
+
+For sandboxed Codex, a leading --yolo or --dangerously-bypass-approvals-and-sandbox
+keeps AgentJail policy approvals enabled while disabling Codex's own sandbox.
+Other child arguments are forwarded unchanged.
+
+--require-tunnel makes tunnel setup fail closed instead of
 falling back to another network mode. --no-sandbox disables OS isolation and
 provides only the weaker hook-based policy layer.`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		// --help before "--" prints help; after "--" it is forwarded to the
 		// child command (e.g. `agentjail run -- some-tool --help`).
+		if len(args) == 1 && args[0] == "help" {
+			_ = cmd.Help()
+			return
+		}
 		if helpRequested(cmd, args) {
 			return
 		}
@@ -127,7 +139,7 @@ func runRunCmd(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "agentjail run: no command given")
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  usage: agentjail run -- <command> [args...]")
+		fmt.Fprintln(os.Stderr, "  usage: agentjail run [flags] [--] <command> [args...]")
 		return 2
 	}
 
@@ -164,6 +176,7 @@ func runRunCmd(args []string) int {
 	if agentName == "claude" {
 		ensureHooksInstalled(home, "claude-code")
 	}
+	args = rewriteCodexBypassForShield(options, args)
 
 	// 4. Resolve the REAL agent binary, skipping the agentjail shim directory.
 	// The shim dir (~/.agentjail/bin) must be FIRST on PATH for transparent
@@ -222,6 +235,14 @@ func runRunCmd(args []string) int {
 	}
 
 	return 0 // unreachable after exec
+}
+
+func rewriteCodexBypassForShield(options runOptions, args []string) []string {
+	if options.noSandbox || len(args) < 2 || args[0] != "codex" {
+		return args
+	}
+	rewritten := pathshim.RewriteCodexBypassArgs(args[1:])
+	return append([]string{"codex"}, rewritten...)
 }
 
 type runOptions struct {

@@ -290,7 +290,7 @@ start_interactive_command() {
     rm -f "$PANE_LOG"
     tmux pipe-pane -t "$SESSION:0.0" -o "tee '$PANE_LOG' >/dev/null"
     tmux send-keys -t "$SESSION:0.0" \
-        "cd '$PROJECT' && '$AJ' run --no-git-ssh -- codex -a on-request -s danger-full-access --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: $command'" Enter
+        "cd '$PROJECT' && '$AJ' run --no-git-ssh -- codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen --dangerously-bypass-hook-trust -C '$PROJECT' 'Run exactly this command once and then stop: $command'" Enter
 }
 
 transport_failed_before_tool() {
