@@ -103,11 +103,44 @@ func TestCodexBypassFlagKeepsOnlyRuleApprovalsInteractive(t *testing.T) {
 	}
 }
 
+func TestRewriteCodexBypassArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "current bypass spelling",
+			args: []string{"--dangerously-bypass-approvals-and-sandbox", "--search"},
+			want: append(codexAgentJailApprovalArgs(), "--search"),
+		},
+		{
+			name: "legacy yolo spelling",
+			args: []string{"--yolo", "exec", "task"},
+			want: append(codexAgentJailApprovalArgs(), "exec", "task"),
+		},
+		{
+			name: "ordinary arguments",
+			args: []string{"--sandbox", "read-only"},
+			want: []string{"--sandbox", "read-only"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RewriteCodexBypassArgs(tt.args)
+			if strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Fatalf("argv = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func codexAgentJailApprovalArgs() []string {
 	return []string{
 		"--sandbox", "danger-full-access",
-		"-c", "approval_policy={ granular = { sandbox_approval = false, rules = true, mcp_elicitations = false, request_permissions = false, skill_approval = false } }",
-		"-c", `approvals_reviewer="user"`,
+		"-c", CodexApprovalPolicyConfig,
+		"-c", CodexApprovalReviewerConfig,
 	}
 }
 

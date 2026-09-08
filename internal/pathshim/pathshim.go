@@ -159,24 +159,42 @@ func AddToShellProfile(home, binDir string) error {
 	return nil
 }
 
+const (
+	CodexApprovalPolicyConfig   = "approval_policy={ granular = { sandbox_approval = false, rules = true, mcp_elicitations = false, request_permissions = false, skill_approval = false } }"
+	CodexApprovalReviewerConfig = `approvals_reviewer="user"`
+)
+
+// RewriteCodexBypassArgs retains rule approvals inside AgentJail's outer sandbox.
+// See ADR 0118-codex-approval-broker.
+func RewriteCodexBypassArgs(args []string) []string {
+	if len(args) == 0 || (args[0] != "--yolo" && args[0] != "--dangerously-bypass-approvals-and-sandbox") {
+		return args
+	}
+	return append([]string{
+		"--sandbox", "danger-full-access",
+		"-c", CodexApprovalPolicyConfig,
+		"-c", CodexApprovalReviewerConfig,
+	}, args[1:]...)
+}
+
 // Render produces one fail-open wrapper. See ADR 0063-shim-fails-open-uninstall-is-total.
 func Render(target Target, shieldBin, shimDir, shimPath string) string {
 	commandUpper := strings.ToUpper(target.Command)
 	launcherBin := filepath.Join(filepath.Dir(shieldBin), "agentjail")
 	codexApprovalCompat := ""
 	if target.Command == "codex" {
-		codexApprovalCompat = `# Keep Codex unsandboxed while preserving AgentJail's exact execpolicy prompt.
+		codexApprovalCompat = fmt.Sprintf(`# Keep Codex unsandboxed while preserving AgentJail's exact execpolicy prompt.
 # See ADR 0118-codex-approval-broker.
 if [ "${1:-}" = "--yolo" ] || [ "${1:-}" = "--dangerously-bypass-approvals-and-sandbox" ]; then
     shift
     set -- \
         --sandbox danger-full-access \
-        -c 'approval_policy={ granular = { sandbox_approval = false, rules = true, mcp_elicitations = false, request_permissions = false, skill_approval = false } }' \
-        -c 'approvals_reviewer="user"' \
+        -c '%s' \
+        -c '%s' \
         "$@"
 fi
 
-`
+`, CodexApprovalPolicyConfig, CodexApprovalReviewerConfig)
 	}
 	return fmt.Sprintf(`#!/bin/sh
 # agentjail PATH shim for %s.

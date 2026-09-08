@@ -112,7 +112,8 @@ interactive Codex transcript, but raw credential values remain excluded.
 This amends ADR 0117-codex-ask-boundary for eligible Bash asks. All other Codex
 PreToolUse asks remain fail-closed denies.
 
-When the opt-in AgentJail PATH shim receives Codex's bypass flag (or its legacy
+When the canonical `agentjail run` launcher or the opt-in AgentJail PATH shim
+receives Codex's bypass flag (or its legacy
 `--yolo` spelling) as the leading global option, it keeps the Codex sandbox at
 `danger-full-access` but replaces the all-or-nothing approval setting with a
 granular policy. Only execpolicy-rule prompts remain interactive; sandbox, MCP
@@ -120,6 +121,13 @@ elicitation, `request_permissions`, and skill-script prompts auto-reject, and
 the reviewer remains the user. This preserves the externally sandboxed launch
 flow while leaving a native approval boundary for AgentJail's exact managed
 rule.
+
+The launcher and shim share the granular configuration constants. Only a leading
+bypass flag is translated; an explicit `run --no-sandbox` preserves native
+Codex arguments. Codex 0.153.4 was live-tested on 2026-09-07 through the canonical
+launcher: a policy ask reached the native approval dialog and cancellation
+prevented execution. The clean-VM approval scenario exercises the native bypass
+spelling for both approval and rejection.
 
 The daemon parses Bash into executable invocations and classifies Git operations
 before Rego evaluation. `command_intents` carries one of the typed remote-update
