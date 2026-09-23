@@ -214,7 +214,9 @@ desktop grid, and its version label opens the matching GitHub release. About
 shows the product identity, guiding principles, exact build, release notes,
 source link, feedback and issue entry point, and the linked creator credit.
 
-Overview reads a bounded snapshot from the authenticated local daemon. It shows
+Overview reads a bounded snapshot from the authenticated local daemon. It refreshes
+setup status when the app becomes active and automatically retries while an
+installed daemon is starting, without requiring a manual refresh. It shows
 active and recent agent sessions, audited-call totals, a 35-day activity grid,
 and token usage over time from supported local Claude Code, Codex, and OpenCode
 transcripts. Session rows include the agent identity, live or recent status,

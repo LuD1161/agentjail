@@ -1487,3 +1487,15 @@ Reproduce by hand before filing.
 When you fix something that was invisible to a green suite, add an entry: what
 looked fine, what was actually happening, and the general rule. Link the ticket
 and the ADR. Keep it short — this file earns its keep by being read.
+
+## Native Overview can retain a failed startup snapshot (AGE-293)
+
+The CLI and authenticated Swift daemon clients were healthy after reboot, but
+the native Overview still offered “Install Local Components” and showed no
+activity. Clicking Refresh immediately loaded the dashboard. The view had only
+one initial fetch; a transient startup failure could persist indefinitely while
+the app remained open. Passing transport and setup tests did not exercise that
+view lifecycle. Refresh when Overview becomes active, and retry unavailable
+health/dashboard reads while an installed daemon starts. Scope retries to the
+active view task so leaving it cancels the work; a missing installation still
+requires explicit setup.

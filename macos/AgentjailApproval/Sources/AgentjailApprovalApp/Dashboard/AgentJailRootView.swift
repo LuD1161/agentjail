@@ -279,6 +279,7 @@ private struct GitHubBrandMark: View {
 }
 
 private struct DashboardOverviewView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var composition: ApprovalAppComposition
     @ObservedObject private var dashboard: DashboardStore
     @ObservedObject private var setup: AgentJailSetupCoordinator
@@ -330,12 +331,14 @@ private struct DashboardOverviewView: View {
                 sessionsCard(snapshot)
             } else { emptyDashboard }
         }
-        .task { await refresh() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await DashboardOverviewRefresh.untilAvailable(setup: setup, dashboard: dashboard)
+        }
     }
 
     private func refresh() async {
-        _ = await setup.refresh()
-        await dashboard.refresh()
+        await DashboardOverviewRefresh.refresh(setup: setup, dashboard: dashboard)
     }
 
     private var setupCard: some View {
