@@ -691,6 +691,7 @@ func TestDaemon_SIGHUP_MCPDecisionChanges(t *testing.T) {
 
 	// Phase 1: empty allowlist → deny all MCP.
 	phase1Cfg := agentconfig.Default()
+	phase1Cfg.Enforcement = agentconfig.EnforcementEnforce
 	// MCP.Allowed is already [] in Default.
 	if err := agentconfig.Save(phase1Cfg, policyPath); err != nil {
 		t.Fatalf("write phase1 policy: %v", err)
@@ -747,6 +748,7 @@ func TestDaemon_SIGHUP_MCPDecisionChanges(t *testing.T) {
 
 	// Phase 2: add filesystem to allowlist.
 	phase2Cfg := agentconfig.Default()
+	phase2Cfg.Enforcement = agentconfig.EnforcementEnforce
 	phase2Cfg.MCP.Allowed = []string{"filesystem"}
 	if err := agentconfig.Save(phase2Cfg, policyPath); err != nil {
 		t.Fatalf("write phase2 policy: %v", err)

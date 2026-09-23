@@ -1,6 +1,7 @@
 package daemonapp
 
 import (
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"testing"
 
 	"github.com/LuD1161/agentjail/internal/policyeval"
@@ -77,5 +78,21 @@ func TestSetMonitoringFlips(t *testing.T) {
 	s.setMonitoring(false)
 	if s.monitoring.Load() {
 		t.Error("setMonitoring(false) did not take effect")
+	}
+}
+
+func TestDefaultMonitorModeCrossesDaemonAndAgentAdapter(t *testing.T) {
+	srv, socket := newTestServer(t)
+	srv.setMonitoring(agentconfig.Default().Monitoring())
+	for _, agent := range []string{"claude", "codex", "cursor"} {
+		got := sendRequest(t, socket, Request{ID: agent, Agent: agent, HookEvent: "PreToolUse", ToolName: "Bash", ToolInput: map[string]interface{}{"command": "rm -rf /dummy-fixture"}})
+		if got.Action != "allow" || got.EffectiveAction != "allow" || got.PolicyAction != "deny" || got.WouldAction != "deny" || got.CodexApprovalBridge {
+			t.Fatalf("%s monitor response = %+v", agent, got)
+		}
+	}
+	srv.setMonitoring(false)
+	got := sendRequest(t, socket, Request{ID: "enforce", ToolName: "Bash", ToolInput: map[string]interface{}{"command": "rm -rf /dummy-fixture"}})
+	if got.Action != "deny" || got.WouldAction != "" {
+		t.Fatalf("enforce response = %+v", got)
 	}
 }

@@ -2,6 +2,12 @@
 
 agentjail is a policy-guardrail layer for AI coding agents (Claude Code, Codex CLI, Cursor). It intercepts every tool call before it executes and evaluates it against OPA-based Rego policies, returning an `allow`, `deny`, or `ask` decision to the agent. No proxy, no wrapper binary, no dynamic-library injection — just hooks and a warm policy daemon.
 
+Policy verdicts are evaluate-only by default across platforms. The daemon records
+the canonical tool verdict and returns allow; network gateways likewise record
+would-deny/would-ask while forwarding recognized traffic. Global
+`enforcement: enforce` opts in. OS isolation and capability authorization remain
+independent and enforced. See [ADR 0150-evaluate-only-default](adr/0150-evaluate-only-default.md).
+
 ---
 
 ## How It Works

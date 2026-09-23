@@ -1,6 +1,6 @@
 # 0091 — Monitor mode for tool calls
 
-Status: Accepted
+Status: Accepted; default and network scope superseded by [ADR 0150-evaluate-only-default](0150-evaluate-only-default.md)
 
 ## Context
 

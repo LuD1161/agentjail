@@ -945,7 +945,7 @@ func runClaude(agent string) {
 	// 3. Connect to daemon with a short dial timeout (30 ms).
 	conn, err := dialDaemonForHook(sockPath, agent, input.HookEventName)
 	if err != nil {
-		if approvalCapableCodexPreTool(agent, input.HookEventName) {
+		if approvalCapableCodexPreTool(agent, input.HookEventName) && !monitoringHookFallback() {
 			failClosedCodexApproval("dial-daemon", fmt.Sprintf("dial %s: %v", sockPath, err))
 			return
 		}
@@ -979,7 +979,7 @@ func runClaude(agent string) {
 		if isWriteErr(err) {
 			cat = "dial-daemon"
 		}
-		if input.HookEventName == "PreToolUse" && codexApprovalCapable(req) {
+		if input.HookEventName == "PreToolUse" && codexApprovalCapable(req) && !monitoringHookFallback() {
 			failClosedCodexApproval(cat, err.Error())
 			return
 		}

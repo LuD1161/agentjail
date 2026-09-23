@@ -70,9 +70,8 @@ type PolicyConfig struct {
 	DaemonUnreachable DaemonUnreachableLevel `yaml:"daemon_unreachable"`
 
 	// Enforcement selects whether a deny/ask verdict is acted on or merely
-	// recorded. Empty defaults to EnforcementEnforce — monitor mode is opt-in,
-	// because a default that silently stops enforcing would be the AGE-212 bug
-	// class as a feature. See ADR 0091-monitor-mode-tools.
+	// recorded. Empty defaults to EnforcementMonitor; enforcement is opt-in.
+	// See ADR 0150-evaluate-only-default.
 	Enforcement EnforcementMode `yaml:"enforcement"`
 }
 
@@ -103,19 +102,19 @@ func (c *PolicyConfig) GitSSHEnabled() bool {
 
 const (
 	// EnforcementEnforce acts on the verdict: deny blocks, ask prompts.
-	// Default when unset.
+	// Enabled only by an explicit global configuration choice.
 	EnforcementEnforce EnforcementMode = "enforce"
 
 	// EnforcementMonitor evaluates the full policy set and records the verdict,
 	// but downgrades deny/ask to allow so nothing is blocked — the land-and-expand
 	// on-ramp ("run it log-only for a day, then choose what to enforce").
-	// The agent still sees a notice; the decision row records what was actually
+	// This is the default when unset. The agent still sees a notice; the decision row records what was actually
 	// allowed plus the verdict that did not fire.
 	EnforcementMonitor EnforcementMode = "monitor"
 )
 
 // validateEnforcement rejects any non-empty EnforcementMode that is not one of
-// the named modes. Empty is valid (defaults to enforce).
+// the named modes. Empty is valid (defaults to monitor).
 func validateEnforcement(mode EnforcementMode) error {
 	switch mode {
 	case "", EnforcementEnforce, EnforcementMonitor:
@@ -127,7 +126,7 @@ func validateEnforcement(mode EnforcementMode) error {
 
 // Monitoring reports whether verdicts are recorded but not acted on.
 func (c *PolicyConfig) Monitoring() bool {
-	return c != nil && c.Enforcement == EnforcementMonitor
+	return c != nil && (c.Enforcement == "" || c.Enforcement == EnforcementMonitor)
 }
 
 // DaemonUnreachableLevel is the tiered policy for hook behavior when the
@@ -747,7 +746,7 @@ func Default() *PolicyConfig {
 		// subset of the permanently-locked online rules, so no working call is
 		// newly refused (ADR 0074, superseding 0050's allow default).
 		DaemonUnreachable: DaemonUnreachableDegraded,
-		Enforcement:       EnforcementEnforce,
+		Enforcement:       EnforcementMonitor,
 	}
 }
 
@@ -1056,7 +1055,7 @@ func Merge(base, overlay *PolicyConfig) *PolicyConfig {
 	case base.Enforcement != "":
 		result.Enforcement = base.Enforcement
 	default:
-		result.Enforcement = EnforcementEnforce
+		result.Enforcement = EnforcementMonitor
 	}
 
 	return result

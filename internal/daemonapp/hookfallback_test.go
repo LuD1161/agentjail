@@ -92,6 +92,7 @@ func TestCompileOfflineRulesUsesHomeDir(t *testing.T) {
 func TestWriteHookFallbackAllowLevelHasNoOfflineRules(t *testing.T) {
 	withTempHome(t)
 	cfg := agentconfig.Default()
+	cfg.Enforcement = agentconfig.EnforcementEnforce
 	cfg.DaemonUnreachable = agentconfig.DaemonUnreachableAllow
 
 	if err := writeHookFallback(cfg); err != nil {
@@ -113,6 +114,7 @@ func TestWriteHookFallbackAllowLevelHasNoOfflineRules(t *testing.T) {
 func TestWriteHookFallbackDegradedLevelHasOfflineRules(t *testing.T) {
 	withTempHome(t)
 	cfg := agentconfig.Default()
+	cfg.Enforcement = agentconfig.EnforcementEnforce
 	cfg.DaemonUnreachable = agentconfig.DaemonUnreachableDegraded
 
 	if err := writeHookFallback(cfg); err != nil {
@@ -131,6 +133,7 @@ func TestWriteHookFallbackDegradedLevelHasOfflineRules(t *testing.T) {
 func TestWriteHookFallbackDenyLevel(t *testing.T) {
 	withTempHome(t)
 	cfg := agentconfig.Default()
+	cfg.Enforcement = agentconfig.EnforcementEnforce
 	cfg.DaemonUnreachable = agentconfig.DaemonUnreachableDeny
 
 	if err := writeHookFallback(cfg); err != nil {
@@ -148,6 +151,7 @@ func TestWriteHookFallbackDenyLevel(t *testing.T) {
 func TestWriteHookFallbackIsAtomicAndPrivate(t *testing.T) {
 	home := withTempHome(t)
 	cfg := agentconfig.Default()
+	cfg.Enforcement = agentconfig.EnforcementEnforce
 
 	if err := writeHookFallback(cfg); err != nil {
 		t.Fatalf("writeHookFallback: %v", err)
@@ -183,7 +187,7 @@ func TestWriteHookFallbackIsAtomicAndPrivate(t *testing.T) {
 // their daemon actually applies.
 func TestWriteHookFallbackEmptyLevelDefaultsToDegraded(t *testing.T) {
 	withTempHome(t)
-	cfg := &agentconfig.PolicyConfig{}
+	cfg := &agentconfig.PolicyConfig{Enforcement: agentconfig.EnforcementEnforce}
 
 	if err := writeHookFallback(cfg); err != nil {
 		t.Fatalf("writeHookFallback: %v", err)
@@ -211,4 +215,19 @@ func readHookFallback(t *testing.T) wire.HookFallback {
 		t.Fatalf("unmarshal sidecar: %v", err)
 	}
 	return fb
+}
+
+func TestMonitorFallbackDoesNotEnforceOfflinePolicies(t *testing.T) {
+	withTempHome(t)
+	for _, level := range []agentconfig.DaemonUnreachableLevel{agentconfig.DaemonUnreachableDegraded, agentconfig.DaemonUnreachableDeny} {
+		cfg := agentconfig.Default()
+		cfg.DaemonUnreachable = level
+		if err := writeHookFallback(cfg); err != nil {
+			t.Fatal(err)
+		}
+		fb := readHookFallback(t)
+		if !fb.Monitoring || fb.Level != "allow" || len(fb.OfflineRules) != 0 {
+			t.Fatalf("monitor fallback = %+v", fb)
+		}
+	}
 }

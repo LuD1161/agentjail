@@ -929,3 +929,17 @@ func TestHook_WallTime(t *testing.T) {
 	}
 	t.Logf("hook wall time: %v", elapsed)
 }
+
+func TestCodexHook_MonitoringDaemonUnavailableAllows(t *testing.T) {
+	bin := buildHook(t, t.TempDir())
+	dir := trustedHome(t)
+	writeSidecar(t, filepath.Dir(dir), wire.HookFallback{Version: wire.HookFallbackVersion, Level: "allow", Monitoring: true})
+	stdin := makeStdinJSON("Write", map[string]interface{}{"path": "/tmp/monitor-fixture", "content": "fixture"}, "monitor-offline")
+	stdout, stderr, code := runHookWithArgs(t, bin, stdin, []string{"AGENTJAIL_SOCKET=" + filepath.Join(dir, "missing.sock")}, []string{"--agent=codex"})
+	if code != 0 {
+		t.Fatalf("monitor hook blocked: code=%d stdout=%s stderr=%s", code, stdout, stderr)
+	}
+	if !strings.Contains(string(stdout), "daemon") {
+		t.Fatalf("missing evaluation availability notice: %s", stdout)
+	}
+}

@@ -284,3 +284,10 @@ func matchesCommandMutationRule(r wire.OfflineRule, toolInput map[string]interfa
 	}
 	return false
 }
+
+// Monitoring is attested by the last successfully activated daemon configuration.
+// See ADR 0150-evaluate-only-default.
+func monitoringHookFallback() bool {
+	fb, ok := loadHookFallback()
+	return ok && fb.Monitoring
+}

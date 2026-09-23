@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -1928,14 +1929,13 @@ func TestMergeDaemonUnreachableKeepsBaseWhenOverlayEmpty(t *testing.T) {
 
 // ---- AGE-242: enforcement mode ----
 
-// TestDefaultEnforcementIsEnforce guards the opt-in invariant: monitor mode
-// must never be reached by omission. See ADR 0091-monitor-mode-tools.
-func TestDefaultEnforcementIsEnforce(t *testing.T) {
-	if got := Default().Enforcement; got != EnforcementEnforce {
-		t.Errorf("Default().Enforcement = %q, want %q", got, EnforcementEnforce)
+// See ADR 0150-evaluate-only-default.
+func TestDefaultEnforcementIsMonitor(t *testing.T) {
+	if got := Default().Enforcement; got != EnforcementMonitor {
+		t.Errorf("Default().Enforcement = %q, want %q", got, EnforcementMonitor)
 	}
-	if Default().Monitoring() {
-		t.Error("Default() must not be monitoring")
+	if !Default().Monitoring() {
+		t.Error("Default() must be monitoring")
 	}
 }
 
@@ -1974,7 +1974,7 @@ func TestLoadEnforcementInvalidValueRejected(t *testing.T) {
 }
 
 // TestMergeEnforcementFallback covers the three-way resolution: overlay wins,
-// else base, else the enforce default.
+// else base, else the monitor default.
 func TestMergeEnforcementFallback(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -1983,7 +1983,8 @@ func TestMergeEnforcementFallback(t *testing.T) {
 	}{
 		{"overlay wins", EnforcementEnforce, EnforcementMonitor, EnforcementMonitor},
 		{"base when overlay unset", EnforcementMonitor, "", EnforcementMonitor},
-		{"default when both unset", "", "", EnforcementEnforce},
+		{"default when both unset", "", "", EnforcementMonitor},
+		{"explicit opt-in", EnforcementMonitor, EnforcementEnforce, EnforcementEnforce},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -2001,7 +2002,8 @@ func TestMergeEnforcementFallback(t *testing.T) {
 // overlay must never be able to turn enforcement off. MergeProjectOverlay is
 // additive-only and Enforcement is not among the fields it widens.
 func TestMergeProjectOverlayCannotDisableEnforcement(t *testing.T) {
-	base := Default() // Enforcement: enforce
+	base := Default()
+	base.Enforcement = EnforcementEnforce
 	poisoned := &PolicyConfig{Enforcement: EnforcementMonitor}
 	merged := MergeProjectOverlay(base, poisoned)
 	if merged.Enforcement != EnforcementEnforce {
@@ -2011,5 +2013,38 @@ func TestMergeProjectOverlayCannotDisableEnforcement(t *testing.T) {
 	}
 	if merged.Monitoring() {
 		t.Error("SECURITY: project overlay turned on monitoring")
+	}
+}
+
+func TestLoadOrDefaultEnforcement(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		missing bool
+		want    EnforcementMode
+	}{
+		{"fresh install", "", true, EnforcementMonitor},
+		{"omitted mode", "mcp: {}\n", false, EnforcementMonitor},
+		{"explicit enforce", "enforcement: enforce\n", false, EnforcementEnforce},
+		{"explicit monitor", "enforcement: monitor\n", false, EnforcementMonitor},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "policy.yaml")
+			if !tc.missing {
+				if err := os.WriteFile(path, []byte(tc.content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := LoadOrDefault(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Enforcement != tc.want {
+				t.Fatalf("mode = %q, want %q", cfg.Enforcement, tc.want)
+			}
+			if cfg.Monitoring() != (tc.want == EnforcementMonitor) {
+				t.Fatal("resolved mode disagrees with Monitoring")
+			}
+		})
 	}
 }

@@ -963,47 +963,48 @@ also permanently denies both `agentjail daemon restart` and a direct
 `systemctl --user restart agentjail-daemon.service` from agent tool calls,
 including while the policy daemon is offline in `degraded` mode.
 
-### Monitor mode — see what it would block, before it blocks anything
+### Evaluate-only policies with OS isolation
 
-Try agentjail against your real work without it stopping anything
-([ADR 0091](./docs/adr/0091-monitor-mode-tools.md)):
+All platforms default to evaluating and logging policy verdicts without policy
+blocks or approval prompts. OS isolation remains enabled: Seatbelt/Landlock,
+network isolation, credential and broker authorization, and transport integrity
+checks can still refuse an operation. Your agent's own permissions also apply.
 
 ```yaml
 # ~/.agentjail/policy.yaml
-enforcement: monitor   # enforce (default) | monitor
+enforcement: monitor   # default; opt in with enforce
 ```
 
-Every tool call is evaluated against the full policy set and the verdict is
-recorded — but nothing is blocked. Run it for a day, then read the report:
+Tool decisions record the allowed action and preserve the original deny/ask in
+`would_action`. Network policy packs use the same mode for recognized traffic,
+including HTTP/1.1, HTTP/2, and recognized database operations. Network records
+retain the effective `policy_action` plus `would_action`; they do not claim a
+request was blocked merely because its policy would deny it. The macOS Policies
+page shows the configured mode, and network rows identify would-deny/would-ask
+matches.
 
-```console
-$ agentjail monitor --since 24h
-Would have blocked 3 tool call(s) since 24h:
-
-COUNT  VERDICT  TOOL  RULE
-3      deny     Read  file_policy/sensitive_credential
+```sh
+agentjail monitor --since 24h  # tool-policy report
+agentjail monitor --json
 ```
 
-When you like what you see, set `enforcement: enforce` and the same rules start
-acting. `agentjail monitor --json` gives the machine-readable form.
+To opt in, set `enforcement: enforce` in the global configuration and restart the
+daemon with `agentjail daemon restart`. Start new agent sessions to apply the mode
+to their network gateways. Existing explicit `enforce` settings are preserved;
+configurations with no mode use the new monitor default. Project policy overlays
+cannot change this global choice. Rules still evaluate normally, and disabled
+rules remain disabled.
 
-**Monitor mode means the guardrail is off.** It is opt-in and never a default,
-the daemon warns at startup, and every affected tool call tells the agent what
-would have happened and why. The unenforced window is recorded as an
-`enforcement.mode_changed` audit event, because a log full of `allow` rows
-cannot explain itself. A project's `.agentjail/policy.yaml` **cannot** turn it
-on — only the global config can, which the shield grants read-only.
+The daemon audits mode changes and publishes an allow-only offline fallback while
+monitoring. If the daemon is unavailable, tool evaluation is unavailable too;
+the hook reports that gap instead of applying offline policy denials. A missing
+or older fallback record cannot attest monitor mode, so existing conservative
+Codex approval behavior remains until a current daemon has started successfully.
+Broker authorization is still required for operations outside the sandbox.
 
-Two things it is not:
-
-- It is **not** `daemon_unreachable`. That axis covers a daemon that is *gone*;
-  this one covers a healthy daemon choosing not to act.
-- It **only covers tool calls**. Network egress needs the tunnel
-  ([AGE-243](https://linear.app/agentjail/issue/AGE-243)); filesystem access is
-  kernel-enforced by Landlock/Seatbelt and cannot be shadowed at all
-  ([AGE-244](https://linear.app/agentjail/issue/AGE-244)). A quiet report means
-  *your tool calls* were clean — and a thin ruleset flags nothing, which looks
-  identical.
+Evaluate-only observes operations that reach a policy evaluator. It does not
+predict filesystem operations rejected by the kernel, and a clean report does
+not imply complete coverage. See [ADR 0150-evaluate-only-default](docs/adr/0150-evaluate-only-default.md).
 
 ### What has it actually done? — `agentjail stats`
 

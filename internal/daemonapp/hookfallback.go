@@ -27,7 +27,12 @@ func writeHookFallback(cfg *agentconfig.PolicyConfig) error {
 		level = string(agentconfig.DaemonUnreachableDegraded)
 	}
 
+	if cfg.Monitoring() {
+		level = string(agentconfig.DaemonUnreachableAllow)
+	}
+
 	fb := wire.HookFallback{
+		Monitoring:   cfg.Monitoring(),
 		Version:      wire.HookFallbackVersion,
 		Level:        level,
 		OfflineRules: []wire.OfflineRule{},

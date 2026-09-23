@@ -142,6 +142,7 @@ const HookFallbackVersion = 1
 // the hook reads when (and only when) the daemon is unreachable. Shared by
 // both processes so they can never drift on field names/types.
 type HookFallback struct {
+	Monitoring bool `json:"monitoring,omitempty"`
 	// Version must equal HookFallbackVersion. A mismatched or missing
 	// version means the hook cannot trust the rest of the document and
 	// falls back to "allow".

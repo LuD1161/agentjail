@@ -4,6 +4,10 @@
 # The daemon loads this file at startup and on SIGHUP.
 # Unknown keys cause a startup error (strict YAML parsing).
 
+# Evaluate and log policy verdicts; OS isolation remains enabled.
+# Set enforce to opt in to policy blocking and approval prompts.
+enforcement: monitor
+
 mcp:
   # Allowlist of MCP server name patterns (glob). Empty = deny all.
   # Examples: "filesystem", "fetch", "github*"

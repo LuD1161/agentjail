@@ -745,6 +745,9 @@ func TestWriteDefaultPolicyEmbedFallback(t *testing.T) {
 
 	// The file should contain the default blocked patterns.
 	content := string(got)
+	if !strings.Contains(content, "enforcement: monitor") {
+		t.Fatal("fresh installation must write evaluate-only policy mode")
+	}
 	for _, pattern := range []string{"*stripe*", "*payment*", "*billing*"} {
 		if !strings.Contains(content, pattern) {
 			t.Errorf("policy.yaml missing default blocked pattern %q", pattern)
