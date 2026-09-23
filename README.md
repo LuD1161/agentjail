@@ -819,6 +819,10 @@ agentjail policy list
 
 ## Network visibility
 
+The local Network API can retrieve any retained request by ID and page through
+older session history. Session totals count all retained captures, independently
+of the displayed page. Live updates catch up across bursts larger than one page.
+
 Direct `agentjail run` launches filter network access by port unless `--tunnel`
 is passed. The opt-in PATH shim adds that flag by default, so ordinary
 `claude`, `codex`, and Cursor `agent` commands route traffic through the

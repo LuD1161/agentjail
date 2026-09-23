@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -40,7 +43,29 @@ func TestAggregateSessionsActiveFromPID(t *testing.T) {
 		{Ts: time.Now().UTC(), Host: "b", Method: "GET", Path: "/", URL: "https://b/", SessionID: "gone", OwnerPID: dead},
 	}
 
-	got := aggregateSessions(rows)
+	store, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for i := range rows {
+		if err := store.Log(&rows[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{netStore: store}
+	rec := httptest.NewRecorder()
+	server.handleNetworkSessions(rec, httptest.NewRequest("GET", "/api/network/sessions", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Sessions []SessionInfo `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	got := response.Sessions
 	byID := map[string]SessionInfo{}
 	for _, s := range got {
 		byID[s.SessionID] = s

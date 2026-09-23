@@ -1394,3 +1394,16 @@ Budget configuration errors also silently removed alerts. Preserve partial
 results, but carry typed warnings and freshness through the API to the total.
 A fake provider success test cannot establish the real provider reports
 incomplete data.
+
+## A page limit is not a history boundary
+
+Network API tests with only a few rows passed while request lookup and session
+filtering scanned only the newest 10,000 captures. Older links returned 404 and
+older sessions appeared empty. Filter and look up IDs in the store before
+limiting the returned page; count retained rows independently of that page.
+The regression fixture now exceeds the old ceiling.
+
+An SSE poll also needs ascending rows after its last emitted ID. Reading only
+the newest page, or iterating an ascending page backward, skips intervening
+requests when a burst exceeds the page size. The stream regression sends more
+than two pages and checks every emitted ID in sequence.

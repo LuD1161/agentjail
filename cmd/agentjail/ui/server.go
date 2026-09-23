@@ -1332,8 +1332,7 @@ func (s *Server) handleNetworkStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// netQueryCeiling mirrors internal/mitm's own LIMIT ceiling: rows past it are
-// unreachable by paging, so it bounds both the page scan and total.
+// netQueryCeiling bounds legacy bulk reads; paged requests have no history ceiling.
 const netQueryCeiling = 10000
 
 // SessionInfo is the JSON shape for one session in GET /api/network/sessions.
@@ -1344,6 +1343,7 @@ type SessionInfo struct {
 	FirstSeen    string `json:"first_seen"`
 	LastSeen     string `json:"last_seen"`
 	RequestCount int64  `json:"request_count"`
+	DenyCount    int64  `json:"deny_count"`
 	// OwnerPID is the shield process that logged this session's rows; Active is
 	// its liveness. The network session id and the daemon session id are
 	// different identities, so "active" is keyed on the PID, not a join.
@@ -1353,7 +1353,7 @@ type SessionInfo struct {
 	// Agent and Cwd label the session (agent binary name, launch directory) so
 	// the sidebar can show the agent's logo and repo name instead of the
 	// opaque session id. Stamped per-row by the shield; rows written before
-	// that existed fall back to a User-Agent sniff in aggregateSessions.
+	// that existed fall back to a User-Agent sniff in the session response.
 	Agent string `json:"agent,omitempty"`
 	Cwd   string `json:"cwd,omitempty"`
 	// Name is the user-assigned Claude session name, resolved through the
@@ -1376,55 +1376,6 @@ func agentFromUserAgent(ua string) string {
 	return ""
 }
 
-// aggregateSessions groups request rows into per-session summaries and marks
-// each active by the liveness of its owning shield PID (procutil.Alive), not a
-// network-recency window. All rows of one session share the PID; the last
-// non-zero one wins. See ADR 0100-network-active-pid.
-func aggregateSessions(rows []mitm.RequestLog) []SessionInfo {
-	byID := map[string]*SessionInfo{}
-	order := []string{}
-	for _, rl := range rows {
-		if rl.SessionID == "" {
-			continue
-		}
-		ts := rl.Ts.UTC().Format(time.RFC3339)
-		si, ok := byID[rl.SessionID]
-		if !ok {
-			si = &SessionInfo{SessionID: rl.SessionID, FirstSeen: ts, LastSeen: ts}
-			byID[rl.SessionID] = si
-			order = append(order, rl.SessionID)
-		}
-		si.RequestCount++
-		if rl.OwnerPID > 0 {
-			si.OwnerPID = rl.OwnerPID
-		}
-		if rl.Agent != "" {
-			si.Agent = rl.Agent
-		} else if si.Agent == "" {
-			si.Agent = agentFromUserAgent(rl.RequestHeaders["User-Agent"])
-		}
-		if rl.Cwd != "" {
-			si.Cwd = rl.Cwd
-		}
-		if ts < si.FirstSeen {
-			si.FirstSeen = ts
-		}
-		if ts > si.LastSeen {
-			si.LastSeen = ts
-		}
-	}
-	out := make([]SessionInfo, 0, len(order))
-	for _, id := range order {
-		si := byID[id]
-		si.Active = procutil.Alive(si.OwnerPID)
-		out = append(out, *si)
-	}
-	return out
-}
-
-// networkRows returns rows matching the SQL-expressible filters. Status,
-// policy and session are filtered in Go: RequestFilter cannot express them and
-// internal/mitm is not this package's to change.
 // unifySessionIDs collapses the two session identities into one: rows the
 // shield stamped with their Claude session id are re-keyed to it, so the
 // network tab groups, filters, and links on the SAME identifier the monitor
@@ -1438,39 +1389,41 @@ func unifySessionIDs(rows []mitm.RequestLog) {
 	}
 }
 
+func networkRequestFilter(r *http.Request, limit int) (mitm.RequestFilter, error) {
+	q := r.URL.Query()
+	values := map[string]int64{}
+	for _, key := range []string{"status", "before_id", "offset", "limit"} {
+		if raw := q.Get(key); raw != "" {
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || n < 0 || (key == "status" && (n < 100 || n > 599)) {
+				return mitm.RequestFilter{}, fmt.Errorf("invalid %s", key)
+			}
+			values[key] = n
+		}
+	}
+	return mitm.RequestFilter{Host: q.Get("host"), Method: q.Get("method"), Limit: limit,
+		Session: q.Get("session"), Status: int(values["status"]), Policy: q.Get("policy"), BeforeID: values["before_id"], Offset: int(values["offset"])}, nil
+}
+
 func (s *Server) networkRows(r *http.Request, limit int) ([]mitm.RequestLog, error) {
 	st, err := s.openNetworkStore()
 	if err != nil {
 		return nil, err
 	}
-	q := r.URL.Query()
-	rows, err := st.Query(r.Context(), mitm.RequestFilter{
-		Host:   q.Get("host"),
-		Method: q.Get("method"),
-		Limit:  limit,
-	})
+	filter, err := networkRequestFilter(r, limit)
 	if err != nil {
 		return nil, err
 	}
+	rows, err := st.Query(r.Context(), filter)
 	unifySessionIDs(rows)
-	status, policy, session := q.Get("status"), q.Get("policy"), q.Get("session")
-	if status == "" && policy == "" && session == "" {
-		return rows, nil
-	}
-	out := rows[:0]
-	for _, rl := range rows {
-		if status != "" && strconv.Itoa(rl.StatusCode) != status {
-			continue
-		}
-		if policy != "" && rl.PolicyAction != policy {
-			continue
-		}
-		if session != "" && rl.SessionID != session {
-			continue
-		}
-		out = append(out, rl)
-	}
-	return out, nil
+	return rows, err
+}
+
+type requestsListResponse struct {
+	Requests []mitm.RequestLog `json:"requests"`
+	Count    int               `json:"count"`
+	Total    int64             `json:"total"`
+	HasMore  bool              `json:"has_more"`
 }
 
 // handleRequestsList backs the Network table. The SPA calls /api/requests, not
@@ -1483,34 +1436,39 @@ func (s *Server) handleRequestsList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
-	q := r.URL.Query()
-	limit, offset := 50, 0
-	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
-		limit = n
+	limit := 50
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+		limit = min(n, 1000)
 	}
-	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
-		offset = n
-	}
-	// Fetch to the store's own ceiling, not offset+limit: total counts the
-	// matching set, and a total capped at the page size makes pagination lie.
-	rows, err := s.networkRows(r, netQueryCeiling)
+	st, err := s.openNetworkStore()
 	if err != nil {
 		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
-	total := len(rows)
-	if offset < len(rows) {
-		rows = rows[offset:]
-	} else {
-		rows = nil
+	filter, err := networkRequestFilter(r, limit+1)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	if len(rows) > limit {
+	rows, err := st.Query(r.Context(), filter)
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	total, err := st.CountMatching(r.Context(), filter)
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
 		rows = rows[:limit]
 	}
+	unifySessionIDs(rows)
 	if rows == nil {
 		rows = []mitm.RequestLog{}
 	}
-	writeJSON(w, map[string]any{"requests": rows, "count": len(rows), "total": total})
+	writeJSON(w, requestsListResponse{Requests: rows, Count: len(rows), Total: total, HasMore: hasMore})
 }
 
 // handleRequestDetail serves one row. Bodies are referenced by path, never
@@ -1524,7 +1482,7 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/requests/")
 	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		writeJSONError(w, "bad request id", http.StatusBadRequest)
 		return
 	}
@@ -1533,8 +1491,7 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
-	// No Get(id) on RequestStore; scan the newest page for it.
-	rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: netQueryCeiling})
+	rows, err := st.Query(r.Context(), mitm.RequestFilter{ID: id, Limit: 1})
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
@@ -1564,19 +1521,24 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only rows logged after the client connected: the table loads history via
+	// /api/requests, and replaying it here would double every row.
+	var lastID int64
+	initial, err := st.Query(r.Context(), mitm.RequestFilter{Limit: 1})
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	if len(initial) > 0 {
+		lastID = initial[0].ID
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	fmt.Fprint(w, ":ok\n\n")
 	flusher.Flush()
-
-	// Only rows logged after the client connected: the table loads history via
-	// /api/requests, and replaying it here would double every row.
-	var lastID int64
-	if rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: 1}); err == nil && len(rows) > 0 {
-		lastID = rows[0].ID
-	}
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -1586,12 +1548,12 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rows, err := st.Query(ctx, mitm.RequestFilter{Limit: defaultStreamPage})
+			rows, err := st.Query(ctx, mitm.RequestFilter{Limit: defaultStreamPage, AfterID: lastID, OldestFirst: true})
 			if err != nil {
-				continue
+				return
 			}
 			unifySessionIDs(rows)
-			for i := len(rows) - 1; i >= 0; i-- { // Query is newest-first; emit oldest-first.
+			for i := range rows { // Catch up in ascending ID order.
 				if rows[i].ID <= lastID {
 					continue
 				}
@@ -1599,7 +1561,9 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					continue
 				}
-				fmt.Fprintf(w, "data: %s\n\n", b)
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+					return
+				}
 				lastID = rows[i].ID
 			}
 			flusher.Flush()
@@ -1611,8 +1575,7 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 // the next tick, since lastID only advances over rows actually emitted.
 const defaultStreamPage = 200
 
-// handleNetworkSessions aggregates rows per session. The store has no
-// Sessions() and internal/mitm is not this package's to change.
+// handleNetworkSessions returns server-authoritative retained session counts.
 func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1620,12 +1583,27 @@ func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
-	rows, err := s.networkRows(r, netQueryCeiling)
+	st, err := s.openNetworkStore()
 	if err != nil {
 		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
-	out := aggregateSessions(rows)
+	summaries, err := st.Sessions(r.Context())
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	out := make([]SessionInfo, 0, len(summaries))
+	for _, row := range summaries {
+		agent := row.Agent
+		if agent == "" {
+			agent = agentFromUserAgent(row.UserAgent)
+		}
+		first, _ := time.Parse("2006-01-02T15:04:05.000", row.FirstSeen)
+		last, _ := time.Parse("2006-01-02T15:04:05.000", row.LastSeen)
+		out = append(out, SessionInfo{SessionID: row.SessionID, FirstSeen: first.UTC().Format(time.RFC3339), LastSeen: last.UTC().Format(time.RFC3339),
+			RequestCount: row.RequestCount, DenyCount: row.DenyCount, OwnerPID: row.OwnerPID, Active: procutil.Alive(row.OwnerPID), Agent: agent, Cwd: row.Cwd})
+	}
 	// The network store only knows the shield pid, so a live session's
 	// user-assigned name resolves through process ancestry (the claude
 	// process is the shield's descendant). Dead sessions keep their
