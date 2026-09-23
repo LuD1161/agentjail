@@ -1,0 +1,330 @@
+Sanitized raw measurement summaries; see performance-measurements-20260923.md.
+
+=== after-component-1.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/netpolicy
+cpu: Apple M2 Pro
+BenchmarkMatcherEvaluate/bytes=128/rules=1         	  378024	      1656 ns/op	    1496 B/op	      22 allocs/op
+BenchmarkMatcherEvaluate/bytes=128/rules=8         	  187064	      3164 ns/op	    2728 B/op	      43 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=1     	     520	   1129543 ns/op	 2114935 B/op	      25 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=8     	     476	   1260917 ns/op	 2116237 B/op	      47 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/netpolicy	2.714s
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/daemonapp
+cpu: Apple M2 Pro
+BenchmarkHookConnection/small         	   37267	     15758 ns/op	     10404 response-ns/op	    9618 B/op	      69 allocs/op
+BenchmarkHookConnection/large         	      85	   7041883 ns/op	   5714977 response-ns/op	 3692490 B/op	      78 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/daemonapp	1.409s
+
+=== after-component-2.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/netpolicy
+cpu: Apple M2 Pro
+BenchmarkMatcherEvaluate/bytes=128/rules=1         	  380745	      1679 ns/op	    1496 B/op	      22 allocs/op
+BenchmarkMatcherEvaluate/bytes=128/rules=8         	  186974	      3197 ns/op	    2728 B/op	      43 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=1     	     528	   1132781 ns/op	 2118942 B/op	      25 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=8     	     470	   1258000 ns/op	 2116167 B/op	      46 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/netpolicy	2.735s
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/daemonapp
+cpu: Apple M2 Pro
+BenchmarkHookConnection/small         	   35822	     15959 ns/op	     10490 response-ns/op	    9596 B/op	      69 allocs/op
+BenchmarkHookConnection/large         	      84	   7126057 ns/op	   5826548 response-ns/op	 3692505 B/op	      78 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/daemonapp	1.399s
+
+=== after-component-3.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/netpolicy
+cpu: Apple M2 Pro
+BenchmarkMatcherEvaluate/bytes=128/rules=1         	  365014	      1669 ns/op	    1496 B/op	      22 allocs/op
+BenchmarkMatcherEvaluate/bytes=128/rules=8         	  186256	      3164 ns/op	    2728 B/op	      43 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=1     	     519	   1128387 ns/op	 2114934 B/op	      25 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=8     	     472	   1256836 ns/op	 2120667 B/op	      46 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/netpolicy	2.689s
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/daemonapp
+cpu: Apple M2 Pro
+BenchmarkHookConnection/small         	   35908	     16065 ns/op	     10607 response-ns/op	    9596 B/op	      69 allocs/op
+BenchmarkHookConnection/large         	      88	   7162138 ns/op	   5843447 response-ns/op	 3692502 B/op	      78 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/daemonapp	1.432s
+
+=== after-hook-1.txt ===
+PASS F1: Allow — Write inside CWD (26ms)
+PASS F2: Deny — Write to ~/.ssh/id_rsa (15ms)
+PASS F3: Deny — Write to ~/.aws/credentials (14ms)
+PASS F4: Deny — Bash rm -rf / (15ms)
+PASS F5: Deny — Bash curl|bash (15ms)
+PASS F6: Deny — Read /etc/hosts (15ms)
+PASS F7: Allow — Read inside CWD (14ms)
+PASS F8: Deny — MCP mcp__stripe__charge (blocked pattern) (14ms)
+PASS F9: Deny — MCP mcp__filesystem__read_file (not in allowlist) (14ms)
+  warm-small: n=100, median=5.44ms, p95=5.75ms, max=6.39ms
+  uncached-small: n=100, median=6.12ms, p95=6.86ms, max=8.02ms
+  warm-512KiB: n=100, median=20.25ms, p95=21.20ms, max=25.22ms
+  concurrent-small: n=100, median=8.74ms, p95=11.47ms, max=13.59ms
+PASS warm hook p95 < 50ms; all workloads returned explicit decisions
+
+=== after-hook-2.txt ===
+PASS F1: Allow — Write inside CWD (28ms)
+PASS F2: Deny — Write to ~/.ssh/id_rsa (17ms)
+PASS F3: Deny — Write to ~/.aws/credentials (16ms)
+PASS F4: Deny — Bash rm -rf / (15ms)
+PASS F5: Deny — Bash curl|bash (15ms)
+PASS F6: Deny — Read /etc/hosts (14ms)
+PASS F7: Allow — Read inside CWD (16ms)
+PASS F8: Deny — MCP mcp__stripe__charge (blocked pattern) (16ms)
+PASS F9: Deny — MCP mcp__filesystem__read_file (not in allowlist) (15ms)
+  warm-small: n=100, median=5.62ms, p95=5.93ms, max=6.62ms
+  uncached-small: n=100, median=6.23ms, p95=6.89ms, max=7.44ms
+  warm-512KiB: n=100, median=20.27ms, p95=21.57ms, max=22.61ms
+  concurrent-small: n=100, median=8.80ms, p95=11.65ms, max=16.03ms
+PASS warm hook p95 < 50ms; all workloads returned explicit decisions
+
+=== after-hook-3.txt ===
+PASS F1: Allow — Write inside CWD (33ms)
+PASS F2: Deny — Write to ~/.ssh/id_rsa (16ms)
+PASS F3: Deny — Write to ~/.aws/credentials (16ms)
+PASS F4: Deny — Bash rm -rf / (15ms)
+PASS F5: Deny — Bash curl|bash (14ms)
+PASS F6: Deny — Read /etc/hosts (15ms)
+PASS F7: Allow — Read inside CWD (15ms)
+PASS F8: Deny — MCP mcp__stripe__charge (blocked pattern) (16ms)
+PASS F9: Deny — MCP mcp__filesystem__read_file (not in allowlist) (15ms)
+  warm-small: n=100, median=5.54ms, p95=5.93ms, max=6.11ms
+  uncached-small: n=100, median=6.18ms, p95=6.91ms, max=7.76ms
+  warm-512KiB: n=100, median=20.35ms, p95=22.07ms, max=26.64ms
+  concurrent-small: n=100, median=8.83ms, p95=11.48ms, max=13.60ms
+PASS warm hook p95 < 50ms; all workloads returned explicit decisions
+
+=== before-component-1.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/netpolicy
+cpu: Apple M2 Pro
+BenchmarkMatcherEvaluate/bytes=128/rules=1         	   62164	      9733 ns/op	   12617 B/op	     160 allocs/op
+BenchmarkMatcherEvaluate/bytes=128/rules=8         	    7786	     76999 ns/op	  100944 B/op	    1280 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=1     	     512	   1133774 ns/op	 2126052 B/op	     163 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=8     	      66	   9046694 ns/op	17008420 B/op	    1304 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/netpolicy	2.630s
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/daemonapp
+cpu: Apple M2 Pro
+BenchmarkHookConnection/small         	    3958	    131477 ns/op	    125417 response-ns/op	 1054476 B/op	      77 allocs/op
+BenchmarkHookConnection/large         	      51	  11686916 ns/op	  11659076 response-ns/op	 2690216 B/op	      79 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/daemonapp	2.106s
+
+=== before-component-2.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/netpolicy
+cpu: Apple M2 Pro
+BenchmarkMatcherEvaluate/bytes=128/rules=1         	   60271	      9805 ns/op	   12617 B/op	     160 allocs/op
+BenchmarkMatcherEvaluate/bytes=128/rules=8         	    7911	     78388 ns/op	  100943 B/op	    1280 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=1     	     512	   1140799 ns/op	 2126052 B/op	     163 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=8     	      64	   9088753 ns/op	17008420 B/op	    1304 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/netpolicy	2.636s
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/daemonapp
+cpu: Apple M2 Pro
+BenchmarkHookConnection/small         	    3727	    135056 ns/op	    128890 response-ns/op	 1054482 B/op	      77 allocs/op
+BenchmarkHookConnection/large         	      51	  11680715 ns/op	  11652918 response-ns/op	 2690214 B/op	      79 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/daemonapp	2.127s
+
+=== before-component-3.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/netpolicy
+cpu: Apple M2 Pro
+BenchmarkMatcherEvaluate/bytes=128/rules=1         	   62124	      9583 ns/op	   12617 B/op	     160 allocs/op
+BenchmarkMatcherEvaluate/bytes=128/rules=8         	    7520	     78164 ns/op	  100944 B/op	    1280 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=1     	     524	   1128538 ns/op	 2126052 B/op	     163 allocs/op
+BenchmarkMatcherEvaluate/bytes=1048576/rules=8     	      64	   9040420 ns/op	17008420 B/op	    1304 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/netpolicy	2.599s
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/daemonapp
+cpu: Apple M2 Pro
+BenchmarkHookConnection/small         	    4006	    130065 ns/op	    123910 response-ns/op	 1054475 B/op	      77 allocs/op
+BenchmarkHookConnection/large         	      52	  11640937 ns/op	  11611159 response-ns/op	 2668920 B/op	      79 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/daemonapp	2.131s
+
+=== before-hook-1.txt ===
+PASS F1: Allow — Write inside CWD (34ms)
+PASS F2: Deny — Write to ~/.ssh/id_rsa (16ms)
+PASS F3: Deny — Write to ~/.aws/credentials (16ms)
+PASS F4: Deny — Bash rm -rf / (16ms)
+PASS F5: Deny — Bash curl|bash (16ms)
+PASS F6: Deny — Read /etc/hosts (16ms)
+PASS F7: Allow — Read inside CWD (15ms)
+PASS F8: Deny — MCP mcp__stripe__charge (blocked pattern) (18ms)
+PASS F9: Deny — MCP mcp__filesystem__read_file (not in allowlist) (15ms)
+  warm-small: n=100, median=5.73ms, p95=6.59ms, max=7.14ms
+  uncached-small: n=100, median=6.45ms, p95=8.75ms, max=12.67ms
+  warm-512KiB: n=100, median=28.08ms, p95=28.96ms, max=29.92ms
+  concurrent-small: n=100, median=9.16ms, p95=12.87ms, max=16.27ms
+PASS warm hook p95 < 50ms; all workloads returned explicit decisions
+
+=== before-hook-2.txt ===
+PASS F1: Allow — Write inside CWD (34ms)
+PASS F2: Deny — Write to ~/.ssh/id_rsa (17ms)
+PASS F3: Deny — Write to ~/.aws/credentials (15ms)
+PASS F4: Deny — Bash rm -rf / (17ms)
+PASS F5: Deny — Bash curl|bash (15ms)
+PASS F6: Deny — Read /etc/hosts (15ms)
+PASS F7: Allow — Read inside CWD (15ms)
+PASS F8: Deny — MCP mcp__stripe__charge (blocked pattern) (15ms)
+PASS F9: Deny — MCP mcp__filesystem__read_file (not in allowlist) (15ms)
+  warm-small: n=100, median=5.73ms, p95=6.31ms, max=6.91ms
+  uncached-small: n=100, median=6.32ms, p95=6.94ms, max=7.26ms
+  warm-512KiB: n=100, median=28.07ms, p95=29.25ms, max=30.05ms
+  concurrent-small: n=100, median=8.64ms, p95=10.94ms, max=12.50ms
+PASS warm hook p95 < 50ms; all workloads returned explicit decisions
+
+=== before-hook-3.txt ===
+PASS F1: Allow — Write inside CWD (33ms)
+PASS F2: Deny — Write to ~/.ssh/id_rsa (17ms)
+PASS F3: Deny — Write to ~/.aws/credentials (15ms)
+PASS F4: Deny — Bash rm -rf / (15ms)
+PASS F5: Deny — Bash curl|bash (15ms)
+PASS F6: Deny — Read /etc/hosts (16ms)
+PASS F7: Allow — Read inside CWD (15ms)
+PASS F8: Deny — MCP mcp__stripe__charge (blocked pattern) (16ms)
+PASS F9: Deny — MCP mcp__filesystem__read_file (not in allowlist) (15ms)
+  warm-small: n=100, median=5.62ms, p95=6.36ms, max=7.55ms
+  uncached-small: n=100, median=6.44ms, p95=8.02ms, max=9.83ms
+  warm-512KiB: n=100, median=28.10ms, p95=29.77ms, max=30.94ms
+  concurrent-small: n=100, median=8.60ms, p95=10.96ms, max=15.25ms
+PASS warm hook p95 < 50ms; all workloads returned explicit decisions
+
+=== body.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/mitm
+cpu: Apple M2 Pro
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=1048576/encoding=identity         	       3	     95972 ns/op	10925.85 MB/s	         1.000 expanded/wire	   1048576 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=1048576/encoding=identity         	       3	     75847 ns/op	13824.88 MB/s	         1.000 expanded/wire	   1048576 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=1048576/encoding=identity         	       3	    173194 ns/op	6054.33 MB/s	         1.000 expanded/wire	   1048576 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=1048576/encoding=gzip             	       3	   1210515 ns/op	 866.22 MB/s	       993.0 expanded/wire	      1056 wire-bytes/op	  399496 B/op	      83 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=1048576/encoding=gzip             	       3	   1074514 ns/op	 975.86 MB/s	       993.0 expanded/wire	      1056 wire-bytes/op	  399496 B/op	      83 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=1048576/encoding=gzip             	       3	   1076569 ns/op	 974.00 MB/s	       993.0 expanded/wire	      1056 wire-bytes/op	  399496 B/op	      83 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=16777216/encoding=identity        	       3	   1671875 ns/op	10034.97 MB/s	         1.000 expanded/wire	  16777216 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=16777216/encoding=identity        	       3	   2264139 ns/op	7409.98 MB/s	         1.000 expanded/wire	  16777216 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=16777216/encoding=identity        	       3	   3682333 ns/op	4556.14 MB/s	         1.000 expanded/wire	  16777216 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=16777216/encoding=gzip            	       3	  14281264 ns/op	1174.77 MB/s	      1027 expanded/wire	     16333 wire-bytes/op	  418696 B/op	     563 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=16777216/encoding=gzip            	       3	  13864375 ns/op	1210.10 MB/s	      1027 expanded/wire	     16333 wire-bytes/op	  418696 B/op	     563 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=16777216/encoding=gzip            	       3	  20126653 ns/op	 833.58 MB/s	      1027 expanded/wire	     16333 wire-bytes/op	  418696 B/op	     563 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=67108864/encoding=identity        	       3	    391889 ns/op	171244.57 MB/s	         1.000 expanded/wire	  67108864 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=67108864/encoding=identity        	       3	   1655917 ns/op	40526.72 MB/s	         1.000 expanded/wire	  67108864 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=67108864/encoding=identity        	       3	   2761264 ns/op	24303.68 MB/s	         1.000 expanded/wire	  67108864 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=67108864/encoding=gzip            	       3	  59268056 ns/op	1132.29 MB/s	      1028 expanded/wire	     65253 wire-bytes/op	  480136 B/op	    2099 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=67108864/encoding=gzip            	       3	  46573180 ns/op	1440.93 MB/s	      1028 expanded/wire	     65253 wire-bytes/op	  480136 B/op	    2099 allocs/op
+BenchmarkBodyCaptureFinish/fixture=repeated/bytes=67108864/encoding=gzip            	       3	  45249083 ns/op	1483.10 MB/s	      1028 expanded/wire	     65253 wire-bytes/op	  480136 B/op	    2099 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=1048576/encoding=identity  	       3	     83292 ns/op	12589.21 MB/s	         1.000 expanded/wire	   1048576 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=1048576/encoding=identity  	       3	     81819 ns/op	12815.80 MB/s	         1.000 expanded/wire	   1048576 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=1048576/encoding=identity  	       3	     64375 ns/op	16288.47 MB/s	         1.000 expanded/wire	   1048576 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=1048576/encoding=gzip      	       3	   3035917 ns/op	 345.39 MB/s	         6.472 expanded/wire	    162006 wire-bytes/op	  402160 B/op	     130 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=1048576/encoding=gzip      	       3	   2930889 ns/op	 357.77 MB/s	         6.472 expanded/wire	    162006 wire-bytes/op	  402160 B/op	     130 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=1048576/encoding=gzip      	       3	   3090222 ns/op	 339.32 MB/s	         6.472 expanded/wire	    162006 wire-bytes/op	  402160 B/op	     130 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=16777216/encoding=identity 	       3	    385666 ns/op	43501.89 MB/s	         1.000 expanded/wire	  16777216 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=16777216/encoding=identity 	       3	    397819 ns/op	42172.95 MB/s	         1.000 expanded/wire	  16777216 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=16777216/encoding=identity 	       3	    408153 ns/op	41105.25 MB/s	         1.000 expanded/wire	  16777216 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=16777216/encoding=gzip     	       3	  43756736 ns/op	 383.42 MB/s	         6.521 expanded/wire	   2572763 wire-bytes/op	  455936 B/op	    1185 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=16777216/encoding=gzip     	       3	  42994639 ns/op	 390.22 MB/s	         6.521 expanded/wire	   2572763 wire-bytes/op	  455936 B/op	    1185 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=16777216/encoding=gzip     	       3	  42795000 ns/op	 392.04 MB/s	         6.521 expanded/wire	   2572763 wire-bytes/op	  455936 B/op	    1185 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=67108864/encoding=identity 	       3	    390792 ns/op	171725.42 MB/s	         1.000 expanded/wire	  67108864 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=67108864/encoding=identity 	       3	    400403 ns/op	167603.30 MB/s	         1.000 expanded/wire	  67108864 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=67108864/encoding=identity 	       3	    401375 ns/op	167197.28 MB/s	         1.000 expanded/wire	  67108864 wire-bytes/op	      80 B/op	       2 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=67108864/encoding=gzip     	       3	 169705513 ns/op	 395.44 MB/s	         6.544 expanded/wire	  10254406 wire-bytes/op	  610664 B/op	    4717 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=67108864/encoding=gzip     	       3	 170559292 ns/op	 393.46 MB/s	         6.544 expanded/wire	  10254406 wire-bytes/op	  610664 B/op	    4717 allocs/op
+BenchmarkBodyCaptureFinish/fixture=synthetic-jsonl/bytes=67108864/encoding=gzip     	       3	 174685486 ns/op	 384.17 MB/s	         6.544 expanded/wire	  10254406 wire-bytes/op	  610664 B/op	    4717 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/mitm	16.867s
+
+=== contention-cpu12.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/costanalytics
+cpu: Apple M2 Pro
+BenchmarkCostProjectionWriterContention/events=1000/idle-12         	       1	2000219958 ns/op	         3.912 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      3909 writer-max-us	        99.50 writer-p50-us	       160.5 writer-p95-us	       999.0 writer-samples	 5142656 B/op	  102953 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/idle-12         	       1	2000331167 ns/op	         2.237 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      1928 writer-max-us	        97.04 writer-p50-us	       146.9 writer-p95-us	      1000 writer-samples	 5024544 B/op	  102747 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/idle-12         	       1	2000278959 ns/op	         2.241 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      1967 writer-max-us	        94.25 writer-p50-us	       140.4 writer-p95-us	      1000 writer-samples	 5003984 B/op	  102697 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/rebuild-12      	       1	2000383750 ns/op	         0.2229 compute-ms/rebuild	         4.517 probe-gap-max-ms	         3.469 read-ms/rebuild	       509.0 rebuilds/op	         0.2378 replace-ms/rebuild	      2000 window-ms/op	      4516 writer-max-us	      1201 writer-p50-us	      3134 writer-p95-us	       998.0 writer-samples	1114532392 B/op	12499424 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/rebuild-12      	       1	2000813333 ns/op	         0.2090 compute-ms/rebuild	         4.268 probe-gap-max-ms	         3.472 read-ms/rebuild	       511.0 rebuilds/op	         0.2339 replace-ms/rebuild	      2001 window-ms/op	      4262 writer-max-us	      1232 writer-p50-us	      3125 writer-p95-us	       997.0 writer-samples	1118883632 B/op	12548076 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/rebuild-12      	       1	2002006208 ns/op	         0.2059 compute-ms/rebuild	         4.481 probe-gap-max-ms	         3.491 read-ms/rebuild	       509.0 rebuilds/op	         0.2366 replace-ms/rebuild	      2002 window-ms/op	      4480 writer-max-us	      1268 writer-p50-us	      3149 writer-p95-us	       997.0 writer-samples	1114522784 B/op	12499443 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/idle-12        	       1	2000340375 ns/op	         2.316 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2315 writer-max-us	        90.75 writer-p50-us	       125.7 writer-p95-us	      1000 writer-samples	 4982688 B/op	  102587 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/idle-12        	       1	2000345833 ns/op	         2.237 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2056 writer-max-us	        97.29 writer-p50-us	       138.8 writer-p95-us	      1000 writer-samples	 4989872 B/op	  102650 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/idle-12        	       1	2000364291 ns/op	         5.375 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      5374 writer-max-us	        96.25 writer-p50-us	       175.8 writer-p95-us	       998.0 writer-samples	 4979240 B/op	  102459 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/rebuild-12     	       1	2028439917 ns/op	         2.005 compute-ms/rebuild	        42.97 probe-gap-max-ms	        35.00 read-ms/rebuild	        52.00 rebuilds/op	         2.002 replace-ms/rebuild	      2028 window-ms/op	     42965 writer-max-us	       253.3 writer-p50-us	     33832 writer-p95-us	       222.0 writer-samples	1367984560 B/op	12604731 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/rebuild-12     	       1	2042714750 ns/op	         2.021 compute-ms/rebuild	        37.66 probe-gap-max-ms	        34.60 read-ms/rebuild	        53.00 rebuilds/op	         1.920 replace-ms/rebuild	      2043 window-ms/op	     37664 writer-max-us	       242.2 writer-p50-us	     33550 writer-p95-us	       228.0 writer-samples	1394280160 B/op	12847256 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/rebuild-12     	       1	2027193291 ns/op	         1.932 compute-ms/rebuild	        34.31 probe-gap-max-ms	        34.37 read-ms/rebuild	        53.00 rebuilds/op	         1.944 replace-ms/rebuild	      2027 window-ms/op	     34305 writer-max-us	       267.5 writer-p50-us	     33402 writer-p95-us	       228.0 writer-samples	1394289744 B/op	12847311 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/idle-12       	       1	2000380166 ns/op	         2.714 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2713 writer-max-us	        98.79 writer-p50-us	       187.6 writer-p95-us	      1000 writer-samples	 4984368 B/op	  102636 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/idle-12       	       1	2000384334 ns/op	         4.988 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      4988 writer-max-us	        95.46 writer-p50-us	       166.8 writer-p95-us	       999.0 writer-samples	 4985976 B/op	  102574 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/idle-12       	       1	2000532708 ns/op	        14.22 probe-gap-max-ms	         0 rebuilds/op	      2001 window-ms/op	     14222 writer-max-us	        99.67 writer-p50-us	       149.2 writer-p95-us	       994.0 writer-samples	 4953184 B/op	  101953 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/rebuild-12    	       1	2303474083 ns/op	        20.50 compute-ms/rebuild	       334.9 probe-gap-max-ms	       341.0 read-ms/rebuild	         6.000 rebuilds/op	        22.35 replace-ms/rebuild	      2303 window-ms/op	    334894 writer-max-us	       112.3 writer-p50-us	    324102 writer-p95-us	       106.0 writer-samples	1704878904 B/op	14517432 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/rebuild-12    	       1	2298390833 ns/op	        21.05 compute-ms/rebuild	       335.8 probe-gap-max-ms	       340.2 read-ms/rebuild	         6.000 rebuilds/op	        21.81 replace-ms/rebuild	      2298 window-ms/op	    335817 writer-max-us	       111.4 writer-p50-us	    320340 writer-p95-us	       110.0 writer-samples	1704891736 B/op	14517771 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/rebuild-12    	       1	2297191125 ns/op	        20.65 compute-ms/rebuild	       334.1 probe-gap-max-ms	       340.6 read-ms/rebuild	         6.000 rebuilds/op	        21.61 replace-ms/rebuild	      2297 window-ms/op	    334108 writer-max-us	       127.0 writer-p50-us	    324422 writer-p95-us	       108.0 writer-samples	1704882600 B/op	14517577 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/costanalytics	56.785s
+
+=== contention.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/costanalytics
+cpu: Apple M2 Pro
+BenchmarkCostProjectionWriterContention/events=1000/idle         	       1	2000348292 ns/op	         3.351 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      3350 writer-max-us	        87.92 writer-p50-us	       128.2 writer-p95-us	      1000 writer-samples	 4987288 B/op	  102875 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/idle         	       1	2000669333 ns/op	         2.222 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      1793 writer-max-us	        90.00 writer-p50-us	       165.5 writer-p95-us	      1000 writer-samples	 4984512 B/op	  102791 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/idle         	       1	2000673583 ns/op	         2.226 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2081 writer-max-us	        88.62 writer-p50-us	       126.8 writer-p95-us	      1000 writer-samples	 4985584 B/op	  102872 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/rebuild      	       1	2002221500 ns/op	         0.2839 compute-ms/rebuild	        25.53 probe-gap-max-ms	         3.765 read-ms/rebuild	       468.0 rebuilds/op	         0.2280 replace-ms/rebuild	      2002 window-ms/op	      4366 writer-max-us	       473.4 writer-p50-us	      3601 writer-p95-us	       158.0 writer-samples	1020075384 B/op	11408621 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/rebuild      	       1	2003367875 ns/op	         0.2843 compute-ms/rebuild	        25.55 probe-gap-max-ms	         3.764 read-ms/rebuild	       468.0 rebuilds/op	         0.2315 replace-ms/rebuild	      2003 window-ms/op	      4004 writer-max-us	       466.5 writer-p50-us	      3780 writer-p95-us	       155.0 writer-samples	1019914560 B/op	11407971 allocs/op
+BenchmarkCostProjectionWriterContention/events=1000/rebuild      	       1	2004451375 ns/op	         0.2865 compute-ms/rebuild	        38.08 probe-gap-max-ms	         3.753 read-ms/rebuild	       470.0 rebuilds/op	         0.2246 replace-ms/rebuild	      2004 window-ms/op	      4810 writer-max-us	       456.2 writer-p50-us	      3526 writer-p95-us	       144.0 writer-samples	1024211456 B/op	11455496 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/idle        	       1	2000318000 ns/op	         3.453 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      3453 writer-max-us	        86.75 writer-p50-us	       128.3 writer-p95-us	      1000 writer-samples	 4984672 B/op	  102807 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/idle        	       1	2000427708 ns/op	         2.336 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2335 writer-max-us	        88.54 writer-p50-us	       132.6 writer-p95-us	      1000 writer-samples	 4984920 B/op	  102823 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/idle        	       1	2000516875 ns/op	         2.207 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      1901 writer-max-us	        87.58 writer-p50-us	       128.4 writer-p95-us	      1000 writer-samples	 4984432 B/op	  102817 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/rebuild     	       1	2031385708 ns/op	         2.848 compute-ms/rebuild	        43.57 probe-gap-max-ms	        39.38 read-ms/rebuild	        46.00 rebuilds/op	         1.929 replace-ms/rebuild	      2031 window-ms/op	     43564 writer-max-us	      3236 writer-p50-us	     39826 writer-p95-us	       133.0 writer-samples	1209740088 B/op	11144148 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/rebuild     	       1	2042080417 ns/op	         2.909 compute-ms/rebuild	        45.63 probe-gap-max-ms	        39.57 read-ms/rebuild	        46.00 rebuilds/op	         1.910 replace-ms/rebuild	      2042 window-ms/op	     45624 writer-max-us	      3217 writer-p50-us	     39619 writer-p95-us	       136.0 writer-samples	1209755712 B/op	11144471 allocs/op
+BenchmarkCostProjectionWriterContention/events=10000/rebuild     	       1	2005801208 ns/op	         2.961 compute-ms/rebuild	        43.49 probe-gap-max-ms	        39.60 read-ms/rebuild	        45.00 rebuilds/op	         2.014 replace-ms/rebuild	      2006 window-ms/op	     43490 writer-max-us	      3432 writer-p50-us	     40019 writer-p95-us	       131.0 writer-samples	1183446552 B/op	10902006 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/idle       	       1	2000326625 ns/op	         2.996 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2995 writer-max-us	        90.33 writer-p50-us	       139.1 writer-p95-us	      1000 writer-samples	 4984664 B/op	  102807 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/idle       	       1	2000325417 ns/op	         2.549 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      2548 writer-max-us	        86.92 writer-p50-us	       127.1 writer-p95-us	      1000 writer-samples	 4984776 B/op	  102814 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/idle       	       1	2000347875 ns/op	         8.000 probe-gap-max-ms	         0 rebuilds/op	      2000 window-ms/op	      7999 writer-max-us	        91.17 writer-p50-us	       134.8 writer-p95-us	       997.0 writer-samples	 4969624 B/op	  102486 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/rebuild    	       1	2246804375 ns/op	        30.45 compute-ms/rebuild	       405.0 probe-gap-max-ms	       398.7 read-ms/rebuild	         5.000 rebuilds/op	        20.19 replace-ms/rebuild	      2247 window-ms/op	    404982 writer-max-us	      2127 writer-p50-us	    396302 writer-p95-us	        26.00 writer-samples	1420767248 B/op	12092184 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/rebuild    	       1	2257925417 ns/op	        31.64 compute-ms/rebuild	       395.0 probe-gap-max-ms	       399.7 read-ms/rebuild	         5.000 rebuilds/op	        20.22 replace-ms/rebuild	      2258 window-ms/op	    394952 writer-max-us	      1480 writer-p50-us	    390629 writer-p95-us	        27.00 writer-samples	1420412976 B/op	12091579 allocs/op
+BenchmarkCostProjectionWriterContention/events=100000/rebuild    	       1	2221724666 ns/op	        26.16 compute-ms/rebuild	       396.8 probe-gap-max-ms	       397.6 read-ms/rebuild	         5.000 rebuilds/op	        20.56 replace-ms/rebuild	      2222 window-ms/op	    396841 writer-max-us	       246.7 writer-p50-us	    396435 writer-p95-us	        20.00 writer-samples	1420377328 B/op	12090845 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/costanalytics	57.251s
+
+=== cost.txt ===
+goos: darwin
+goarch: arm64
+pkg: github.com/LuD1161/agentjail/internal/costanalytics
+cpu: Apple M2 Pro
+BenchmarkCostProjectionRefresh/events=1000         	       3	   4260625 ns/op	      1000 events/op	 2174210 B/op	   24277 allocs/op
+BenchmarkCostProjectionRefresh/events=1000         	       3	   4420542 ns/op	      1000 events/op	 2174216 B/op	   24277 allocs/op
+BenchmarkCostProjectionRefresh/events=1000         	       3	   4411681 ns/op	      1000 events/op	 2174216 B/op	   24277 allocs/op
+BenchmarkCostProjectionRefresh/events=10000        	       3	  42930889 ns/op	     10000 events/op	26260536 B/op	  241526 allocs/op
+BenchmarkCostProjectionRefresh/events=10000        	       3	  42854208 ns/op	     10000 events/op	26260536 B/op	  241526 allocs/op
+BenchmarkCostProjectionRefresh/events=10000        	       3	  43449069 ns/op	     10000 events/op	26260536 B/op	  241526 allocs/op
+BenchmarkCostProjectionRefresh/events=100000       	       3	 442661167 ns/op	    100000 events/op	283837224 B/op	 2413716 allocs/op
+BenchmarkCostProjectionRefresh/events=100000       	       3	 441236014 ns/op	    100000 events/op	283837224 B/op	 2413716 allocs/op
+BenchmarkCostProjectionRefresh/events=100000       	       3	 444607736 ns/op	    100000 events/op	283837224 B/op	 2413716 allocs/op
+PASS
+ok  	github.com/LuD1161/agentjail/internal/costanalytics	26.394s
