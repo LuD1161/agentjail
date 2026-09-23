@@ -19,6 +19,8 @@ Catches the accidental foot-gun **before it fires** - no changes to how you use 
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
 &nbsp;[![GitHub downloads](https://img.shields.io/github/downloads/LuD1161/agentjail/total.svg?style=flat)](https://github.com/LuD1161/agentjail/releases)
 
+Install `minisign` through your trusted package manager first (`brew install minisign` on macOS; `sudo apt-get install minisign` on Debian/Ubuntu). The installer verifies the signed release manifest before extracting or running the download.
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
@@ -211,12 +213,14 @@ You may genuinely want this service - but only after you've made an explicit dec
 
 ## Install
 
-**macOS / Linux (one-liner):**
+**macOS / Linux:** install `minisign` from a trusted package manager first, then:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
+
+Remote shell installs require a valid `SHA256SUMS.minisig` under the pinned release key plus a matching archive checksum. Missing verifier, signature, or verification failure stops before extraction; there is no unsigned remote fallback. The installer script itself remains the bootstrap trust anchor, so review or pin it when your environment requires reproducible installation. `LOCAL_TARBALL` is an explicit unsigned-development path for your own trusted builds, not a release-verification alternative. See [ADR 0145-install-signature-trust](./docs/adr/0145-install-signature-trust.md).
 
 Auto-detects your agents (Claude Code, Codex, Cursor), registers hooks, and requests daemon startup. Follow the shell-specific activation command printed by the installer, or open a new terminal. Restart already-running agents to load their hooks, then run `agentjail doctor` before relying on protection.
 

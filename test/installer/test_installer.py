@@ -1,5 +1,7 @@
 """Run only fixture binaries in isolated homes; never install a real agent or service."""
 import io
+import hashlib
+import re
 import os
 from pathlib import Path
 import platform
@@ -8,6 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +45,7 @@ class InstallerTest(unittest.TestCase):
         self.script = ROOT / "install.sh"
 
     def install(self):
-        return subprocess.run(["sh", str(self.script)], env=self.env, text=True, capture_output=True, timeout=20)
+        return subprocess.run(["/bin/sh", str(self.script)], env=self.env, text=True, capture_output=True, timeout=20)
 
     def assert_ok(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -155,6 +158,88 @@ esac
         for flag in ["--connect-timeout 10", "--max-time 120", "--retry 2", "--retry-max-time 240"]:
             self.assertIn(flag, args)
         self.assertFalse((self.home / "executed").exists())
+
+    def prepare_signed_release(self):
+        minisign = shutil.which("minisign")
+        if not minisign:
+            self.skipTest("minisign required; installer CI installs it")
+        (self.bin / "minisign").symlink_to(minisign)
+        self.fake_curl()
+        del self.env["LOCAL_TARBALL"]
+        manifest = self.assets / "SHA256SUMS"
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        manifest.write_text(f"{digest}  {self.archive.name}\n")
+        public = self.base / "fixture.pub"
+        private = self.base / "fixture.key"
+        for args in [
+            ["-G", "-W", "-p", str(public), "-s", str(private)],
+            ["-S", "-s", str(private), "-m", str(manifest), "-q"],
+        ]:
+            result = subprocess.run([minisign] + args, text=True, capture_output=True, env=self.env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        script = (ROOT / "install.sh").read_text()
+        script, replacements = re.subn(r"SIGNING_PUBLIC_KEY='[^']+'", "SIGNING_PUBLIC_KEY='" + public.read_text().splitlines()[1] + "'", script)
+        self.assertEqual(replacements, 1)
+        self.script = self.base / "fixture-install.sh"
+        self.script.write_text(script)
+        tar = shutil.which("tar")
+        spy = self.bin / "tar"
+        spy.write_text('#!/bin/sh\nprintf extracted >> "$HOME/extracted"\nexec ' + shlex.quote(tar) + ' "$@"\n')
+        spy.chmod(0o755)
+
+    def assert_payload_untouched(self, result):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.home / "extracted").exists(), "untrusted payload extracted")
+        self.assertFalse((self.home / "executed").exists(), "untrusted payload executed")
+        self.assertFalse((self.home / ".agentjail/bin").exists(), "untrusted payload installed")
+
+    def test_signed_release_verified_before_install(self):
+        self.prepare_signed_release()
+        result = self.install()
+        self.assert_ok(result)
+        self.assertIn("release signature verified", result.stdout)
+        self.assertTrue((self.home / "executed").exists())
+        self.assertTrue((self.home / "extracted").exists())
+        requests = (self.home / "curl-args").read_text().splitlines()
+        self.assertEqual(len(requests), 3)
+        for request in requests:
+            self.assertIn("--connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 240", request)
+
+    def test_modified_manifest_is_rejected_before_extraction(self):
+        self.prepare_signed_release()
+        manifest = self.assets / "SHA256SUMS"
+        manifest.write_text(manifest.read_text() + "# tampered\n")
+        result = self.install()
+        self.assert_payload_untouched(result)
+        self.assertIn("signature verification failed", result.stderr)
+
+    def test_missing_signature_is_rejected_before_extraction(self):
+        self.prepare_signed_release()
+        (self.assets / "SHA256SUMS.minisig").unlink()
+        result = self.install()
+        self.assert_payload_untouched(result)
+        self.assertIn("signature unavailable", result.stderr)
+
+    def test_modified_archive_is_rejected_before_extraction(self):
+        self.prepare_signed_release()
+        self.archive.write_bytes(self.archive.read_bytes() + b"tampered")
+        result = self.install()
+        self.assert_payload_untouched(result)
+        self.assertIn("SHA256 mismatch", result.stderr)
+
+    def test_missing_verifier_has_no_unsigned_fallback(self):
+        del self.env["LOCAL_TARBALL"]
+        self.env["PATH"] = str(self.bin)
+        result = self.install()
+        self.assert_payload_untouched(result)
+        self.assertIn("minisign is required", result.stderr)
+        self.assertFalse((self.home / "curl-args").exists())
+
+    def test_installer_key_matches_release_build_key(self):
+        installer_key = re.search(r"SIGNING_PUBLIC_KEY='([^']+)'", (ROOT / "install.sh").read_text()).group(1)
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        build_key = re.search(r"SigningPubKey=([^ ]+)", release).group(1)
+        self.assertEqual(installer_key, build_key)
 
 
 if __name__ == "__main__":

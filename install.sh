@@ -8,7 +8,7 @@
 #   AGENTJAIL_VERSION     — pin to a specific tag (default: latest)
 #   AGENTJAIL_HOME        — installation root (default: $HOME/.agentjail)
 #   AGENTJAIL_DRY_RUN     — set to 1 to skip actual install; verify download, signature, and checksum only
-#   LOCAL_TARBALL          — path to a local tarball; skips network fetch (for testing)
+#   LOCAL_TARBALL         — trusted local development tarball; skips release authentication
 #
 # POSIX sh — no bash-isms; passes shellcheck.
 set -eu
@@ -17,6 +17,16 @@ REPO="LuD1161/agentjail"
 VERSION="${AGENTJAIL_VERSION:-latest}"
 INSTALL_DIR="${AGENTJAIL_HOME:-$HOME/.agentjail}/bin"
 DRY_RUN="${AGENTJAIL_DRY_RUN:-0}"
+# Must match release.yml and the updater's release key. See ADR 0145-install-signature-trust.
+SIGNING_PUBLIC_KEY='RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ'
+
+if [ -z "${LOCAL_TARBALL:-}" ] && ! command -v minisign >/dev/null 2>&1; then
+    echo "agentjail installer: minisign is required to authenticate release downloads." >&2
+    echo "  Install minisign through your trusted package manager, then retry." >&2
+    echo "  macOS: brew install minisign; Debian/Ubuntu: sudo apt-get install minisign" >&2
+    echo "  No downloaded binaries have been executed or installed." >&2
+    exit 7
+fi
 
 # Network work has bounded retries and deadlines; no download can wait forever.
 fetch() {
@@ -178,7 +188,8 @@ TARBALL="agentjail-${VERSION}-${PLATFORM}.tar.gz"
 
 if [ -n "${LOCAL_TARBALL:-}" ]; then
     # Testing path: use a local tarball instead of fetching from GitHub.
-    echo "using local tarball: ${LOCAL_TARBALL}"
+    echo "using trusted local development tarball: ${LOCAL_TARBALL}"
+    echo "⚠️  LOCAL_TARBALL skips release signature verification; use only your own trusted build." >&2
     cp "$LOCAL_TARBALL" "$TMP/$TARBALL"
 
     # Generate a local checksum manifest for the dry-run verification path.
@@ -196,6 +207,15 @@ else
         echo "agentjail installer: checksum download failed; retry the installer." >&2
         exit 3
     fi
+    if ! fetch -o "$TMP/SHA256SUMS.minisig" "${URL_BASE}/SHA256SUMS.minisig"; then
+        echo "agentjail installer: release signature unavailable; refusing this release." >&2
+        exit 7
+    fi
+    if ! minisign -V -m "$TMP/SHA256SUMS" -x "$TMP/SHA256SUMS.minisig" -P "$SIGNING_PUBLIC_KEY" -q; then
+        echo "agentjail installer: release signature verification failed; nothing extracted or executed." >&2
+        exit 7
+    fi
+    echo "🔐  release signature verified"
 fi
 
 # --- Verify SHA256 ---
