@@ -839,8 +839,8 @@ func sendAndReceive(conn net.Conn, req daemonRequest) (daemonResponse, error) {
 	}
 
 	scanner := bufio.NewScanner(conn)
-	// 1 MB line buffer matches the daemon's scanner buffer.
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	// Grow on demand while retaining the daemon's 1 MiB frame limit.
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
 
 	if !scanner.Scan() {
 		scanErr := scanner.Err()

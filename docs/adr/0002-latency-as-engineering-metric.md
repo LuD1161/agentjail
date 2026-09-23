@@ -95,3 +95,12 @@ UX metric.
 > partial `elapsed_us`. Otherwise the number is misleading and we have to
 > explain "yes it says 21 ms but it's actually ~10 ms total" — which is worse
 > than just not showing the number.
+
+### Hook transport allocation and framing
+
+Hook and daemon scanners start at 4 KiB and grow only when a frame needs it;
+the 1 MiB maximum is unchanged. The daemon decodes its routing envelope once
+before decoding the selected request type. `BenchmarkHookConnection` reports
+full connection cost and allocations for small and large benign tool inputs.
+It isolates transport/recording overhead with a trivial evaluator and is not an
+OPA or end-to-end agent latency claim.

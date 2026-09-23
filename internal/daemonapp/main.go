@@ -434,8 +434,8 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	scanner := bufio.NewScanner(conn)
-	// 1 MB line buffer — large enough for realistic tool_input payloads.
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	// Grow on demand while retaining the 1 MiB frame limit.
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
 
 	enc := json.NewEncoder(conn)
 
@@ -449,7 +449,7 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 	for {
 		// Reset the idle read deadline before each read (P9). A connection
 		// that opens and then sends nothing (or trickles bytes slowly) is
-		// cut off instead of holding a goroutine + 1 MB scanner buffer
+		// cut off instead of holding a goroutine + scanner buffer
 		// indefinitely; a connection making steady requests is unaffected
 		// since the deadline is pushed out again after each one completes.
 		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
@@ -463,33 +463,24 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		if len(line) == 0 {
 			continue
 		}
-		{
-			var probe struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal(line, &probe) == nil && probe.Type == hostproxy.RequestType {
-				s.handleHostProxyExec(ctx, conn, enc, line)
-				continue
-			}
+		var probe struct {
+			Type string `json:"type"`
+		}
+		probeErr := json.Unmarshal(line, &probe)
+		if probeErr == nil && probe.Type == hostproxy.RequestType {
+			s.handleHostProxyExec(ctx, conn, enc, line)
+			continue
 		}
 
 		// Route grant_request to the grant server.
-		{
-			var probe struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal(line, &probe) == nil && probe.Type == approvalexec.RedeemRequestType {
-				s.handleApprovalRedeem(ctx, conn, enc, line)
-				continue
-			}
+		if probeErr == nil && probe.Type == approvalexec.RedeemRequestType {
+			s.handleApprovalRedeem(ctx, conn, enc, line)
+			continue
 		}
 
 		// Route grant_request to the grant server.
 		if s.grantSrv != nil {
-			var probe struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal(line, &probe) == nil && probe.Type == string(grantctl.ReqGrantRequest) {
+			if probeErr == nil && probe.Type == string(grantctl.ReqGrantRequest) {
 				var greq grantctl.Request
 				if err := json.Unmarshal(line, &greq); err != nil {
 					_ = enc.Encode(grantctl.Response{OK: false, Error: "malformed grant request"})
@@ -520,43 +511,38 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 		//
 		// The peer-UID check stays as defence-in-depth against a
 		// different-UID peer, which is all it can honestly do.
-		{
-			var probe struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal(line, &probe) == nil && probe.Type == wire.ControlType {
-				peerUID, uidErr := extractPeerUID(conn)
-				if !peerUIDAllowed(peerUID, os.Getuid(), uidErr) {
-					slog.Warn("control socket: rejecting connection", "peer_uid", peerUID, "daemon_uid", os.Getuid(), "err", uidErr)
-					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unauthorized"})
-					continue
-				}
-
-				var creq wire.ControlRequest
-				if err := json.Unmarshal(line, &creq); err != nil {
-					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "malformed control request"})
-					continue
-				}
-				switch creq.Op {
-				case wire.ControlOpReload:
-					// Refused here on purpose (ADR 0066) — see the block
-					// comment above. This socket is reachable by the sandboxed
-					// agent by design, and the peer-UID check cannot exclude a
-					// same-UID peer, so serving a Rego recompile here is a
-					// fail-open DoS lever. The CLI uses
-					// grantctl.ReqDaemonReload on the sandbox-denied control
-					// socket instead.
-					slog.Warn("control reload refused on the agent socket — use the daemon control socket", "peer_uid", peerUID)
-					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "reload is not served on the agent socket; use the daemon control socket"})
-				case wire.ControlOpPing:
-					// Side-effect-free liveness probe for the single-instance
-					// guard (see singleton.go). Reply OK and do nothing else.
-					_ = enc.Encode(wire.ControlResponse{OK: true, Version: buildinfo.Version})
-				default:
-					_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unknown control op: " + creq.Op})
-				}
+		if probeErr == nil && probe.Type == wire.ControlType {
+			peerUID, uidErr := extractPeerUID(conn)
+			if !peerUIDAllowed(peerUID, os.Getuid(), uidErr) {
+				slog.Warn("control socket: rejecting connection", "peer_uid", peerUID, "daemon_uid", os.Getuid(), "err", uidErr)
+				_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unauthorized"})
 				continue
 			}
+
+			var creq wire.ControlRequest
+			if err := json.Unmarshal(line, &creq); err != nil {
+				_ = enc.Encode(wire.ControlResponse{OK: false, Error: "malformed control request"})
+				continue
+			}
+			switch creq.Op {
+			case wire.ControlOpReload:
+				// Refused here on purpose (ADR 0066) — see the block
+				// comment above. This socket is reachable by the sandboxed
+				// agent by design, and the peer-UID check cannot exclude a
+				// same-UID peer, so serving a Rego recompile here is a
+				// fail-open DoS lever. The CLI uses
+				// grantctl.ReqDaemonReload on the sandbox-denied control
+				// socket instead.
+				slog.Warn("control reload refused on the agent socket — use the daemon control socket", "peer_uid", peerUID)
+				_ = enc.Encode(wire.ControlResponse{OK: false, Error: "reload is not served on the agent socket; use the daemon control socket"})
+			case wire.ControlOpPing:
+				// Side-effect-free liveness probe for the single-instance
+				// guard (see singleton.go). Reply OK and do nothing else.
+				_ = enc.Encode(wire.ControlResponse{OK: true, Version: buildinfo.Version})
+			default:
+				_ = enc.Encode(wire.ControlResponse{OK: false, Error: "unknown control op: " + creq.Op})
+			}
+			continue
 		}
 
 		var req policyeval.Request
