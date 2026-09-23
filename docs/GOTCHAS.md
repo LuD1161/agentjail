@@ -1359,3 +1359,11 @@ Go, whose cache tracks source and embedded assets. Installation also preserves
 the install command's exit status instead of filtering it through a pipeline.
 Verify that build recipes run after a previous build; comparing copies alone
 cannot establish that either copy reflects the source.
+
+## Damaged consent must not become fresh consent
+
+Loading valid opt-out settings passed tests, but invalid JSON or missing consent
+metadata took the new-install path and overwrote an existing opt-out with
+`enabled: true`. Only absence now initializes enabled defaults; invalid existing
+state is preserved and disables telemetry until an explicit CLI repair. Test
+corrupt and unreadable settings as well as the successful configuration path.

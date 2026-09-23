@@ -1041,6 +1041,10 @@ agentjail telemetry view      # see what's queued
 agentjail telemetry disable   # opt out (or: AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS=false)
 ```
 
+Invalid existing telemetry consent disables collection until explicitly repaired
+with `agentjail telemetry enable` or `disable`; `agentjail telemetry status`
+reports the problem.
+
 Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.md).
 
 ---
