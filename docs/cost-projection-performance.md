@@ -26,19 +26,42 @@ are excluded; they may add additional costs in production.
 
 ## Results
 
-Apple M2 Pro, darwin/arm64, 2026-09-23; medians of three runs, three iterations
-per run. No production optimization was applied in this measurement commit.
+Apple M2 Pro, darwin/arm64, Go 1.26.3, 2026-09-23; medians of three runs, three
+iterations per run. No production optimization was applied. These measurements
+replace the preliminary 1k/10k results.
 
 | Lifetime events | Sessions / projection rows | Refresh time | Allocated bytes/op | Allocations/op |
 | ---: | ---: | ---: | ---: | ---: |
-| 1,000 | 10 | 4.76 ms | 2,174,178 | 24,275 |
-| 10,000 | 100 | 45.73 ms | 26,260,536 | 241,526 |
+| 1,000 | 10 | 4.412 ms | 2,174,216 | 24,277 |
+| 10,000 | 100 | 42.931 ms | 26,260,536 | 241,526 |
+| 100,000 | 1,000 | 442.661 ms | 283,837,224 | 2,413,716 |
 
-The 1,000-event time range was 4.62–5.01 ms; 10,000 events took
-45.27–49.70 ms. Ten times the lifetime history incurred approximately 9.6 times
-the runtime and 12.1 times the allocation volume despite unchanged output.
-These small synthetic runs establish scaling, not a production p95, peak heap,
-or an extrapolation to millions of events.
+The run means ranged from 4.261–4.421 ms, 42.854–43.449 ms, and
+441.236–444.608 ms respectively. A hundred times the lifetime history incurs
+about a hundred times the runtime, even with unchanged output. Allocated bytes
+are cumulative allocations per operation, not peak heap or retained memory.
+
+## Writer contention probe
+
+```sh
+go test ./internal/costanalytics -run '^$' -bench '^BenchmarkCostProjectionWriterContention$' -benchtime=1x -count=3 -benchmem -cpu=1,12
+```
+
+The probe compares an idle indexer against continuously rebuilding unchanged
+history for at least two seconds. One writer uses the same singleton store and
+attempts a real `RecordDecision` every 2 ms. Assertions verify every completed
+write and unchanged event/projection counts. This intentionally stresses rebuild
+overlap; it does not reproduce the production refresh frequency.
+
+The writer is a closed-loop probe: blocked operations and scheduler delays drop
+ticker samples. Latency excludes time before the write starts, so sample counts
+and maximum start gaps are essential context. It is not an open-loop arrival
+p95. Phase times are wall time, including scheduling and pool waits; residual
+computation is not a CPU profile. The last rebuild completes before the window
+ends, so windows can exceed two seconds.
+
+See [the measurement report](performance-measurements-20260923.md) for both
+single-core and 12-core results, sample counts, phases, and raw measurements.
 
 ## Follow-up worth evaluating
 

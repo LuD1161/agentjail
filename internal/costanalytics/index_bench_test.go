@@ -15,7 +15,7 @@ import (
 // Measures unchanged lifetime-history projection work, excluding ingestion.
 // See ADR 0142-incremental-cost-index.
 func BenchmarkCostProjectionRefresh(b *testing.B) {
-	for _, count := range []int{1000, 10000} {
+	for _, count := range []int{1000, 10000, 100000} {
 		b.Run(fmt.Sprintf("events=%d", count), func(b *testing.B) {
 			ctx := context.Background()
 			db, err := store.Open(filepath.Join(b.TempDir(), "agentjail.db"))
