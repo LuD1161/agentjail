@@ -3,6 +3,7 @@ package mitm
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -354,5 +355,77 @@ func TestRequestStoreOwnerPIDRoundTrip(t *testing.T) {
 	}
 	if results[0].OwnerPID != 424242 {
 		t.Errorf("owner_pid: got %d, want 424242", results[0].OwnerPID)
+	}
+}
+
+func TestHistoryBeyondQueryCeiling(t *testing.T) {
+	store, err := NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	_, err = store.db.Exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10005)
+ INSERT INTO network_requests(ts, host, method, path, url, session_id, claude_session_id, policy_action)
+ SELECT '2026-09-22T00:00:00.000', 'example.com', 'GET', '/', 'https://example.com/', CASE WHEN x<4 THEN 'old-capture' ELSE 'recent' END,
+ CASE WHEN x<4 THEN 'old-session' ELSE '' END, CASE WHEN x=1 THEN 'deny' ELSE 'allow' END FROM n`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.Query(ctx, RequestFilter{ID: 1, Limit: 1})
+	if err != nil || len(rows) != 1 || rows[0].ID != 1 {
+		t.Fatalf("old detail: %+v %v", rows, err)
+	}
+	rows, err = store.Query(ctx, RequestFilter{Session: "old-session", Limit: 2})
+	if err != nil || len(rows) != 2 || rows[0].ID != 3 {
+		t.Fatalf("old session: %+v %v", rows, err)
+	}
+	rows, err = store.Query(ctx, RequestFilter{Session: "old-session", BeforeID: 2, Limit: 2})
+	if err != nil || len(rows) != 1 || rows[0].ID != 1 {
+		t.Fatalf("old page: %+v %v", rows, err)
+	}
+	count, err := store.CountMatching(ctx, RequestFilter{Session: "old-session", BeforeID: 2})
+	if err != nil || count != 3 {
+		t.Fatalf("count: %d %v", count, err)
+	}
+	summaries, err := store.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 2 || summaries[1].RequestCount != 3 || summaries[1].DenyCount != 1 {
+		t.Fatalf("summaries: %+v", summaries)
+	}
+	var id, parent, unused int
+	var plan string
+	err = store.db.QueryRow("EXPLAIN QUERY PLAN SELECT id FROM network_requests WHERE "+unifiedSessionExpression+" = ? AND id < ? ORDER BY id DESC LIMIT 2", "old-session", 4).Scan(&id, &parent, &unused, &plan)
+	if err != nil || !strings.Contains(plan, "idx_network_session_id") {
+		t.Fatalf("query plan: %q %v", plan, err)
+	}
+}
+
+func TestSessionSummaryUsesLatestNonemptyMetadata(t *testing.T) {
+	store, err := NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, row := range []RequestLog{
+		{Host: "a", Method: "GET", SessionID: "a", OwnerPID: 900, Agent: "z-agent", Cwd: "/old"},
+		{Host: "a", Method: "GET", SessionID: "a", OwnerPID: 100, Agent: "a-agent", Cwd: "/new"},
+		{Host: "a", Method: "GET", SessionID: "a"},
+	} {
+		if err := store.Log(&row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.db.Exec("UPDATE network_requests SET request_headers = 'invalid'"); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := store.Sessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].OwnerPID != 100 || summaries[0].Agent != "a-agent" || summaries[0].Cwd != "/new" {
+		t.Fatalf("metadata: %+v", summaries)
 	}
 }
