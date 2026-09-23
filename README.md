@@ -1116,3 +1116,7 @@ locally.
 The Network UI streams requests in ID order and catches up across polling pages,
 so traffic bursts larger than a single page remain visible. Each two-second
 poll drains up to ten 200-row pages and resumes from its cursor on the next poll.
+
+Monitor repository names and branches are cached by working directory for 30
+seconds, including unavailable repositories. Git metadata lookup has a 500 ms
+deadline and runs outside the live-event state lock.

@@ -1395,3 +1395,13 @@ rows even though ordinary endpoint tests passed.
   read oldest-first. Test more than two pages plus arrivals after catch-up.
   A transient query failure must retain the delivered cursor for retry; reopening
   a stream at the newest row silently skips the backlog.
+
+## An empty branch is not a cache state
+
+The Monitor fetched Git metadata for each historical session on every refresh.
+Live ingestion held its state mutex during Git subprocesses and retried on every
+event outside a Git repository because the empty branch meant “not loaded.”
+Functional tests passed without measuring subprocess count or lock progress.
+
+- **Rule:** key metadata by working directory, cache negative results with an
+  explicit expiry, bound subprocess time, and perform I/O outside state locks.

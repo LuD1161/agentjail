@@ -5,10 +5,8 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -93,9 +91,10 @@ type StateSnapshot struct {
 
 // Store is the thread-safe in-memory state for the UI server.
 type Store struct {
-	mu       sync.RWMutex
-	sessions map[string]*SessionState
-	events   []EvalLine // ring buffer, capped at maxEvents
+	repositories repositoryCache
+	mu           sync.RWMutex
+	sessions     map[string]*SessionState
+	events       []EvalLine // ring buffer, capped at maxEvents
 }
 
 // NewStore creates an empty Store.
@@ -117,6 +116,7 @@ func (s *Store) Ingest(raw []byte) (EvalLine, bool) {
 		return EvalLine{}, false
 	}
 
+	info := s.repositories.get(context.Background(), line.CWD)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,9 +145,7 @@ func (s *Store) Ingest(raw []byte) (EvalLine, bool) {
 		}
 		if line.CWD != "" {
 			sess.CWD = line.CWD
-			if sess.Branch == "" {
-				sess.Branch, sess.RepoName = gitInfo(line.CWD)
-			}
+			sess.Branch, sess.RepoName = info.branch, info.name
 		}
 	}
 
@@ -183,23 +181,4 @@ func (s *Store) Snapshot() StateSnapshot {
 	snap.TotalDecisions = snap.TotalAllow + snap.TotalDeny + snap.TotalAsk
 
 	return snap
-}
-
-// gitInfo runs git to get the branch name and repo basename for a directory.
-// Uses --git-common-dir so worktrees resolve to the real repo, not the
-// worktree directory. Returns ("", "") on any failure.
-func gitInfo(cwd string) (branch, repoName string) {
-	b, err := exec.Command("git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return "", ""
-	}
-	branch = strings.TrimSpace(string(b))
-
-	g, err := exec.Command("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
-	if err != nil {
-		return branch, ""
-	}
-	gitDir := strings.TrimSpace(string(g))
-	repoName = filepath.Base(filepath.Dir(gitDir))
-	return branch, repoName
 }

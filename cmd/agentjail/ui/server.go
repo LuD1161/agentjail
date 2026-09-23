@@ -59,11 +59,12 @@ import (
 
 // Server is the local web UI HTTP server.
 type Server struct {
-	addr       string
-	logPath    string
-	dbPath     string
-	editPolicy bool
-	version    string
+	repositories repositoryCache
+	addr         string
+	logPath      string
+	dbPath       string
+	editPolicy   bool
+	version      string
 
 	// trustedHosts allow-lists non-loopback Host/Origin values for the rebinding
 	// guard. Empty = loopback only (the default). Dev opt-in via `--trusted-host`
@@ -1136,6 +1137,7 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 	}
 	sessionByID := make(map[string]*SessionState, len(sessions))
 	snap := StateSnapshot{Sessions: make([]*SessionState, 0, len(sessions))}
+	repositories := make(map[string]repositoryInfo)
 	for _, sess := range sessions {
 		ss := &SessionState{
 			ID:        sess.SessionID,
@@ -1152,7 +1154,12 @@ func (s *Server) sqliteSnapshot(ctx context.Context, f localstore.Filter) (State
 			ss.LastEvent = ss.LastSeen.UTC().Format(time.RFC3339)
 		}
 		if ss.CWD != "" {
-			ss.Branch, ss.RepoName = gitInfo(ss.CWD)
+			info, found := repositories[ss.CWD]
+			if !found {
+				info = s.repositories.get(ctx, ss.CWD)
+				repositories[ss.CWD] = info
+			}
+			ss.Branch, ss.RepoName = info.branch, info.name
 		}
 		sessionByID[sess.SessionID] = ss
 		snap.Sessions = append(snap.Sessions, ss)
