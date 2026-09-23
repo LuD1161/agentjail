@@ -1376,3 +1376,12 @@ clock processes also inflated measured hook latency. The gate now times hook
 subprocesses from one monotonic clock, validates their decisions, exercises
 repeated and unique allow/deny/ask inputs, and exits nonzero on p95 misses.
 A deterministic test verifies that a slow tail changes the exit status.
+
+## Installer success must describe observed state
+
+The installer test suite passed while service-start errors were swallowed and
+both the Go summary and shell wrapper still printed readiness. A partial hook
+installation could also return success. Shell setup must finish so recovery is
+possible, but its success must not erase the component failure or claim that
+policy enforcement is active. Test the final exit status and user-visible text,
+including the unavailable-supervisor and partial-registration paths.

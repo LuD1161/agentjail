@@ -178,7 +178,7 @@ func TestInstallAndStartDaemonServiceLinuxAvailable(t *testing.T) {
 	if !strings.Contains(out, "systemd --user unit installed") {
 		t.Errorf("output missing unit-installed step\ngot:\n%s", out)
 	}
-	if !strings.Contains(out, "daemon started (systemd --user)") {
+	if !strings.Contains(out, "daemon start requested (systemd --user)") {
 		t.Errorf("output missing daemon-started step\ngot:\n%s", out)
 	}
 }
@@ -199,8 +199,8 @@ func TestInstallAndStartDaemonServiceLinuxUnavailable(t *testing.T) {
 	logPath := filepath.Join(home, ".agentjail", "daemon.log")
 	crashLogPath := filepath.Join(home, ".agentjail", "crash.log")
 
-	if err := installAndStartDaemonService(home, daemonDst, rulesD, logPath, crashLogPath, &buf); err != nil {
-		t.Fatalf("installAndStartDaemonService: %v", err)
+	if err := installAndStartDaemonService(home, daemonDst, rulesD, logPath, crashLogPath, &buf); err == nil {
+		t.Fatal("missing supervisor session must report incomplete setup")
 	}
 
 	unitDst := filepath.Join(systemdUserUnitDir(home), systemdUnitFilename)
@@ -221,11 +221,9 @@ func TestInstallAndStartDaemonServiceLinuxUnavailable(t *testing.T) {
 	}
 }
 
-// TestInstallAndStartDaemonServiceLinuxEnableStartFailureNonFatal verifies
-// that a failure from systemctlUserEnableStartFn does not fail the install
-// (mirrors the launchd behavior on macOS, where a launchctl load failure is
-// logged but non-fatal).
-func TestInstallAndStartDaemonServiceLinuxEnableStartFailureNonFatal(t *testing.T) {
+// TestInstallAndStartDaemonServiceLinuxEnableStartFailure verifies
+// guards against claiming readiness after a supervisor failure.
+func TestInstallAndStartDaemonServiceLinuxEnableStartFailure(t *testing.T) {
 	withCurrentGOOS(t, "linux")
 	stubSystemdAvailable(t, true)
 	stubSystemctlEnableStart(t, errors.New("simulated systemctl failure"))
@@ -237,8 +235,11 @@ func TestInstallAndStartDaemonServiceLinuxEnableStartFailureNonFatal(t *testing.
 	logPath := filepath.Join(home, ".agentjail", "daemon.log")
 	crashLogPath := filepath.Join(home, ".agentjail", "crash.log")
 
-	if err := installAndStartDaemonService(home, daemonDst, rulesD, logPath, crashLogPath, &buf); err != nil {
-		t.Fatalf("installAndStartDaemonService should not fail when enable/start fails: %v", err)
+	if err := installAndStartDaemonService(home, daemonDst, rulesD, logPath, crashLogPath, &buf); err == nil || !strings.Contains(err.Error(), "simulated systemctl failure") {
+		t.Fatalf("startup failure must propagate: %v", err)
+	}
+	if strings.Contains(buf.String(), "daemon start requested") || strings.Contains(buf.String(), "daemon started") {
+		t.Fatal("failed startup claimed success: " + buf.String())
 	}
 }
 
@@ -325,5 +326,21 @@ func TestAllowUnsupportedFlagStillParses(t *testing.T) {
 	_, _, _, allowUnsupported := parseInstallFlags([]string{"--allow-unsupported"})
 	if !allowUnsupported {
 		t.Error("expected allowUnsupported=true for --allow-unsupported flag")
+	}
+}
+
+func TestInstallAndStartDaemonServiceDarwinFailure(t *testing.T) {
+	withCurrentGOOS(t, "darwin")
+	original := installLaunchctlLoadFn
+	installLaunchctlLoadFn = func(string) error { return errors.New("simulated launchctl failure") }
+	t.Cleanup(func() { installLaunchctlLoadFn = original })
+	home := t.TempDir()
+	var buf bytes.Buffer
+	err := installAndStartDaemonService(home, "/fixture/daemon", "/fixture/rules", "/fixture/log", "/fixture/crash", &buf)
+	if err == nil || !strings.Contains(err.Error(), "simulated launchctl failure") {
+		t.Fatalf("startup error = %v", err)
+	}
+	if strings.Contains(buf.String(), "daemon started") || strings.Contains(buf.String(), "daemon start requested") {
+		t.Fatal(buf.String())
 	}
 }
