@@ -40,7 +40,10 @@ missing release assets are publication failures rather than warnings.
 The minisign command contract was checked on 2026-09-22 with installed minisign
 0.12, the [official usage reference](https://jedisct1.github.io/minisign/), and
 live fixture signing/verification using `-V -m FILE -x SIGNATURE -P KEY -q`.
-Installer CI runs those real cryptographic checks on macOS and Linux.
+The dedicated `installer.yml` CI job installs minisign and fish independently,
+checks both prerequisites, and runs those real cryptographic checks on macOS
+and Linux. A fixture executes the release signing step without credentials and
+requires refusal before publication.
 
 ## Consequences
 

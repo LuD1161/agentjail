@@ -217,17 +217,26 @@ jobs:
           cat SHA256SUMS
 
       - name: sign SHA256SUMS with minisign
-        if: ${{ env.MINISIGN_KEY != '' }}
         env:
           MINISIGN_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
         run: |
+          set -eu
+          if [ -z "$MINISIGN_KEY" ]; then
+            echo "MINISIGN_PRIVATE_KEY is required; refusing to publish an unsigned release." >&2
+            exit 1
+          fi
           sudo apt-get update -qq && sudo apt-get install -yqq minisign
-          echo "$MINISIGN_KEY" | base64 -d > /tmp/minisign.key
-          minisign -S -s /tmp/minisign.key -m dist/SHA256SUMS \
+          umask 077
+          signing_key=$(mktemp)
+          trap 'rm -f "$signing_key"' EXIT
+          printf '%s' "$MINISIGN_KEY" | base64 -d > "$signing_key"
+          minisign -S -s "$signing_key" -m dist/SHA256SUMS \
             -x dist/SHA256SUMS.minisig \
-            -t "agentjail ${{ github.ref_name }}" -q
-          rm -f /tmp/minisign.key
-          echo "SHA256SUMS.minisig created"
+            -t "agentjail ${{ github.ref_name }}" -q </dev/null
+          minisign -V -m dist/SHA256SUMS -x dist/SHA256SUMS.minisig \
+            -P 'RWRg/Bbl+U571C1qv/08AwUwlvf6zG4lYzV8e0QHFd0FrjYTmImUoRpQ' -q
+          test -s dist/SHA256SUMS.minisig
+          echo "SHA256SUMS.minisig verified"
 
       - name: extract CHANGELOG section for this release
         id: changelog

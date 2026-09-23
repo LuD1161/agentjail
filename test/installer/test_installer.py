@@ -235,6 +235,16 @@ esac
         self.assertIn("minisign is required", result.stderr)
         self.assertFalse((self.home / "curl-args").exists())
 
+    def test_release_job_refuses_missing_signing_key(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        step = workflow.split("      - name: sign SHA256SUMS with minisign\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertNotIn("\n        if:", step, "signing must never be an optional release step")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        env = dict(self.env, MINISIGN_KEY="")
+        result = subprocess.run(["/bin/sh", "-c", script], env=env, text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing to publish an unsigned release", result.stderr)
+
     def test_installer_key_matches_release_build_key(self):
         installer_key = re.search(r"SIGNING_PUBLIC_KEY='([^']+)'", (ROOT / "install.sh").read_text()).group(1)
         release = (ROOT / ".github/workflows/release.yml").read_text()
