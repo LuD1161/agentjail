@@ -1349,3 +1349,13 @@ See ADR 0144-refresh-installed-policies.
 When you fix something that was invisible to a green suite, add an entry: what
 looked fine, what was actually happening, and the general rule. Link the ticket
 and the ADR. Keep it short — this file earns its keep by being read.
+
+## Existing build artifacts can hide changed source
+
+`make build` and `make dev-install` treated existing binary files as current
+without source prerequisites. Tests passed and installation hashes matched, but
+both hashes described the same stale binary. Binary targets now always invoke
+Go, whose cache tracks source and embedded assets. Installation also preserves
+the install command's exit status instead of filtering it through a pipeline.
+Verify that build recipes run after a previous build; comparing copies alone
+cannot establish that either copy reflects the source.
