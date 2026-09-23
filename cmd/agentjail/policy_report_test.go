@@ -101,3 +101,24 @@ func TestPolicyDisplayName(t *testing.T) {
 		t.Fatalf("policyDisplayName = %q", got)
 	}
 }
+
+func TestPolicyReportExposesConfiguredMode(t *testing.T) {
+	for _, mode := range []string{"monitor", "enforce"} {
+		t.Run(mode, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, ".agentjail"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".agentjail", "policy.yaml"), []byte("enforcement: "+mode+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			report, err := collectPolicyReport(context.Background(), home, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(report.Enforcement) != mode {
+				t.Fatalf("mode = %q, want %q", report.Enforcement, mode)
+			}
+		})
+	}
+}

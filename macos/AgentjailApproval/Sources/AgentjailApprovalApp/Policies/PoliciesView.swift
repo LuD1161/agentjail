@@ -82,6 +82,9 @@ private struct PolicyTable: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Active policies")
                         .font(.title3.bold())
+                    Text(snapshot.modeSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("Select a rule for its description, examples, match history, and Rego.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

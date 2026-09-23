@@ -137,3 +137,11 @@ Run the physical-Mac packaging check with:
 
 Build the customer bundle with `make macos-app`; follow
 `docs/runbooks/macos-tunnel-release.md` for Developer ID distribution.
+
+### Policy mode
+
+Policy verdicts default to evaluate-only on every platform. The Policies page
+shows the configured mode; network activity labels would-deny/would-ask matches.
+OS isolation and broker authorization remain independent. Enable policy blocking
+with global `enforcement: enforce`, restart the daemon, and start new sessions
+for the network mode to take effect. See ADR 0150-evaluate-only-default.

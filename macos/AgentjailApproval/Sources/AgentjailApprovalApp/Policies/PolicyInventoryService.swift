@@ -4,10 +4,24 @@ struct PolicyInventorySnapshot: Decodable, Equatable, Sendable {
     static let protocolVersion: UInt32 = 1
 
     let protocolVersion: UInt32
+    let enforcement: EnforcementMode?
     let historyAvailable: Bool
     let policies: [Policy]
     let sources: [Source]
     let breakdownLimited: Bool
+
+    enum EnforcementMode: String, Decodable, Equatable, Sendable {
+        case monitor
+        case enforce
+    }
+
+    var modeSummary: String {
+        switch enforcement {
+        case .monitor: "Configured: evaluate-only. Policy verdicts are logged; OS isolation remains independent."
+        case .enforce: "Configured: enforcement. Policy verdicts can block or request approval."
+        case nil: "Policy mode unavailable from this CLI version."
+        }
+    }
 
     struct Policy: Decodable, Equatable, Identifiable, Sendable {
         let id: String
@@ -77,6 +91,7 @@ struct PolicyInventorySnapshot: Decodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
+        case enforcement
         case historyAvailable = "history_available"
         case policies, sources
         case breakdownLimited = "breakdown_limited"
@@ -86,6 +101,7 @@ struct PolicyInventorySnapshot: Decodable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         protocolVersion = try values.decode(UInt32.self, forKey: .protocolVersion)
         guard protocolVersion == Self.protocolVersion else { throw PolicyInventoryError.unsupportedProtocol }
+        enforcement = try values.decodeIfPresent(EnforcementMode.self, forKey: .enforcement)
         historyAvailable = try values.decode(Bool.self, forKey: .historyAvailable)
         policies = try values.decode([Policy].self, forKey: .policies)
         sources = try values.decode([Source].self, forKey: .sources)

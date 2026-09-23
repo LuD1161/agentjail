@@ -37,6 +37,22 @@ struct PolicyInventoryServiceTests {
         }
     }
 
+    @Test(arguments: ["monitor", "enforce"])
+    func decodesConfiguredPolicyMode(mode: String) async throws {
+        let json = Self.validJSON.replacingOccurrences(
+            of: "\"protocol_version\": 1,",
+            with: "\"protocol_version\": 1, \"enforcement\": \"\(mode)\","
+        )
+        let snapshot = try await BundledPolicyInventoryService(runner: PolicyRunner(data: json)).inventory()
+        #expect(snapshot.enforcement?.rawValue == mode)
+    }
+
+    @Test func olderProjectionDoesNotClaimEnforcementMode() async throws {
+        let snapshot = try await BundledPolicyInventoryService(runner: PolicyRunner(data: Self.validJSON)).inventory()
+        #expect(snapshot.enforcement == nil)
+        #expect(snapshot.modeSummary == "Policy mode unavailable from this CLI version.")
+    }
+
     private static let validJSON = """
     {
       "protocol_version": 1,

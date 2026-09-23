@@ -31,11 +31,12 @@ type policyReportStore interface {
 }
 
 type policyReport struct {
-	ProtocolVersion  uint32               `json:"protocol_version"`
-	HistoryAvailable bool                 `json:"history_available"`
-	Policies         []policyReportRule   `json:"policies"`
-	Sources          []policyReportSource `json:"sources"`
-	BreakdownLimited bool                 `json:"breakdown_limited"`
+	Enforcement      config.EnforcementMode `json:"enforcement"`
+	ProtocolVersion  uint32                 `json:"protocol_version"`
+	HistoryAvailable bool                   `json:"history_available"`
+	Policies         []policyReportRule     `json:"policies"`
+	Sources          []policyReportSource   `json:"sources"`
+	BreakdownLimited bool                   `json:"breakdown_limited"`
 }
 
 type policyReportSource struct {
@@ -122,6 +123,7 @@ func collectPolicyReport(ctx context.Context, home string, history policyReportS
 	totals := map[string]store.PolicyMatchCount{}
 	breakdowns := map[string][]store.PolicySessionMatch{}
 	report := policyReport{
+		Enforcement:      cfg.Enforcement,
 		ProtocolVersion:  policyReportProtocolVersion,
 		HistoryAvailable: history != nil,
 		Policies:         []policyReportRule{},
