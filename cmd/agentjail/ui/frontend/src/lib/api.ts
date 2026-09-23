@@ -12,6 +12,7 @@ export interface RequestsListParams {
   session?: string | null
   limit?: number
   offset?: number
+  beforeId?: number | null
   host?: string
   method?: string
   status?: string
@@ -22,6 +23,7 @@ export interface RequestsListResponse {
   requests: RequestLog[]
   count?: number
   total?: number
+  has_more?: boolean
   unavailable?: boolean
 }
 
@@ -29,6 +31,7 @@ export function fetchRequests(
   params: RequestsListParams,
 ): Promise<RequestsListResponse> {
   const q = new URLSearchParams()
+  if (params.beforeId) q.set('before_id', String(params.beforeId))
   if (params.session) q.set('session', params.session)
   q.set('limit', String(params.limit ?? 50))
   q.set('offset', String(params.offset ?? 0))

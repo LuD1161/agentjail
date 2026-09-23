@@ -30,3 +30,6 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+Run `bun test` for the live-request retention and deduplication regressions. The
+frontend CI job runs these tests after the production build.

@@ -54,7 +54,7 @@ jobs:
   # This job is the only one that needs bun — it proves the SPA still builds and
   # that THIRD_PARTY_LICENSES covers the npm packages shipped inside the binary.
   frontend:
-    name: frontend (build + licenses)
+    name: frontend (build + tests + licenses)
     runs-on: ubuntu-latest
 
     steps:
@@ -71,6 +71,10 @@ jobs:
 
       - name: build web UI
         run: make ui
+
+      - name: test web UI
+        working-directory: cmd/agentjail/ui/frontend
+        run: bun test
 
       - name: go build with the real SPA embedded
         run: go build ./...

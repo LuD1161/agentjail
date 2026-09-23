@@ -7,11 +7,17 @@ import { SessionSidebar } from '@/components/session-sidebar'
 import { SplitPane } from '@/components/split-pane'
 import { DataTable } from '@/components/data-table'
 import { DataTableColumnHeader } from '@/components/data-table-column-header'
+import { Button } from '@/components/ui/button'
 import { RequestDetail } from '@/components/request-detail'
 import { useEventSource } from '@/hooks/use-event-source'
 import { fetchNetworkSessions, fetchRequests } from '@/lib/api'
+import { selectedRequestQuery } from '@/lib/selected-request'
+import { LIVE_REQUEST_LIMIT, mergeLiveRequests } from '@/lib/live-requests'
+import type { RequestsListResponse } from '@/lib/api'
 import { formatTime, formatBytes } from '@/lib/format'
 import type { RequestLog } from '@/types'
+
+const EMPTY_REQUESTS: RequestLog[] = []
 
 function methodBadgeClass(method: string) {
   switch (method.toUpperCase()) {
@@ -176,11 +182,21 @@ export function NetworkPage() {
     refetchInterval: 10000,
   })
 
+  const [historyBeforeId, setHistoryBeforeId] = React.useState<number | null>(null)
+  const live = historyBeforeId === null
   const requestsQuery = useQuery({
-    queryKey: ['requests'],
-    queryFn: () => fetchRequests({ limit: 200 }),
+    queryKey: ['requests', historyBeforeId ?? 'live'],
+    queryFn: () => fetchRequests({ limit: LIVE_REQUEST_LIMIT, beforeId: historyBeforeId }),
     refetchInterval: false,
+    gcTime: 0,
   })
+  const pending = React.useRef(new Map<number, RequestLog>())
+  const flushTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  React.useEffect(() => () => {
+    if (flushTimer.current !== null) clearTimeout(flushTimer.current)
+    flushTimer.current = null
+    pending.current.clear()
+  }, [historyBeforeId])
 
   const streamUrl = '/api/requests/stream'
 
@@ -189,22 +205,34 @@ export function NetworkPage() {
   useEventSource<RequestLog>(
     streamUrl,
     (incoming) => {
-      queryClient.setQueryData(
-        ['requests'],
-        (old: { requests: RequestLog[] } | undefined) => {
-          if (!old) return old
-          if (old.requests.some((r) => r.id === incoming.id)) return old
-          return { ...old, requests: [incoming, ...old.requests] }
-        },
-      )
+      pending.current.set(incoming.id, incoming)
+      if (pending.current.size > LIVE_REQUEST_LIMIT) {
+        const oldest = pending.current.keys().next().value
+        if (oldest !== undefined) pending.current.delete(oldest)
+      }
+      if (flushTimer.current !== null) return
+      flushTimer.current = setTimeout(() => {
+        flushTimer.current = null
+        const batch = [...pending.current.values()]
+        pending.current.clear()
+        queryClient.setQueryData<RequestsListResponse>(
+          ['requests', 'live'],
+          (old) => old ? {
+            ...old,
+            requests: mergeLiveRequests(old.requests, batch),
+            has_more: old.has_more || old.requests.length + batch.length >= LIVE_REQUEST_LIMIT,
+          } : old,
+        )
+      }, 100)
     },
     {
+      enabled: live,
       onOpen: () => setConnected(true),
       onError: () => setConnected(false),
     },
   )
 
-  const allRequests = requestsQuery.data?.requests ?? []
+  const allRequests = requestsQuery.data?.requests ?? EMPTY_REQUESTS
 
   // Requests key off the network session id -- the same identity the sidebar
   // now lists. See AGE-252.
@@ -213,8 +241,11 @@ export function NetworkPage() {
     return allRequests.filter((r) => r.session_id === selectedSession)
   }, [allRequests, selectedSession])
 
-  const selectedRequest =
-    requests.find((r) => r.id === selectedRequestId) ?? null
+  const selectedQuery = useQuery(selectedRequestQuery(
+    selectedRequestId,
+    allRequests.find((request) => request.id === selectedRequestId),
+  ))
+  const selectedRequest = selectedQuery.data ?? null
 
   // Deny counts are not in the sessions payload; derive them from the loaded
   // rows, grouped by the same network session id.
@@ -248,7 +279,7 @@ export function NetworkPage() {
   }, [sessionsQuery.data?.sessions, denyBySession])
 
   return (
-    <Layout connected={connected}>
+    <Layout connected={connected && live}>
       <SplitPane direction="horizontal" defaultSize={300} minSize={150} maxSize={600}>
         <SessionSidebar
           sessions={sessions}
@@ -258,22 +289,44 @@ export function NetworkPage() {
           mode="network"
         />
         <SplitPane direction="vertical" defaultSize={selectedRequest ? 350 : 9999} minSize={150} maxSize={800}>
-          <DataTable
-            columns={columns}
-            data={requests}
-            defaultSorting={[{ id: 'ts', desc: true }]}
-            pageSize={50}
-            getRowId={(row) => row.id}
-            selectedRowId={selectedRequestId}
-            onRowClick={(row) =>
-              setSelectedRequestId(selectedRequestId === row.id ? null : row.id)
-            }
-            emptyMessage={
-              requestsQuery.data?.unavailable
-                ? 'Network store unavailable -- is agentjail-shield running?'
-                : 'No requests captured yet.'
-            }
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="flex flex-none items-center gap-3 border-b border-[#2a3040] px-3 py-2 text-xs text-[#9ca3af]">
+              <span>{live ? `Live · latest ${LIVE_REQUEST_LIMIT} requests` : 'History · live updates paused'}</span>
+              {!live && <Button variant="outline" size="sm" onClick={() => {
+                setSelectedRequestId(null)
+                setHistoryBeforeId(null)
+              }}>Back to live</Button>}
+              <Button variant="outline" size="sm"
+                disabled={requestsQuery.isFetching || !requestsQuery.data?.has_more || allRequests.length === 0}
+                onClick={() => {
+                  setSelectedRequestId(null)
+                  setHistoryBeforeId(allRequests[allRequests.length - 1].id)
+                }}>Older requests</Button>
+              {requestsQuery.isFetching && <span>Loading…</span>}
+              {requestsQuery.isError && <span>Could not load requests.</span>}
+              {selectedQuery.isFetching && selectedRequest === null && <span>Loading selected request…</span>}
+              {selectedQuery.isError && <span>Could not load the selected request.</span>}
+            </div>
+            <div className="min-h-0 flex-1">
+                <DataTable
+                  key={historyBeforeId ?? 'live'}
+                  columns={columns}
+                  data={requests}
+                  defaultSorting={[{ id: 'ts', desc: true }]}
+                  pageSize={50}
+                  getRowId={(row) => row.id}
+                  selectedRowId={selectedRequestId}
+                  onRowClick={(row) =>
+                    setSelectedRequestId(selectedRequestId === row.id ? null : row.id)
+                  }
+                  emptyMessage={
+                    requestsQuery.data?.unavailable
+                      ? 'Network store unavailable -- is agentjail-shield running?'
+                      : 'No requests captured yet.'
+                  }
+                />
+            </div>
+          </div>
           {selectedRequest ? (
             <RequestDetail
               req={selectedRequest}

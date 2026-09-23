@@ -298,6 +298,60 @@ func TestNetworkStreamPollIsBoundedAndCatchesUp(t *testing.T) {
 	}
 }
 
+func TestNetworkHistoryCursorSurvivesNewTraffic(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for n := 0; n < 650; n++ {
+		if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{netStore: st}
+	type page struct {
+		Requests []mitm.RequestLog `json:"requests"`
+		More     bool              `json:"has_more"`
+	}
+	read := func(url string) page {
+		t.Helper()
+		response := httptest.NewRecorder()
+		server.handleRequestsList(response, httptest.NewRequest(http.MethodGet, url, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("response = %d: %s", response.Code, response.Body.String())
+		}
+		var got page
+		if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := read("/api/requests?limit=500")
+	if len(first.Requests) != 500 || first.Requests[0].ID != 650 || !first.More {
+		t.Fatalf("first page length = %d, more = %v", len(first.Requests), first.More)
+	}
+	if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+		t.Fatal(err)
+	}
+	second := read("/api/requests?limit=500&before_id=151")
+	if len(second.Requests) != 150 || second.More {
+		t.Fatalf("second page length = %d, more = %v", len(second.Requests), second.More)
+	}
+	for n, row := range second.Requests {
+		if row.ID != int64(150-n) {
+			t.Fatalf("history skipped ID: %d", row.ID)
+		}
+	}
+	for _, cursor := range []string{"-1", "0", "invalid"} {
+		response := httptest.NewRecorder()
+		server.handleRequestsList(response, httptest.NewRequest(http.MethodGet, "/api/requests?before_id="+cursor, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid cursor %q accepted", cursor)
+		}
+	}
+}
+
 type interruptedStreamReader struct {
 	store *mitm.RequestStore
 	calls int
@@ -360,5 +414,43 @@ func TestNetworkStreamRetriesQueryFailureFromLastEmittedID(t *testing.T) {
 	last, err = streamRequestBatch(context.Background(), st, failedStreamWriter{writeErr}, 0)
 	if last != 0 || !errors.Is(err, writeErr) || errors.Is(err, errRequestStreamQuery) {
 		t.Fatalf("write failure cursor = %d, error = %v", last, err)
+	}
+}
+
+func TestNetworkDetailFindsRequestBeyondNewestPage(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for n := 0; n < netQueryCeiling+1; n++ {
+		if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET", SessionID: "capture", ClaudeSessionID: "canonical"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{netStore: st}
+	response := httptest.NewRecorder()
+	server.handleRequestDetail(response, httptest.NewRequest(http.MethodGet, "/api/requests/1", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("old detail status = %d: %s", response.Code, response.Body.String())
+	}
+	var row mitm.RequestLog
+	if err := json.Unmarshal(response.Body.Bytes(), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.ID != 1 || row.SessionID != "canonical" {
+		t.Fatalf("old detail = %+v", row)
+	}
+	for _, id := range []string{"0", "-1", "invalid"} {
+		response := httptest.NewRecorder()
+		server.handleRequestDetail(response, httptest.NewRequest(http.MethodGet, "/api/requests/"+id, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid ID %q accepted", id)
+		}
+	}
+	missing := httptest.NewRecorder()
+	server.handleRequestDetail(missing, httptest.NewRequest(http.MethodGet, "/api/requests/999999", nil))
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing ID status = %d", missing.Code)
 	}
 }

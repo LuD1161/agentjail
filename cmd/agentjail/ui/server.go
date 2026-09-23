@@ -1451,10 +1451,12 @@ func (s *Server) networkRows(r *http.Request, limit int) ([]mitm.RequestLog, err
 		return nil, err
 	}
 	q := r.URL.Query()
+	beforeID, _ := strconv.ParseInt(q.Get("before_id"), 10, 64)
 	rows, err := st.Query(r.Context(), mitm.RequestFilter{
-		Host:   q.Get("host"),
-		Method: q.Get("method"),
-		Limit:  limit,
+		BeforeID: beforeID,
+		Host:     q.Get("host"),
+		Method:   q.Get("method"),
+		Limit:    limit,
 	})
 	if err != nil {
 		return nil, err
@@ -1491,6 +1493,12 @@ func (s *Server) handleRequestsList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
 	q := r.URL.Query()
+	if value := q.Get("before_id"); value != "" {
+		if id, err := strconv.ParseInt(value, 10, 64); err != nil || id <= 0 {
+			writeJSONError(w, "before_id must be a positive request ID", http.StatusBadRequest)
+			return
+		}
+	}
 	limit, offset := 50, 0
 	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
 		limit = n
@@ -1517,7 +1525,7 @@ func (s *Server) handleRequestsList(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []mitm.RequestLog{}
 	}
-	writeJSON(w, map[string]any{"requests": rows, "count": len(rows), "total": total})
+	writeJSON(w, map[string]any{"requests": rows, "count": len(rows), "total": total, "has_more": offset+len(rows) < total})
 }
 
 // handleRequestDetail serves one row. Bodies are referenced by path, never
@@ -1531,7 +1539,7 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/requests/")
 	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		writeJSONError(w, "bad request id", http.StatusBadRequest)
 		return
 	}
@@ -1540,18 +1548,15 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
 		return
 	}
-	// No Get(id) on RequestStore; scan the newest page for it.
-	rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: netQueryCeiling})
+	rows, err := st.Query(r.Context(), mitm.RequestFilter{ID: id, Limit: 1})
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
 	}
 	unifySessionIDs(rows)
-	for _, rl := range rows {
-		if rl.ID == id {
-			writeJSON(w, rl)
-			return
-		}
+	if len(rows) != 0 {
+		writeJSON(w, rows[0])
+		return
 	}
 	http.NotFound(w, r)
 }

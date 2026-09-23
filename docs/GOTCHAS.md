@@ -1418,3 +1418,17 @@ after one second and successful results after one minute. Cancellation and
 deadline failures are never cached; healthy waiters retry when a coalesced
 lookup loses its initiating context. Policy reload clears cached roots. Cache
 freshness must account for filesystem changes and transient subprocess errors.
+
+---
+
+## Table pagination does not bound a live cache
+
+The Network table showed one page while its SSE handler retained and copied every
+request received since opening the tab. Ordinary rendering tests passed, but
+memory and per-event work grew throughout long sessions.
+
+- **Rule:** bound the live collection and pending update buffer independently of
+  visible pagination. Keep older data accessible through stable ID cursors and
+  discard inactive browser pages. Resolve the selected detail independently by
+  exact ID so eviction does not close it or break historical links. Test sustained
+  traffic and history during writes.

@@ -84,12 +84,14 @@ const (
 
 // RequestFilter selects requests for Query. Zero-value fields are not filtered on.
 type RequestFilter struct {
-	AfterID int64
-	Order   RequestOrder
-	Host    string
-	Method  string
-	Limit   int
-	Since   time.Duration
+	ID       int64
+	AfterID  int64
+	BeforeID int64
+	Order    RequestOrder
+	Host     string
+	Method   string
+	Limit    int
+	Since    time.Duration
 }
 
 // HostStats contains per-host aggregated traffic statistics.
@@ -417,12 +419,20 @@ func (s *RequestStore) hasColumn(ctx context.Context, name string) bool {
 	return false
 }
 
-// Query returns recent requests matching the filter, newest first.
+// Query returns matching requests in filter.Order, newest first by default.
 func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]RequestLog, error) {
 	var (
 		conds []string
 		args  []interface{}
 	)
+	if filter.ID > 0 {
+		conds = append(conds, "id = ?")
+		args = append(args, filter.ID)
+	}
+	if filter.BeforeID > 0 {
+		conds = append(conds, "id < ?")
+		args = append(args, filter.BeforeID)
+	}
 	if filter.AfterID > 0 {
 		conds = append(conds, "id > ?")
 		args = append(args, filter.AfterID)

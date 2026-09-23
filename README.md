@@ -1120,3 +1120,12 @@ poll drains up to ten 200-row pages and resumes from its cursor on the next poll
 Monitor repository names and branches are cached by working directory for 30
 seconds, including unavailable repositories. Git metadata lookup has a 500 ms
 deadline and runs outside the live-event state lock.
+
+The Network tab retains the latest 500 requests in live view and batches incoming
+updates. Use **Older requests** to browse bounded history pages, then **Back to
+live** to resume streaming. Historical pages pause live updates and are released
+from the browser cache when you leave them; captured database history is retained.
+
+A selected network request remains open when it leaves the live window. Request
+links resolve directly by ID, including older captured history, while the browser
+retains only the current detail record alongside its bounded table window.
