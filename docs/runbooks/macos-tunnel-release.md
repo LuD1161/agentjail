@@ -101,6 +101,11 @@ codesign -dvvvv "$EXT" 2>&1 | grep -E '^(Identifier|CDHash|TeamIdentifier|Author
 
 Decode each embedded profile with `security cms -D -i` and verify:
 
+The app and extension currently both request
+`com.apple.developer.system-extension.install`; each profile must authorize it.
+Regenerate profiles after enabling capabilities on the Apple bundle identifiers.
+The builder checks this before compiling.
+
 - its application identifier matches the signed bundle;
 - its Team ID is `Q98Z3744J2`;
 - `ProvisionsAllDevices` is true;

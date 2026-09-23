@@ -1441,6 +1441,19 @@ look unavailable.
 - **Rule:** bound serialized bytes at every framed transport boundary, and load
   large per-row details on demand. See ADR 0149-local-activity-feed.
 
+## 110. Notarization does not prove restricted entitlements can launch
+
+AGE-293 build 1277 passed signing, Apple notarization, stapling, and Gatekeeper,
+but a clean Mac refused to launch it. Its old Developer ID profiles allowed
+Network Extensions but omitted `com.apple.developer.system-extension.install`;
+`taskgated-helper` and `amfid` reported unsatisfied entitlements.
+
+- **Rule:** validate every required restricted entitlement in the provisioning
+  profile before building, then launch the exact signed artifact on a clean Mac.
+  Regenerate profiles after capability changes; an accepted notary ticket is
+  insufficient runtime evidence. See [the release runbook](runbooks/macos-tunnel-release.md)
+  and ADR 0141-unified-macos-app.
+
 ### Assert the mechanism, not the symptom
 
 A Python probe demanding `200` "failed" when Cloudflare bot-blocked its

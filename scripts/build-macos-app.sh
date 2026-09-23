@@ -199,6 +199,7 @@ verify_profile() {
   require_plist_value "$decoded" "ProvisionsAllDevices" "true"
   require_plist_value "$decoded" "Entitlements:com.apple.application-identifier" "$team_id.$expected_id"
   require_plist_array_value "$decoded" "Entitlements:com.apple.developer.networking.networkextension" "app-proxy-provider-systemextension"
+  require_plist_value "$decoded" "Entitlements:com.apple.developer.system-extension.install" "true"
   expiration="$("$plutil_binary" -extract ExpirationDate raw "$decoded")" \
     || fail "missing ExpirationDate in $decoded"
   expiration_epoch="$("$date_binary" -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expiration" '+%s')" \
@@ -326,6 +327,14 @@ completed=0
 trap cleanup EXIT
 resolve_version
 resolve_toolchain
+# AGE-293: reject incompatible profiles before spending time compiling/notarizing.
+if [[ "$signing_mode" == "developer-id" ]]; then
+  profile_dir="${PROFILE_DIR:-$repo_root/.secrets/profiles}"
+  for bundle_id in "$app_id" "$extension_id"; do
+    require_file "$profile_dir/$bundle_id.provisionprofile"
+    verify_profile "$profile_dir/$bundle_id.provisionprofile" "$bundle_id"
+  done
+fi
 printf 'build-macos-app: version=%s build=%s signing=%s\n' "$app_version" "$app_build" "$signing_mode"
 
 APPROVAL_ARTIFACT_ROOT="$approval_root" "$repo_root/scripts/build-macos-approval-app.sh"
