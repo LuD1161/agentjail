@@ -1,6 +1,9 @@
 package telemetry
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 )
@@ -62,5 +65,75 @@ func TestLoadConsent_CreatesDefaultsWhenMissing(t *testing.T) {
 	c2, _ := LoadConsent(p)
 	if c2.AnonymousID != c.AnonymousID {
 		t.Fatalf("anon id changed: %q -> %q", c.AnonymousID, c2.AnonymousID)
+	}
+}
+
+func TestLoadConsent_InvalidPreserved(t *testing.T) {
+	for _, data := range []string{
+		`{"enabled":false`, `null`, `{}`, `{"enabled":false,"schema":0,"anonymous_id":"old"}`,
+		`{"enabled":true,"schema":2,"anonymous_id":""}`, `{"enabled":true,"schema":99,"anonymous_id":"future"}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			p := Paths{Base: t.TempDir()}
+			if err := os.WriteFile(p.Consent(), []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := LoadConsent(p)
+			if !errors.Is(err, ErrInvalidConsent) || c.Enabled || c.Schema != 2 || c.AnonymousID == "" {
+				t.Fatalf("got %+v, %v", c, err)
+			}
+			stored, err := os.ReadFile(p.Consent())
+			if err != nil || !bytes.Equal(stored, []byte(data)) {
+				t.Fatalf("invalid consent overwritten: %q, %v", stored, err)
+			}
+			if r, err := New(p, env(map[string]string{EnvVar: "true"}), "test", "test", "test", nil); err == nil || r != nil {
+				t.Fatal("invalid consent started a recorder")
+			}
+		})
+	}
+}
+
+func TestLoadConsent_DisabledMigration(t *testing.T) {
+	p := Paths{Base: t.TempDir()}
+	c := Consent{Enabled: false, AnonymousID: "legacy", FirstSeen: "2025-01-01", NoticeShown: true, Schema: 1}
+	if err := SaveConsent(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadConsent(p)
+	if err != nil || got.Enabled || got.FirstSeen != c.FirstSeen || !got.NoticeShown {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	var persisted Consent
+	b, err := os.ReadFile(p.Consent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Enabled {
+		t.Fatal("migration enabled telemetry")
+	}
+}
+
+func TestLoadConsent_ReadFailurePreserved(t *testing.T) {
+	p := Paths{Base: t.TempDir()}
+	if err := os.WriteFile(p.Consent(), []byte(`{"enabled":false}`), 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p.Consent(), 0600) })
+	if _, err := os.ReadFile(p.Consent()); err == nil {
+		t.Skip("user can read mode 0000 files")
+	}
+	c, err := LoadConsent(p)
+	if !errors.Is(err, os.ErrPermission) || c.Enabled {
+		t.Fatalf("got %+v, %v", c, err)
+	}
+	info, err := os.Stat(p.Consent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0 {
+		t.Fatal("unreadable consent replaced")
 	}
 }

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"time"
 
@@ -46,13 +47,16 @@ func isCI(getenv func(string) string) bool {
 	return false
 }
 
-// LoadConsent reads telemetry.json, creating it with opt-out defaults (enabled,
-// fresh random anonymous ID) if absent.
+// ErrInvalidConsent leaves telemetry disabled until an explicit consent repair.
+var ErrInvalidConsent = errors.New("invalid telemetry consent; telemetry is disabled; run agentjail telemetry enable or disable to repair")
+
+// LoadConsent initializes opt-out defaults only for an absent file.
+// Invalid existing state is preserved and returns disabled repair defaults.
 func LoadConsent(p Paths) (Consent, error) {
 	b, err := os.ReadFile(p.Consent())
 	if err == nil {
 		var c Consent
-		if jErr := json.Unmarshal(b, &c); jErr == nil && c.Schema >= 1 && c.AnonymousID != "" {
+		if jErr := json.Unmarshal(b, &c); jErr == nil && (c.Schema == 1 || c.Schema == 2) && c.AnonymousID != "" {
 			if c.Schema < 2 {
 				if mid := stableMachineID(); mid != "" {
 					c.AnonymousID = mid
@@ -62,25 +66,29 @@ func LoadConsent(p Paths) (Consent, error) {
 			}
 			return c, nil
 		}
-		// Corrupt/old: fall through and re-init.
+		return newConsent(false), ErrInvalidConsent
 	} else if !os.IsNotExist(err) {
 		return Consent{}, err
 	}
+	c := newConsent(true)
+	if err := SaveConsent(p, c); err != nil {
+		return Consent{}, err
+	}
+	return c, nil
+}
+
+func newConsent(enabled bool) Consent {
 	anonID := stableMachineID()
 	if anonID == "" {
 		anonID = uuid.NewString()
 	}
-	c := Consent{
-		Enabled:     true,
+	return Consent{
+		Enabled:     enabled,
 		AnonymousID: anonID,
 		FirstSeen:   time.Now().UTC().Format("2006-01-02"),
 		NoticeShown: false,
 		Schema:      2,
 	}
-	if err := SaveConsent(p, c); err != nil {
-		return Consent{}, err
-	}
-	return c, nil
 }
 
 // NewAnonymousID returns a fresh random anonymous ID.

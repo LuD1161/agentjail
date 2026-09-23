@@ -108,6 +108,11 @@ The telemetry model is disclosed in `README.md` and `docs/TELEMETRY.md`.
 
 ### 5. Trust model: TOFU (Trust On First Use)
 
+**Initial-install decision superseded:** [ADR 0145-install-signature-trust](0145-install-signature-trust.md)
+requires an independently installed minisign verifier and an authenticated
+release manifest before extraction. The initial-install discussion below is
+historical; the signed-update contract remains in force.
+
 The initial install (via `install.sh | sh`) operates under a different trust
 model than subsequent updates:
 

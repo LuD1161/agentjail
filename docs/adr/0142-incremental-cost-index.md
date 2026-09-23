@@ -87,3 +87,11 @@ to enforcement.
   connection is introduced.
 - Parser-version or pricing-revision changes can rebuild derived rows from
   retained typed facts. Raw transcripts remain the ultimate recovery source.
+
+The Cost API includes typed `warnings` and `indexed_at` fields alongside partial
+results. Stale indexes, incomplete pricing, and unreadable budget configuration
+remain visible next to estimated spend; a building or unavailable index still
+returns an unavailable response. The most recent `cost_index.failed` audit event newer than the projection
+produces a refresh-failed warning; unavailable audit evidence produces an
+explicit status warning. This best-effort evidence does not attest exhaustive
+per-source completeness or detect missing source files that produced no error.

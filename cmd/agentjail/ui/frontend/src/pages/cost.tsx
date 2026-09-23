@@ -162,10 +162,22 @@ export function CostPage() {
               ))}
 
               <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <StatCard label="Total spend" value={usd(summary.total_cost)} accent />
+                <StatCard label="Estimated spend" value={usd(summary.total_cost)} accent />
                 <StatCard label="Sessions" value={summary.session_count.toLocaleString()} />
                 <StatCard label="Average / session" value={usd(summary.avg_cost_per_session)} accent />
               </div>
+
+              <div className="mb-4 text-xs text-[#9ca3af]">
+                Usage indexed {summary.indexed_at ? new Date(summary.indexed_at).toLocaleString() : 'at an unknown time'}.
+              </div>
+              {(summary.warnings ?? []).length > 0 && (
+                <div role="status" className="mb-5 rounded-md border border-[#66531c] bg-[#292313] px-4 py-3 text-xs text-[#e3b341]">
+                  <div className="mb-2 font-semibold">This estimate has limitations</div>
+                  <ul className="list-disc space-y-1 pl-4">
+                    {summary.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}
+                  </ul>
+                </div>
+              )}
 
               {summary.session_count === 0 ? (
                 <div className="rounded-md border border-[#2a3040] bg-[#1a1f2e] py-16 text-center">

@@ -229,8 +229,8 @@ else
 fi
 
 # --- Phase 7: agentjail try ---
-TRY_DENY=$(AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail" try "cat ~/.ssh/id_rsa" 2>&1) || true
-assert_contains "Try: deny cat ~/.ssh/id_rsa" "deny" "$TRY_DENY"
+TRY_DENY=$(AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail" try --read "$ORIG_HOME/.ssh/id_rsa" 2>&1) || true
+assert_contains "Try: deny native read of ~/.ssh/id_rsa" "deny" "$TRY_DENY"
 
 TRY_ALLOW=$(AGENTJAIL_SOCKET="$SOCK" "$BIN/agentjail" try "git status" 2>&1) || true
 assert_contains "Try: allow git status" "allow" "$TRY_ALLOW"

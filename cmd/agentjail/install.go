@@ -262,7 +262,11 @@ func runInstallCmd(args []string) {
 			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: %s: %v", ag.DisplayName(), err)))
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: install complete for %s. Restart the agent to activate the hook.", ag.DisplayName())))
+		if !ag.Status(env).Installed {
+			fmt.Fprintf(os.Stderr, "agentjail: incomplete hook registration for %s; run agentjail doctor\n", ag.DisplayName())
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: install complete for %s. Restart the agent to activate the hook; verify with agentjail doctor.", ag.DisplayName())))
 		if tp, err := telemetry.DefaultPaths(); err == nil {
 			telemetry.MaybePrintNotice(tp, os.Getenv, os.Stdout)
 			// Fire install telemetry synchronously (bounded 5s) so the install is
@@ -301,7 +305,7 @@ func runInstallCmd(args []string) {
 			v = "dev"
 		}
 		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: already protecting all %d detected agent(s); refreshed binaries and daemon to %s.", state.present, v)))
+		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: hook registrations already present for all %d detected agent(s); refreshed binaries to %s and requested daemon startup.", state.present, v)))
 		fmt.Fprintln(os.Stdout, u.Badge("dim", "nothing to wire — run 'agentjail status' to verify, or 'agentjail install --for <agent>' to add another."))
 		return
 	}
@@ -408,7 +412,7 @@ func runInstallCmd(args []string) {
 				continue
 			}
 			if err := installVSCodeWrapper(home, app, false, false); err != nil {
-				fmt.Fprintln(os.Stdout, "      "+u.Badge("warn", fmt.Sprintf("%s: %v", app, err)))
+				results = append(results, installResult{name: app + " IDE wrapper", err: err})
 			}
 		}
 
@@ -416,7 +420,7 @@ func runInstallCmd(args []string) {
 		if hasFlag(args, "--with-path-shim") {
 			fmt.Fprintln(os.Stdout)
 			if err := installPathShim(home); err != nil {
-				fmt.Fprintln(os.Stdout, "      "+u.Badge("warn", fmt.Sprintf("PATH shim: %v", err)))
+				results = append(results, installResult{name: "PATH shim", err: err})
 			}
 		}
 	}
@@ -507,6 +511,7 @@ func printInstallSummary(w io.Writer, results []installResult) bool {
 		state := "installed"
 		badgeKind := "ok"
 		if !res.status.Installed {
+			anyFailed = true
 			state = "installed (partial)"
 			badgeKind = "warn"
 		}
@@ -516,7 +521,7 @@ func printInstallSummary(w io.Writer, results []installResult) bool {
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, u.Badge("info", "daemon ready — see 'agentjail status' for daemon and plist state"))
+	lines = append(lines, u.Badge("info", "verify protection with 'agentjail doctor' before starting an agent"))
 	lines = append(lines, u.Badge("dim", "harden further: 'agentjail policy list' to enable optional rules"))
 
 	// Network visibility (AGE-258): report ON when the scoped profile is active,
@@ -528,7 +533,11 @@ func printInstallSummary(w io.Writer, results []installResult) bool {
 
 	body := strings.Join(lines, "\n")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, u.Box(u.Emoji("✅  ")+"install summary", body))
+	summaryIcon := "✅  "
+	if anyFailed {
+		summaryIcon = "⚠️  "
+	}
+	fmt.Fprintln(w, u.Box(u.Emoji(summaryIcon)+"install summary", body))
 	fmt.Fprintln(w)
 
 	return anyFailed
@@ -871,7 +880,7 @@ func stripAgentjailPathBlock(content string) (string, bool) {
 			}
 			// Unterminated: fall back to the conservative bare-marker rule —
 			// drop the next line only when it is our PATH export.
-			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
+			if i+1 < len(lines) && (strings.Contains(lines[i+1], ".agentjail/bin") || strings.HasSuffix(lines[i+1], "# agentjail managed environment")) {
 				i++
 			}
 			continue
@@ -881,7 +890,7 @@ func stripAgentjailPathBlock(content string) (string, bool) {
 			dropBlankBefore()
 			// Skip the following line only when it's our PATH line, so a marker
 			// left dangling above unrelated content can't eat a user line.
-			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
+			if i+1 < len(lines) && (strings.Contains(lines[i+1], ".agentjail/bin") || strings.HasSuffix(lines[i+1], "# agentjail managed environment")) {
 				i++
 			}
 			continue
@@ -921,7 +930,7 @@ func stripShimRCBlock(content string) (string, bool) {
 			}
 			// Unterminated: fall back to dropping the next line only when it's our
 			// PATH export, so a dangling marker can't eat unrelated user content.
-			if i+1 < len(lines) && strings.Contains(lines[i+1], ".agentjail/bin") {
+			if i+1 < len(lines) && (strings.Contains(lines[i+1], ".agentjail/bin") || strings.HasSuffix(lines[i+1], "# agentjail managed environment")) {
 				i++
 			}
 			continue
@@ -1388,7 +1397,7 @@ func printVersionOutput(w io.Writer) {
 //     systemd --user unit on Linux)
 //  6. Start the daemon (launchctl on macOS; `systemctl --user enable --now` +
 //     restart on Linux — or, if no systemd user session is reachable, print
-//     manual-start instructions instead of failing)
+//     manual-start instructions and return an incomplete-setup error)
 //
 // mcpSeed is a pre-filtered list of MCP server names to seed into mcp.allowed
 // on first install (R10: discovery runs before this function is called so the
@@ -1636,6 +1645,8 @@ func installSecretsBrokerService(home string, w io.Writer) error {
 // Linux path on any host; systemdUserAvailableFn / systemctlUserEnableStartFn
 // are themselves variables so tests can stub them and never touch a real
 // systemd session.
+var installLaunchctlLoadFn = launchctlLoad
+
 func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashLogPath string, w io.Writer) error {
 	u := ui.New(w)
 
@@ -1646,11 +1657,10 @@ func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashL
 		}
 		fmt.Fprintln(w, u.Step(5, 6, "launchd plist installed", true))
 
-		if err := launchctlLoad(plistDst); err != nil {
-			// Non-fatal: log but continue.
-			fmt.Fprintf(os.Stderr, "agentjail: warning: launchctl load failed (daemon may not be running): %v\n", err)
+		if err := installLaunchctlLoadFn(plistDst); err != nil {
+			return fmt.Errorf("start daemon with launchd: %w; run agentjail doctor", err)
 		}
-		fmt.Fprintln(w, u.Step(6, 6, "daemon started", true))
+		fmt.Fprintln(w, u.Step(6, 6, "daemon start requested (launchd); verify with agentjail doctor", true))
 		return nil
 	}
 
@@ -1663,14 +1673,14 @@ func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashL
 
 	if systemdUserAvailableFn() {
 		if err := systemctlUserEnableStartFn(systemdUnitFilename); err != nil {
-			// Non-fatal: log but continue, same as the launchd path.
-			fmt.Fprintf(os.Stderr, "agentjail: warning: systemctl --user enable/start failed (daemon may not be running): %v\n", err)
+			return fmt.Errorf("start daemon with systemd --user: %w; run agentjail doctor", err)
 		}
-		fmt.Fprintln(w, u.Step(6, 6, "daemon started (systemd --user)", true))
+		fmt.Fprintln(w, u.Step(6, 6, "daemon start requested (systemd --user); verify with agentjail doctor", true))
 	} else {
-		fmt.Fprintln(w, u.Step(6, 6, "daemon NOT started — no systemd --user session detected", true))
+		fmt.Fprintln(w, u.Step(6, 6, "daemon NOT started — no systemd --user session detected", false))
 		fmt.Fprintln(w, "      "+u.Badge("dim", fmt.Sprintf("unit installed at %s", unitDst)))
 		fmt.Fprintln(w, "      "+u.Badge("dim", fmt.Sprintf("start it manually once a session exists: systemctl --user enable --now %s", systemdUnitFilename)))
+		return errors.New("daemon setup incomplete: no systemd --user session; run agentjail doctor")
 	}
 	return nil
 }

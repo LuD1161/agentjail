@@ -1,0 +1,31 @@
+name: installer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: installer fixtures (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - name: install independent fixture tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -yqq minisign fish
+      - name: install independent fixture tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install minisign fish
+      - name: verify fixture prerequisites
+        run: |
+          minisign -v
+          fish --version
+      - name: exercise isolated installer fixtures
+        run: python3 test/installer/test_installer.py -v

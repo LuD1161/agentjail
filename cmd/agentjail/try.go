@@ -69,7 +69,7 @@ func runTry(args []string) int {
 		fmt.Fprintln(os.Stderr, "  ~ in paths and commands is expanded to the real home directory.")
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Examples:")
-		fmt.Fprintln(os.Stderr, "  agentjail try \"cat ~/.ssh/id_rsa\"")
+		fmt.Fprintln(os.Stderr, "  agentjail try --read ~/.ssh/id_rsa")
 		fmt.Fprintln(os.Stderr, "  agentjail try \"git status\"")
 		fmt.Fprintln(os.Stderr, "  agentjail try --read ~/.aws/credentials")
 		fmt.Fprintln(os.Stderr, "  agentjail try --write /etc/hosts")

@@ -43,6 +43,7 @@ export interface SessionInfo {
   first_seen: string
   last_seen: string
   request_count: number
+  deny_count: number
   /** Set server-side from the owning shield PID's liveness, not a recency window. */
   active: boolean
   owner_pid?: number
@@ -156,6 +157,8 @@ export interface CostBudgetAlert {
 }
 
 export interface CostSummary {
+  warnings: { code: 'stale_index' | 'pricing_estimate' | 'budget_config_unavailable' | 'refresh_failed' | 'refresh_status_unavailable'; message: string }[]
+  indexed_at: string
   period: string
   total_cost: number
   session_count: number

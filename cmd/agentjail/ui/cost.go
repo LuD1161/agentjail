@@ -3,13 +3,13 @@ package ui
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/LuD1161/agentjail/agentpolicy/config"
+	"github.com/LuD1161/agentjail/internal/audit"
 	"github.com/LuD1161/agentjail/internal/costanalytics"
 	localstore "github.com/LuD1161/agentjail/internal/store"
 )
@@ -24,49 +24,65 @@ type CostQuery struct {
 // CostProvider is defined by the UI consumer so transcript discovery and
 // aggregation remain independently testable. See ADR 0035-domain-driven-interface-first-typesafe.
 type CostProvider interface {
-	Summary(context.Context, CostQuery) (costanalytics.CostReport, []costanalytics.BudgetAlert, error)
+	Summary(context.Context, CostQuery) (CostSummary, error)
 }
 
 type localCostProvider struct {
 	open func() (localstore.ReadStore, error)
+	now  func() time.Time
 }
 
-func (provider localCostProvider) Summary(ctx context.Context, query CostQuery) (costanalytics.CostReport, []costanalytics.BudgetAlert, error) {
+func (provider localCostProvider) Summary(ctx context.Context, query CostQuery) (CostSummary, error) {
 	if provider.open == nil {
-		return costanalytics.CostReport{}, nil, fmt.Errorf("cost index is unavailable")
+		return CostSummary{}, fmt.Errorf("cost index is unavailable")
 	}
 	indexed, err := provider.open()
 	if err != nil {
-		return costanalytics.CostReport{}, nil, err
+		return CostSummary{}, err
 	}
 	sessions, indexStatus, err := costanalytics.ReadIndexedSessions(ctx, indexed, query.Since)
 	if err != nil {
-		return costanalytics.CostReport{}, nil, err
+		return CostSummary{}, err
 	}
 	if !indexStatus.Ready {
-		return costanalytics.CostReport{}, nil, fmt.Errorf("cost index is still building")
-	}
-	if time.Since(indexStatus.LatestUpdate) > 26*time.Hour {
-		slog.Debug("cost index is stale", "updated_at", indexStatus.LatestUpdate)
-	}
-	for _, warning := range costanalytics.PricingWarnings(sessions) {
-		slog.Debug("cost estimate warning", "err", warning)
+		return CostSummary{}, fmt.Errorf("cost index is still building")
 	}
 	reportSessions := sessions
 	if query.Project != "" {
 		reportSessions = costanalytics.FilterByProject(sessions, query.Project)
 	}
 
-	report := costanalytics.Aggregate(reportSessions, costanalytics.Period(query.Period))
-	alerts := []costanalytics.BudgetAlert{}
+	result := CostSummary{
+		CostReport:   costanalytics.Aggregate(reportSessions, costanalytics.Period(query.Period)),
+		BudgetAlerts: []costanalytics.BudgetAlert{},
+		Warnings:     []CostWarning{},
+		IndexedAt:    indexStatus.LatestUpdate,
+	}
+	now := time.Now()
+	if provider.now != nil {
+		now = provider.now()
+	}
+	if now.Sub(indexStatus.LatestUpdate) > 26*time.Hour {
+		result.Warnings = append(result.Warnings, CostWarning{Code: CostWarningStale, Message: "Usage index is stale; recent spend may be missing. Keep the daemon running to refresh it."})
+	}
+	failures, err := indexed.ListAuditLog(ctx, localstore.AuditLogFilter{EventType: audit.CostIndexFailed, Limit: 1})
+	if err != nil {
+		result.Warnings = append(result.Warnings, CostWarning{Code: CostWarningStatus, Message: "Index refresh status is unavailable; the last indexed estimate is shown."})
+	} else if len(failures) > 0 && !failures[0].Ts.Before(indexStatus.LatestUpdate) {
+		result.Warnings = append(result.Warnings, CostWarning{Code: CostWarningRefresh, Message: "The latest recorded index refresh failed; usage may be incomplete. Check daemon diagnostics and retry the refresh."})
+	}
+	for _, warning := range costanalytics.PricingWarnings(reportSessions) {
+		result.Warnings = append(result.Warnings, CostWarning{Code: CostWarningPricing, Message: warning.Error()})
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return report, alerts, nil
+		result.Warnings = append(result.Warnings, budgetUnavailableWarning())
+		return result, nil
 	}
 	policy, err := config.LoadOrDefault(filepath.Join(home, ".agentjail", "policy.yaml"))
 	if err != nil {
-		slog.Debug("cost budget config unavailable", "err", err)
-		return report, alerts, nil
+		result.Warnings = append(result.Warnings, budgetUnavailableWarning())
+		return result, nil
 	}
 	status := costanalytics.CheckBudget(
 		policy.Cost.DailyBudget,
@@ -74,12 +90,34 @@ func (provider localCostProvider) Summary(ctx context.Context, query CostQuery) 
 		policy.Cost.AlertThreshold,
 		sessions,
 	)
-	return report, status.Alerts, nil
+	result.BudgetAlerts = status.Alerts
+	return result, nil
 }
 
-type costSummaryResponse struct {
+type CostWarningCode string
+
+const (
+	CostWarningStale   CostWarningCode = "stale_index"
+	CostWarningPricing CostWarningCode = "pricing_estimate"
+	CostWarningRefresh CostWarningCode = "refresh_failed"
+	CostWarningStatus  CostWarningCode = "refresh_status_unavailable"
+	CostWarningBudget  CostWarningCode = "budget_config_unavailable"
+)
+
+type CostWarning struct {
+	Code    CostWarningCode `json:"code"`
+	Message string          `json:"message"`
+}
+
+func budgetUnavailableWarning() CostWarning {
+	return CostWarning{Code: CostWarningBudget, Message: "Budget configuration could not be loaded; budget alerts are unavailable. Check policy.yaml with agentjail doctor."}
+}
+
+type CostSummary struct {
 	costanalytics.CostReport
 	BudgetAlerts []costanalytics.BudgetAlert `json:"budget_alerts"`
+	Warnings     []CostWarning               `json:"warnings"`
+	IndexedAt    time.Time                   `json:"indexed_at"`
 }
 
 func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +141,7 @@ func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report, alerts, err := s.costProvider.Summary(r.Context(), CostQuery{
+	report, err := s.costProvider.Summary(r.Context(), CostQuery{
 		Period:  period,
 		Since:   s.now().Add(-duration),
 		Project: project,
@@ -112,8 +150,11 @@ func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, fmt.Sprintf("cost summary: %v", err), http.StatusServiceUnavailable)
 		return
 	}
-	if alerts == nil {
-		alerts = []costanalytics.BudgetAlert{}
+	if report.BudgetAlerts == nil {
+		report.BudgetAlerts = []costanalytics.BudgetAlert{}
+	}
+	if report.Warnings == nil {
+		report.Warnings = []CostWarning{}
 	}
 	if report.ByProject == nil {
 		report.ByProject = []costanalytics.ProjectSummary{}
@@ -123,7 +164,7 @@ func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	writeJSON(w, costSummaryResponse{CostReport: report, BudgetAlerts: alerts})
+	writeJSON(w, report)
 }
 
 func parseCostPeriod(value string) (time.Duration, error) {

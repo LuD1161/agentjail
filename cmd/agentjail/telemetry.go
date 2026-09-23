@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,7 +28,11 @@ func runTelemetryWith(p telemetry.Paths, getenv func(string) string, args []stri
 	}
 	switch sub {
 	case "status":
-		c, _ := telemetry.LoadConsent(p)
+		c, err := telemetry.LoadConsent(p)
+		if err != nil {
+			fmt.Fprintf(out, "telemetry: disabled (consent unavailable): %v\n", err)
+			return 1
+		}
 		on, src := telemetry.Resolve(c, getenv)
 		state := "disabled"
 		if on {
@@ -36,7 +41,11 @@ func runTelemetryWith(p telemetry.Paths, getenv func(string) string, args []stri
 		fmt.Fprintf(out, "telemetry: %s (source: %s)\nanonymous id: %s\n", state, src, c.AnonymousID)
 		return 0
 	case "enable", "disable":
-		c, _ := telemetry.LoadConsent(p)
+		c, err := telemetry.LoadConsent(p)
+		if err != nil && !errors.Is(err, telemetry.ErrInvalidConsent) {
+			fmt.Fprintf(out, "telemetry: %v\n", err)
+			return 1
+		}
 		c.Enabled = sub == "enable"
 		if err := telemetry.SaveConsent(p, c); err != nil {
 			fmt.Fprintf(out, "telemetry: %v\n", err)
@@ -50,10 +59,20 @@ func runTelemetryWith(p telemetry.Paths, getenv func(string) string, args []stri
 		fmt.Fprintln(out, string(b))
 		return 0
 	case "reset":
-		c, _ := telemetry.LoadConsent(p)
+		c, err := telemetry.LoadConsent(p)
+		if err != nil {
+			fmt.Fprintf(out, "telemetry: %v\n", err)
+			return 1
+		}
 		c.AnonymousID = telemetry.NewAnonymousID()
-		_ = telemetry.SaveConsent(p, c)
-		_ = telemetry.NewSpool(p, 1000, 512*1024).Truncate()
+		if err := telemetry.SaveConsent(p, c); err != nil {
+			fmt.Fprintf(out, "telemetry: %v\n", err)
+			return 1
+		}
+		if err := telemetry.NewSpool(p, 1000, 512*1024).Truncate(); err != nil {
+			fmt.Fprintf(out, "telemetry: %v\n", err)
+			return 1
+		}
 		fmt.Fprintln(out, "telemetry reset (new anonymous id, spool cleared)")
 		return 0
 	default:

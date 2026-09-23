@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -204,4 +207,99 @@ func TestNetworkStatsJSONContract(t *testing.T) {
 	if h["avg_latency_ms"] != float64(300) {
 		t.Errorf("avg_latency_ms = %v, want 300", h["avg_latency_ms"])
 	}
+}
+
+func TestRequestHistoryFilteringPagingAndDetail(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for i := 0; i < 10005; i++ {
+		session := "new"
+		if i < 3 {
+			session = "old"
+		}
+		if err := st.Log(&mitm.RequestLog{Host: "example.com", Method: "GET", Path: "/", SessionID: session}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := &Server{netStore: st}
+	for _, target := range []string{"/api/requests?session=old&limit=2", "/api/requests?session=old&before_id=2&limit=2"} {
+		rec := httptest.NewRecorder()
+		srv.handleRequestsList(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", target, rec.Code, rec.Body.String())
+		}
+		var got requestsListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Total != 3 || len(got.Requests) == 0 {
+			t.Fatalf("%s: %+v", target, got)
+		}
+		if strings.Contains(target, "before_id") && (got.Requests[0].ID != 1 || got.HasMore) {
+			t.Fatalf("oldest page: %+v", got)
+		}
+	}
+	rec := httptest.NewRecorder()
+	srv.handleRequestDetail(rec, httptest.NewRequest("GET", "/api/requests/1", nil))
+	if rec.Code != 200 {
+		t.Fatalf("historical detail: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, target := range []string{"/api/requests?before_id=invalid", "/api/requests?status=abc", "/api/requests?offset=-1"} {
+		rec := httptest.NewRecorder()
+		srv.handleRequestsList(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 400 {
+			t.Fatalf("invalid filter %s: %d", target, rec.Code)
+		}
+	}
+}
+
+func TestRequestStreamCatchesUpBurstInOrder(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := &Server{netStore: st}
+	server := httptest.NewServer(http.HandlerFunc(srv.handleRequestsStream))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	// The first keepalive confirms subscription before the burst is written.
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() {
+		t.Fatal("missing stream keepalive")
+	}
+	for i := 0; i < defaultStreamPage*2+1; i++ {
+		if err := st.Log(&mitm.RequestLog{Host: "example.com", Method: "GET", Path: fmt.Sprint(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var last int64
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var row mitm.RequestLog
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.ID != last+1 {
+			t.Fatalf("stream skipped: got %d after %d", row.ID, last)
+		}
+		last = row.ID
+		if last == defaultStreamPage*2+1 {
+			return
+		}
+	}
+	t.Fatalf("stream stopped at %d: %v", last, scanner.Err())
 }

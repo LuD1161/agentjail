@@ -30,6 +30,13 @@ we don't collect it.
 
 ## Controlling telemetry
 
+An existing unreadable or invalid `telemetry.json` disables telemetry without
+replacing the file. `agentjail telemetry status` reports the problem. After
+fixing file permissions if needed, explicitly run `agentjail telemetry disable`
+or `agentjail telemetry enable` to repair invalid state with your chosen setting.
+Only a missing file receives the default enabled setting.
+
+
 | Command | What it does |
 |---|---|
 | `agentjail telemetry status` | Show whether it's on/off and *why* (env var, CI, config, or default), plus your anonymous ID |
