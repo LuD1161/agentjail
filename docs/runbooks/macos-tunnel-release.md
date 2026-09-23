@@ -197,8 +197,14 @@ AGENTJAIL_DRY_RUN=1 AGENTJAIL_VERSION=X.Y.Z \
   LOCAL_MACOS_DMG=build/AgentJail.dmg sh install.sh
 ```
 
-The installer must verify the checksum, disk image, app identity, nested code
-signature, and Gatekeeper result before it writes either the app or bundled CLI.
+`make macos-dmg` packages the existing bundle; it must not depend on
+`macos-app`, rebuild, or re-sign the notarized app. Run `make macos-app`
+explicitly first when producing a new candidate.
+
+The installer verifies the checksum, disk image, both bundle IDs, matching app
+and extension versions, Apple-issued signatures from Team ID `Q98Z3744J2`,
+nested code integrity, and a `Notarized Developer ID` Gatekeeper assessment
+before it writes either the app or bundled CLI.
 An upgrade stages and verifies the replacement before moving the existing app;
 a failed post-copy assessment restores the previous app.
 
@@ -310,3 +316,33 @@ ssh guest date +%s
 
 Different displayed hours with matching epoch seconds are harmless. Correct a
 real clock skew before diagnosing certificate validity.
+
+## Clean-machine acceptance for evaluate-only defaults
+
+Use a disposable clone of a vanilla Apple Silicon macOS image, preserving the
+approved golden and the host installation. Record the image digest, macOS build,
+SIP status, Gatekeeper status, and absence of AgentJail app/state/extensions
+before installation. Some CI images ship with Gatekeeper disabled: enable it
+with the supported macOS control and confirm `spctl --status` before testing.
+An assessment-disabled image is not release acceptance evidence.
+
+Transfer only the stapled distribution DMG and installer, never signing
+material. Record their SHA-256 hashes and the app/extension versions and CDHashes.
+Verify both the installer dry run and real installation with Gatekeeper enabled.
+Check CLI links, daemon startup, first-run UI, and the normal extension-consent
+flow. Extension approval remains a human step; do not automate it.
+
+After approval, verify `[activated enabled]` for the exact candidate and test:
+
+- A fresh configuration defaults to monitor. A harmless request matching a
+  deny/ask test policy completes and records its original `would_action`.
+- OS isolation remains active in that same session. Check a disposable fixture
+  outside the allowed workspace; do not use actual credentials as test data.
+- Explicit `enforce` in a new session blocks the same policy-matching operation
+  and records the blocking verdict.
+- Restart/reboot retains the approved extension and working app/CLI/daemon.
+
+The historical strict tunnel smoke matrix expects blocking policies. It cannot
+stand in for the default-monitor check, and skipped checks are not passes.
+Record pending human or hardware checks explicitly; universal Intel binaries
+alone do not establish Intel hardware acceptance.

@@ -156,7 +156,7 @@ tunnel-lib:  ## build the cgo c-archive linked into the macOS network extension 
 macos-app:  ## build unified universal build/AgentJail.app (SIGNING_MODE=developer-id NOTARIZE=1 for distribution)
 	./scripts/build-macos-app.sh
 
-macos-dmg: macos-app  ## package build/AgentJail.app into build/AgentJail.dmg
+macos-dmg:  ## package the existing build/AgentJail.app without rebuilding or re-signing it
 	./scripts/package-macos-dmg.sh
 
 macos-approval-app:  ## build + locally ad-hoc-sign AgentjailApproval.app

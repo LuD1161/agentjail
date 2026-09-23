@@ -26,6 +26,13 @@ mkdir -p "$fake_bin" "$source_app/Contents/Resources/bin" "$applications" "$test
 printf 'test dmg\n' > "$test_root/AgentJail.dmg"
 
 cp "$repo_root/macos/AgentJail/Info.plist" "$source_app/Contents/Info.plist"
+source_extension="$source_app/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension"
+mkdir -p "$source_extension/Contents"
+cp "$repo_root/macos/AgentjailExtension/Info.plist" "$source_extension/Contents/Info.plist"
+for version_key in CFBundleShortVersionString CFBundleVersion; do
+    version_value=$(plutil -extract "$version_key" raw "$source_app/Contents/Info.plist")
+    plutil -replace "$version_key" -string "$version_value" "$source_extension/Contents/Info.plist"
+done
 
 cat > "$source_app/Contents/Resources/bin/agentjail" <<'EOF'
 #!/bin/sh
@@ -62,6 +69,14 @@ EOF
 
 cat > "$fake_bin/codesign" <<'EOF'
 #!/bin/sh
+for value in "$@"; do
+    case "$value" in
+        -R=*)
+            printf '%s\n' "$value" >> "$AGENTJAIL_TEST_LOG"
+            [ "${AGENTJAIL_TEST_WRONG_TEAM:-0}" != "1" ] || exit 1
+            ;;
+    esac
+done
 exit 0
 EOF
 
@@ -70,6 +85,12 @@ cat > "$fake_bin/spctl" <<'EOF'
 for value in "$@"; do target=$value; done
 if [ "${AGENTJAIL_TEST_FAIL_FINAL:-0}" = "1" ] && [ "$target" = "$AGENTJAIL_TEST_FINAL_APP" ]; then
     exit 1
+fi
+[ "${AGENTJAIL_TEST_GATEKEEPER_REJECT:-0}" != "1" ] || exit 1
+if [ "${AGENTJAIL_TEST_NOT_NOTARIZED:-0}" = "1" ]; then
+    echo 'source=Developer ID' >&2
+else
+    echo 'source=Notarized Developer ID' >&2
 fi
 exit 0
 EOF
@@ -101,6 +122,10 @@ run_installer() {
 run_installer > "$test_root/success.out"
 
 [ -d "$applications/AgentJail.app" ] || fail "app was not installed"
+for expected_id in com.blinkerlm.agentjail com.blinkerlm.agentjail.extension; do
+    grep -Fqx -- "-R=anchor apple generic and identifier \"$expected_id\" and certificate leaf[subject.OU] = \"Q98Z3744J2\"" "$log" \
+        || fail "installer did not pin Apple signing identity for $expected_id"
+done
 [ -x "$test_home/.agentjail/bin/agentjail" ] || fail "CLI was not installed"
 [ -x "$test_home/.agentjail/bin/agentjail-hook" ] || fail "hook was not installed"
 for role in agentjail-daemon agentjail-shield agentjail-netproxy agentjail-secrets; do
@@ -134,5 +159,29 @@ fi
 if find "$applications" -maxdepth 1 -name '.AgentJail.app.*' | grep . >/dev/null; then
     fail "failed clean install left staging paths"
 fi
+
+# Rejected payloads must not replace an existing app or execute its CLI.
+mkdir -p "$applications/AgentJail.app"
+printf 'previous app\n' > "$applications/AgentJail.app/previous.txt"
+assert_rejected() {
+    : > "$log"
+    if run_installer "$@" > "$test_root/rejected.out" 2>&1; then
+        fail "invalid distribution unexpectedly installed: $*"
+    fi
+    [ -f "$applications/AgentJail.app/previous.txt" ] || fail "rejection replaced previous app"
+    if grep -E '^(agentjail|open) ' "$log" >/dev/null; then
+        fail "rejection executed payload"
+    fi
+}
+assert_rejected AGENTJAIL_TEST_WRONG_TEAM=1
+assert_rejected AGENTJAIL_TEST_NOT_NOTARIZED=1
+assert_rejected AGENTJAIL_TEST_GATEKEEPER_REJECT=1
+plutil -replace CFBundleIdentifier -string com.example.wrong "$source_extension/Contents/Info.plist"
+assert_rejected
+plutil -replace CFBundleIdentifier -string com.blinkerlm.agentjail.extension "$source_extension/Contents/Info.plist"
+plutil -replace CFBundleVersion -string 999999 "$source_extension/Contents/Info.plist"
+assert_rejected
+rm -rf -- "$source_extension"
+assert_rejected
 
 printf 'install-macos-app-test: ok\n'

@@ -68,6 +68,44 @@ sha256() {
     $SHA256_CMD "$@"
 }
 
+# Validate both the package identity and its Apple-issued signing identity at
+# every install boundary. A valid signature alone does not identify our team.
+verify_macos_app() {
+    _verified_app=$1
+    _verified_extension="$_verified_app/Contents/Library/SystemExtensions/com.blinkerlm.agentjail.extension.systemextension"
+    for _verified_component in "$_verified_app" "$_verified_extension"; do
+        if [ "$_verified_component" = "$_verified_app" ]; then
+            _expected_id=com.blinkerlm.agentjail
+        else
+            _expected_id=com.blinkerlm.agentjail.extension
+        fi
+        [ "$(plutil -extract CFBundleIdentifier raw "$_verified_component/Contents/Info.plist")" = "$_expected_id" ] || {
+            echo "agentjail installer: unexpected macOS bundle identity." >&2
+            exit 7
+        }
+        codesign --verify --strict \
+            -R="anchor apple generic and identifier \"$_expected_id\" and certificate leaf[subject.OU] = \"Q98Z3744J2\"" \
+            "$_verified_component"
+    done
+    for _version_key in CFBundleShortVersionString CFBundleVersion; do
+        _app_version=$(plutil -extract "$_version_key" raw "$_verified_app/Contents/Info.plist") || exit 7
+        _extension_version=$(plutil -extract "$_version_key" raw "$_verified_extension/Contents/Info.plist") || exit 7
+        [ -n "$_app_version" ] && [ "$_app_version" = "$_extension_version" ] || {
+            echo "agentjail installer: app and extension versions differ." >&2
+            exit 7
+        }
+    done
+    codesign --verify --deep --strict "$_verified_app"
+    _assessment=$(LC_ALL=C spctl -a -t exec -vv "$_verified_app" 2>&1) || {
+        printf '%s\n' "$_assessment" >&2
+        exit 7
+    }
+    printf '%s\n' "$_assessment" | grep -Fx 'source=Notarized Developer ID' >/dev/null || {
+        echo "agentjail installer: notarized Developer ID distribution required." >&2
+        exit 7
+    }
+}
+
 # _spin_frame prints the spinner glyph for tick $1. Frames are emitted by a
 # case statement (not string slicing) so multibyte braille glyphs stay intact
 # across POSIX sh implementations. $2=1 selects UTF-8 braille; otherwise ASCII.
@@ -263,12 +301,7 @@ if [ "$INSTALL_MACOS_APP" = "1" ]; then
         echo "agentjail installer: AgentJail.app is missing from the DMG." >&2
         exit 7
     }
-    [ "$(plutil -extract CFBundleIdentifier raw "$SOURCE_APP/Contents/Info.plist")" = "com.blinkerlm.agentjail" ] || {
-        echo "agentjail installer: unexpected macOS app identity." >&2
-        exit 7
-    }
-    codesign --verify --deep --strict "$SOURCE_APP"
-    spctl -a -t exec "$SOURCE_APP"
+    verify_macos_app "$SOURCE_APP"
     PAYLOAD_DIR="$SOURCE_APP/Contents/Resources/bin"
     [ -x "$PAYLOAD_DIR/agentjail" ] && [ -x "$PAYLOAD_DIR/agentjail-hook" ] || {
         echo "agentjail installer: bundled CLI payload is incomplete." >&2
@@ -310,8 +343,7 @@ if [ "$INSTALL_MACOS_APP" = "1" ]; then
         exit 7
     }
     ditto "$SOURCE_APP" "$STAGED_APP"
-    codesign --verify --deep --strict "$STAGED_APP"
-    spctl -a -t exec "$STAGED_APP"
+    verify_macos_app "$STAGED_APP"
     if [ -e "$FINAL_APP" ]; then
         [ -d "$FINAL_APP" ] && [ ! -L "$FINAL_APP" ] || {
             echo "agentjail installer: refusing to replace a non-application path: $FINAL_APP" >&2
@@ -322,8 +354,7 @@ if [ "$INSTALL_MACOS_APP" = "1" ]; then
     APP_REPLACEMENT_STARTED=1
     mv "$STAGED_APP" "$FINAL_APP"
     STAGED_APP=""
-    codesign --verify --deep --strict "$FINAL_APP"
-    spctl -a -t exec "$FINAL_APP"
+    verify_macos_app "$FINAL_APP"
     PAYLOAD_DIR="$FINAL_APP/Contents/Resources/bin"
     echo "✅  installed AgentJail.app  →  ${FINAL_APP}"
 fi
