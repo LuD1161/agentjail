@@ -1367,3 +1367,12 @@ metadata took the new-install path and overwrote an existing opt-out with
 `enabled: true`. Only absence now initializes enabled defaults; invalid existing
 state is preserved and disables telemetry until an explicit CLI repair. Test
 corrupt and unreadable settings as well as the successful configuration path.
+
+## A printed latency miss is not a regression gate
+
+The smoke suite stayed green when its ten repeated allow requests exceeded the
+latency target: the benchmark printed `MISSED` without failing. Separate Python
+clock processes also inflated measured hook latency. The gate now times hook
+subprocesses from one monotonic clock, validates their decisions, exercises
+repeated and unique allow/deny/ask inputs, and exits nonzero on p95 misses.
+A deterministic test verifies that a slow tail changes the exit status.
