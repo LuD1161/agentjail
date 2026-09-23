@@ -1360,3 +1360,14 @@ when adding a workspace module.
 When you fix something that was invisible to a green suite, add an entry: what
 looked fine, what was actually happening, and the general rule. Link the ticket
 and the ADR. Keep it short — this file earns its keep by being read.
+
+## A failed upload is not an empty request
+
+The capture gateway passed successful forwarding tests, but its scan helper
+returned an empty body when reading an incoming upload failed. The handler then
+sent an empty request upstream and recorded that response instead of the original
+read failure. The helper now propagates the error; the gateway records a 400 and
+never calls upstream. Test failed reads both before and after partial data.
+
+- **Rule:** transport read errors must cross helper boundaries explicitly; a nil
+  body is a valid empty request and cannot represent a failed upload.

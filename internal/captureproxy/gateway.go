@@ -184,7 +184,16 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request) {
 		g.finishCaptures(reqLog, reqCapture, respCapture)
 	}
 
-	forwardBody, bodyBuf, sizeCounter := g.captureRequestBody(r, &reqCapture)
+	forwardBody, bodyBuf, sizeCounter, err := g.captureRequestBody(r, &reqCapture)
+	if err != nil {
+		reqLog.Error = fmt.Sprintf("read request body: %v", err)
+		reqLog.StatusCode = http.StatusBadRequest
+		reqLog.ElapsedMs = time.Since(start).Milliseconds()
+		finish()
+		g.log(reqLog)
+		http.Error(w, "gateway: read request body failed", http.StatusBadRequest)
+		return
+	}
 
 	// Same recognizer pipeline internal/mitm uses, so policy templates
 	// evaluate identically regardless of capture path.
@@ -281,14 +290,14 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request) {
 // streams the rest unbuffered -- large uploads are never fully buffered.
 // Mirrors internal/mitm.Handle. counter.n holds the exact body size once the
 // upstream request has fully sent.
-func (g *Gateway) captureRequestBody(r *http.Request, capture **mitm.BodyCapture) (forwardBody io.Reader, scanned []byte, counter *countingReader) {
+func (g *Gateway) captureRequestBody(r *http.Request, capture **mitm.BodyCapture) (forwardBody io.Reader, scanned []byte, counter *countingReader, err error) {
 	if r.Body == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	limited := io.LimitReader(r.Body, maxBodyScan+1)
 	buf, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, err
 	}
 	*capture = g.startCapture(mitm.SideRequest, r.Header.Get("Content-Encoding"))
 
@@ -304,7 +313,7 @@ func (g *Gateway) captureRequestBody(r *http.Request, capture **mitm.BodyCapture
 		src = io.TeeReader(src, *capture)
 	}
 	counter = &countingReader{r: src}
-	return counter, scanned, counter
+	return counter, scanned, counter, nil
 }
 
 // startCapture opens a body file, or returns nil: recording must never fail

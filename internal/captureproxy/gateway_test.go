@@ -286,3 +286,42 @@ func TestGatewayCloseStopsServing(t *testing.T) {
 		t.Error("expected request to a closed gateway to fail")
 	}
 }
+
+// A failed upload must not become an empty upstream request.
+func TestGatewayRejectsUnreadableRequestBody(t *testing.T) {
+	for _, prefix := range []string{"", "partial upload"} {
+		t.Run(fmt.Sprintf("prefix-%d", len(prefix)), func(t *testing.T) {
+			rec := &fakeRecorder{}
+			calls := 0
+			g := New(mustParseURL(t, "https://example.invalid"), rec, Options{
+				Transport: failingUploadTransport{calls: &calls},
+			})
+			g.nonce = "test-nonce"
+			r := httptest.NewRequest(http.MethodPost, "/aj~test-nonce/v1/messages", nil)
+			r.Body = io.NopCloser(io.MultiReader(strings.NewReader(prefix), failedUploadReader{}))
+			w := httptest.NewRecorder()
+			g.handle(w, r)
+			if calls != 0 {
+				t.Fatalf("upstream calls = %d, want 0", calls)
+			}
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d", w.Code)
+			}
+			entries := rec.all()
+			if len(entries) != 1 || !strings.Contains(entries[0].Error, io.ErrUnexpectedEOF.Error()) || entries[0].StatusCode != http.StatusBadRequest {
+				t.Fatalf("missing upload failure record: %#v", entries)
+			}
+		})
+	}
+}
+
+type failedUploadReader struct{}
+
+func (failedUploadReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+type failingUploadTransport struct{ calls *int }
+
+func (tr failingUploadTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	*tr.calls++
+	return nil, fmt.Errorf("unexpected upstream request")
+}
