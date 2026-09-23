@@ -119,9 +119,22 @@ func parseTemplates(data []byte) ([]Template, error) {
 		if err := compileScanRules(&t); err != nil {
 			return nil, fmt.Errorf("template %s: %w", t.ID, err)
 		}
+		compileMatchTemplates(&t)
 		templates = append(templates, t)
 	}
 	return templates, nil
+}
+
+// Invalid expressions retain their existing no-match or literal-text behavior.
+func compileMatchTemplates(t *Template) {
+	t.Match.compiledPaths = make([]*regexp.Regexp, len(t.Match.Path))
+	for i, p := range t.Match.Path {
+		if strings.HasPrefix(p, "re:") {
+			t.Match.compiledPaths[i], _ = regexp.Compile(p[3:])
+		}
+	}
+	t.compiledReason, _ = template.New("").Parse(t.Reason)
+	t.compiledImpact, _ = template.New("").Parse(t.Impact)
 }
 
 // isZeroTemplate reports whether a decoded document carried no fields at all.
@@ -176,6 +189,7 @@ func compileScanRules(t *Template) error {
 // Returns nil if no template matches (default: allow).
 func (m *Matcher) Evaluate(op *Operation) *MatchResult {
 	var best *MatchResult
+	var input scanInput
 
 	for i := range m.templates {
 		t := &m.templates[i]
@@ -183,7 +197,7 @@ func (m *Matcher) Evaluate(op *Operation) *MatchResult {
 			continue
 		}
 
-		hits := scanOperation(t.Scan, op)
+		hits := scanOperation(t.Scan, op, &input)
 
 		// If the template has scan rules but nothing matched, skip it.
 		if t.Scan != nil && hasScanRules(t.Scan) && len(hits) == 0 {
@@ -193,8 +207,6 @@ func (m *Matcher) Evaluate(op *Operation) *MatchResult {
 		result := &MatchResult{
 			Template: t,
 			Action:   t.Action,
-			Reason:   expandTemplate(t.Reason, op, hits),
-			Impact:   expandTemplate(t.Impact, op, hits),
 			ScanHits: hits,
 		}
 
@@ -203,6 +215,10 @@ func (m *Matcher) Evaluate(op *Operation) *MatchResult {
 		}
 	}
 
+	if best != nil {
+		best.Reason = expandTemplate(best.Template.compiledReason, best.Template.Reason, op, best.ScanHits)
+		best.Impact = expandTemplate(best.Template.compiledImpact, best.Template.Impact, op, best.ScanHits)
+	}
 	return best
 }
 
@@ -283,7 +299,7 @@ func matchSpec(spec *MatchSpec, op *Operation) bool {
 	if !matchStringList(spec.Method, op.Method) {
 		return false
 	}
-	if !matchPathList(spec.Path, op.Path) {
+	if !matchPathList(spec.Path, spec.compiledPaths, op.Path) {
 		return false
 	}
 	return true
@@ -342,15 +358,15 @@ func matchGlobList(patterns []string, value string) bool {
 // Patterns prefixed with "re:" are treated as regexps.
 // Patterns with * or ? are treated as globs.
 // Others are compared case-insensitively.
-func matchPathList(patterns []string, value string) bool {
+func matchPathList(patterns []string, compiled []*regexp.Regexp, value string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
 	lower := strings.ToLower(value)
-	for _, p := range patterns {
+	for i, p := range patterns {
 		if strings.HasPrefix(p, "re:") {
-			re, err := regexp.Compile(p[3:])
-			if err != nil {
+			re := compiled[i]
+			if re == nil {
 				continue
 			}
 			if re.MatchString(value) {
@@ -367,18 +383,29 @@ func matchPathList(patterns []string, value string) bool {
 	return false
 }
 
+type scanInput struct {
+	payloadReady bool
+	payloadValid bool
+	payload      string
+}
+
 // scanOperation runs all scan rules against the operation's content.
-func scanOperation(spec *ScanSpec, op *Operation) []ScanHit {
+func scanOperation(spec *ScanSpec, op *Operation, input *scanInput) []ScanHit {
 	if spec == nil {
 		return nil
 	}
 	var hits []ScanHit
 
 	if len(spec.Payload) > 0 && op.Payload != nil {
-		payloadJSON, err := json.Marshal(op.Payload)
-		if err == nil {
+		if !input.payloadReady {
+			payloadJSON, err := json.Marshal(op.Payload)
+			input.payloadReady = true
+			input.payloadValid = err == nil
+			input.payload = string(payloadJSON)
+		}
+		if input.payloadValid {
 			for _, rule := range spec.Payload {
-				hits = append(hits, scanContent(rule, string(payloadJSON), "payload")...)
+				hits = append(hits, scanContent(rule, input.payload, "payload")...)
 			}
 		}
 	}
@@ -463,12 +490,11 @@ type templateData struct {
 }
 
 // expandTemplate renders a Go text/template string with operation fields.
-func expandTemplate(tmplStr string, op *Operation, hits []ScanHit) string {
+func expandTemplate(t *template.Template, tmplStr string, op *Operation, hits []ScanHit) string {
 	if tmplStr == "" {
 		return ""
 	}
-	t, err := template.New("").Parse(tmplStr)
-	if err != nil {
+	if t == nil {
 		return tmplStr
 	}
 	data := templateData{

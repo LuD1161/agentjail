@@ -1,6 +1,9 @@
 package netpolicy
 
-import "regexp"
+import (
+	"regexp"
+	"text/template"
+)
 
 // Template is one policy rule in Nuclei-style YAML format.
 type Template struct {
@@ -11,6 +14,9 @@ type Template struct {
 	Action string       `yaml:"action"` // "allow", "ask", "deny"
 	Reason string       `yaml:"reason"` // supports {{.Verb}}, {{.ResourceType}} etc.
 	Impact string       `yaml:"impact,omitempty"`
+
+	compiledReason *template.Template
+	compiledImpact *template.Template
 }
 
 // TemplateInfo holds metadata about a template.
@@ -39,6 +45,8 @@ type MatchSpec struct {
 	Port         []Port   `yaml:"port,omitempty"`
 	Method       []string `yaml:"method,omitempty"`
 	Path         []string `yaml:"path,omitempty"` // supports glob and regex (prefixed with "re:")
+
+	compiledPaths []*regexp.Regexp
 }
 
 // ScanSpec defines content scanning rules applied to the payload/body.
