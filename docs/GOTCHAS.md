@@ -1385,3 +1385,12 @@ installation could also return success. Shell setup must finish so recovery is
 possible, but its success must not erase the component failure or claim that
 policy enforcement is active. Test the final exit status and user-visible text,
 including the unavailable-supervisor and partial-registration paths.
+
+## Cost success responses must carry limitations
+
+The Cost route tests passed while the local provider logged stale-index and
+pricing warnings only at debug level and returned a healthy-looking total.
+Budget configuration errors also silently removed alerts. Preserve partial
+results, but carry typed warnings and freshness through the API to the total.
+A fake provider success test cannot establish the real provider reports
+incomplete data.

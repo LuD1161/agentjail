@@ -156,6 +156,8 @@ export interface CostBudgetAlert {
 }
 
 export interface CostSummary {
+  warnings: { code: 'stale_index' | 'pricing_estimate' | 'budget_config_unavailable' | 'refresh_failed' | 'refresh_status_unavailable'; message: string }[]
+  indexed_at: string
   period: string
   total_cost: number
   session_count: number

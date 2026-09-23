@@ -475,7 +475,9 @@ Opens a loopback-only viewer at `http://127.0.0.1:9101` backed by
 filters, policy-mutation audit events, redacted session-bundle downloads, and a
 Cost tab that groups locally discovered Claude Code, Codex, and OpenCode transcript
 spend by project and model. The Cost tab also shows token efficiency and budget
-alerts configured in `policy.yaml`.
+alerts configured in `policy.yaml`. It shows the indexed-through time beside
+estimated spend and flags failed refreshes, stale usage, incomplete pricing, and unavailable
+budget configuration rather than presenting partial estimates as complete.
 
 The same locally computed report is available as a terminal dashboard:
 
