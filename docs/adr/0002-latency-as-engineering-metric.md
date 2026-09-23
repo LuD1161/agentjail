@@ -96,6 +96,28 @@ UX metric.
 > explain "yes it says 21 ms but it's actually ~10 ms total" — which is worse
 > than just not showing the number.
 
+## Enforced hook measurement (2026-09-23)
+
+The hook smoke gate now fails when warm serial end-to-end p95 reaches 50 ms.
+Each workload has ten warm-ups and 100 measured real hook processes. A single
+Python process uses a monotonic clock around subprocess execution, excluding
+payload preparation and response validation. Every sample must return an
+explicit allow without a degradation notice; fast fail-open responses cannot
+pass the performance gate. Regression checks exercise the missed-budget and
+fail-open rejection paths before the benchmark runs.
+
+The same harness reports uncached small requests, warm 512 KiB inputs, and four
+concurrent small requests. These are diagnostic workloads with no new absolute
+budgets. The existing Go latency test measures daemon socket round trips with
+an inline policy; its median assertion does not substitute for this real-hook
+p95 gate.
+
+A local macOS arm64 run after the scanner and logging changes measured warm
+small p95 14.65 ms, uncached small 16.22 ms, warm 512 KiB 32.94 ms, and concurrent
+small 21.86 ms. These are one-run developer measurements on a machine also
+running tests, not a before/after comparison or a portable performance claim.
+Run `bash cmd/agentjail-hook/test/smoke.sh` to reproduce the workload.
+
 ### Hook transport allocation and framing
 
 Hook and daemon scanners start at 4 KiB and grow only when a frame needs it;

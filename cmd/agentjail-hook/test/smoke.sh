@@ -9,8 +9,7 @@
 # Run from the repo root. Requires Go (to build the binaries).
 # Exit code 0 = all fixtures pass.  Non-zero = one or more fixtures failed.
 #
-# Latency note: After the warm-up fixture, fixture 1 is re-run 10 times and
-# median + p95 latency is reported.
+# Latency uses real hook processes and gates warm end-to-end p95 at 50 ms.
 
 set -euo pipefail
 
@@ -380,36 +379,15 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 4 — Latency benchmark (10 runs of Fixture 1)
+# Step 4 — Latency benchmark
 # ---------------------------------------------------------------------------
 
-echo "=== Latency benchmark (10 warm runs of F1) ==="
-JSON_BENCH='{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"${CWD}"'/bench.txt","content":"hello"},"session_id":"bench","cwd":"'"${CWD}"'"}'
-
-declare -a LATENCIES
-for i in $(seq 1 10); do
-    T_START=$(ns_now)
-    echo "$JSON_BENCH" | AGENTJAIL_SOCKET="$SOCK" "${HOOK_BIN}" >/dev/null 2>&1
-    T_END=$(ns_now)
-    LATENCIES+=( $(elapsed_ms "$T_START" "$T_END") )
-done
-
-# Sort and compute median + p95
-SORTED=($(printf '%s\n' "${LATENCIES[@]}" | sort -n))
-N=${#SORTED[@]}
-MEDIAN=${SORTED[$((N/2))]}
-P95_IDX=$(( (N * 95 / 100) ))
-[ "$P95_IDX" -ge "$N" ] && P95_IDX=$((N-1))
-P95=${SORTED[$P95_IDX]}
-
-echo "  Latencies (ms): ${SORTED[*]}"
-echo "  Median: ${MEDIAN}ms"
-echo "  p95:    ${P95}ms"
-
-if [ "$P95" -lt 50 ]; then
-    info "p95 < 50ms target: MET (${P95}ms)"
+echo "=== Hook latency (100 samples per workload) ==="
+python3 -B -m unittest discover -s "${REPO_ROOT}/cmd/agentjail-hook/test" -p latency_test.py
+if python3 "${REPO_ROOT}/cmd/agentjail-hook/test/latency.py" "${HOOK_BIN}" "${SOCK}" "${CWD}"; then
+    pass "warm hook p95 < 50ms; all workloads returned explicit decisions"
 else
-    info "p95 < 50ms target: MISSED (${P95}ms) — see findings"
+    fail "hook latency or decision validation failed"
 fi
 echo ""
 
