@@ -7,10 +7,10 @@
   </picture>
 </p>
 
-### Policy guardrails for coding agents - _your agent literally can't do that_
+### Policy checks and OS sandboxing for coding agents
 
 A safety rail for Claude Code, Codex, and Cursor. <br>
-Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
+Install policy hooks, then launch your agent through AgentJail for OS-level filesystem protection.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
 &nbsp;![v1.8.0](https://img.shields.io/badge/v1.8.0-released-orange)
@@ -28,6 +28,16 @@ or
 ```
 brew install LuD1161/tap/agentjail
 ```
+
+Follow the installer's shell activation instruction, restart any running agent, then start your first protected session:
+
+```sh
+agentjail doctor                       # check protection and follow any recovery steps
+agentjail try --read ~/.ssh/id_rsa      # safe policy simulation; reads nothing
+agentjail run -- codex                 # or: agentjail run -- claude / agent
+```
+
+Installation registers hooks; `agentjail run` adds the OS sandbox. Hooks alone are cooperative checks, not a filesystem isolation boundary. For automatic sandboxing of ordinary agent commands, opt into the [PATH shim](#install). Use `--tunnel` when you also want network visibility; the launch banner reports the active protection level.
 
 <br>
 
@@ -79,11 +89,11 @@ See [`CHANGELOG.md`](./CHANGELOG.md) for full details, or check the [releases pa
 
 ## How it works
 
-Every tool call your agent makes is checked against a policy in **~8 ms** before it runs:
+Supported agent tool calls are checked against policy before execution while the daemon is available:
 
 ```
 Claude Code / Codex / Cursor
-    │  (PreToolUse hook - every tool call)
+    │  (supported agent tool hooks)
     ▼
 agentjail-hook ── Unix socket ──▶ agentjail-daemon ──▶ OPA Rego rules
     │                                                      │
@@ -98,13 +108,13 @@ agentjail-hook ── Unix socket ──▶ agentjail-daemon ──▶ OPA Rego 
 
 </div>
 
-You keep working exactly as before. The only difference: the dumb stuff quietly never happens.
+Hooks provide policy decisions and explanations. Launching through `agentjail run` adds the OS sandbox, which enforces filesystem restrictions independently of the hook daemon.
 
 - 🪝 **Zero-config** - one install command auto-detects your agents and wires the hook
 - ⚡ **~8 ms median** - persistent OPA daemon + decision cache. You won't feel it
 - 🛡️ **Defense in depth** - hook-level policy + optional kernel sandbox (`agentjail-shield`)
 - 📜 **Real policy engine** - [OPA](https://www.openpolicyagent.org/) Rego rules, not regex hacks
-- 🔒 **Fail-closed** - when in doubt, deny
+- 🔒 **Explicit failure posture** — credential and approval authorization fail closed. Ordinary hooks default to a limited offline denylist when the daemon is unavailable; other calls may proceed. Choose `daemon_unreachable: deny` for strict hook failure behavior. [Details](#when-the-daemon-is-unreachable).
 
 ---
 
@@ -226,6 +236,11 @@ Auto-detects your agents (Claude Code, Codex, Cursor), registers hooks, and requ
 
 Setup failures return a nonzero status after finishing PATH setup, so the CLI remains available for diagnosis. Downloads use a 10-second connection timeout, a 120-second limit per attempt, and at most two retries within a 240-second retry window. Re-running the installer repairs its managed shell activation line without duplicating it. `AGENTJAIL_HOME` selects the shell installer's binary/activation directory; the CLI's policy, daemon, and other runtime state still use `~/.agentjail`. `AGENTJAIL_NO_MODIFY_PATH=1` leaves shell profiles unchanged. For installed Claude Code and Codex hooks, AgentJail also owns one fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block tells the agent how to request bounded host access without routing MCP or credential operations around their normal approval paths. Install and update refresh only that block; other instructions, file modes, and instruction-file symlinks are preserved.
 
+Before starting work, run `agentjail doctor`, resolve any reported failures, and launch with `agentjail run -- codex` (or `claude` / Cursor's `agent`). `agentjail try --read ~/.ssh/id_rsa` checks native file-read policy without opening the file; it does not test the OS sandbox.
+
+<details>
+<summary>Agent integration details and governed host access</summary>
+
 Cursor shell, file-read, and MCP events are normalized into the same policy
 contract as Claude Code and Codex. Cursor cannot prompt interactively for a
 file read, so an agentjail `ask` verdict on `beforeReadFile` fails closed as a
@@ -283,11 +298,13 @@ supported. See [ADR 0134-host-proxy-mvp](./docs/adr/0134-host-proxy-mvp.md) and
 Each `apply_patch` target is normalized to the same file-policy contract as an
 Edit, so a multi-file patch is denied when any target is protected.
 
+</details>
+
 ```sh
 agentjail status                      # quick installed-component snapshot
 agentjail doctor                      # comprehensive protection diagnostics
 agentjail doctor --fix                # repair what it can (dead daemon, dangling shim, stale service unit), then re-check
-agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
+agentjail try --read ~/.ssh/id_rsa      # native read policy: DENY; reads nothing
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail logs --latest 1000 --json   # newest 1000 matching decisions, chronological JSON
 agentjail stats                       # aggregate final outcomes, policy denies, latency, and coverage
@@ -654,7 +671,7 @@ capability to `false` for a strict standing posture.
 | `file_policy/agentjail_self` | reads/writes to agentjail's own config and binaries |
 | `library/no-daemon-kill` | `kill` / `pkill` targeting `agentjail-daemon` |
 | `command_policy/no-policy-mutation` | CLI commands that would mutate policy non-interactively |
-| `resolver/default` | the default deny resolver (fail-closed fallback) |
+| `resolver/default` | asks when no policy candidate matches; adapters without an approval path deny |
 
 `file_policy/hook_config` asks (does not block) on Write/Edit to `~/.claude/settings*.json` to prevent silent hook removal. It is not locked, so it can be disabled like any other rule; it does not cover `~/.codex/` or `~/.cursor/`.
 
