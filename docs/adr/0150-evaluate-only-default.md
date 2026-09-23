@@ -60,3 +60,14 @@ network events carry would-action separately from effective action.
 - `agentjail monitor` remains a tool-policy report; network matches are recorded
   in the network store and shown in the network view.
 - This source change does not install or activate a new daemon or signed app.
+
+## Clean-machine acceptance clarification — 2026-09-23
+
+The network transport has no per-request approval transport. In explicit
+`enforce` mode, a network `ask` must therefore block until approval support
+exists; silently forwarding it would grant unapproved access. HTTP/1 and HTTP/2
+return 403, and TCP closes without relaying. Records retain the canonical `ask`
+verdict and the blocking status. In monitor mode, both deny and ask remain
+non-blocking and retain `would_action`. AGE-293 clean-machine validation exposed
+this gap; the HTTP test matrix now checks mode, upstream reachability, response,
+and audit values together.

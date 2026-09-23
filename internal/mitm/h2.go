@@ -204,7 +204,7 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 				"proto", "h2",
 			)
 
-			if strings.EqualFold(result.Action, "deny") {
+			if result.BlocksWithoutApproval() {
 				denyBody, _ := json.Marshal(map[string]string{
 					"error":    "blocked by agentjail network policy",
 					"template": result.Template.ID,

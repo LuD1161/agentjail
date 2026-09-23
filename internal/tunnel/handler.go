@@ -128,7 +128,7 @@ func (g *Gateway) handleConn(c net.Conn) {
 	// Step 4: Policy evaluation.
 	if g.matcher != nil {
 		result := g.matcher.Evaluate(op)
-		if result != nil && result.Action == "deny" {
+		if result.BlocksWithoutApproval() {
 			log.Warn("connection denied by policy",
 				"template", result.Template.ID,
 				"reason", result.Reason,
@@ -405,7 +405,7 @@ func (g *Gateway) relayManaged(client, upstream net.Conn, hostname string, port 
 								mh.RecordPolicyDecision(op, res, 0, int64(n))
 							}
 						}
-						if res != nil && res.Action == "deny" {
+						if res.BlocksWithoutApproval() {
 							if log != nil {
 								log.Warn("managed-port deny mid-stream; tearing down connection",
 									"protocol", op.Protocol,

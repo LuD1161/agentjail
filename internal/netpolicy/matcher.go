@@ -31,6 +31,12 @@ type MatchResult struct {
 	ScanHits    []ScanHit // any PII/pattern matches found
 }
 
+// BlocksWithoutApproval keeps network asks closed until an approval transport exists.
+// Monitor rendering has already changed Action to allow (ADR 0150-evaluate-only-default).
+func (r *MatchResult) BlocksWithoutApproval() bool {
+	return r != nil && (strings.EqualFold(r.Action, "deny") || strings.EqualFold(r.Action, "ask"))
+}
+
 // ScanHit records a single content-scan match.
 type ScanHit struct {
 	RuleName string // e.g. "SSN", "Credit Card"

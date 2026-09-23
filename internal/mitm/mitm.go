@@ -296,7 +296,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 					"template", result.Template.ID,
 				)
 
-				if strings.EqualFold(result.Action, "deny") {
+				if result.BlocksWithoutApproval() {
 					denied = true
 					denyBody, _ := json.Marshal(map[string]string{
 						"error":    "blocked by agentjail network policy",
