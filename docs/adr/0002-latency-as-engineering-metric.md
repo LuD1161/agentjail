@@ -104,3 +104,9 @@ before decoding the selected request type. `BenchmarkHookConnection` reports
 full connection cost and allocations for small and large benign tool inputs.
 It isolates transport/recording overhead with a trivial evaluator and is not an
 OPA or end-to-end agent latency claim.
+
+Log-only summary and tool-input redaction run after the daemon sends the policy
+response. Approval-display redaction remains response-critical, and SQLite
+still redacts independently at its storage boundary. The connection benchmark
+also reports `response-ns/op` (request encode through response decode), separately
+from total work including post-response logging.

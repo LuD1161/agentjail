@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"github.com/LuD1161/agentjail/internal/policyeval"
@@ -35,10 +36,12 @@ func BenchmarkHookConnection(b *testing.B) {
 			srv := &server{evaluator: benchmarkEvaluator{}}
 			b.ReportAllocs()
 			b.ResetTimer()
+			var responseTime time.Duration
 			for i := 0; i < b.N; i++ {
 				client, peer := net.Pipe()
 				srv.wg.Add(1)
 				go srv.handleConn(context.Background(), peer)
+				start := time.Now()
 				if err := json.NewEncoder(client).Encode(req); err != nil {
 					b.Fatal(err)
 				}
@@ -46,9 +49,11 @@ func BenchmarkHookConnection(b *testing.B) {
 				if err := json.NewDecoder(client).Decode(&resp); err != nil {
 					b.Fatal(err)
 				}
+				responseTime += time.Since(start)
 				client.Close()
 				srv.wg.Wait()
 			}
+			b.ReportMetric(float64(responseTime.Nanoseconds())/float64(b.N), "response-ns/op")
 		})
 	}
 }

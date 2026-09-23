@@ -755,18 +755,6 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			s.recordTelemetry(resp.Action, resp.RuleID, req.ToolName, req.Agent, elapsed)
 		}
 
-		// Extract a short identifying summary from tool_input — the command
-		// string for Bash, the file_path for file tools, MCP server name for
-		// MCP calls. Truncated to keep the log line bounded. This is what the
-		// `agentjail logs -v` formatter shows on the same row as the verdict.
-		summary := store.RedactText(policyeval.SummarizeToolInput(req.ToolName, req.ToolInput))
-
-		// Full redacted input for the log line, same redactor + 4096 cap the
-		// store persists (ADR 0019). The UI's live SSE feed is parsed from
-		// this log; with only the 200-char summary, the monitor's detail
-		// pane showed live events cut mid-command.
-		redactedInput := store.RedactToolInput(req.ToolInput)
-
 		// Write the response to the client BEFORE logging. This ensures that
 		// log rotation (which holds a mutex and may do file I/O) does not add
 		// latency to the hook response. The client is unblocked first; the log
@@ -793,6 +781,10 @@ func (s *server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 			// Fall through to log the eval result even when the client is gone.
 		}
+
+		// Log values remain redacted after response delivery; see ADR 0019-redaction-policy.
+		summary := store.RedactText(policyeval.SummarizeToolInput(req.ToolName, req.ToolInput))
+		redactedInput := store.RedactToolInput(req.ToolInput)
 
 		// NOTE on `elapsed_us` (see docs/adr/0002-latency-as-engineering-metric.md):
 		// This measures cache lookup + (on miss) OPA Rego eval + cache set —
