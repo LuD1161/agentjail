@@ -356,3 +356,44 @@ func TestRequestStoreOwnerPIDRoundTrip(t *testing.T) {
 		t.Errorf("owner_pid: got %d, want 424242", results[0].OwnerPID)
 	}
 }
+
+func TestRequestStoreCursorDrainsBurst(t *testing.T) {
+	st, err := NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	for n := 0; n < 451; n++ {
+		if err := st.Log(&RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest, err := st.Query(ctx, RequestFilter{Limit: 1})
+	if err != nil || len(latest) != 1 || latest[0].ID != 451 {
+		t.Fatalf("latest = %v, %v", latest, err)
+	}
+	var lastID int64
+	for _, wantCount := range []int{200, 200, 51, 0} {
+		rows, err := st.Query(ctx, RequestFilter{AfterID: lastID, Order: RequestsOldestFirst, Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != wantCount {
+			t.Fatalf("page length = %d, want %d", len(rows), wantCount)
+		}
+		for _, row := range rows {
+			if row.ID != lastID+1 {
+				t.Fatalf("cursor skipped from %d to %d", lastID, row.ID)
+			}
+			lastID = row.ID
+		}
+	}
+	if err := st.Log(&RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.Query(ctx, RequestFilter{AfterID: lastID, Order: RequestsOldestFirst, Limit: 200})
+	if err != nil || len(rows) != 1 || rows[0].ID != lastID+1 {
+		t.Fatalf("appended page = %v, %v", rows, err)
+	}
+}

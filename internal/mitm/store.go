@@ -74,13 +74,22 @@ type RequestLog struct {
 	bodiesFinished bool
 }
 
-// RequestFilter selects requests for Query. Zero-value fields are not
-// filtered on.
+// RequestOrder selects the direction of request IDs returned by Query.
+type RequestOrder uint8
+
+const (
+	RequestsNewestFirst RequestOrder = iota
+	RequestsOldestFirst
+)
+
+// RequestFilter selects requests for Query. Zero-value fields are not filtered on.
 type RequestFilter struct {
-	Host   string
-	Method string
-	Limit  int
-	Since  time.Duration
+	AfterID int64
+	Order   RequestOrder
+	Host    string
+	Method  string
+	Limit   int
+	Since   time.Duration
 }
 
 // HostStats contains per-host aggregated traffic statistics.
@@ -414,6 +423,10 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 		conds []string
 		args  []interface{}
 	)
+	if filter.AfterID > 0 {
+		conds = append(conds, "id > ?")
+		args = append(args, filter.AfterID)
+	}
 	if filter.Host != "" {
 		conds = append(conds, "host = ?")
 		args = append(args, filter.Host)
@@ -443,7 +456,11 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
-	q += " ORDER BY id DESC"
+	if filter.Order == RequestsOldestFirst {
+		q += " ORDER BY id ASC"
+	} else {
+		q += " ORDER BY id DESC"
+	}
 	q += fmt.Sprintf(" LIMIT %d", clampLimit(filter.Limit))
 
 	rows, err := s.db.QueryContext(ctx, q, args...)

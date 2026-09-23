@@ -1564,19 +1564,24 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only rows logged after the client connected: the table loads history via
+	// /api/requests, and replaying it here would double every row.
+	var lastID int64
+	rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: 1})
+	if err != nil {
+		writeJSONError(w, netUnavailableMsg, http.StatusServiceUnavailable)
+		return
+	}
+	if len(rows) > 0 {
+		lastID = rows[0].ID
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	fmt.Fprint(w, ":ok\n\n")
 	flusher.Flush()
-
-	// Only rows logged after the client connected: the table loads history via
-	// /api/requests, and replaying it here would double every row.
-	var lastID int64
-	if rows, err := st.Query(r.Context(), mitm.RequestFilter{Limit: 1}); err == nil && len(rows) > 0 {
-		lastID = rows[0].ID
-	}
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -1586,30 +1591,50 @@ func (s *Server) handleRequestsStream(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rows, err := st.Query(ctx, mitm.RequestFilter{Limit: defaultStreamPage})
-			if err != nil {
-				continue
-			}
-			unifySessionIDs(rows)
-			for i := len(rows) - 1; i >= 0; i-- { // Query is newest-first; emit oldest-first.
-				if rows[i].ID <= lastID {
-					continue
-				}
-				b, err := json.Marshal(rows[i])
-				if err != nil {
-					continue
-				}
-				fmt.Fprintf(w, "data: %s\n\n", b)
-				lastID = rows[i].ID
+			lastID, err = streamRequestBatch(ctx, st, w, lastID)
+			if ctx.Err() != nil || (err != nil && !errors.Is(err, errRequestStreamQuery)) {
+				return
 			}
 			flusher.Flush()
 		}
 	}
 }
 
-// defaultStreamPage bounds one poll. A burst larger than this catches up on
-// the next tick, since lastID only advances over rows actually emitted.
-const defaultStreamPage = 200
+// Bound each poll while draining bursts across several oldest-first pages.
+const (
+	defaultStreamPage = 200
+	maxStreamPages    = 10
+)
+
+type requestStreamReader interface {
+	Query(context.Context, mitm.RequestFilter) ([]mitm.RequestLog, error)
+}
+
+var errRequestStreamQuery = errors.New("request stream query failed")
+
+func streamRequestBatch(ctx context.Context, st requestStreamReader, w io.Writer, lastID int64) (int64, error) {
+	for page := 0; page < maxStreamPages; page++ {
+		rows, err := st.Query(ctx, mitm.RequestFilter{AfterID: lastID, Order: mitm.RequestsOldestFirst, Limit: defaultStreamPage})
+		if err != nil {
+			return lastID, fmt.Errorf("%w: %w", errRequestStreamQuery, err)
+		}
+		unifySessionIDs(rows)
+		for _, row := range rows {
+			b, err := json.Marshal(row)
+			if err != nil {
+				return lastID, err
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+				return lastID, err
+			}
+			lastID = row.ID
+		}
+		if len(rows) < defaultStreamPage {
+			break
+		}
+	}
+	return lastID, nil
+}
 
 // handleNetworkSessions aggregates rows per session. The store has no
 // Sessions() and internal/mitm is not this package's to change.

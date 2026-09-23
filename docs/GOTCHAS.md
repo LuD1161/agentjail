@@ -1382,3 +1382,16 @@ cleared the project cache. Overlay hashes alone did not invalidate that engine.
 Project cache lookup and publication now validate the global generation under
 the engine lock. Derived caches must track every input's version, including
 inputs whose bytes are not part of their local content hash.
+
+---
+
+## A newest-first page cannot drain a live cursor
+
+The network SSE stream fetched the latest 200 rows and advanced its cursor to
+the newest emitted row. Bursts larger than one page silently lost their older
+rows even though ordinary endpoint tests passed.
+
+- **Rule:** stream catch-up queries must seek after the last delivered ID and
+  read oldest-first. Test more than two pages plus arrivals after catch-up.
+  A transient query failure must retain the delivered cursor for retry; reopening
+  a stream at the newest row silently skips the backlog.

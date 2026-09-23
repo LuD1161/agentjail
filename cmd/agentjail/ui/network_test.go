@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -203,5 +206,159 @@ func TestNetworkStatsJSONContract(t *testing.T) {
 	}
 	if h["avg_latency_ms"] != float64(300) {
 		t.Errorf("avg_latency_ms = %v, want 300", h["avg_latency_ms"])
+	}
+}
+
+func TestNetworkStreamDeliversBurstAcrossPages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "network.db")
+	st, err := mitm.NewRequestStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := mitm.OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	s := &Server{netStore: ro}
+	server := httptest.NewServer(http.HandlerFunc(s.handleRequestsStream))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != ":ok" {
+		t.Fatalf("missing ready frame: %s, %v", scanner.Text(), scanner.Err())
+	}
+	for n := 0; n < 451; n++ {
+		if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var received int
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var row mitm.RequestLog
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &row); err != nil {
+			t.Fatal(err)
+		}
+		received++
+		if row.ID != int64(received+1) {
+			t.Fatalf("received ID %d, want %d", row.ID, received+1)
+		}
+		if received == 451 {
+			return
+		}
+	}
+	t.Fatalf("received only %d rows: %v", received, scanner.Err())
+}
+
+func TestNetworkStreamPollIsBoundedAndCatchesUp(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	const total = defaultStreamPage*maxStreamPages + 51
+	for n := 0; n < total; n++ {
+		if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := httptest.NewRecorder()
+	last, err := streamRequestBatch(context.Background(), st, first, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last != defaultStreamPage*maxStreamPages {
+		t.Fatalf("first poll cursor = %d", last)
+	}
+	if count := strings.Count(first.Body.String(), "data: "); count != defaultStreamPage*maxStreamPages {
+		t.Fatalf("first poll rows = %d", count)
+	}
+	second := httptest.NewRecorder()
+	last, err = streamRequestBatch(context.Background(), st, second, last)
+	if err != nil || last != total || strings.Count(second.Body.String(), "data: ") != 51 {
+		t.Fatalf("catch-up cursor = %d, error = %v", last, err)
+	}
+}
+
+type interruptedStreamReader struct {
+	store *mitm.RequestStore
+	calls int
+	err   error
+}
+
+func (r *interruptedStreamReader) Query(ctx context.Context, filter mitm.RequestFilter) ([]mitm.RequestLog, error) {
+	r.calls++
+	if r.calls == 2 {
+		return nil, r.err
+	}
+	return r.store.Query(ctx, filter)
+}
+
+type failedStreamWriter struct{ err error }
+
+func (w failedStreamWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestNetworkStreamRetriesQueryFailureFromLastEmittedID(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for n := 0; n < 451; n++ {
+		if err := st.Log(&mitm.RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	transient := errors.New("temporary read interruption")
+	reader := &interruptedStreamReader{store: st, err: transient}
+	response := httptest.NewRecorder()
+	last, err := streamRequestBatch(context.Background(), reader, response, 0)
+	if last != defaultStreamPage || !errors.Is(err, errRequestStreamQuery) || !errors.Is(err, transient) {
+		t.Fatalf("interrupted batch cursor = %d, error = %v", last, err)
+	}
+	last, err = streamRequestBatch(context.Background(), reader, response, last)
+	if err != nil || last != 451 {
+		t.Fatalf("retry cursor = %d, error = %v", last, err)
+	}
+	scanner := bufio.NewScanner(response.Body)
+	received := 0
+	for scanner.Scan() {
+		if !strings.HasPrefix(scanner.Text(), "data: ") {
+			continue
+		}
+		var row mitm.RequestLog
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(scanner.Text(), "data: ")), &row); err != nil {
+			t.Fatal(err)
+		}
+		received++
+		if row.ID != int64(received) {
+			t.Fatalf("out-of-sequence ID %d after %d rows", row.ID, received)
+		}
+	}
+	if scanner.Err() != nil || received != 451 {
+		t.Fatalf("received %d rows: %v", received, scanner.Err())
+	}
+	writeErr := errors.New("client disconnected")
+	last, err = streamRequestBatch(context.Background(), st, failedStreamWriter{writeErr}, 0)
+	if last != 0 || !errors.Is(err, writeErr) || errors.Is(err, errRequestStreamQuery) {
+		t.Fatalf("write failure cursor = %d, error = %v", last, err)
 	}
 }

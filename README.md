@@ -1112,3 +1112,7 @@ dashboard, supplemented by source-dated official rates for current agent models
 that have not reached Gryph's bundled catalog yet. Gryph never receives
 transcript content or usage data from AgentJail; all pricing is evaluated
 locally.
+
+The Network UI streams requests in ID order and catches up across polling pages,
+so traffic bursts larger than a single page remain visible. Each two-second
+poll drains up to ten 200-row pages and resumes from its cursor on the next poll.
