@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -96,9 +95,12 @@ type evaluator struct {
 	cfg     *agentconfig.PolicyConfig
 	modules [][2]string
 
-	// repoRootCache maps canonical cwd -> git repo root (or "" for non-git dirs).
-	repoRootMu    sync.RWMutex
-	repoRootCache map[string]string
+	// Repository discovery is coalesced and cached with bounded freshness.
+	repoRootMu       sync.Mutex
+	repoRootCache    map[string]repoRootEntry
+	repoRootInFlight map[string]*repoRootFlight
+	findRepoRoot     func(context.Context, string) (string, error)
+	repoRootNow      func() time.Time
 
 	// awsProfiles is a lazily-parsed view of ~/.aws/config.
 	awsCfgMu    sync.Mutex
@@ -135,7 +137,7 @@ func (e *evaluator) Eval(ctx context.Context, req Request) (Response, error) {
 		ToolInput: normalizedInput,
 		SessionID: req.SessionID,
 		CWD:       canonCWD,
-		RepoRoot:  e.resolveRepoRoot(canonCWD),
+		RepoRoot:  e.resolveRepoRoot(ctx, canonCWD),
 	}
 
 	// AWS account resolution (ADR 0017): for `aws --profile <name>` CLI
@@ -247,6 +249,10 @@ func (e *evaluator) Reload(ctx context.Context, modules [][2]string, cfg *agentc
 	e.projectEngines = nil
 	e.projectEngMu.Unlock()
 
+	e.repoRootMu.Lock()
+	e.repoRootCache = nil
+	e.repoRootMu.Unlock()
+
 	return nil
 }
 
@@ -317,41 +323,4 @@ func SummarizeToolInput(tool string, in map[string]interface{}) string {
 		s = s[:maxLen-1] + "…"
 	}
 	return s
-}
-
-// resolveRepoRoot returns the git repo root for the given canonical cwd.
-// Results are cached.
-func (e *evaluator) resolveRepoRoot(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
-
-	e.repoRootMu.RLock()
-	if root, ok := e.repoRootCache[cwd]; ok {
-		e.repoRootMu.RUnlock()
-		return root
-	}
-	e.repoRootMu.RUnlock()
-
-	// Run git rev-parse --show-toplevel with a short timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	root := ""
-	if err == nil {
-		root = strings.TrimSpace(string(out))
-		if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil {
-			root = resolved
-		}
-	}
-
-	e.repoRootMu.Lock()
-	if e.repoRootCache == nil {
-		e.repoRootCache = make(map[string]string)
-	}
-	e.repoRootCache[cwd] = root
-	e.repoRootMu.Unlock()
-
-	return root
 }

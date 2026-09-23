@@ -1405,3 +1405,16 @@ Functional tests passed without measuring subprocess count or lock progress.
 
 - **Rule:** key metadata by working directory, cache negative results with an
   explicit expiry, bound subprocess time, and perform I/O outside state locks.
+
+---
+
+## Repository discovery failures need an expiry
+
+A successful test in an already-initialized repository hid permanent negative
+caching: one failed Git lookup, or a lookup before `git init`, disabled project
+root discovery for that directory until daemon restart. Discovery now honors
+caller cancellation, coalesces concurrent lookups, and expires negative results
+after one second and successful results after one minute. Cancellation and
+deadline failures are never cached; healthy waiters retry when a coalesced
+lookup loses its initiating context. Policy reload clears cached roots. Cache
+freshness must account for filesystem changes and transient subprocess errors.
