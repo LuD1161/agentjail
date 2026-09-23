@@ -190,6 +190,7 @@ func (rh *h2RecordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 		if result := h.Matcher.Evaluate(op); result != nil {
 			reqLog.PolicyAction = result.Action
+			reqLog.WouldAction = result.WouldAction
 			reqLog.PolicyTemplate = result.Template.ID
 			reqLog.PolicyReason = result.Reason
 

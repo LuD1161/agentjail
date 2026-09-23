@@ -356,3 +356,66 @@ func TestRequestStoreOwnerPIDRoundTrip(t *testing.T) {
 		t.Errorf("owner_pid: got %d, want 424242", results[0].OwnerPID)
 	}
 }
+
+func TestRequestStoreMonitorVerdictSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "network.db")
+	writer, err := NewRequestStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Log(&RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET", Path: "/", URL: "https://example.test/", PolicyAction: "allow", WouldAction: "deny", PolicyTemplate: "test", StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	rows, err := reader.Query(context.Background(), RequestFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].PolicyAction != "allow" || rows[0].WouldAction != "deny" || rows[0].StatusCode != 200 {
+		t.Fatalf("persisted monitor decision = %+v", rows)
+	}
+}
+
+func TestReadOnlyNetworkStoreBeforeMonitorMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "network.db")
+	writer, err := NewRequestStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Log(&RequestLog{Ts: time.Now(), Host: "example.test", Method: "GET", Path: "/", URL: "https://example.test/", PolicyAction: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.db.Exec("ALTER TABLE network_requests DROP COLUMN would_action"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := reader.Query(context.Background(), RequestFilter{})
+	reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].PolicyAction != "deny" || rows[0].WouldAction != "" {
+		t.Fatalf("legacy rows = %+v", rows)
+	}
+	upgraded, err := NewRequestStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	if !upgraded.hasColumn(context.Background(), "would_action") {
+		t.Fatal("monitor column not migrated")
+	}
+}

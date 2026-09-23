@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"net/netip"
 
 	"golang.zx2c4.com/wireguard/device"
@@ -34,6 +35,8 @@ type Config struct {
 
 	// PacksDir is the directory containing policy template YAML files.
 	PacksDir string
+
+	Enforcement agentconfig.EnforcementMode
 
 	// MTU is the tunnel MTU. Zero defaults to 1420.
 	MTU int

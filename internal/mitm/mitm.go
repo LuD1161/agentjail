@@ -283,6 +283,7 @@ func (h *MITMHandler) Handle(clientConn net.Conn, host, port string) {
 
 			if result := h.Matcher.Evaluate(op); result != nil {
 				reqLog.PolicyAction = result.Action
+				reqLog.WouldAction = result.WouldAction
 				reqLog.PolicyTemplate = result.Template.ID
 				reqLog.PolicyReason = result.Reason
 
@@ -422,6 +423,7 @@ func (h *MITMHandler) RecordPolicyDecision(op *netpolicy.Operation, result *netp
 		Agent:           h.Agent,
 		Cwd:             h.Cwd,
 		PolicyAction:    result.Action,
+		WouldAction:     result.WouldAction,
 		PolicyTemplate:  result.Template.ID,
 		PolicyReason:    result.Reason,
 		Service:         op.Service,

@@ -139,7 +139,10 @@ func (g *Gateway) handleConn(c net.Conn) {
 			return
 		}
 		if result != nil {
-			log = log.With("policy_action", result.Action, "template", result.Template.ID)
+			if result.WouldAction != "" && mh != nil {
+				mh.RecordPolicyDecision(op, result, 0, int64(len(peek)))
+			}
+			log = log.With("policy_action", result.Action, "would_action", result.WouldAction, "template", result.Template.ID)
 		}
 	}
 
@@ -393,7 +396,16 @@ func (g *Gateway) relayManaged(client, upstream net.Conn, hostname string, port 
 					inspections++
 					op, recognized := g.recognizeTCP(hostname, port, chunk)
 					if recognized && g.matcher != nil {
-						if res := g.matcher.Evaluate(op); res != nil && res.Action == "deny" {
+						res := g.matcher.Evaluate(op)
+						if res != nil && res.WouldAction != "" {
+							g.mu.Lock()
+							mh := g.mitmHandler
+							g.mu.Unlock()
+							if mh != nil {
+								mh.RecordPolicyDecision(op, res, 0, int64(n))
+							}
+						}
+						if res != nil && res.Action == "deny" {
 							if log != nil {
 								log.Warn("managed-port deny mid-stream; tearing down connection",
 									"protocol", op.Protocol,

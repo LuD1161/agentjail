@@ -198,6 +198,7 @@ func startTunnelDarwin(ctx context.Context, cfg *config.PolicyConfig, agentPath 
 		PeerPublicKey: agentPub,
 		TunnelAddr:    tunnelServerAddr,
 		PacksDir:      packsDir,
+		Enforcement:   cfg.Enforcement,
 	}
 	// v6 provisioning is flag-gated (AGE-262 Phase 1): only attempt it when the
 	// resolved on/off decision (resolveTunnelIPv6 in main.go — CLI flag > env

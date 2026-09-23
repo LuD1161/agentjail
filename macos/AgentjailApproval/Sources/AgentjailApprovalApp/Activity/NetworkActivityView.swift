@@ -196,7 +196,7 @@ private struct NetworkEventTable: View {
             case .blocked: ["deny", "block"].contains(event.policyAction.lowercased())
             case .errors: !event.error.isEmpty || event.statusCode >= 400
             }
-            let haystack = "\(event.host) \(event.path) \(event.agent) \(event.project) \(event.policyAction) \(event.policyReason)".lowercased()
+            let haystack = "\(event.host) \(event.path) \(event.agent) \(event.project) \(event.policyAction) \(event.wouldAction) \(event.policyReason)".lowercased()
             return matchesFilter && (query.isEmpty || haystack.contains(query))
         }
     }
@@ -257,7 +257,9 @@ private struct NetworkEventRow: View {
                 .font(.caption)
             }
             .frame(width: 145, alignment: .leading)
-            Text(event.policyAction.isEmpty ? "Observed" : event.policyAction.capitalized)
+            Text(event.wouldAction.isEmpty
+                 ? (event.policyAction.isEmpty ? "Observed" : event.policyAction.capitalized)
+                 : "Would \(event.wouldAction)")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(policyColor)
                 .frame(width: 88, alignment: .leading)

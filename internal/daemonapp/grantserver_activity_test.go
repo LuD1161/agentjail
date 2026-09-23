@@ -40,7 +40,7 @@ func TestLocalActivityProjectionIsBoundedRedactedAndSessionExact(t *testing.T) {
 		Ts: now, Host: "api.example.com", Method: "GET", Path: "/v1/items?token=secret-value",
 		URL: "https://api.example.com/v1/items?token=secret-value", StatusCode: 200,
 		SessionID: "capture-1", ClaudeSessionID: "session-1", Agent: "codex",
-		Cwd: "/Users/private/secret-project", PolicyAction: "allow",
+		Cwd: "/Users/private/secret-project", PolicyAction: "allow", WouldAction: "deny",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +62,9 @@ func TestLocalActivityProjectionIsBoundedRedactedAndSessionExact(t *testing.T) {
 		t.Fatalf("network snapshot = %+v", network)
 	}
 	event := network.Events[0]
+	if event.PolicyAction != "allow" || event.WouldAction != "deny" {
+		t.Fatalf("network verdict = %+v", event)
+	}
 	if event.Path != "/v1/items" || event.SessionID != "session-1" || event.Project != "secret-project" {
 		t.Fatalf("network event = %+v", event)
 	}

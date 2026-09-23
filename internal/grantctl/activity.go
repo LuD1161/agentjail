@@ -36,6 +36,7 @@ type NetworkEventV1 struct {
 	Project         string           `json:"project,omitempty"`
 	ToolName        string           `json:"tool_name,omitempty"`
 	PolicyAction    string           `json:"policy_action,omitempty"`
+	WouldAction     string           `json:"would_action,omitempty"`
 	PolicyReason    string           `json:"policy_reason,omitempty"`
 	Service         string           `json:"service,omitempty"`
 	Verb            string           `json:"verb,omitempty"`

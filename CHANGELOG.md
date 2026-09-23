@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+### Changed
+
+- Default policy verdicts to evaluate-only on every platform while retaining OS
+  isolation. Explicit `enforcement: enforce` remains supported. Network captures
+  preserve would-deny/would-ask verdicts and the native app displays configured
+  mode and observed policy matches. Offline fallback honors activated monitor mode.
+
 ### Added
 
 - **Observe-only MCP inventory for macOS**: the unified app reads global Claude

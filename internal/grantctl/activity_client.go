@@ -136,7 +136,7 @@ func validateSessionActionDetailV1(detail SessionActionDetailV1) error {
 }
 
 func networkEventText(event NetworkEventV1) []string {
-	return []string{event.Host, event.Method, event.Path, event.Error, event.SessionID, event.Agent, event.Project, event.ToolName, event.PolicyAction, event.PolicyReason, event.Service, event.Verb, event.ResourceType}
+	return []string{event.Host, event.Method, event.Path, event.Error, event.SessionID, event.Agent, event.Project, event.ToolName, event.PolicyAction, event.WouldAction, event.PolicyReason, event.Service, event.Verb, event.ResourceType}
 }
 
 func sessionActionText(entry SessionActionV1) []string {

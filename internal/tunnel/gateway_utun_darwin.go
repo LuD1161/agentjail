@@ -78,7 +78,7 @@ func NewGatewayUTun(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) 
 	// Load policy templates (optional; nil matcher means allow-all).
 	var matcher *netpolicy.Matcher
 	if cfg.PacksDir != "" {
-		matcher, err = netpolicy.NewMatcher(cfg.PacksDir)
+		matcher, err = netpolicy.NewMatcherForMode(cfg.Enforcement, cfg.PacksDir)
 		if err != nil {
 			kernelTun.Close()
 			return nil, "", fmt.Errorf("tunnel: loading policy templates: %w", err)
@@ -87,13 +87,13 @@ func NewGatewayUTun(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) 
 	}
 
 	g := &Gateway{
-		cfg:         cfg,
-		registry:    registry,
-		matcher:     matcher,
-		tnet:        tnet,
-		dev:         nil, // no WireGuard device in utun mode
-		kernelTun:   kernelTun,
-		logger:      logger,
+		cfg:       cfg,
+		registry:  registry,
+		matcher:   matcher,
+		tnet:      tnet,
+		dev:       nil, // no WireGuard device in utun mode
+		kernelTun: kernelTun,
+		logger:    logger,
 	}
 
 	// Bridge goroutines ferry raw IP packets between the kernel utun and the

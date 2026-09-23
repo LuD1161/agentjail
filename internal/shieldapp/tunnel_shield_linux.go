@@ -5,6 +5,7 @@ package shieldapp
 import (
 	"context"
 	"fmt"
+	"github.com/LuD1161/agentjail/agentpolicy/config"
 	"log/slog"
 	"os"
 	"strings"
@@ -72,7 +73,7 @@ func tunnelBlockedByUsernsRestriction() bool {
 	return !strings.Contains(string(label), "agentjail-shield")
 }
 
-func startTunnel(ctx context.Context, agentPath string, mitmEnabled bool, emitter audit.Emitter) (*tunnelSession, bool) {
+func startTunnel(ctx context.Context, cfg *config.PolicyConfig, agentPath string, mitmEnabled bool, emitter audit.Emitter) (*tunnelSession, bool) {
 	logger := slog.Default()
 
 	// Create the owned user+net+mount namespaces and the in-namespace TUN,
@@ -112,7 +113,7 @@ func startTunnel(ctx context.Context, agentPath string, mitmEnabled bool, emitte
 	// it the matcher is nil and the MITM is observe/log-only. Sourced from
 	// AGENTJAIL_NETPACKS_DIR, falling back to ~/.agentjail/netpacks when that dir
 	// exists, so enforcement is opt-in per install and empty by default.
-	gw, err := tunnel.NewForwardGateway(tunnel.Config{MTU: netns.TUNMTU, PacksDir: resolveNetpacksDir()}, registry, logger)
+	gw, err := tunnel.NewForwardGateway(tunnel.Config{MTU: netns.TUNMTU, PacksDir: resolveNetpacksDir(), Enforcement: cfg.Enforcement}, registry, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"agentjail-shield: could not create tunnel gateway (%v)\n"+

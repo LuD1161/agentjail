@@ -11,21 +11,24 @@ import (
 	"strings"
 	"text/template"
 
+	agentconfig "github.com/LuD1161/agentjail/agentpolicy/config"
 	"go.yaml.in/yaml/v3"
 )
 
 // Matcher loads templates and evaluates operations against them.
 type Matcher struct {
-	templates []Template
+	templates  []Template
+	monitoring bool
 }
 
 // MatchResult is the outcome of evaluating an operation against templates.
 type MatchResult struct {
-	Template *Template
-	Action   string    // "allow", "ask", "deny"
-	Reason   string    // with template variables expanded
-	Impact   string    // with template variables expanded
-	ScanHits []ScanHit // any PII/pattern matches found
+	Template    *Template
+	Action      string    // "allow", "ask", "deny"
+	WouldAction string    // canonical verdict when evaluate-only changes Action
+	Reason      string    // with template variables expanded
+	Impact      string    // with template variables expanded
+	ScanHits    []ScanHit // any PII/pattern matches found
 }
 
 // ScanHit records a single content-scan match.
@@ -47,6 +50,20 @@ func NewMatcher(templateDirs ...string) (*Matcher, error) {
 		all = append(all, ts...)
 	}
 	return &Matcher{templates: all}, nil
+}
+
+// NewMatcherForMode applies the global policy mode after selecting a verdict.
+// See ADR 0150-evaluate-only-default.
+func NewMatcherForMode(mode agentconfig.EnforcementMode, dirs ...string) (*Matcher, error) {
+	if mode != "" && mode != agentconfig.EnforcementMonitor && mode != agentconfig.EnforcementEnforce {
+		return nil, fmt.Errorf("invalid network enforcement mode %q", mode)
+	}
+	m, err := NewMatcher(dirs...)
+	if err != nil {
+		return nil, err
+	}
+	m.monitoring = mode != agentconfig.EnforcementEnforce
+	return m, nil
 }
 
 // ValidateDir reports whether every template in dir parses and is meaningful.
@@ -203,6 +220,10 @@ func (m *Matcher) Evaluate(op *Operation) *MatchResult {
 		}
 	}
 
+	if best != nil && m.monitoring && !strings.EqualFold(best.Action, "allow") {
+		best.WouldAction = best.Action
+		best.Action = "allow"
+	}
 	return best
 }
 

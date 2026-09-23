@@ -38,6 +38,7 @@ public struct NetworkEvent: Decodable, Identifiable, Equatable, Sendable {
     public let project: String
     public let toolName: String
     public let policyAction: String
+    public let wouldAction: String
     public let policyReason: String
     public let service: String
     public let verb: String
@@ -48,7 +49,7 @@ public struct NetworkEvent: Decodable, Identifiable, Equatable, Sendable {
         case timestampUnixMs = "timestamp_unix_ms", statusCode = "status_code"
         case requestSize = "request_size", responseSize = "response_size", elapsedMs = "elapsed_ms"
         case sessionID = "session_id", toolName = "tool_name", policyAction = "policy_action"
-        case policyReason = "policy_reason", resourceType = "resource_type"
+        case policyReason = "policy_reason", resourceType = "resource_type", wouldAction = "would_action"
     }
 
     public init(from decoder: Decoder) throws {
@@ -68,6 +69,7 @@ public struct NetworkEvent: Decodable, Identifiable, Equatable, Sendable {
         project = try sanitized(values, .project)
         toolName = try sanitized(values, .toolName)
         policyAction = try sanitized(values, .policyAction)
+        wouldAction = try sanitized(values, .wouldAction)
         policyReason = try sanitized(values, .policyReason)
         service = try sanitized(values, .service)
         verb = try sanitized(values, .verb)

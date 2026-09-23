@@ -63,6 +63,7 @@ type RequestLog struct {
 	Cwd            string `json:"cwd,omitempty"`
 	ToolName       string `json:"tool_name,omitempty"`
 	PolicyAction   string `json:"policy_action,omitempty"`
+	WouldAction    string `json:"would_action,omitempty"`
 	PolicyTemplate string `json:"policy_template,omitempty"`
 	PolicyReason   string `json:"policy_reason,omitempty"`
 	Service        string `json:"service,omitempty"`
@@ -216,6 +217,7 @@ func (s *RequestStore) migrate() error {
 			cwd TEXT,
 			tool_name TEXT,
 			policy_action TEXT,
+			would_action TEXT,
 			policy_template TEXT,
 			policy_reason TEXT,
 			service TEXT,
@@ -232,7 +234,7 @@ func (s *RequestStore) migrate() error {
 		}
 	}
 	// Idempotent column additions for policy decision tracking and body paths.
-	for _, col := range []string{"policy_action", "policy_template", "policy_reason", "service", "verb", "resource_type",
+	for _, col := range []string{"would_action", "policy_action", "policy_template", "policy_reason", "service", "verb", "resource_type",
 		"request_body_path", "response_body_path", "encoding_raw", "agent", "cwd",
 		"claude_session_id"} {
 		s.db.Exec(fmt.Sprintf("ALTER TABLE network_requests ADD COLUMN %s TEXT", col))
@@ -339,8 +341,8 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 		 elapsed_ms, request_headers, response_headers,
 		 request_body_path, response_body_path, encoding_raw,
 		 error, session_id, claude_session_id, owner_pid, agent, cwd, tool_name,
-		 policy_action, policy_template, policy_reason, service, verb, resource_type)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 policy_action, would_action, policy_template, policy_reason, service, verb, resource_type)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ts, entry.Host, entry.Method, entry.Path, entry.URL,
 		nullInt(entry.StatusCode), nullInt64(entry.RequestSize), nullInt64(entry.ResponseSize),
 		nullInt64(entry.ElapsedMs),
@@ -350,7 +352,7 @@ func (s *RequestStore) Log(entry *RequestLog) error {
 		nullStr(entry.Error),
 		nullStr(entry.SessionID), nullStr(entry.ClaudeSessionID), nullInt(entry.OwnerPID),
 		nullStr(entry.Agent), nullStr(entry.Cwd), nullStr(entry.ToolName),
-		nullStr(entry.PolicyAction), nullStr(entry.PolicyTemplate),
+		nullStr(entry.PolicyAction), nullStr(entry.WouldAction), nullStr(entry.PolicyTemplate),
 		nullStr(entry.PolicyReason), nullStr(entry.Service),
 		nullStr(entry.Verb), nullStr(entry.ResourceType),
 	)
@@ -434,11 +436,15 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 	if !s.hasColumn(ctx, "agent") || !s.hasColumn(ctx, "claude_session_id") {
 		agentCols = "'' AS claude_session_id, '' AS agent, '' AS cwd"
 	}
+	wouldColumn := "would_action"
+	if !s.hasColumn(ctx, "would_action") {
+		wouldColumn = "NULL AS would_action"
+	}
 	q := `SELECT id, ts, host, method, path, url, status_code, request_size, response_size,
 		elapsed_ms, request_headers, response_headers,
 		request_body_path, response_body_path, encoding_raw,
 		error, session_id, ` + agentCols + `, owner_pid, tool_name,
-		policy_action, policy_template, policy_reason, service, verb, resource_type
+		policy_action, ` + wouldColumn + `, policy_template, policy_reason, service, verb, resource_type
 		FROM network_requests`
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
@@ -478,6 +484,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			cwd          sql.NullString
 			toolName     sql.NullString
 			policyAction sql.NullString
+			wouldAction  sql.NullString
 			policyTmpl   sql.NullString
 			policyReason sql.NullString
 			service      sql.NullString
@@ -488,7 +495,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			&statusCode, &reqSize, &respSize, &elapsedMs,
 			&reqH, &respH, &reqBodyPath, &respBodyPath, &encodingRaw,
 			&errStr, &sessionID, &claudeSID, &agent, &cwd, &ownerPID, &toolName,
-			&policyAction, &policyTmpl, &policyReason,
+			&policyAction, &wouldAction, &policyTmpl, &policyReason,
 			&service, &verb, &resourceType); err != nil {
 			return nil, fmt.Errorf("mitm/store: scan: %w", err)
 		}
@@ -517,6 +524,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 			Cwd:              cwd.String,
 			ToolName:         toolName.String,
 			PolicyAction:     policyAction.String,
+			WouldAction:      wouldAction.String,
 			PolicyTemplate:   policyTmpl.String,
 			PolicyReason:     policyReason.String,
 			Service:          service.String,

@@ -104,7 +104,7 @@ func (p *localActivityProjector) NetworkSnapshot(ctx context.Context, now time.T
 			ResponseSize: nonnegative64(row.ResponseSize), ElapsedMs: nonnegative64(row.ElapsedMs),
 			Error: activityText(row.Error), SessionID: activityText(sessionID), Agent: activityText(row.Agent),
 			Project: dashboardProjectName(row.Cwd), ToolName: activityText(row.ToolName),
-			PolicyAction: activityText(row.PolicyAction), PolicyReason: activityText(row.PolicyReason),
+			PolicyAction: activityText(row.PolicyAction), WouldAction: activityText(row.WouldAction), PolicyReason: activityText(row.PolicyReason),
 			Service: activityText(row.Service), Verb: activityText(row.Verb), ResourceType: activityText(row.ResourceType),
 		})
 	}

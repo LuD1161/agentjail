@@ -161,7 +161,7 @@ func NewGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logger) (*Ga
 	// Load policy templates (optional; nil matcher means allow-all).
 	var matcher *netpolicy.Matcher
 	if cfg.PacksDir != "" {
-		matcher, err = netpolicy.NewMatcher(cfg.PacksDir)
+		matcher, err = netpolicy.NewMatcherForMode(cfg.Enforcement, cfg.PacksDir)
 		if err != nil {
 			dev.Close()
 			return nil, fmt.Errorf("tunnel: loading policy templates: %w", err)
@@ -226,7 +226,7 @@ func NewForwardGateway(cfg Config, registry *dnsvip.Registry, logger *slog.Logge
 	// Config.Validate() — only the fields the forwarder consumes matter.
 	var matcher *netpolicy.Matcher
 	if cfg.PacksDir != "" {
-		m, err := netpolicy.NewMatcher(cfg.PacksDir)
+		m, err := netpolicy.NewMatcherForMode(cfg.Enforcement, cfg.PacksDir)
 		if err != nil {
 			return nil, fmt.Errorf("tunnel: loading policy templates: %w", err)
 		}
