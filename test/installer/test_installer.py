@@ -250,6 +250,8 @@ esac
         release = (ROOT / ".github/workflows/release.yml").read_text()
         build_key = re.search(r"SigningPubKey=([^ ]+)", release).group(1)
         self.assertEqual(installer_key, build_key)
+        verification_key = re.search(r"-P '([^']+)' -q", release).group(1)
+        self.assertEqual(installer_key, verification_key)
 
 
 if __name__ == "__main__":

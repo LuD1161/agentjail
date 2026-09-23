@@ -35,7 +35,10 @@ replacement environment variable.
 
 Release publication requires signing credentials and a verified manifest
 signature. An absent signing key or failed verification stops the release job;
-missing release assets are publication failures rather than warnings.
+missing release assets are publication failures rather than warnings through
+`fail_on_unmatched_files: true`. This input was verified on 2026-09-22 against
+the pinned action's [official v2 action contract](https://raw.githubusercontent.com/softprops/action-gh-release/v2/action.yml).
+Publication itself is not exercised by local tests.
 
 The minisign command contract was checked on 2026-09-22 with installed minisign
 0.12, the [official usage reference](https://jedisct1.github.io/minisign/), and
