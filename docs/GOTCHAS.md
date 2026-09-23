@@ -1371,3 +1371,14 @@ never calls upstream. Test failed reads both before and after partial data.
 
 - **Rule:** transport read errors must cross helper boundaries explicitly; a nil
   body is a valid empty request and cannot represent a failed upload.
+
+---
+
+## Project engine caches must include the global policy generation
+
+Sequential reload tests passed while an in-flight project compilation could
+publish an engine derived from the previous global configuration after reload
+cleared the project cache. Overlay hashes alone did not invalidate that engine.
+Project cache lookup and publication now validate the global generation under
+the engine lock. Derived caches must track every input's version, including
+inputs whose bytes are not part of their local content hash.

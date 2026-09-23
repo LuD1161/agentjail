@@ -18,6 +18,7 @@ type projectEngine struct {
 	eng        policy.HookEngine
 	cache      policy.Cache
 	configHash string // hex SHA-256 of project policy.yaml content
+	generation uint64
 }
 
 // resolveProjectEngine checks for a per-project policy file at
@@ -73,18 +74,19 @@ func (e *evaluator) resolveProjectEngine(ctx context.Context, repoRoot string) (
 
 	hash := overlay.ContentHash
 
-	// Check cache (read lock - fast path).
+	// Snapshot the global generation before consulting its derived engines.
+	e.engineMu.RLock()
+	generation := e.gen.Load()
+	globalCfg := e.cfg
+	mods := e.modules
 	e.projectEngMu.RLock()
-	if pe, ok := e.projectEngines[repoRoot]; ok && pe.configHash == hash {
+	if pe, ok := e.projectEngines[repoRoot]; ok && pe.configHash == hash && pe.generation == generation {
 		e.projectEngMu.RUnlock()
+		e.engineMu.RUnlock()
 		return pe.eng, pe.cache
 	}
 	e.projectEngMu.RUnlock()
 
-	// Build merged config: global base + trusted project overlay.
-	e.engineMu.RLock()
-	globalCfg := e.cfg
-	mods := e.modules
 	e.engineMu.RUnlock()
 
 	if globalCfg == nil {
@@ -115,17 +117,25 @@ func (e *evaluator) resolveProjectEngine(ctx context.Context, repoRoot string) (
 
 	newCache := policy.NewLRUCache(1024)
 
-	// Store in cache (write lock).
+	// Publish only into the global generation used for compilation.
+	pe := &projectEngine{eng: eng, cache: newCache, configHash: hash, generation: generation}
+	if !e.publishProjectEngine(repoRoot, pe) {
+		return nil, nil
+	}
+	return eng, newCache
+}
+
+func (e *evaluator) publishProjectEngine(repoRoot string, pe *projectEngine) bool {
+	e.engineMu.RLock()
+	defer e.engineMu.RUnlock()
+	if pe.generation != e.gen.Load() {
+		return false
+	}
 	e.projectEngMu.Lock()
 	if e.projectEngines == nil {
 		e.projectEngines = make(map[string]*projectEngine)
 	}
-	e.projectEngines[repoRoot] = &projectEngine{
-		eng:        eng,
-		cache:      newCache,
-		configHash: hash,
-	}
+	e.projectEngines[repoRoot] = pe
 	e.projectEngMu.Unlock()
-
-	return eng, newCache
+	return true
 }
