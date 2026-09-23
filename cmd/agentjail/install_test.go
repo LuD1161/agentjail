@@ -890,8 +890,8 @@ func TestPrintInstallSummaryInstalledOK(t *testing.T) {
 	if !strings.Contains(out, "installed") {
 		t.Errorf("printInstallSummary: output missing 'installed'\ngot:\n%s", out)
 	}
-	if !strings.Contains(out, "daemon ready") {
-		t.Errorf("printInstallSummary: output missing 'daemon ready'\ngot:\n%s", out)
+	if strings.Contains(out, "daemon ready") || !strings.Contains(out, "agentjail doctor") {
+		t.Errorf("summary must direct users to diagnostics without claiming readiness:\n%s", out)
 	}
 	if !strings.Contains(out, "install summary") {
 		t.Errorf("printInstallSummary: output missing 'install summary' box title\ngot:\n%s", out)
@@ -1565,5 +1565,23 @@ func TestWriteDefaultPolicy_MergesOnReinstall(t *testing.T) {
 		if cfg.MCP.Allowed[i] != v {
 			t.Errorf("allowed[%d] = %q, want %q", i, cfg.MCP.Allowed[i], v)
 		}
+	}
+}
+
+func TestInstallSummaryPartialIsFailure(t *testing.T) {
+	var buf bytes.Buffer
+	if !printInstallSummary(&buf, []installResult{{name: "Codex", status: agents.Status{Installed: false}}}) {
+		t.Fatal("partial hook registration must report installation failure")
+	}
+	if !strings.Contains(buf.String(), "partial") {
+		t.Fatal(buf.String())
+	}
+}
+
+func TestStripManagedInstallerEnvironment(t *testing.T) {
+	input := "# keep\n# added by agentjail installer\n. '/custom path/env' # agentjail managed environment\n# keep too\n"
+	got, changed := stripAgentjailPathBlock(input)
+	if !changed || got != "# keep\n# keep too\n" {
+		t.Fatalf("cleanup = %q, %v", got, changed)
 	}
 }

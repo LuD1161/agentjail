@@ -31,8 +31,8 @@ export function fetchRequests(
   params: RequestsListParams,
 ): Promise<RequestsListResponse> {
   const q = new URLSearchParams()
-  if (params.beforeId) q.set('before_id', String(params.beforeId))
   if (params.session) q.set('session', params.session)
+  if (params.beforeId) q.set('before_id', String(params.beforeId))
   q.set('limit', String(params.limit ?? 50))
   q.set('offset', String(params.offset ?? 0))
   if (params.host) q.set('host', params.host)

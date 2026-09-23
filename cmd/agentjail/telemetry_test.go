@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -60,5 +61,31 @@ func TestRunTelemetry_ViewPrintsJSON(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "feature_used") {
 		t.Fatalf("view did not print spooled event: %q", out.String())
+	}
+}
+
+func TestRunTelemetry_RepairInvalidConsent(t *testing.T) {
+	for _, action := range []string{"enable", "disable"} {
+		t.Run(action, func(t *testing.T) {
+			p := telemetry.Paths{Base: t.TempDir()}
+			if err := os.WriteFile(p.Consent(), []byte(`{"enabled":false`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			getenv := func(string) string { return "" }
+			if code := runTelemetryWith(p, getenv, []string{"status"}, &out); code != 1 || !strings.Contains(out.String(), "repair") {
+				t.Fatalf("status=%d %q", code, out.String())
+			}
+			if code := runTelemetryWith(p, getenv, []string{"reset"}, &out); code != 1 {
+				t.Fatalf("reset=%d", code)
+			}
+			if code := runTelemetryWith(p, getenv, []string{action}, &out); code != 0 {
+				t.Fatalf("repair=%d %q", code, out.String())
+			}
+			c, err := telemetry.LoadConsent(p)
+			if err != nil || c.Enabled != (action == "enable") {
+				t.Fatalf("got %+v, %v", c, err)
+			}
+		})
 	}
 }

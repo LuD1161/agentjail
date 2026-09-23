@@ -2,156 +2,104 @@
 
 This document covers build setup, workspace structure, dev workflows, and the engineering principles that govern all contributions. For the user-facing overview see [README.md](./README.md).
 
-## Quick start
+## Prerequisites
 
-```sh
-# 1. Build all binaries
-make build
+- macOS or Linux, on arm64 or amd64. Platform-specific enforcement needs its native OS.
+- The Go version declared in [`go.mod`](./go.mod) and [`go.work`](./go.work) (currently 1.26.3).
+- Bun at the version in [`cmd/agentjail/ui/frontend/.bun-version`](./cmd/agentjail/ui/frontend/.bun-version) when building the dashboard.
+- OPA on PATH for Rego tests (`brew install opa` on macOS).
+- Python 3, minisign, and fish for the isolated installer fixtures. Install these independently through your trusted package manager.
 
-# 2. Run the test suite
-go test ./... -race
+Read [`AGENTS.md`](./AGENTS.md), [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), and [`docs/ENGINEERING.md`](./docs/ENGINEERING.md) before changing enforcement behavior.
 
-# 3. Run the smoke fixtures
-make smoke
-```
-
-## What this project is
-
-agentjail gives every coding agent (Claude Code, Codex CLI, Cursor) a policy guardrail — enforcing what files it can read/write, which MCPs it can call, and which shell commands it can run — without requiring any changes to the agent itself.
-
-Three deployment tiers, in build order:
-
-1. **Tier 1 — Hooks** (current focus): plug into the hook systems that Claude Code / Codex / Cursor already ship. Zero new infrastructure. Lightest isolation.
-2. **Tier 2 — MicroVM/Container**: run the agent in isolation; monitor at the container boundary. Stronger isolation for setups that need hard containment.
-3. **Tier 3 — Kernel module**: EDR-style, system-wide. Strongest isolation, works for any process on the machine.
-
-See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the architecture overview and isolation tier model.
-
-## Repository layout
-
-| Tree | What | Where the code lives |
-|---|---|---|
-| **Tier 1 hook binaries** | Hook binary + persistent daemon for Claude Code PreToolUse integration. | `cmd/agentjail-hook/`, `cmd/agentjail-daemon/` |
-| **Wrapper + per-session daemon** | Go binary with capture tracks, sync-DENY enforcement, OS peer-cred auth, OPA policy, cred TUI. | repo root + `cmd/agentjail/` |
-| **Policy engine** | OPA/Rego decision engine; file/MCP/command rules; LRU cache. | `agentpolicy/` |
-| **Containment substrate** | C PATH shim, Node/Bun runtime hook, mitmproxy addon, adversarial fixtures, microVM spikes. | `agentjail/` |
-
-Each tree builds, tests, and ships independently.
-
-## Prereqs
-
-- macOS Apple Silicon (Linux/Intel support follows the same patterns but is deferred)
-- Go 1.26+
-- `brew install mitmproxy` for the proxy track (optional; needed only for HTTPS capture)
-- `opa` on PATH for policy tests (`brew install opa`)
-
-## Build
+## Build and test without installing
 
 ```sh
 git clone https://github.com/LuD1161/agentjail.git
 cd agentjail
 
-# Build all binaries
+# Build the embedded dashboard, then the two shipped executables.
+make ui
+mkdir -p bin
+go build -o bin/agentjail ./cmd/agentjail
+go build -o bin/agentjail-hook ./cmd/agentjail-hook
+
+# Root module and nested workspace modules are checked explicitly.
 go build ./...
-
-# Build just the Tier 1 hook binaries
-go build ./cmd/agentjail-hook ./cmd/agentjail-daemon
-
-# Build the C PATH shim
-make -C agentjail/native/shim build
-```
-
-## One-time setup (full-stack wrapper mode)
-
-```sh
-./bin/agentjail ca gen           # generate ~/.agentjail/ca/root.pem
-./bin/agentjail ca install       # optional — installs CA to login keychain for curl/git/etc.
-./bin/agentjail shim install     # symlinks ~/.agentjail/shims/{git,npm,rm,...} -> agentjail-shim
-```
-
-## Run an agent under agentjail (full wrapper)
-
-```sh
-AGENTJAIL_RUNTIME_DIR="$PWD/agentjail/runtime" \
-AGENTJAIL_ADDON_PATH="$PWD/agentjail/addons/agentjail_addon.py" \
-./bin/agentjail claude
-```
-
-Optionally bind an agent slug so every event in `events.jsonl` carries the principal identity:
-
-```sh
-./bin/agentjail --agent my-agent claude
-# or via env (flag wins when both are set):
-AGENTJAIL_AGENT_SLUG=my-agent ./bin/agentjail claude
-```
-
-## Inspect sessions
-
-```sh
-./bin/agentjail sessions list    # all sessions, newest first
-./bin/agentjail tail             # live tail of the most recent session
-./bin/agentjail tail <sid>       # tail a specific session (prefix OK)
-./bin/agentjail bodies <sid>     # list captured req/res bodies (opt-in per host)
-```
-
-## Test
-
-```sh
-# Go unit tests
-go build ./... && go vet ./... && go test ./... -race
-
-# OPA policy unit tests (requires opa on PATH)
+go vet ./...
+go test -race ./...
+go test -race ./agentpolicy/...
+go test -race ./agentjail/...
 opa test agentpolicy/policies/
-
-# Smoke fixtures
+python3 test/installer/test_installer.py -v
 make smoke
 ```
 
-The smoke runner skips fixtures whose prereq env vars are absent, so `make smoke` passes in a plain dev environment.
+The released `agentjail` executable is a multicall binary: daemon, shield,
+netproxy, and secrets roles dispatch through symlinks to it. `agentjail-hook`
+is the separate lightweight executable. `go build ./...` checks packages; the
+explicit `-o` commands above produce runnable development artifacts.
 
-## Three independent capture tracks (full-stack mode)
+`make smoke` runs hook and OS-sandbox fixtures. A fixture may report SKIP when
+its documented prerequisites are unavailable; review those skips before
+claiming platform coverage. `make e2e-release` is the separate clean-VM release
+gate with real agent authentication; see [`test/testbed/README.md`](./test/testbed/README.md).
 
-When running `agentjail claude` (legacy full-wrapper mode), three capture tracks operate simultaneously to cover each other's blind spots:
+## Repository layout
 
-| | Track A — Native | Track C — Runtime | Track P — Proxy |
-|---|---|---|---|
-| Catches | every shell-out by argv[0] basename | every `fs`/`child_process`/`fetch` call inside Node/Bun | every HTTPS request through `HTTPS_PROXY` |
-| Mechanism | PATH shim binaries before `/usr/bin` | `NODE_OPTIONS=--require` (Node) + `BUN_OPTIONS=--preload` (Bun) | mitmproxy + per-session root CA |
-| Blind spots | absolute paths to SIP-protected binaries invoked directly | direct syscalls / FFI that bypass JS APIs | non-HTTPS_PROXY-honoring clients |
+| Tree | Responsibility |
+|---|---|
+| `cmd/agentjail/` | Multicall CLI, install/diagnostic commands, and local dashboard |
+| `cmd/agentjail-hook/` | Standalone hook adapter |
+| `cmd/agentjail-daemon/`, `cmd/agentjail-shield/` | Policy daemon and OS sandbox role implementations |
+| `internal/` | Typed domain services: agents, store, audit, credentials, network, updates |
+| `agentpolicy/` | Nested Go module containing the OPA policy engine and Rego rules |
+| `agentjail/` | Separate legacy/experimental workspace module and containment prototypes |
+| `test/` | Installer fixtures, clean-VM release gate, and integration tests |
 
-The Tier 1 hook-only path (the current focus) works independently of these tracks.
+## Try your development build
 
-### Bun preload note
+Installing a development build changes your local agent hooks, binaries, and
+supervised daemon. Run it deliberately from a normal terminal:
 
-Claude Code is a Bun-compiled single-file Mach-O. `NODE_OPTIONS` is ignored, and hardened runtime strips `DYLD_INSERT_LIBRARIES`. `BUN_OPTIONS=--preload` fires inside the compiled binary, giving in-process visibility without rebuild, sudo, or Apple-gated entitlements.
-
-## Configuration
-
-`~/.agentjail/config.yaml` (auto-created with safe defaults) controls body capture for full-stack mode:
-
-```yaml
-capture_bodies:
-  enabled_hosts: []       # e.g. ["api.anthropic.com", "*.example.com"]
-  max_bytes: 65536
+```sh
+make dev-deploy
+agentjail doctor
+agentjail try --read ~/.ssh/id_rsa  # policy simulation; opens no file
+agentjail run -- codex             # or claude / Cursor's agent
 ```
 
-Bodies are written to `~/.agentjail/sessions/<sid>/bodies/<n>.{req,res}.bin` only for matched hosts. Default: nothing captured.
+`make dev-deploy` rebuilds and reconciles the installed components. Restart
+already-running agents to load updated hooks. Hooks are cooperative policy
+checks; `agentjail run` adds OS sandbox enforcement. For network visibility,
+see [`docs/SANDBOX.md`](./docs/SANDBOX.md); the supported path uses AgentJail's
+tunnel/proxy components rather than a separately installed mitmproxy.
 
-## Policy rules
+Inspect the resulting local records with:
 
-Policy rules live in `agentpolicy/policies/`. See [`agentpolicy/README.md`](./agentpolicy/README.md) for the full rule-authoring reference, including how to write custom Rego rules and the lib module pattern.
+```sh
+agentjail logs
+agentjail sessions
+agentjail replay --session SESSION_ID
+agentjail ui
+```
 
-Policy decisions appear in session `events.jsonl` as `body: "policy.decision"` with `rule_id` and `action`.
+## Configuration and policy
 
-## JIT credentials (Tier 1.5 — credential broker)
+The active configuration is `~/.agentjail/policy.yaml`; decisions and audit
+records use the unified SQLite store under `~/.agentjail`. Use the public store
+interfaces instead of opening additional database connections.
 
-Once `~/.agentjail/capabilities.yaml` is in place, a wrapped agent can mint short-lived database credentials on demand. The daemon evaluates the `cred_use` action against `data.agentjail.caps`, issues a scoped credential, stores it in a file-backed AES-GCM store, tracks the lease, and registers the cred bytes with the mitmproxy redactor. On session end every lease is revoked.
-
-See [ADR 0004](./docs/adr/0004-credential-broker-tier1.md) for the credential broker design.
+Core policy source lives in `agentpolicy/policies/` and the CLI embeds the
+corresponding bundle in `cmd/agentjail/policies/`. Keep both copies in sync.
+See [`agentpolicy/README.md`](./agentpolicy/README.md) for rule authoring and the
+README's credential commands for the current broker interface. Historical
+`ca gen`, `shim install`, `tail`, and `bodies` wrapper examples are not the
+current shipped CLI workflow.
 
 ## Engineering principles — non-negotiable
 
-These are enforced by [`CLAUDE.md`](./CLAUDE.md), and apply equally to human contributors:
+These are defined by [`AGENTS.md`](./AGENTS.md), and apply equally to human contributors:
 
 - **KISS.** The simplest thing that could possibly work. Three lines of duplication beats a premature abstraction.
 - **Standard libraries only.** No ORMs, no DI containers, no custom retry frameworks. New libraries require an ADR.
@@ -160,7 +108,7 @@ These are enforced by [`CLAUDE.md`](./CLAUDE.md), and apply equally to human con
 - **Decision log.** Architecture decisions land as `docs/adr/NNNN-slug.md` with Context / Decision / Consequences.
 - **Tests use `-race`.** Every test, every commit.
 
-See [`CLAUDE.md`](./CLAUDE.md) for the full list and rationale.
+See [`AGENTS.md`](./AGENTS.md) for the full list and rationale.
 
 ## Workflow
 
@@ -247,7 +195,7 @@ git push --force-with-lease
 
 ## Reporting security issues
 
-agentjail is a security tool. If you find a vulnerability **do not** open a public issue. Email the maintainer privately. Disclosure policy will land alongside the v1.0 release.
+agentjail is a security tool. If you find a vulnerability **do not** open a public issue. Follow the private reporting instructions in [`SECURITY.md`](./SECURITY.md).
 
 ## License
 

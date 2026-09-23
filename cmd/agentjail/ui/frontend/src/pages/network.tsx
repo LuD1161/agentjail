@@ -7,17 +7,13 @@ import { SessionSidebar } from '@/components/session-sidebar'
 import { SplitPane } from '@/components/split-pane'
 import { DataTable } from '@/components/data-table'
 import { DataTableColumnHeader } from '@/components/data-table-column-header'
-import { Button } from '@/components/ui/button'
 import { RequestDetail } from '@/components/request-detail'
 import { useEventSource } from '@/hooks/use-event-source'
-import { fetchNetworkSessions, fetchRequests } from '@/lib/api'
+import { fetchNetworkSessions, fetchRequests, type RequestsListResponse } from '@/lib/api'
+import { mergeLiveRequestBatch, networkPageSize, requestId } from '@/lib/network-history'
 import { selectedRequestQuery } from '@/lib/selected-request'
-import { LIVE_REQUEST_LIMIT, mergeLiveRequests } from '@/lib/live-requests'
-import type { RequestsListResponse } from '@/lib/api'
 import { formatTime, formatBytes } from '@/lib/format'
 import type { RequestLog } from '@/types'
-
-const EMPTY_REQUESTS: RequestLog[] = []
 
 function methodBadgeClass(method: string) {
   switch (method.toUpperCase()) {
@@ -159,7 +155,9 @@ export function NetworkPage() {
   // every open detail pane is a shareable perma-link.
   const [searchParams, setSearchParams] = useSearchParams()
   const reqParam = searchParams.get('req')
-  const selectedRequestId = reqParam ? Number(reqParam) : null
+  const selectedRequestId = requestId(reqParam)
+  const [history, setHistory] = React.useState<number[]>([])
+  const beforeId = history.at(-1) ?? 0
   const setSelectedRequestId = React.useCallback(
     (id: number | null) => {
       setSearchParams((prev) => {
@@ -182,31 +180,33 @@ export function NetworkPage() {
     refetchInterval: 10000,
   })
 
-  const [historyBeforeId, setHistoryBeforeId] = React.useState<number | null>(null)
-  const live = historyBeforeId === null
+  const requestsKey = ['requests', selectedSession, beforeId] as const
   const requestsQuery = useQuery({
-    queryKey: ['requests', historyBeforeId ?? 'live'],
-    queryFn: () => fetchRequests({ limit: LIVE_REQUEST_LIMIT, beforeId: historyBeforeId }),
-    refetchInterval: false,
+    queryKey: requestsKey,
+    queryFn: () => fetchRequests({ limit: networkPageSize, session: selectedSession, beforeId }),
+    refetchInterval: beforeId === 0 ? 10000 : false,
     gcTime: 0,
   })
+  const detailQuery = useQuery({
+    ...selectedRequestQuery(selectedRequestId),
+    retry: false,
+  })
+  const live = beforeId === 0
   const pending = React.useRef(new Map<number, RequestLog>())
   const flushTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   React.useEffect(() => () => {
     if (flushTimer.current !== null) clearTimeout(flushTimer.current)
     flushTimer.current = null
     pending.current.clear()
-  }, [historyBeforeId])
-
-  const streamUrl = '/api/requests/stream'
-
+  }, [selectedSession, beforeId])
   const [connected, setConnected] = React.useState(false)
 
   useEventSource<RequestLog>(
-    streamUrl,
+    '/api/requests/stream',
     (incoming) => {
+      if (!live || (selectedSession && incoming.session_id !== selectedSession)) return
       pending.current.set(incoming.id, incoming)
-      if (pending.current.size > LIVE_REQUEST_LIMIT) {
+      if (pending.current.size > networkPageSize) {
         const oldest = pending.current.keys().next().value
         if (oldest !== undefined) pending.current.delete(oldest)
       }
@@ -215,48 +215,27 @@ export function NetworkPage() {
         flushTimer.current = null
         const batch = [...pending.current.values()]
         pending.current.clear()
-        queryClient.setQueryData<RequestsListResponse>(
-          ['requests', 'live'],
-          (old) => old ? {
-            ...old,
-            requests: mergeLiveRequests(old.requests, batch),
-            has_more: old.has_more || old.requests.length + batch.length >= LIVE_REQUEST_LIMIT,
-          } : old,
-        )
+        queryClient.setQueryData<RequestsListResponse>(requestsKey,
+          (old) => mergeLiveRequestBatch(old, batch, selectedSession))
       }, 100)
     },
     {
       enabled: live,
-      onOpen: () => setConnected(true),
+      onOpen: () => {
+        setConnected(true)
+        void queryClient.invalidateQueries({ queryKey: ['requests'] })
+        void queryClient.invalidateQueries({ queryKey: ['network-sessions'] })
+      },
       onError: () => setConnected(false),
     },
   )
 
-  const allRequests = requestsQuery.data?.requests ?? EMPTY_REQUESTS
-
-  // Requests key off the network session id -- the same identity the sidebar
-  // now lists. See AGE-252.
-  const requests = React.useMemo(() => {
-    if (!selectedSession) return allRequests
-    return allRequests.filter((r) => r.session_id === selectedSession)
-  }, [allRequests, selectedSession])
-
-  const selectedQuery = useQuery(selectedRequestQuery(
-    selectedRequestId,
-    allRequests.find((request) => request.id === selectedRequestId),
-  ))
-  const selectedRequest = selectedQuery.data ?? null
-
-  // Deny counts are not in the sessions payload; derive them from the loaded
-  // rows, grouped by the same network session id.
-  const denyBySession = React.useMemo(() => {
-    const m = new Map<string, number>()
-    for (const r of allRequests) {
-      if (!r.session_id || r.policy_action?.toLowerCase() !== 'deny') continue
-      m.set(r.session_id, (m.get(r.session_id) ?? 0) + 1)
-    }
-    return m
-  }, [allRequests])
+  const requests = requestsQuery.data?.requests ?? []
+  const selectedRequest = detailQuery.data ?? null
+  function selectSession(id: string | null) {
+    setHistory([])
+    setSelectedSession(id)
+  }
 
   // "active" is authoritative from the server: it reflects the owning shield
   // PID's liveness, so a running-but-network-idle agent stays active. The old
@@ -272,59 +251,57 @@ export function NetworkPage() {
         active: s.active,
         requestCount: s.request_count,
         networkCount: s.request_count,
-        denyCount: denyBySession.get(s.session_id) ?? 0,
+        denyCount: s.deny_count,
         lastSeen: s.last_seen,
       }))
       .sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())
-  }, [sessionsQuery.data?.sessions, denyBySession])
+  }, [sessionsQuery.data?.sessions])
 
   return (
-    <Layout connected={connected && live}>
+    <Layout connected={live && connected && !requestsQuery.isError && !sessionsQuery.isError}>
       <SplitPane direction="horizontal" defaultSize={300} minSize={150} maxSize={600}>
         <SessionSidebar
           sessions={sessions}
           selectedId={selectedSession}
-          onSelect={setSelectedSession}
+          onSelect={selectSession}
           title="Sessions"
           mode="network"
         />
-        <SplitPane direction="vertical" defaultSize={selectedRequest ? 350 : 9999} minSize={150} maxSize={800}>
+        <SplitPane direction="vertical" defaultSize={reqParam ? 350 : 9999} minSize={150} maxSize={800}>
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex flex-none items-center gap-3 border-b border-[#2a3040] px-3 py-2 text-xs text-[#9ca3af]">
-              <span>{live ? `Live · latest ${LIVE_REQUEST_LIMIT} requests` : 'History · live updates paused'}</span>
-              {!live && <Button variant="outline" size="sm" onClick={() => {
-                setSelectedRequestId(null)
-                setHistoryBeforeId(null)
-              }}>Back to live</Button>}
-              <Button variant="outline" size="sm"
-                disabled={requestsQuery.isFetching || !requestsQuery.data?.has_more || allRequests.length === 0}
-                onClick={() => {
-                  setSelectedRequestId(null)
-                  setHistoryBeforeId(allRequests[allRequests.length - 1].id)
-                }}>Older requests</Button>
-              {requestsQuery.isFetching && <span>Loading…</span>}
-              {requestsQuery.isError && <span>Could not load requests.</span>}
-              {selectedQuery.isFetching && selectedRequest === null && <span>Loading selected request…</span>}
-              {selectedQuery.isError && <span>Could not load the selected request.</span>}
+            <div className="flex flex-wrap items-center gap-3 border-b border-[#2a3040] px-3 py-2 text-xs text-[#9ca3af]">
+              <span>{beforeId ? 'History · live updates paused' : `Live · latest ${networkPageSize}`} · {requestsQuery.data?.total ?? '--'} stored requests (last refresh)</span>
+              <button type="button" disabled={!history.length} onClick={() => setHistory((h) => h.slice(0, -1))}>Newer</button>
+              <button type="button" disabled={requestsQuery.isFetching || !requestsQuery.data?.has_more || !requests.length} onClick={() => setHistory((h) => [...h, requests[requests.length - 1].id])}>Older</button>
+              {beforeId !== 0 && <button type="button" onClick={() => setHistory([])}>Return to live</button>}
+              <span>Column filters apply to these {requests.length} rows.</span>
             </div>
+            {(requestsQuery.isError || sessionsQuery.isError || (live && !connected)) && (
+              <div role="status" className="px-3 py-2 text-xs text-[#e3b341]">
+                {requestsQuery.isError ? 'Request history could not be loaded. ' : ''}
+                {sessionsQuery.isError ? 'Session counts are unavailable. ' : ''}
+                {live && !connected ? 'Live stream disconnected; retrying. ' : ''}
+                <button type="button" onClick={() => { void requestsQuery.refetch(); void sessionsQuery.refetch() }}>Retry history</button>
+              </div>
+            )}
             <div className="min-h-0 flex-1">
-                <DataTable
-                  key={historyBeforeId ?? 'live'}
-                  columns={columns}
-                  data={requests}
-                  defaultSorting={[{ id: 'ts', desc: true }]}
-                  pageSize={50}
-                  getRowId={(row) => row.id}
-                  selectedRowId={selectedRequestId}
-                  onRowClick={(row) =>
-                    setSelectedRequestId(selectedRequestId === row.id ? null : row.id)
-                  }
-                  emptyMessage={
-                    requestsQuery.data?.unavailable
-                      ? 'Network store unavailable -- is agentjail-shield running?'
-                      : 'No requests captured yet.'
-                  }
-                />
+          <DataTable
+            key={`${selectedSession}-${beforeId}`}
+            columns={columns}
+            data={requests}
+            defaultSorting={[{ id: 'ts', desc: true }]}
+            pageSize={50}
+            getRowId={(row) => row.id}
+            selectedRowId={selectedRequestId}
+            onRowClick={(row) =>
+              setSelectedRequestId(selectedRequestId === row.id ? null : row.id)
+            }
+            emptyMessage={
+              requestsQuery.data?.unavailable
+                ? 'Network store unavailable -- is agentjail-shield running?'
+                : requestsQuery.isPending ? 'Loading request history...' : requestsQuery.isError ? 'Request history is unavailable.' : 'No requests captured for this session.'
+            }
+          />
             </div>
           </div>
           {selectedRequest ? (
@@ -332,6 +309,12 @@ export function NetworkPage() {
               req={selectedRequest}
               onClose={() => setSelectedRequestId(null)}
             />
+          ) : reqParam ? (
+            <div role="status" className="p-4 text-sm text-[#9ca3af]">
+              {selectedRequestId === null ? 'Invalid request link.' : detailQuery.isError ? 'Request unavailable. It may have been removed by retention, or the network store is unavailable.' : 'Loading request...'}
+              <button type="button" className="ml-3" onClick={() => setSelectedRequestId(null)}>Close</button>
+              {detailQuery.isError && <button type="button" className="ml-3" onClick={() => void detailQuery.refetch()}>Retry</button>}
+            </div>
           ) : <div />}
         </SplitPane>
       </SplitPane>

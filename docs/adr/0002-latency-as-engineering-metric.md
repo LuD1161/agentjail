@@ -96,27 +96,55 @@ UX metric.
 > explain "yes it says 21 ms but it's actually ~10 ms total" — which is worse
 > than just not showing the number.
 
-## Enforced hook measurement (2026-09-23)
+## End-to-end regression gate (2026-09-22)
 
-The hook smoke gate now fails when warm serial end-to-end p95 reaches 50 ms.
-Each workload has ten warm-ups and 100 measured real hook processes. A single
-Python process uses a monotonic clock around subprocess execution, excluding
-payload preparation and response validation. Every sample must return an
-explicit allow without a degradation notice; fast fail-open responses cannot
-pass the performance gate. Regression checks exercise the missed-budget and
-fail-open rejection paths before the benchmark runs.
+The smoke suite enforces the existing **p95 < 50 ms** end-to-end target for
+each of four policy paths: file allow, file deny, shell ask, and MCP deny. Each
+runs five warmups followed by 50 measured samples, with separate repeated-input
+and unique-input sets. Unique tool inputs avoid the daemon's decision-cache key;
+this measures uncached evaluation with the already-running daemon, not startup.
+Payloads are evaluated only; no file operation, shell command, or MCP call runs.
 
-The same harness reports uncached small requests, warm 512 KiB inputs, and four
-concurrent small requests. These are diagnostic workloads with no new absolute
-budgets. The existing Go latency test measures daemon socket round trips with
-an inline policy; its median assertion does not substitute for this real-hook
-p95 gate.
+A single Python process uses `perf_counter_ns` around hook process creation,
+stdin delivery, and response collection. Interpreter startup, JSON preparation,
+and result validation are outside the timed interval. This replaces timestamps
+from separate Python processes that accidentally counted interpreter overhead.
+Nearest-rank p95, median, and maximum are printed for every set. Every sample
+must return the expected decision; missing responses and timeouts fail instead
+of appearing as fast fail-open successes. A budget miss fails the smoke job.
 
-A local macOS arm64 run after the scanner and logging changes measured warm
-small p95 14.65 ms, uncached small 16.22 ms, warm 512 KiB 32.94 ms, and concurrent
-small 21.86 ms. These are one-run developer measurements on a machine also
-running tests, not a before/after comparison or a portable performance claim.
-Run `bash cmd/agentjail-hook/test/smoke.sh` to reproduce the workload.
+Developer hosts can explicitly set `AGENTJAIL_SMOKE_P95_MS` to a positive finite
+budget or `AGENTJAIL_SMOKE_SAMPLES` to at least 20; the output records both. CI
+rejects a changed 50 ms budget or fewer than 50 samples. No retries discard slow
+runs. Use a quiet machine for comparisons; sustained host contention is visible
+in these wall-time measurements. The smoke CI job already runs this gate.
+
+Calibration on macOS arm64 with concurrent builds paused produced p95 values
+of 5.89–6.74 ms across the eight sets (50 samples each). A separate run under
+concurrent build load reached 50.35 ms and correctly failed; that result was
+not discarded by an automatic retry. The existing 50 ms budget therefore has
+substantial headroom on the measured quiet host; CI runner results remain the
+source of truth for CI-specific noise.
+
+This gate covers the hook/daemon policy pipeline, not OS sandbox startup, agent
+dispatch, external MCP servers, or credential issuance. It does not enforce the
+separate in-process evaluation target.
+
+### Large-payload and concurrency diagnostics (2026-09-23)
+
+The same harness additionally reports warm small, uncached small, warm 512 KiB,
+and four-concurrent small requests, each with ten warmups and 100 measured
+real hook processes. Warm small requests also enforce the configured p95 budget;
+the other diagnostic workloads have no absolute budget. These workloads retain
+the before/after measurement methodology. Allow and ask samples must have no
+degradation notice, and every
+diagnostic sample must return an explicit allow. A fast fail-open response
+cannot pass either set of checks. Regression tests cover degraded responses,
+missing decisions, missed budgets, and CI override rejection.
+
+See [controlled measurements](../performance-measurements-20260923.md) for
+before/after results and limits. Run `bash cmd/agentjail-hook/test/smoke.sh`
+to run the gate and diagnostics together.
 
 ### Hook transport allocation and framing
 

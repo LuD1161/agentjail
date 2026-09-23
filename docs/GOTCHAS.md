@@ -1432,3 +1432,72 @@ memory and per-event work grew throughout long sessions.
   discard inactive browser pages. Resolve the selected detail independently by
   exact ID so eviction does not close it or break historical links. Test sustained
   traffic and history during writes.
+
+---
+
+## Existing build artifacts can hide changed source
+
+`make build` and `make dev-install` treated existing binary files as current
+without source prerequisites. Tests passed and installation hashes matched, but
+both hashes described the same stale binary. Binary targets now always invoke
+Go, whose cache tracks source and embedded assets. Installation also preserves
+the install command's exit status instead of filtering it through a pipeline.
+Verify that build recipes run after a previous build; comparing copies alone
+cannot establish that either copy reflects the source.
+
+## Damaged consent must not become fresh consent
+
+Loading valid opt-out settings passed tests, but invalid JSON or missing consent
+metadata took the new-install path and overwrote an existing opt-out with
+`enabled: true`. Only absence now initializes enabled defaults; invalid existing
+state is preserved and disables telemetry until an explicit CLI repair. Test
+corrupt and unreadable settings as well as the successful configuration path.
+
+## A printed latency miss is not a regression gate
+
+The smoke suite stayed green when its ten repeated allow requests exceeded the
+latency target: the benchmark printed `MISSED` without failing. Separate Python
+clock processes also inflated measured hook latency. The gate now times hook
+subprocesses from one monotonic clock, validates their decisions, exercises
+repeated and unique allow/deny/ask inputs, and exits nonzero on p95 misses.
+A deterministic test verifies that a slow tail changes the exit status.
+
+## Installer success must describe observed state
+
+The installer test suite passed while service-start errors were swallowed and
+both the Go summary and shell wrapper still printed readiness. A partial hook
+installation could also return success. Shell setup must finish so recovery is
+possible, but its success must not erase the component failure or claim that
+policy enforcement is active. Test the final exit status and user-visible text,
+including the unavailable-supervisor and partial-registration paths.
+
+## Cost success responses must carry limitations
+
+The Cost route tests passed while the local provider logged stale-index and
+pricing warnings only at debug level and returned a healthy-looking total.
+Budget configuration errors also silently removed alerts. Preserve partial
+results, but carry typed warnings and freshness through the API to the total.
+A fake provider success test cannot establish the real provider reports
+incomplete data.
+
+## A page limit is not a history boundary
+
+Network API tests with only a few rows passed while request lookup and session
+filtering scanned only the newest 10,000 captures. Older links returned 404 and
+older sessions appeared empty. Filter and look up IDs in the store before
+limiting the returned page; count retained rows independently of that page.
+The regression fixture now exceeds the old ceiling.
+
+An SSE poll also needs ascending rows after its last emitted ID. Reading only
+the newest page, or iterating an ascending page backward, skips intervening
+requests when a burst exceeds the page size. The stream regression sends more
+than two pages and checks every emitted ID in sequence.
+
+## Browser pagination does not bound live memory
+
+The Network table rendered 50 rows at a time but its SSE cache prepended every
+capture forever. Its request link resolved only against that growing cache, so
+freshly opening a link older than the initial 200 rows showed no detail. Bound
+the cached live window separately from table pagination, fetch detail by ID,
+and fetch older session pages from the server. Server totals must not be
+recomputed from the bounded window. Refresh history on stream reconnect.

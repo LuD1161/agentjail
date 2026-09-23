@@ -84,14 +84,18 @@ const (
 
 // RequestFilter selects requests for Query. Zero-value fields are not filtered on.
 type RequestFilter struct {
-	ID       int64
-	AfterID  int64
-	BeforeID int64
-	Order    RequestOrder
 	Host     string
 	Method   string
 	Limit    int
 	Since    time.Duration
+	ID       int64
+	AfterID  int64
+	Order    RequestOrder
+	BeforeID int64
+	Session  string
+	Status   int
+	Policy   string
+	Offset   int
 }
 
 // HostStats contains per-host aggregated traffic statistics.
@@ -252,6 +256,9 @@ func (s *RequestStore) migrate() error {
 	// keeps integer affinity and PIDs round-trip as numbers, not "12345" text.
 	// See ADR 0100-network-active-pid.
 	s.db.Exec("ALTER TABLE network_requests ADD COLUMN owner_pid INTEGER")
+	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_network_session_id ON network_requests(" + unifiedSessionExpression + ", id)"); err != nil {
+		return fmt.Errorf("mitm/store: session index: %w", err)
+	}
 
 	// One-time cleanup for the unified-session-id upgrade (AGE-111): rows
 	// written before claude_session_id existed can never join the daemon's
@@ -419,11 +426,11 @@ func (s *RequestStore) hasColumn(ctx context.Context, name string) bool {
 	return false
 }
 
-// Query returns matching requests in filter.Order, newest first by default.
-func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]RequestLog, error) {
+// requestConditions shares filtering between queries and counts.
+func (s *RequestStore) requestConditions(ctx context.Context, filter RequestFilter) ([]string, []any) {
 	var (
 		conds []string
-		args  []interface{}
+		args  []any
 	)
 	if filter.ID > 0 {
 		conds = append(conds, "id = ?")
@@ -450,6 +457,25 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 		args = append(args, time.Now().Add(-filter.Since).UTC().Format("2006-01-02T15:04:05.000"))
 	}
 
+	if filter.Session != "" {
+		conds = append(conds, s.sessionExpression(ctx)+" = ?")
+		args = append(args, filter.Session)
+	}
+	if filter.Status > 0 {
+		conds = append(conds, "status_code = ?")
+		args = append(args, filter.Status)
+	}
+	if filter.Policy != "" {
+		conds = append(conds, "policy_action = ?")
+		args = append(args, filter.Policy)
+	}
+	return conds, args
+}
+
+// Query returns matching requests in filter.Order, newest first by default.
+func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]RequestLog, error) {
+	conds, args := s.requestConditions(ctx, filter)
+
 	// agent/cwd exist only after a writer has migrated the DB; the UI opens
 	// read-only (ADR 0092 D3) and may be newer than every writer, so select
 	// empty literals instead of failing on the missing columns.
@@ -472,6 +498,10 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 		q += " ORDER BY id DESC"
 	}
 	q += fmt.Sprintf(" LIMIT %d", clampLimit(filter.Limit))
+	if filter.Offset > 0 {
+		q += " OFFSET ?"
+		args = append(args, filter.Offset)
+	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -559,7 +589,7 @@ func (s *RequestStore) Query(ctx context.Context, filter RequestFilter) ([]Reque
 func (s *RequestStore) Stats(ctx context.Context, since time.Duration) ([]HostStats, error) {
 	var (
 		conds []string
-		args  []interface{}
+		args  []any
 	)
 	if since > 0 {
 		conds = append(conds, "ts > ?")
@@ -607,4 +637,74 @@ func (s *RequestStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+const unifiedSessionExpression = "COALESCE(NULLIF(claude_session_id, ''), session_id, '')"
+
+func (s *RequestStore) sessionExpression(ctx context.Context) string {
+	if s.hasColumn(ctx, "claude_session_id") {
+		return unifiedSessionExpression
+	}
+	return "COALESCE(session_id, '')"
+}
+
+// CountMatching returns the full matching count independently of paging boundaries.
+func (s *RequestStore) CountMatching(ctx context.Context, filter RequestFilter) (int64, error) {
+	filter.BeforeID = 0
+	conds, args := s.requestConditions(ctx, filter)
+	query := "SELECT COUNT(*) FROM network_requests"
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	var count int64
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	return count, err
+}
+
+type SessionSummary struct {
+	SessionID    string
+	FirstSeen    string
+	LastSeen     string
+	RequestCount int64
+	DenyCount    int64
+	OwnerPID     int
+	Agent        string
+	Cwd          string
+	UserAgent    string
+}
+
+// Sessions aggregates all retained rows without loading request bodies or headers.
+func (s *RequestStore) Sessions(ctx context.Context) ([]SessionSummary, error) {
+	session := s.sessionExpression(ctx)
+	agentIDs := "MAX(CASE WHEN agent <> '' THEN id END) AS agent_id, MAX(CASE WHEN cwd <> '' THEN id END) AS cwd_id"
+	agentCols := "COALESCE(a.agent, ''), COALESCE(c.cwd, '')"
+	if !s.hasColumn(ctx, "agent") {
+		agentIDs = "NULL AS agent_id, NULL AS cwd_id"
+		agentCols = "'', ''"
+	}
+	query := `WITH grouped AS (SELECT ` + session + ` AS sid, MIN(ts) AS first_seen, MAX(ts) AS last_seen, COUNT(*) AS count,
+ SUM(CASE WHEN lower(policy_action) = 'deny' THEN 1 ELSE 0 END) AS denies,
+ MAX(CASE WHEN owner_pid > 0 THEN id END) AS owner_id, ` + agentIDs + `,
+ MAX(CASE WHEN json_valid(request_headers) THEN CASE WHEN json_extract(request_headers, '$."User-Agent"') <> '' THEN id END END) AS header_id,
+ MAX(id) AS newest_id FROM network_requests GROUP BY sid HAVING sid <> '')
+ SELECT g.sid, g.first_seen, g.last_seen, g.count, g.denies, COALESCE(o.owner_pid, 0), ` + agentCols + `,
+ CASE WHEN json_valid(h.request_headers) THEN COALESCE(json_extract(h.request_headers, '$."User-Agent"'), '') ELSE '' END
+ FROM grouped g LEFT JOIN network_requests o ON o.id = g.owner_id
+ LEFT JOIN network_requests a ON a.id = g.agent_id LEFT JOIN network_requests c ON c.id = g.cwd_id
+ LEFT JOIN network_requests h ON h.id = g.header_id ORDER BY g.newest_id DESC`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SessionSummary{}
+	for rows.Next() {
+		var row SessionSummary
+		if err := rows.Scan(&row.SessionID, &row.FirstSeen, &row.LastSeen, &row.RequestCount, &row.DenyCount, &row.OwnerPID, &row.Agent, &row.Cwd, &row.UserAgent); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }

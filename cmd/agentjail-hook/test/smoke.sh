@@ -9,7 +9,8 @@
 # Run from the repo root. Requires Go (to build the binaries).
 # Exit code 0 = all fixtures pass.  Non-zero = one or more fixtures failed.
 #
-# Latency uses real hook processes and gates warm end-to-end p95 at 50 ms.
+# Latency gate: repeated and unique allow/deny/ask fixtures, measured with a
+# monotonic clock outside interpreter startup. See latency.py and ADR 0002.
 
 set -euo pipefail
 
@@ -144,6 +145,7 @@ echo ""
 
 # Isolate HOME now that the build is done (see SMOKE_HOME above).
 export HOME="${SMOKE_HOME}"
+export AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS=false
 mkdir -p "${SMOKE_HOME}/.agentjail"
 
 # ---------------------------------------------------------------------------
@@ -379,15 +381,16 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 4 — Latency benchmark
+# Step 4 — End-to-end latency regression gate
 # ---------------------------------------------------------------------------
 
-echo "=== Hook latency (100 samples per workload) ==="
-python3 -B -m unittest discover -s "${REPO_ROOT}/cmd/agentjail-hook/test" -p latency_test.py
-if python3 "${REPO_ROOT}/cmd/agentjail-hook/test/latency.py" "${HOOK_BIN}" "${SOCK}" "${CWD}"; then
-    pass "warm hook p95 < 50ms; all workloads returned explicit decisions"
+python3 -B "${REPO_ROOT}/cmd/agentjail-hook/test/latency_test.py"
+echo "=== Latency benchmark ==="
+if python3 "${REPO_ROOT}/cmd/agentjail-hook/test/latency.py" \
+    --hook "${HOOK_BIN}" --socket "${SOCK}" --cwd "${CWD}"; then
+    pass "end-to-end latency regression gate"
 else
-    fail "hook latency or decision validation failed"
+    fail "end-to-end latency regression gate"
 fi
 echo ""
 

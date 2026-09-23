@@ -7,10 +7,10 @@
   </picture>
 </p>
 
-### Policy guardrails for coding agents - _your agent literally can't do that_
+### Policy checks and OS sandboxing for coding agents
 
 A safety rail for Claude Code, Codex, and Cursor. <br>
-Catches the accidental foot-gun **before it fires** - no changes to how you use your agent.
+Install policy hooks, then launch your agent through AgentJail for OS-level filesystem protection.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
 &nbsp;![v1.8.0](https://img.shields.io/badge/v1.8.0-released-orange)
@@ -19,6 +19,8 @@ Catches the accidental foot-gun **before it fires** - no changes to how you use 
 &nbsp;[![Hits](https://hits.sh/github.com/LuD1161/agentjail.svg?style=flat&label=views)](https://hits.sh/github.com/LuD1161/agentjail/)
 &nbsp;[![GitHub downloads](https://img.shields.io/github/downloads/LuD1161/agentjail/total.svg?style=flat)](https://github.com/LuD1161/agentjail/releases)
 
+Install `minisign` through your trusted package manager first (`brew install minisign` on macOS; `sudo apt-get install minisign` on Debian/Ubuntu). The installer verifies the signed release manifest before extracting or running the download.
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
@@ -26,6 +28,16 @@ or
 ```
 brew install LuD1161/tap/agentjail
 ```
+
+Follow the installer's shell activation instruction, restart any running agent, then start your first protected session:
+
+```sh
+agentjail doctor                       # check protection and follow any recovery steps
+agentjail try --read ~/.ssh/id_rsa      # safe policy simulation; reads nothing
+agentjail run -- codex                 # or: agentjail run -- claude / agent
+```
+
+Installation registers hooks; `agentjail run` adds the OS sandbox. Hooks alone are cooperative checks, not a filesystem isolation boundary. For automatic sandboxing of ordinary agent commands, opt into the [PATH shim](#install). Use `--tunnel` when you also want network visibility; the launch banner reports the active protection level.
 
 <br>
 
@@ -77,11 +89,11 @@ See [`CHANGELOG.md`](./CHANGELOG.md) for full details, or check the [releases pa
 
 ## How it works
 
-Every tool call your agent makes is checked against a policy in **~8 ms** before it runs:
+Supported agent tool calls are checked against policy before execution while the daemon is available:
 
 ```
 Claude Code / Codex / Cursor
-    │  (PreToolUse hook - every tool call)
+    │  (supported agent tool hooks)
     ▼
 agentjail-hook ── Unix socket ──▶ agentjail-daemon ──▶ OPA Rego rules
     │                                                      │
@@ -96,13 +108,13 @@ agentjail-hook ── Unix socket ──▶ agentjail-daemon ──▶ OPA Rego 
 
 </div>
 
-You keep working exactly as before. The only difference: the dumb stuff quietly never happens.
+Hooks provide policy decisions and explanations. Launching through `agentjail run` adds the OS sandbox, which enforces filesystem restrictions independently of the hook daemon.
 
 - 🪝 **Zero-config** - one install command auto-detects your agents and wires the hook
 - ⚡ **~8 ms median** - persistent OPA daemon + decision cache. You won't feel it
 - 🛡️ **Defense in depth** - hook-level policy + optional kernel sandbox (`agentjail-shield`)
 - 📜 **Real policy engine** - [OPA](https://www.openpolicyagent.org/) Rego rules, not regex hacks
-- 🔒 **Fail-closed** - when in doubt, deny
+- 🔒 **Explicit failure posture** — credential and approval authorization fail closed. Ordinary hooks default to a limited offline denylist when the daemon is unavailable; other calls may proceed. Choose `daemon_unreachable: deny` for strict hook failure behavior. [Details](#when-the-daemon-is-unreachable).
 
 ---
 
@@ -211,14 +223,23 @@ You may genuinely want this service - but only after you've made an explicit dec
 
 ## Install
 
-**macOS / Linux (one-liner):**
+**macOS / Linux:** install `minisign` from a trusted package manager first, then:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 
-Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards. For installed Claude Code and Codex hooks, AgentJail also owns one fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block tells the agent how to request bounded host access without routing MCP or credential operations around their normal approval paths. Install and update refresh only that block; other instructions, file modes, and instruction-file symlinks are preserved.
+Remote shell installs require a valid `SHA256SUMS.minisig` under the pinned release key plus a matching archive checksum. Missing verifier, signature, or verification failure stops before extraction; there is no unsigned remote fallback. The installer script itself remains the bootstrap trust anchor, so review or pin it when your environment requires reproducible installation. `LOCAL_TARBALL` is an explicit unsigned-development path for your own trusted builds, not a release-verification alternative. See [ADR 0145-install-signature-trust](./docs/adr/0145-install-signature-trust.md).
+
+Auto-detects your agents (Claude Code, Codex, Cursor), registers hooks, and requests daemon startup. Follow the shell-specific activation command printed by the installer, or open a new terminal. Restart already-running agents to load their hooks, then run `agentjail doctor` before relying on protection.
+
+Setup failures return a nonzero status after finishing PATH setup, so the CLI remains available for diagnosis. Downloads use a 10-second connection timeout, a 120-second limit per attempt, and at most two retries within a 240-second retry window. Re-running the installer repairs its managed shell activation line without duplicating it. `AGENTJAIL_HOME` selects the shell installer's binary/activation directory; the CLI's policy, daemon, and other runtime state still use `~/.agentjail`. `AGENTJAIL_NO_MODIFY_PATH=1` leaves shell profiles unchanged. For installed Claude Code and Codex hooks, AgentJail also owns one fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block tells the agent how to request bounded host access without routing MCP or credential operations around their normal approval paths. Install and update refresh only that block; other instructions, file modes, and instruction-file symlinks are preserved.
+
+Before starting work, run `agentjail doctor`, resolve any reported failures, and launch with `agentjail run -- codex` (or `claude` / Cursor's `agent`). `agentjail try --read ~/.ssh/id_rsa` checks native file-read policy without opening the file; it does not test the OS sandbox.
+
+<details>
+<summary>Agent integration details and governed host access</summary>
 
 Cursor shell, file-read, and MCP events are normalized into the same policy
 contract as Claude Code and Codex. Cursor cannot prompt interactively for a
@@ -277,11 +298,13 @@ supported. See [ADR 0134-host-proxy-mvp](./docs/adr/0134-host-proxy-mvp.md) and
 Each `apply_patch` target is normalized to the same file-policy contract as an
 Edit, so a multi-file patch is denied when any target is protected.
 
+</details>
+
 ```sh
 agentjail status                      # quick installed-component snapshot
 agentjail doctor                      # comprehensive protection diagnostics
 agentjail doctor --fix                # repair what it can (dead daemon, dangling shim, stale service unit), then re-check
-agentjail try "cat ~/.ssh/id_rsa"     # dry-run: ✗ DENY (nothing executes)
+agentjail try --read ~/.ssh/id_rsa      # native read policy: DENY; reads nothing
 agentjail logs                        # watch SQLite-backed decisions live
 agentjail logs --latest 1000 --json   # newest 1000 matching decisions, chronological JSON
 agentjail stats                       # aggregate final outcomes, policy denies, latency, and coverage
@@ -469,7 +492,9 @@ Opens a loopback-only viewer at `http://127.0.0.1:9101` backed by
 filters, policy-mutation audit events, redacted session-bundle downloads, and a
 Cost tab that groups locally discovered Claude Code, Codex, and OpenCode transcript
 spend by project and model. The Cost tab also shows token efficiency and budget
-alerts configured in `policy.yaml`.
+alerts configured in `policy.yaml`. It shows the indexed-through time beside
+estimated spend and flags failed refreshes, stale usage, incomplete pricing, and unavailable
+budget configuration rather than presenting partial estimates as complete.
 
 The same locally computed report is available as a terminal dashboard:
 
@@ -646,7 +671,7 @@ capability to `false` for a strict standing posture.
 | `file_policy/agentjail_self` | reads/writes to agentjail's own config and binaries |
 | `library/no-daemon-kill` | `kill` / `pkill` targeting `agentjail-daemon` |
 | `command_policy/no-policy-mutation` | CLI commands that would mutate policy non-interactively |
-| `resolver/default` | the default deny resolver (fail-closed fallback) |
+| `resolver/default` | asks when no policy candidate matches; adapters without an approval path deny |
 
 `file_policy/hook_config` asks (does not block) on Write/Edit to `~/.claude/settings*.json` to prevent silent hook removal. It is not locked, so it can be disabled like any other rule; it does not cover `~/.codex/` or `~/.cursor/`.
 
@@ -810,6 +835,15 @@ agentjail policy list
 ---
 
 ## Network visibility
+
+The local Network API can retrieve any retained request by ID and page through
+older session history. Session totals count all retained captures, independently
+of the displayed page. Live updates catch up across bursts larger than one page.
+The Network tab keeps a 500-request live window; use **Older**, **Newer**, or
+**Return to live** to navigate history. Column filters and sorting apply to the
+loaded window. Request links load their detail independently, including requests
+older than that window. Reconnecting refreshes the stored history, and errors
+remain visible alongside any previously loaded rows.
 
 Direct `agentjail run` launches filter network access by port unless `--tunnel`
 is passed. The opt-in PATH shim adds that flag by default, so ordinary
@@ -1041,6 +1075,10 @@ agentjail telemetry view      # see what's queued
 agentjail telemetry disable   # opt out (or: AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS=false)
 ```
 
+Invalid existing telemetry consent disables collection until explicitly repaired
+with `agentjail telemetry enable` or `disable`; `agentjail telemetry status`
+reports the problem.
+
 Off automatically in CI. Full details in [`docs/TELEMETRY.md`](./docs/TELEMETRY.md).
 
 ---
@@ -1122,7 +1160,7 @@ seconds, including unavailable repositories. Git metadata lookup has a 500 ms
 deadline and runs outside the live-event state lock.
 
 The Network tab retains the latest 500 requests in live view and batches incoming
-updates. Use **Older requests** to browse bounded history pages, then **Back to
+updates. Use **Older** and **Newer** to browse bounded history pages, then **Return to
 live** to resume streaming. Historical pages pause live updates and are released
 from the browser cache when you leave them; captured database history is retained.
 

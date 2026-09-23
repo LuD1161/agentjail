@@ -454,3 +454,50 @@ func TestNetworkDetailFindsRequestBeyondNewestPage(t *testing.T) {
 		t.Fatalf("missing ID status = %d", missing.Code)
 	}
 }
+
+func TestRequestHistoryFilteringPagingAndDetail(t *testing.T) {
+	st, err := mitm.NewRequestStore(filepath.Join(t.TempDir(), "network.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for i := 0; i < 10005; i++ {
+		session := "new"
+		if i < 3 {
+			session = "old"
+		}
+		if err := st.Log(&mitm.RequestLog{Host: "example.com", Method: "GET", Path: "/", SessionID: session}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := &Server{netStore: st}
+	for _, target := range []string{"/api/requests?session=old&limit=2", "/api/requests?session=old&before_id=2&limit=2"} {
+		rec := httptest.NewRecorder()
+		srv.handleRequestsList(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", target, rec.Code, rec.Body.String())
+		}
+		var got requestsListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Total != 3 || len(got.Requests) == 0 {
+			t.Fatalf("%s: %+v", target, got)
+		}
+		if strings.Contains(target, "before_id") && (got.Requests[0].ID != 1 || got.HasMore) {
+			t.Fatalf("oldest page: %+v", got)
+		}
+	}
+	rec := httptest.NewRecorder()
+	srv.handleRequestDetail(rec, httptest.NewRequest("GET", "/api/requests/1", nil))
+	if rec.Code != 200 {
+		t.Fatalf("historical detail: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, target := range []string{"/api/requests?before_id=invalid", "/api/requests?status=abc", "/api/requests?offset=-1"} {
+		rec := httptest.NewRecorder()
+		srv.handleRequestsList(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 400 {
+			t.Fatalf("invalid filter %s: %d", target, rec.Code)
+		}
+	}
+}

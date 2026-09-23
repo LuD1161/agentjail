@@ -13,9 +13,12 @@ LDFLAGS := -X github.com/LuD1161/agentjail/internal/buildinfo.Version=$(VERSION)
 help:
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
+.PHONY: FORCE
+FORCE:
+
 build: $(BIN)  ## build the laptop binary
 
-$(BIN):
+$(BIN): FORCE
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/agentjail
 
 INSTALL_DIR ?= $(HOME)/.agentjail/bin
@@ -29,13 +32,13 @@ DEV_BINS    := bin/agentjail bin/agentjail-hook
 dev-install: $(DEV_BINS)  ## build + install binaries, policy rules, and restart daemon; verify
 	@echo "Installing binaries..."
 	@mkdir -p $(INSTALL_DIR)
-	@for b in $(DEV_BINS); do \
+	@set -e; for b in $(DEV_BINS); do \
 		name=$$(basename $$b); \
 		cp $$b $(INSTALL_DIR)/$$name; \
 		echo "  ✓ $$name"; \
 	done
 	@echo "Syncing policy rules..."
-	@bin/agentjail install --for claude-code 2>&1 | grep -E "✓|⚠" | head -6
+	@bin/agentjail install --for claude-code
 	@echo ""
 	@echo "Verifying installation..."
 	@ok=true; \
@@ -60,10 +63,10 @@ dev-install: $(DEV_BINS)  ## build + install binaries, policy rules, and restart
 dev-deploy:  ## build, force-reconcile detected agent hooks, hot-swap local binaries, and restart daemon (run from a plain terminal)
 	./scripts/dev-deploy.sh
 
-bin/agentjail-hook:
+bin/agentjail-hook: FORCE
 	go build -ldflags "$(LDFLAGS)" -o bin/agentjail-hook ./cmd/agentjail-hook
 
-bin/agentjail-daemon:  ## dev-only compile-check artifact; never installed as a real file (see DEV_BINS above)
+bin/agentjail-daemon: FORCE  ## dev-only compile-check artifact; never installed as a real file (see DEV_BINS above)
 	go build -o bin/agentjail-daemon ./cmd/agentjail-daemon
 
 shim:  ## build the C PATH shim into bin/agentjail-shim

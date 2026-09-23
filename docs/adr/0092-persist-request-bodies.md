@@ -510,3 +510,14 @@ For the ticket that builds this, so they are not rediscovered:
       window silently capped `request_size` at 1048577 for every larger upload
       (fixed, AGE-243) — D2 budgets against these numbers, so a lie here is a
       retention bug, not a cosmetic one.
+
+## Retained request history queries
+
+The network store exposes request ID lookup and cursor/offset paging with
+session, status, and policy filters applied before the page limit. Unified
+session identity uses the stamped Claude session ID when present and otherwise
+the capture ID; a matching expression index supports session history queries.
+Counts and session summaries cover retained rows independently of the bounded
+live window. Session metadata comes from the latest nonempty observation.
+The SSE reader consumes ascending IDs after its high-water mark, so bursts
+larger than one polling page catch up without skipping intervening requests.
