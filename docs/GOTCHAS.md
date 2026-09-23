@@ -1344,6 +1344,17 @@ See ADR 0144-refresh-installed-policies.
 
 ---
 
+## Workspace membership does not extend a package pattern
+
+CI and `make test-all` passed with `go test ./...`, but that pattern stopped at
+nested module boundaries even though `go.work` included them. The Go tests in
+`agentpolicy` and the containment module were never selected; running OPA tests
+did not exercise their Go adapters. Build, vet, and test gates must name each
+module's package pattern explicitly. Check the selected packages with `go list`
+when adding a workspace module.
+
+---
+
 ## Adding to this file
 
 When you fix something that was invisible to a green suite, add an entry: what

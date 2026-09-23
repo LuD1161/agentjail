@@ -79,7 +79,7 @@ test:  ## go test the laptop tree with -race
 	go test ./... -race
 
 test-all:  ## go test (all workspace modules) + opa test, all with -race
-	go test ./... -race
+	go test -race ./... ./agentpolicy/... ./agentjail/...
 	opa test agentpolicy/policies/
 
 opa-test:  ## opa test over agentpolicy/policies/ (requires opa on PATH)

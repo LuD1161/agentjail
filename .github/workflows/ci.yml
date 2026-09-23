@@ -27,10 +27,10 @@ jobs:
           cache: true
 
       - name: build
-        run: go build ./...
+        run: go build ./... ./agentpolicy/... ./agentjail/...
 
       - name: vet
-        run: go vet ./...
+        run: go vet ./... ./agentpolicy/... ./agentjail/...
 
       # Two branches can pick the same ADR number without either noticing; it
       # only bites at merge, when a bare "ADR 0049" stops identifying one
@@ -39,7 +39,7 @@ jobs:
         run: ./scripts/adr-check.sh
 
       - name: test
-        run: go test ./... -race
+        run: go test -race ./... ./agentpolicy/... ./agentjail/...
 
       - name: setup opa
         uses: open-policy-agent/setup-opa@v2
