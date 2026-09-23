@@ -72,6 +72,10 @@ jobs:
       - name: build web UI
         run: make ui
 
+      - name: frontend behavior tests
+        working-directory: cmd/agentjail/ui/frontend
+        run: bun test
+
       - name: go build with the real SPA embedded
         run: go build ./...
 

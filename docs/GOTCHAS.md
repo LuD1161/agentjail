@@ -1407,3 +1407,12 @@ An SSE poll also needs ascending rows after its last emitted ID. Reading only
 the newest page, or iterating an ascending page backward, skips intervening
 requests when a burst exceeds the page size. The stream regression sends more
 than two pages and checks every emitted ID in sequence.
+
+## Browser pagination does not bound live memory
+
+The Network table rendered 50 rows at a time but its SSE cache prepended every
+capture forever. Its request link resolved only against that growing cache, so
+freshly opening a link older than the initial 200 rows showed no detail. Bound
+the cached live window separately from table pagination, fetch detail by ID,
+and fetch older session pages from the server. Server totals must not be
+recomputed from the bounded window. Refresh history on stream reconnect.

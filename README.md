@@ -822,6 +822,11 @@ agentjail policy list
 The local Network API can retrieve any retained request by ID and page through
 older session history. Session totals count all retained captures, independently
 of the displayed page. Live updates catch up across bursts larger than one page.
+The Network tab keeps a 200-request live window; use **Older**, **Newer**, or
+**Return to live** to navigate history. Column filters and sorting apply to the
+loaded window. Request links load their detail independently, including requests
+older than that window. Reconnecting refreshes the stored history, and errors
+remain visible alongside any previously loaded rows.
 
 Direct `agentjail run` launches filter network access by port unless `--tunnel`
 is passed. The opt-in PATH shim adds that flag by default, so ordinary

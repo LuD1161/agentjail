@@ -13,14 +13,16 @@ export function useEventSource<T>(
 ) {
   const onMessageRef = React.useRef(onMessage)
   onMessageRef.current = onMessage
+  const optionsRef = React.useRef(options)
+  optionsRef.current = options
   const enabled = options?.enabled ?? true
 
   React.useEffect(() => {
     if (!url || !enabled) return
     const source = new EventSource(url)
 
-    source.onopen = () => options?.onOpen?.()
-    source.onerror = () => options?.onError?.()
+    source.onopen = () => optionsRef.current?.onOpen?.()
+    source.onerror = () => optionsRef.current?.onError?.()
     source.onmessage = (event) => {
       if (!event.data || event.data === 'ok') return
       try {

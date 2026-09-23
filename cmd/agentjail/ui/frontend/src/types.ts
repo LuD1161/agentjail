@@ -43,6 +43,7 @@ export interface SessionInfo {
   first_seen: string
   last_seen: string
   request_count: number
+  deny_count: number
   /** Set server-side from the owning shield PID's liveness, not a recency window. */
   active: boolean
   owner_pid?: number
