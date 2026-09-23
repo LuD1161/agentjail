@@ -218,7 +218,9 @@ curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh |
 
 **Homebrew:** `brew install LuD1161/tap/agentjail`
 
-Auto-detects your agents (Claude Code, Codex, Cursor), wires the hook, starts the daemon. Restart your shell or `source ~/.zshrc` afterwards. For installed Claude Code and Codex hooks, AgentJail also owns one fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block tells the agent how to request bounded host access without routing MCP or credential operations around their normal approval paths. Install and update refresh only that block; other instructions, file modes, and instruction-file symlinks are preserved.
+Auto-detects your agents (Claude Code, Codex, Cursor), registers hooks, and requests daemon startup. Follow the shell-specific activation command printed by the installer, or open a new terminal. Restart already-running agents to load their hooks, then run `agentjail doctor` before relying on protection.
+
+Setup failures return a nonzero status after finishing PATH setup, so the CLI remains available for diagnosis. Downloads use a 10-second connection timeout, a 120-second limit per attempt, and at most two retries within a 240-second retry window. Re-running the installer repairs its managed shell activation line without duplicating it. `AGENTJAIL_HOME` selects the shell installer's binary/activation directory; the CLI's policy, daemon, and other runtime state still use `~/.agentjail`. `AGENTJAIL_NO_MODIFY_PATH=1` leaves shell profiles unchanged. For installed Claude Code and Codex hooks, AgentJail also owns one fenced block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The block tells the agent how to request bounded host access without routing MCP or credential operations around their normal approval paths. Install and update refresh only that block; other instructions, file modes, and instruction-file symlinks are preserved.
 
 Cursor shell, file-read, and MCP events are normalized into the same policy
 contract as Claude Code and Codex. Cursor cannot prompt interactively for a

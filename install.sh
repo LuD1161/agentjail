@@ -7,7 +7,7 @@
 # Environment overrides:
 #   AGENTJAIL_VERSION     — pin to a specific tag (default: latest)
 #   AGENTJAIL_HOME        — installation root (default: $HOME/.agentjail)
-#   AGENTJAIL_DRY_RUN     — set to 1 to skip actual install; verify download+checksum only
+#   AGENTJAIL_DRY_RUN     — set to 1 to skip actual install; verify download, signature, and checksum only
 #   LOCAL_TARBALL          — path to a local tarball; skips network fetch (for testing)
 #
 # POSIX sh — no bash-isms; passes shellcheck.
@@ -17,6 +17,11 @@ REPO="LuD1161/agentjail"
 VERSION="${AGENTJAIL_VERSION:-latest}"
 INSTALL_DIR="${AGENTJAIL_HOME:-$HOME/.agentjail}/bin"
 DRY_RUN="${AGENTJAIL_DRY_RUN:-0}"
+
+# Network work has bounded retries and deadlines; no download can wait forever.
+fetch() {
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 240 "$@"
+}
 
 # --- Detect OS + arch ---
 
@@ -117,7 +122,10 @@ spin() {
 
 if [ "${LOCAL_TARBALL:-}" = "" ] && [ "$VERSION" = "latest" ]; then
     echo "    resolving latest release…"
-    LATEST_JSON=$(curl -fsSL "https://releases.agentjail.io/v1/latest")
+    if ! LATEST_JSON=$(fetch "https://releases.agentjail.io/v1/latest"); then
+        echo "agentjail installer: release lookup failed; check your connection and retry." >&2
+        exit 3
+    fi
     VERSION=$(printf '%s' "$LATEST_JSON" \
               | grep '"version"' \
               | head -1 \
@@ -163,7 +171,8 @@ fi
 
 TMP=$(mktemp -d)
 # shellcheck disable=SC2064
-trap "rm -rf '$TMP'" EXIT
+rc_stage=
+trap 'rm -rf "$TMP"; if [ -n "$rc_stage" ]; then rm -f "$rc_stage"; fi' EXIT
 
 TARBALL="agentjail-${VERSION}-${PLATFORM}.tar.gz"
 
@@ -173,20 +182,25 @@ if [ -n "${LOCAL_TARBALL:-}" ]; then
     cp "$LOCAL_TARBALL" "$TMP/$TARBALL"
 
     # Generate a local checksum manifest for the dry-run verification path.
-    (cd "$(dirname "$LOCAL_TARBALL")" && sha256 "$(basename "$LOCAL_TARBALL")") \
-        | sed "s|$(basename "$LOCAL_TARBALL")|$TARBALL|" \
-        > "$TMP/SHA256SUMS"
+    local_hash=$(sha256 "$TMP/$TARBALL" | awk '{print $1}')
+    printf '%s  %s\n' "$local_hash" "$TARBALL" > "$TMP/SHA256SUMS"
 else
     URL_BASE="https://releases.agentjail.io/download/${VERSION}"
 
-    spin "downloading ${TARBALL}" \
-        curl -fsSL -o "$TMP/$TARBALL" "${URL_BASE}/${TARBALL}"
-    curl -fsSL -o "$TMP/SHA256SUMS" "${URL_BASE}/SHA256SUMS"
+    if ! spin "downloading ${TARBALL}" \
+        fetch -o "$TMP/$TARBALL" "${URL_BASE}/${TARBALL}"; then
+        echo "agentjail installer: archive download failed; check your connection and retry." >&2
+        exit 3
+    fi
+    if ! fetch -o "$TMP/SHA256SUMS" "${URL_BASE}/SHA256SUMS"; then
+        echo "agentjail installer: checksum download failed; retry the installer." >&2
+        exit 3
+    fi
 fi
 
 # --- Verify SHA256 ---
 
-EXPECTED=$(grep "  ${TARBALL}$" "$TMP/SHA256SUMS" | awk '{print $1}')
+EXPECTED=$(awk -v name="$TARBALL" '$2 == name {print $1}' "$TMP/SHA256SUMS")
 if [ -z "$EXPECTED" ]; then
     echo "agentjail installer: no SHA256 entry for '${TARBALL}' in checksum manifest." >&2
     exit 4
@@ -273,111 +287,137 @@ echo "🔗  linked agentjail-daemon, agentjail-shield, agentjail-netproxy, agent
 # formula can export AGENTJAIL_INSTALL_METHOD=brew before invoking the installer.
 export AGENTJAIL_INSTALL_METHOD="${AGENTJAIL_INSTALL_METHOD:-curl}"
 
-# Non-fatal: a partial agent-install failure (e.g. one detected agent's hook
-# wiring fails) must not abort the rest of this script under `set -eu` — the
-# PATH setup and next-steps banner below still need to run so the user isn't
-# left without a usable `agentjail` command. `agentjail install` prints its
-# own per-step/per-agent errors; this just stops a non-zero exit from killing
-# the shell.
+# Finish shell setup after a partial failure, then preserve the install exit status.
+INSTALL_STATUS=0
 if [ "${AGENTJAIL_ASSUME_YES:-0}" = "1" ]; then
-    "$INSTALL_DIR/agentjail" install --yes \
-        || echo "⚠️  agentjail install reported errors above — see output; continuing setup" >&2
+    "$INSTALL_DIR/agentjail" install --yes || INSTALL_STATUS=$?
 else
-    "$INSTALL_DIR/agentjail" install \
-        || echo "⚠️  agentjail install reported errors above — see output; continuing setup" >&2
+    "$INSTALL_DIR/agentjail" install || INSTALL_STATUS=$?
 fi
 
-# --- Put agentjail on PATH (default on; opt out: AGENTJAIL_NO_MODIFY_PATH=1) ---
+# --- Put agentjail on PATH ---
 
 AGENTJAIL_HOME_DIR="${AGENTJAIL_HOME:-$HOME/.agentjail}"
 ENV_FILE="$AGENTJAIL_HOME_DIR/env"
+FISH_ENV_FILE="$AGENTJAIL_HOME_DIR/env.fish"
+shell_name=$(basename "${SHELL:-sh}")
 
-# write_env_file drops a rustup-style script. `source $HOME/.agentjail/env` puts
-# agentjail on PATH in the CURRENT shell, independent of which rc the user has.
-# The INSTALL_DIR is baked as an absolute literal (correct under a custom
-# AGENTJAIL_HOME), and the case guard makes re-sourcing idempotent.
-# shellcheck disable=SC2016  # ${PATH}/$PATH are written literally into the script on purpose
-write_env_file() {
-    {
-        printf '# agentjail shell environment. Put `agentjail` on your PATH with:\n'
-        printf '#   source "%s"\n' "$ENV_FILE"
-        printf 'case ":${PATH}:" in\n'
-        printf '    *":%s:"*) ;;\n' "$INSTALL_DIR"
-        printf '    *) export PATH="%s:$PATH" ;;\n' "$INSTALL_DIR"
-        printf 'esac\n'
-    } > "$ENV_FILE" 2>/dev/null
+# Quote literal paths; shell startup must never evaluate characters in a path.
+quote_sh() {
+    printf "'"
+    printf '%s' "$1" | sed "s/'/'\\\\''/g"
+    printf "'"
+}
+quote_fish() {
+    printf "'"
+    printf '%s' "$1" | sed "s/\\\\/\\\\\\\\/g; s/'/\\\\'/g"
+    printf "'"
 }
 
-# add_to_path appends a single marked, idempotent line to the login shell's rc
-# (zsh/bash/fish) so `agentjail` is on PATH in FUTURE shells. Best-effort and
-# SILENT — all user-facing guidance is printed by the final block below.
-# Honors AGENTJAIL_NO_MODIFY_PATH=1 (the env file is still written either way).
-# shellcheck disable=SC2016  # $HOME/$PATH are written into the rc literally on purpose
+# shellcheck disable=SC2016
+write_env_files() {
+    quoted_bin=$(quote_sh "$INSTALL_DIR")
+    {
+        printf '# agentjail shell environment\n'
+        printf 'case ":${PATH}:" in\n'
+        printf '    *:%s:*) ;;\n' "$quoted_bin"
+        printf '    *) export PATH=%s:"$PATH" ;;\n' "$quoted_bin"
+        printf 'esac\n'
+    } > "$ENV_FILE" || return 1
+    printf 'fish_add_path --path --move --prepend %s\n' "$(quote_fish "$INSTALL_DIR")" > "$FISH_ENV_FILE"
+}
+
+RC_UPDATED=0
 add_to_path() {
     [ "${AGENTJAIL_NO_MODIFY_PATH:-0}" = "1" ] && return 0
-
-    shell_name=$(basename "${SHELL:-sh}")
     case "$shell_name" in
-        zsh)
-            rc="${ZDOTDIR:-$HOME}/.zshrc"
-            line='export PATH="$HOME/.agentjail/bin:$PATH"'
-            ;;
+        zsh) rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
         bash)
-            if [ "$(uname -s)" = "Darwin" ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi
-            line='export PATH="$HOME/.agentjail/bin:$PATH"'
-            ;;
-        fish)
-            rc="$HOME/.config/fish/config.fish"
-            line='fish_add_path "$HOME/.agentjail/bin"'
-            ;;
-        *)
-            rc="$HOME/.profile"
-            line='export PATH="$HOME/.agentjail/bin:$PATH"'
-            ;;
+            if [ "$OS" = "darwin" ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
+        fish) rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+        *) rc="$HOME/.profile" ;;
     esac
-
-    # Idempotent: skip if our marker is already in the rc file.
-    if [ -f "$rc" ] && grep -q 'added by agentjail installer' "$rc" 2>/dev/null; then
-        return 0
+    if [ "$shell_name" = "fish" ]; then
+        line="source $(quote_fish "$FISH_ENV_FILE") # agentjail managed environment"
+    else
+        line=". $(quote_sh "$ENV_FILE") # agentjail managed environment"
     fi
-    mkdir -p "$(dirname "$rc")" 2>/dev/null && \
-        printf '\n# added by agentjail installer\n%s\n' "$line" >> "$rc" 2>/dev/null
+    # Follow profile symlinks without replacing the user's link itself.
+    rc_links=0
+    while [ -L "$rc" ]; do
+        rc_links=$((rc_links + 1))
+        [ "$rc_links" -le 40 ] || return 1
+        rc_link=$(readlink "$rc") || return 1
+        case "$rc_link" in
+            /*) rc=$rc_link ;;
+            *) rc="$(dirname "$rc")/$rc_link" ;;
+        esac
+    done
+    mkdir -p "$(dirname "$rc")" || return 1
+    # Replace only our owned line, including the legacy default-directory line.
+    if [ -f "$rc" ]; then
+        awk '
+            $0 == "# added by agentjail installer" {
+                marker = $0
+                if (getline > 0) {
+                    if ($0 ~ /# agentjail managed environment$/ ||
+                        $0 == "export PATH=\"$HOME/.agentjail/bin:$PATH\"" ||
+                        $0 == "fish_add_path \"$HOME/.agentjail/bin\"") next
+                    print marker
+                    print
+                } else print marker
+                next
+            }
+            {print}
+        ' "$rc" > "$TMP/shell-rc" || return 1
+    else
+        : > "$TMP/shell-rc"
+    fi
+    printf '# added by agentjail installer\n%s\n' "$line" >> "$TMP/shell-rc"
+    rc_stage=$(mktemp "${rc}.agentjail.XXXXXX") || return 1
+    if [ -f "$rc" ]; then
+        cp -p "$rc" "$rc_stage" || return 1
+    fi
+    cat "$TMP/shell-rc" > "$rc_stage" || return 1
+    mv -f "$rc_stage" "$rc" || return 1
+    rc_stage=
+    RC_UPDATED=1
 }
 
-# --- Done — write env file, edit rc, then print a clear conditional next step ---
-
-write_env_file
-add_to_path
-
-printf '\n🎉  agentjail %s installed — the hook is active now.\n' "${VERSION}"
-printf '    (enforcement uses an absolute path; PATH below is only for the `agentjail` CLI)\n'
-
-if command -v agentjail >/dev/null 2>&1; then
-    # Already resolvable (reinstall, or INSTALL_DIR was already on PATH).
-    printf '\n✅  Ready — run:  agentjail status\n'
-else
-    printf '\n┌─ One step to use the `agentjail` command ─────────────────────\n'
-    printf '│\n'
-    printf '│   source %s\n' "$ENV_FILE"
-    printf '│       …or just open a new terminal (your shell rc was updated)\n'
-    printf '│\n'
-    printf '│   then:  agentjail status\n'
-    printf '│\n'
-    printf '│   ▶ or run it right now, no PATH needed:\n'
-    printf '│       %s/agentjail status\n' "$INSTALL_DIR"
-    if [ "${AGENTJAIL_NO_MODIFY_PATH:-0}" = "1" ]; then
-        printf '│\n'
-        printf '│   (AGENTJAIL_NO_MODIFY_PATH=1 — your shell rc was left untouched)\n'
-    fi
-    printf '└───────────────────────────────────────────────────────────────\n'
+if ! write_env_files; then
+    echo "agentjail installer: could not write shell activation files." >&2
+    INSTALL_STATUS=1
 fi
+if ! add_to_path; then
+    echo "agentjail installer: could not update your shell profile; use the activation command below." >&2
+    INSTALL_STATUS=1
+fi
+
+if [ "$INSTALL_STATUS" -eq 0 ]; then
+    printf '\n✅  agentjail %s setup completed. Restart your agent to load its hooks.\n' "$VERSION"
+else
+    printf '\n⚠️  agentjail %s setup is incomplete; see errors above.\n' "$VERSION" >&2
+fi
+printf '    Run agentjail doctor before relying on protection.\n'
+if [ "$shell_name" = "fish" ]; then
+    activation="source $(quote_fish "$FISH_ENV_FILE")"
+else
+    activation=". $(quote_sh "$ENV_FILE")"
+fi
+printf '\nActivate the CLI in this shell:\n    %s\n' "$activation"
+if [ "$RC_UPDATED" = "1" ]; then
+    printf 'Or open a new terminal (your shell profile was updated).\n'
+fi
+printf '\nDiagnose without changing PATH:\n    %s doctor\n' "$(quote_sh "$INSTALL_DIR/agentjail")"
 
 cat <<EOF
 
-🚀  Quick start
-      agentjail status        verify daemon + hook
-      agentjail logs          watch decisions live
+🚀  First protected session
+      agentjail doctor                  check protection and recovery steps
+      agentjail run -- codex             launch a sandboxed agent (or claude / agent)
+      agentjail logs                     watch decisions in another terminal
 
 📚  Docs  ·  https://github.com/${REPO}
 
 EOF
+exit "$INSTALL_STATUS"
