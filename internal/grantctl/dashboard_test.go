@@ -69,3 +69,25 @@ func TestValidateMCPToolsDiscoveryRejectsUnknownStatusAndMalformedTools(t *testi
 		t.Fatal("empty discovery tool accepted")
 	}
 }
+
+func TestLocalSessionProjectionValidation(t *testing.T) {
+	base := DashboardSnapshotV1{RecentSessions: []DashboardSessionV1{}, Activity: []DashboardDayV1{}, Tokens: []DashboardTokenDayV1{}, TokenAgents: []DashboardTokenAgentV1{}, TokenCoverage: []string{}, TokenStatus: DashboardTokensReady}
+	session := DashboardLocalSessionV1{ID: "s", Agent: "codex", Project: "demo", StartedAtUnixMs: 1234}
+	base.LocalSessions = []DashboardLocalSessionV1{session}
+	if err := validateDashboardSnapshotV1(base); err != nil {
+		t.Fatal(err)
+	}
+	base.LocalSessions = append(base.LocalSessions, session)
+	if validateDashboardSnapshotV1(base) == nil {
+		t.Fatal("duplicate history accepted")
+	}
+	base.LocalSessions = make([]DashboardLocalSessionV1, MaxDashboardSessions+1)
+	if validateDashboardSnapshotV1(base) == nil {
+		t.Fatal("oversized history accepted")
+	}
+	session.StartedAtUnixMs = -1
+	base.LocalSessions = []DashboardLocalSessionV1{session}
+	if validateDashboardSnapshotV1(base) == nil {
+		t.Fatal("invalid history timestamp accepted")
+	}
+}

@@ -10,6 +10,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
     public let askedCalls: Int64
     public let totalSessions: Int64
     public let activeSessions: Int
+    public let localSessions: [DashboardLocalSession]
     public let recentSessions: [DashboardSession]
     public let activity: [DashboardDay]
     public let tokens: [DashboardTokenDay]
@@ -23,6 +24,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         case protocolVersion = "protocol_version", generatedAtUnixMs = "generated_at_unix_ms"
         case totalCalls = "total_calls", allowedCalls = "allowed_calls", deniedCalls = "denied_calls", askedCalls = "asked_calls"
         case totalSessions = "total_sessions", activeSessions = "active_sessions", recentSessions = "recent_sessions"
+        case localSessions = "local_sessions"
         case activity, tokens, tokenAgents = "token_agents", mcpTools = "mcp_tools", mcpDiscoveryStatuses = "mcp_discovery_status", tokenCoverage = "token_coverage", tokenStatus = "token_status"
     }
 
@@ -37,6 +39,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         askedCalls = try values.decode(Int64.self, forKey: .askedCalls)
         totalSessions = try values.decode(Int64.self, forKey: .totalSessions)
         activeSessions = try values.decode(Int.self, forKey: .activeSessions)
+        localSessions = try values.decodeIfPresent([DashboardLocalSession].self, forKey: .localSessions) ?? []
         recentSessions = try values.decode([DashboardSession].self, forKey: .recentSessions)
         activity = try values.decode([DashboardDay].self, forKey: .activity)
         tokens = try values.decode([DashboardTokenDay].self, forKey: .tokens)
@@ -47,6 +50,7 @@ public struct DashboardSnapshotV1: Decodable, Equatable, Sendable {
         tokenStatus = try values.decodeIfPresent(DashboardTokenStatus.self, forKey: .tokenStatus) ?? .ready
         guard totalCalls >= 0, allowedCalls >= 0, deniedCalls >= 0, askedCalls >= 0,
               totalSessions >= 0, activeSessions >= 0, recentSessions.count <= 12,
+              localSessions.count <= 12, Set(localSessions.map(\.id)).count == localSessions.count,
               activity.count <= 35, tokens.count <= 35, tokenAgents.count <= 8, mcpTools.count <= 64, mcpDiscoveryStatuses.count <= 64,
               tokenCoverage.allSatisfy({ $0.utf8.count <= 128 }) else {
             throw DashboardModelError.invalidProjection
@@ -185,4 +189,28 @@ public enum DashboardModelError: Error, Equatable, Sendable {
 
 public protocol DashboardControlling: Sendable {
     func fetchDashboard() async throws -> DashboardSnapshotV1
+}
+
+// Transcript metadata deliberately has no live state or audited-call count.
+public struct DashboardLocalSession: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let agent: String
+    public let project: String
+    public let startedAtUnixMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case id, agent, project, startedAtUnixMs = "started_at_unix_ms"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        agent = DisplaySanitizer.text(try values.decode(String.self, forKey: .agent), limit: 128).text
+        project = DisplaySanitizer.text(try values.decode(String.self, forKey: .project), limit: 128).text
+        startedAtUnixMs = try values.decode(Int64.self, forKey: .startedAtUnixMs)
+        guard !id.isEmpty, id.utf8.count <= 128, !agent.isEmpty, agent.utf8.count <= 128,
+              !project.isEmpty, project.utf8.count <= 128, startedAtUnixMs > 0 else {
+            throw DashboardModelError.invalidProjection
+        }
+    }
 }

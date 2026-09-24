@@ -175,7 +175,7 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	if snapshot.RecentSessions == nil || snapshot.Activity == nil || snapshot.Tokens == nil || snapshot.TokenAgents == nil || snapshot.TokenCoverage == nil {
 		return fmt.Errorf("dashboard arrays are required")
 	}
-	if len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 || len(snapshot.MCPTools) > 64 || len(snapshot.MCPDiscovery) > 64 {
+	if len(snapshot.LocalSessions) > MaxDashboardSessions || len(snapshot.RecentSessions) > MaxDashboardSessions || len(snapshot.Activity) > MaxDashboardDays || len(snapshot.Tokens) > MaxDashboardDays || len(snapshot.TokenAgents) > 8 || len(snapshot.MCPTools) > 64 || len(snapshot.MCPDiscovery) > 64 {
 		return fmt.Errorf("dashboard projection exceeds item limits")
 	}
 	for _, agent := range snapshot.TokenAgents {
@@ -188,6 +188,13 @@ func validateDashboardSnapshotV1(snapshot DashboardSnapshotV1) error {
 	}
 	if snapshot.TokenStatus != DashboardTokensLoading && snapshot.TokenStatus != DashboardTokensReady {
 		return fmt.Errorf("invalid dashboard token status")
+	}
+	seenLocal := make(map[string]bool)
+	for _, session := range snapshot.LocalSessions {
+		if !session.Valid() || seenLocal[session.ID] {
+			return fmt.Errorf("invalid local session history")
+		}
+		seenLocal[session.ID] = true
 	}
 	for _, session := range snapshot.RecentSessions {
 		if session.SessionID == "" || len(session.SessionID) > MaxDashboardSessionIDBytes || len(session.Agent) > MaxDashboardLabelBytes || len(session.Project) > MaxDashboardLabelBytes || session.AuditedCalls < 0 {

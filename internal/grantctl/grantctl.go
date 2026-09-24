@@ -190,22 +190,37 @@ const (
 // DashboardSnapshotV1 is a bounded, server-generated view of local activity.
 // It intentionally contains no commands, full paths, tool input, or secrets.
 type DashboardSnapshotV1 struct {
-	ProtocolVersion   ProtocolVersion         `json:"protocol_version"`
-	GeneratedAtUnixMs UnixMilliseconds        `json:"generated_at_unix_ms"`
-	TotalCalls        int64                   `json:"total_calls"`
-	AllowedCalls      int64                   `json:"allowed_calls"`
-	DeniedCalls       int64                   `json:"denied_calls"`
-	AskedCalls        int64                   `json:"asked_calls"`
-	TotalSessions     int64                   `json:"total_sessions"`
-	ActiveSessions    int                     `json:"active_sessions"`
-	RecentSessions    []DashboardSessionV1    `json:"recent_sessions"`
-	Activity          []DashboardDayV1        `json:"activity"`
-	Tokens            []DashboardTokenDayV1   `json:"tokens"`
-	TokenAgents       []DashboardTokenAgentV1 `json:"token_agents"`
-	MCPTools          []DashboardMCPToolsV1   `json:"mcp_tools"`
-	MCPDiscovery      []DashboardMCPStatusV1  `json:"mcp_discovery_status"`
-	TokenCoverage     []string                `json:"token_coverage"`
-	TokenStatus       DashboardTokenStatus    `json:"token_status"`
+	ProtocolVersion   ProtocolVersion           `json:"protocol_version"`
+	GeneratedAtUnixMs UnixMilliseconds          `json:"generated_at_unix_ms"`
+	TotalCalls        int64                     `json:"total_calls"`
+	AllowedCalls      int64                     `json:"allowed_calls"`
+	DeniedCalls       int64                     `json:"denied_calls"`
+	AskedCalls        int64                     `json:"asked_calls"`
+	TotalSessions     int64                     `json:"total_sessions"`
+	ActiveSessions    int                       `json:"active_sessions"`
+	LocalSessions     []DashboardLocalSessionV1 `json:"local_sessions,omitempty"`
+	RecentSessions    []DashboardSessionV1      `json:"recent_sessions"`
+	Activity          []DashboardDayV1          `json:"activity"`
+	Tokens            []DashboardTokenDayV1     `json:"tokens"`
+	TokenAgents       []DashboardTokenAgentV1   `json:"token_agents"`
+	MCPTools          []DashboardMCPToolsV1     `json:"mcp_tools"`
+	MCPDiscovery      []DashboardMCPStatusV1    `json:"mcp_discovery_status"`
+	TokenCoverage     []string                  `json:"token_coverage"`
+	TokenStatus       DashboardTokenStatus      `json:"token_status"`
+}
+
+// DashboardLocalSessionV1 is transcript metadata, not an audited or live session.
+type DashboardLocalSessionV1 struct {
+	ID              string           `json:"id"`
+	Agent           string           `json:"agent"`
+	Project         string           `json:"project"`
+	StartedAtUnixMs UnixMilliseconds `json:"started_at_unix_ms"`
+}
+
+func (s DashboardLocalSessionV1) Valid() bool {
+	return s.ID != "" && len(s.ID) <= MaxDashboardSessionIDBytes &&
+		s.Agent != "" && len(s.Agent) <= MaxDashboardLabelBytes &&
+		s.Project != "" && len(s.Project) <= MaxDashboardLabelBytes && s.StartedAtUnixMs > 0
 }
 
 type DashboardSessionV1 struct {

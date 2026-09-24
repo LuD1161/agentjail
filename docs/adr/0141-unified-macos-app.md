@@ -138,3 +138,9 @@ hook-based rules from traffic policies that require network monitoring. Network
 activation preserves the configured evaluate-only mode and does not opt into
 blocking. Historical local transcript metadata must be labeled separately from
 AgentJail audit activity; discovery is not evidence of policy evaluation.
+
+The dashboard protocol adds optional `local_sessions` metadata (at most twelve
+rows). Its type has no audited-call count or active state. Older daemons remain
+readable; clients bound and validate the additive field independently of audited
+sessions. Each row carries only a stable opaque ID, agent, project basename, and
+start time, never prompts or transcript content.
