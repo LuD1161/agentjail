@@ -99,7 +99,7 @@ struct AgentJailRootView: View {
     }
 
     private var sidebarStatusColor: Color {
-        setup.health.isReady ? .green : (setup.health.localComponentsReady || setup.health.localComponentsNeedUpdate ? .orange : .red)
+        setup.health.localComponentsReady ? .green : (setup.health.localComponentsNeedUpdate ? .orange : .red)
     }
 
     private var sidebarStatusTitle: String {
@@ -122,12 +122,13 @@ struct AgentJailRootView: View {
         case .overview:
             DashboardOverviewView(composition: composition)
         case .policies:
-            PoliciesView(store: composition.policyInventoryStore)
+            PoliciesView(store: composition.policyInventoryStore, setup: setup, showNetwork: { composition.selectedTab = .network })
         case .network:
             NetworkActivityView(
                 store: composition.activityStore,
                 setup: composition.setupCoordinator,
-                showSetup: composition.requestSetup
+                showSetup: composition.requestSetup,
+                openExtensionSettings: composition.openExtensionApprovalSettings
             )
         case .logs:
             SessionLogsView(store: composition.activityStore)
@@ -313,7 +314,23 @@ private struct DashboardOverviewView: View {
                 .disabled(dashboard.isRefreshing)
                 .agentJailInteractiveHover()
             }
-            if !setup.health.isReady { setupCard }
+            if !setup.health.localComponentsReady { setupCard }
+            if setup.health.localComponentsReady && !setup.health.tunnelProfile.isConfigured {
+                AgentJailCardSurface {
+                    HStack(alignment: .top, spacing: 14) {
+                        AgentJailIconTile(systemImage: "network", color: .blue)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Network monitoring is off").font(.headline)
+                            Text("Your sessions and tool-call activity are available without it. Add network monitoring to inspect agent traffic and evaluate network policies.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Set Up Network Monitoring") { composition.selectedTab = .network }
+                            .buttonStyle(.bordered)
+                            .agentJailInteractiveHover()
+                    }
+                }
+            }
             if let snapshot = dashboard.snapshot, let report {
                 metrics(snapshot)
                 ViewThatFits(in: .horizontal) {
@@ -458,7 +475,7 @@ private struct DashboardOverviewView: View {
             icon: "terminal.fill"
         ) {
             if sessions.isEmpty {
-                Text("No audited agent sessions yet.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
+                Text("Start a new session in a supported agent to see its tool-call activity here. Network monitoring is optional.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
             } else {
                 VStack(spacing: 0) {
                     ForEach(sessions) { session in

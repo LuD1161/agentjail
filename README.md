@@ -1128,3 +1128,13 @@ dashboard, supplemented by source-dated official rates for current agent models
 that have not reached Gryph's bundled catalog yet. Gryph never receives
 transcript content or usage data from AgentJail; all pricing is evaluated
 locally.
+
+### Sessions first on macOS
+
+The session dashboard and tool-call policy audit work independently of the
+optional Network Extension. Overview shows when network monitoring is off;
+choose **Network → Enable Network Monitoring** to set it up. macOS approval
+remains required. The Policies page distinguishes hook-based tool-call policies
+from network policies, which require monitored agent traffic. Enabling network
+monitoring does not opt into enforcement: policy verdicts are evaluated and
+logged by default, with OS isolation retained.

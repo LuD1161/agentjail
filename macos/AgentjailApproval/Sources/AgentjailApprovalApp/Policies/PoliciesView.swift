@@ -2,10 +2,14 @@ import SwiftUI
 
 struct PoliciesView: View {
     @ObservedObject private var store: PolicyInventoryStore
+    @ObservedObject private var setup: AgentJailSetupCoordinator
+    let showNetwork: () -> Void
     @State private var selectedPolicy: PolicyInventorySnapshot.Policy?
 
-    init(store: PolicyInventoryStore) {
+    init(store: PolicyInventoryStore, setup: AgentJailSetupCoordinator, showNetwork: @escaping () -> Void) {
         _store = ObservedObject(wrappedValue: store)
+        _setup = ObservedObject(wrappedValue: setup)
+        self.showNetwork = showNetwork
     }
 
     var body: some View {
@@ -23,9 +27,25 @@ struct PoliciesView: View {
                 .disabled(store.isRefreshing)
                 .agentJailInteractiveHover()
             }
+            AgentJailCardSurface {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Network policies").font(.headline)
+                    Text(setup.health.tunnelProfile.isConfigured
+                         ? "Network monitoring is configured. Network policies evaluate traffic in monitored agent sessions using your selected policy mode."
+                         : "Requires network monitoring. Network policies can only evaluate agent traffic after you enable monitoring. Tool-call policies below work through agent hooks without it.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Button(setup.health.tunnelProfile.isConfigured ? "Open Network" : "Set Up Network Monitoring", action: showNetwork)
+                        .buttonStyle(.bordered)
+                        .agentJailInteractiveHover()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             content
         }
-        .task { await store.refresh() }
+        .task {
+            _ = await setup.refresh()
+            await store.refresh()
+        }
         .sheet(item: $selectedPolicy) { policy in
             PolicyDetailSheet(
                 policy: policy,
@@ -36,8 +56,8 @@ struct PoliciesView: View {
     }
 
     private var pageDetail: String {
-        guard let snapshot = store.snapshot else { return "Active local Rego rules and recorded matches" }
-        return "\(snapshot.policies.count) active rules · counts show selected policy decisions"
+        guard let snapshot = store.snapshot else { return "Tool-call policies and recorded matches" }
+        return "\(snapshot.policies.count) configured tool-call rules · counts show selected policy decisions"
     }
 
     @ViewBuilder
@@ -80,7 +100,7 @@ private struct PolicyTable: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Active policies")
+                    Text("Tool-call policies")
                         .font(.title3.bold())
                     Text(snapshot.modeSummary)
                         .font(.caption)
@@ -473,7 +493,7 @@ private struct PolicyDetailSheet: View {
             if !historyAvailable {
                 PolicyDetailMessage(text: "Local decision history is unavailable.")
             } else if policy.evaluations.isEmpty {
-                PolicyDetailMessage(text: "This active rule has no recorded selected decisions yet.")
+                PolicyDetailMessage(text: "This configured rule has no recorded selected decisions yet.")
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(policy.evaluations) { evaluation in

@@ -85,7 +85,7 @@ extension have been built and exercised on Intel hardware.
 
 Network Extension activation remains an explicit Apple-controlled user decision.
 Local CLI, daemon, and hook installation completes independently; users may defer
-network monitoring and enable it later from Settings. The application requests
+network monitoring and enable it later from the Network sidebar destination. The application requests
 activation only after an explicit network-monitoring action, changes to a durable
 approval-required state before Apple's notice appears, and keeps the exact System
 Settings path visible if that notice is dismissed with **OK**. It never automates
@@ -128,3 +128,13 @@ security/audit evidence remains distinct from anonymous product telemetry.
   but they must approve the Network Extension once when macOS requests it.
 - Product funnel metrics become useful for identifying setup failures without
   expanding the sensitive network or policy data that leaves the machine.
+
+## Sessions-first onboarding clarification
+
+Local setup is sufficient for the normal session dashboard. Optional network
+setup is presented on Network, with an Overview entry point; its absence does
+not make healthy local services an error. Policies distinguish configured
+hook-based rules from traffic policies that require network monitoring. Network
+activation preserves the configured evaluate-only mode and does not opt into
+blocking. Historical local transcript metadata must be labeled separately from
+AgentJail audit activity; discovery is not evidence of policy evaluation.

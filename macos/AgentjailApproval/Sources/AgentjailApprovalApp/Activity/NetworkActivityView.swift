@@ -5,13 +5,15 @@ struct NetworkActivityView: View {
     @ObservedObject private var store: ActivityStore
     @ObservedObject private var setup: AgentJailSetupCoordinator
     let showSetup: () -> Void
+    let openExtensionSettings: () -> Void
     @State private var searchText = ""
     @State private var filter: NetworkEventFilter = .all
 
-    init(store: ActivityStore, setup: AgentJailSetupCoordinator, showSetup: @escaping () -> Void) {
+    init(store: ActivityStore, setup: AgentJailSetupCoordinator, showSetup: @escaping () -> Void, openExtensionSettings: @escaping () -> Void) {
         _store = ObservedObject(wrappedValue: store)
         _setup = ObservedObject(wrappedValue: setup)
         self.showSetup = showSetup
+        self.openExtensionSettings = openExtensionSettings
     }
 
     var body: some View {
@@ -34,7 +36,7 @@ struct NetworkActivityView: View {
             }
 
             if !setup.health.tunnelProfile.isConfigured {
-                NetworkExtensionMissingCard(showSetup: showSetup)
+                NetworkExtensionMissingCard(setup: setup, showSetup: showSetup, openExtensionSettings: openExtensionSettings)
             }
 
             if let snapshot = store.networkSnapshot {
@@ -82,25 +84,40 @@ struct NetworkActivityView: View {
 }
 
 private struct NetworkExtensionMissingCard: View {
+    @ObservedObject var setup: AgentJailSetupCoordinator
     let showSetup: () -> Void
+    let openExtensionSettings: () -> Void
 
     var body: some View {
         AgentJailCardSurface(padding: 20) {
-            HStack(spacing: 16) {
-                AgentJailIconTile(systemImage: "network.slash", color: .orange)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Network Extension not installed")
-                        .font(.headline)
-                    Text("Install and approve the extension to capture live traffic from protected sessions. Previously recorded events remain visible below.")
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Add network monitoring", systemImage: "network")
+                    .font(.headline)
+                Text("Optional. Inspect traffic from agent sessions and evaluate network policies. Your session dashboard and tool-call policies work without network monitoring.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Text("macOS will ask you to approve the AgentJail Network Extension. Certificate trust stays inside agent sessions; no system-wide root certificate is installed. Enabling monitoring does not turn on policy enforcement.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if setup.phase == .awaitingApproval {
+                    Text("General → Login Items & Extensions → Network Extensions → AgentJail")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open System Settings", action: openExtensionSettings)
+                        .buttonStyle(.borderedProminent)
+                } else if setup.phase.isWorking {
+                    ProgressView("Preparing network monitoring…")
+                } else if setup.health.localComponentsReady {
+                    if case .failed = setup.phase {
+                        Text("Network setup did not finish. Check macOS approval and try again.")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Enable Network Monitoring") { setup.beginSetup() }
+                        .buttonStyle(.borderedProminent)
+                        .agentJailInteractiveHover()
+                } else {
+                    Button("Set Up Local Components", action: showSetup)
+                        .buttonStyle(.borderedProminent)
                 }
-                Spacer(minLength: 12)
-                Button("Complete setup", action: showSetup)
-                    .buttonStyle(.borderedProminent)
-                    .agentJailInteractiveHover()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
