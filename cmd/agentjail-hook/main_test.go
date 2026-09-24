@@ -444,7 +444,7 @@ func TestSendAndReceive_CodexColdApprovalResponse(t *testing.T) {
 	}
 }
 
-func TestSendAndReceive_LegacyDeadlineRemainsBounded(t *testing.T) {
+func TestSendAndReceive_OrdinaryDeadlineRemainsBounded(t *testing.T) {
 	client, server := net.Pipe()
 	t.Cleanup(func() {
 		_ = client.Close()
@@ -456,12 +456,12 @@ func TestSendAndReceive_LegacyDeadlineRemainsBounded(t *testing.T) {
 		if !scanner.Scan() {
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(defaultRoundTripDeadline + 100*time.Millisecond)
 		_ = json.NewEncoder(server).Encode(daemonResponse{Action: "allow"})
 	}()
 
 	if _, err := sendAndReceive(client, daemonRequest{Agent: "claude"}); err == nil {
-		t.Fatal("legacy request exceeded its 45 ms ceiling without timing out")
+		t.Fatal("ordinary request exceeded its availability ceiling without timing out")
 	}
 }
 
@@ -941,5 +941,42 @@ func TestCodexHook_MonitoringDaemonUnavailableAllows(t *testing.T) {
 	}
 	if !strings.Contains(string(stdout), "daemon") {
 		t.Fatalf("missing evaluation availability notice: %s", stdout)
+	}
+}
+
+func TestSendAndReceiveOrdinaryColdEvaluation(t *testing.T) {
+	for _, action := range []string{"allow", "deny", "ask"} {
+		t.Run(action, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+			done := make(chan error, 1)
+			go func() {
+				var req daemonRequest
+				if err := json.NewDecoder(server).Decode(&req); err != nil {
+					done <- err
+					return
+				}
+				time.Sleep(250 * time.Millisecond)
+				done <- json.NewEncoder(server).Encode(daemonResponse{Action: action, RuleID: "cold-fixture"})
+			}()
+			response, err := sendAndReceive(client, daemonRequest{Agent: "claude"})
+			if err != nil {
+				t.Fatalf("cold daemon misclassified: %v", err)
+			}
+			if response.Action != action {
+				t.Fatalf("action = %q, want %q", response.Action, action)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReadResponseFailureDoesNotClaimDaemonStopped(t *testing.T) {
+	message := fallbackSystemMessage(levelAllow, "read-response")
+	if strings.Contains(message, "not running") || strings.Contains(message, "unreachable") || !strings.Contains(message, "response unavailable") {
+		t.Fatalf("misleading response failure: %q", message)
 	}
 }

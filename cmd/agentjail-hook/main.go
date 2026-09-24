@@ -314,20 +314,23 @@ func failOpenMarker(agent, category string) {
 func failOpenClaudeLike(agent, category, detail, toolName string, toolInput map[string]interface{}, cwd string) {
 	fb, _ := loadHookFallback()
 	failOpenMarker(agent, category)
-	printFailOpenBanner(fb.Level)
+	printFallbackBanner(fb.Level, category)
 	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
 
 	decision := resolveFailOpenDecision(fb, toolName, toolInput, cwd)
+	if category == "read-response" {
+		decision.Reason = strings.ReplaceAll(decision.Reason, "daemon unreachable", "daemon response unavailable")
+	}
 	if decision.Deny {
 		fmt.Fprintf(os.Stderr, "agentjail: denied by policy (rule=%s): %s\n", decision.RuleID, decision.Reason)
 		os.Exit(2)
 	}
 
 	if agent == "codex" {
-		writeCodexSystemMessage(failOpenSystemMessage(fb.Level))
+		writeCodexSystemMessage(fallbackSystemMessage(fb.Level, category))
 		os.Exit(0)
 	}
-	writeAllowWithSystemMessage(decision.Reason, failOpenSystemMessage(fb.Level))
+	writeAllowWithSystemMessage(decision.Reason, fallbackSystemMessage(fb.Level, category))
 	os.Exit(0)
 }
 
@@ -337,17 +340,20 @@ func failOpenClaudeLike(agent, category, detail, toolName string, toolInput map[
 func failOpenCursor(category, detail, toolName string, toolInput map[string]interface{}, cwd string) {
 	fb, _ := loadHookFallback()
 	failOpenMarker("cursor", category)
-	printFailOpenBanner(fb.Level)
+	printFallbackBanner(fb.Level, category)
 	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
 
 	decision := resolveFailOpenDecision(fb, toolName, toolInput, cwd)
+	if category == "read-response" {
+		decision.Reason = strings.ReplaceAll(decision.Reason, "daemon unreachable", "daemon response unavailable")
+	}
 	if decision.Deny {
 		// decision.Reason already carries restartInstructions on every deny path.
 		writeCursorDeny(decision.Reason)
 	} else {
 		// Not decision.Reason: it omits restartInstructions at levelAllow, and
 		// Cursor has no status line to carry the notice instead (ADR 0073).
-		writeCursorAllowWithMessage(failOpenSystemMessage(fb.Level))
+		writeCursorAllowWithMessage(fallbackSystemMessage(fb.Level, category))
 	}
 	os.Exit(0)
 }
@@ -782,7 +788,7 @@ func dialDaemon(sockPath string) (net.Conn, error) {
 }
 
 const (
-	defaultRoundTripDeadline       = 45 * time.Millisecond
+	defaultRoundTripDeadline       = 2 * time.Second
 	codexApprovalDialDeadline      = 500 * time.Millisecond
 	codexApprovalRoundTripDeadline = 2 * time.Second
 )
@@ -825,8 +831,8 @@ func failClosedCodexApproval(category, detail string) {
 
 // sendAndReceive sends req to conn and reads the daemon response.
 func sendAndReceive(conn net.Conn, req daemonRequest) (daemonResponse, error) {
-	// Cold approval evaluation includes policy plus process attestation.
-	// Keep its availability ceiling distinct from the latency target. See ADR 0118-codex-approval-broker.
+	// Availability includes cold policy evaluation; the hot-path latency target is separate.
+	// See AGE-299 and ADR 0002-latency-as-engineering-metric.
 	if err := conn.SetDeadline(time.Now().Add(roundTripDeadline(req))); err != nil {
 		// Non-fatal — continue without deadline.
 		fmt.Fprintf(os.Stderr, "agentjail-hook: set deadline: %v\n", err)
@@ -1136,9 +1142,9 @@ func runCodexPermissionRequest(input hookInput) {
 func failOpenCodexPermissionRequest(category, detail string) {
 	failOpenMarker("codex", category)
 	fb, _ := loadHookFallback()
-	printFailOpenBanner(fb.Level)
+	printFallbackBanner(fb.Level, category)
 	fmt.Fprintf(os.Stderr, "agentjail-hook: detail: %s\n", detail)
-	writeCodexSystemMessage(failOpenSystemMessage(fb.Level))
+	writeCodexSystemMessage(fallbackSystemMessage(fb.Level, category))
 }
 
 // runCursor implements the Cursor hook adapter (--agent=cursor).

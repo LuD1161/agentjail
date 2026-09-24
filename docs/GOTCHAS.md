@@ -1499,3 +1499,11 @@ view lifecycle. Refresh when Overview becomes active, and retry unavailable
 health/dashboard reads while an installed daemon starts. Scope retries to the
 active view task so leaving it cancels the work; a missing installation still
 requires explicit setup.
+
+## Cold policy latency is not daemon absence (AGE-299)
+
+A warm test passed while the first clean-VM evaluation took 234 ms. The hook's
+45 ms response deadline reported a stopped daemon, but the daemon later wrote
+the verdict. Keep the evaluation performance target separate from the bounded
+transport availability ceiling, and distinguish connection failure from missing
+responses in diagnostics. Test cold responses before counting warm retries.

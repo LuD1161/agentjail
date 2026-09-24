@@ -95,3 +95,14 @@ UX metric.
 > partial `elapsed_us`. Otherwise the number is misleading and we have to
 > explain "yes it says 21 ms but it's actually ~10 ms total" — which is worse
 > than just not showing the number.
+
+## Hook availability ceiling (AGE-299)
+
+A successful connection has a two-second response ceiling, including ordinary
+hook requests. This is a bounded availability timeout, not the target evaluation
+latency. A cold VM evaluation exceeded the former 45 ms cutoff and was falsely
+reported as daemon absence despite later persisting its verdict. Connection
+attempts retain their short dial timeout; completed deny/ask verdicts retain
+adapter semantics. Missing/invalid replies report response unavailability rather
+than claiming the daemon is stopped. Cold-response and bounded-timeout tests
+cover this boundary; installed-candidate validation must include first requests.

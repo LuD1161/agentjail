@@ -291,3 +291,19 @@ func monitoringHookFallback() bool {
 	fb, ok := loadHookFallback()
 	return ok && fb.Monitoring
 }
+
+// A connected daemon can time out or send an invalid reply without being stopped.
+func fallbackSystemMessage(level, category string) string {
+	if category != "read-response" {
+		return failOpenSystemMessage(level)
+	}
+	return "⚠ agentjail: daemon response unavailable — using configured offline fallback (" + level + "). " + restartInstructions
+}
+
+func printFallbackBanner(level, category string) {
+	if category != "read-response" {
+		printFailOpenBanner(level)
+		return
+	}
+	fmt.Fprintln(os.Stderr, fallbackSystemMessage(level, category))
+}
