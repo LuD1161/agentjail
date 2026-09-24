@@ -1,4 +1,5 @@
 import XCTest
+import Testing
 @testable import AgentjailApprovalApp
 
 @MainActor
@@ -220,4 +221,48 @@ private actor SetupHealthInspector: AgentJailSetupHealthInspecting {
 
 private struct ImmediateSetupSleeper: AgentJailSetupSleeping {
     func pause() async { await Task.yield() }
+}
+
+@MainActor
+struct FirstLaunchSetupTests {
+    @Test func installsOnceWithoutRequestingNetworkActivation() async {
+        let runner = SetupCommandRunner()
+        let coordinator = AgentJailSetupCoordinator(
+            runner: runner,
+            inspector: SetupHealthInspector([
+                AgentJailSetupHealth(appInApplications: true, cliInstalled: false, daemonReachable: false, tunnelProfile: .absent),
+                AgentJailSetupHealth(appInApplications: true, cliInstalled: true, daemonReachable: true, tunnelProfile: .absent),
+            ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        await coordinator.prepareFirstLaunch()
+        await coordinator.prepareFirstLaunch()
+        #expect(coordinator.health.localComponentsReady)
+        #expect(!coordinator.health.tunnelProfile.isConfigured)
+        let commands = await runner.commands()
+        #expect(commands.filter { $0 == .installComponents }.count == 1)
+        #expect(!commands.contains(.installExtension))
+    }
+
+    @Test func failedAutomaticInstallDoesNotLoop() async {
+        let runner = SetupCommandRunner(failing: .installComponents)
+        let coordinator = AgentJailSetupCoordinator(runner: runner, inspector: SetupHealthInspector([
+            AgentJailSetupHealth(appInApplications: true, cliInstalled: false, daemonReachable: false, tunnelProfile: .absent),
+        ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        await coordinator.prepareFirstLaunch()
+        _ = await coordinator.refresh()
+        await coordinator.prepareFirstLaunch()
+        let commands = await runner.commands()
+        #expect(commands.filter { $0 == .installComponents }.count == 1)
+    }
+
+    @Test(arguments: [false, true]) func existingCLIOrUnmovedAppIsNotAutomaticallyInstalled(existing: Bool) async {
+        let runner = SetupCommandRunner()
+        let coordinator = AgentJailSetupCoordinator(runner: runner, inspector: SetupHealthInspector([
+            AgentJailSetupHealth(appInApplications: existing, cliPresent: existing, cliInstalled: false, daemonReachable: false, tunnelProfile: .absent),
+        ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        await coordinator.prepareFirstLaunch()
+        #expect(await runner.commands().isEmpty)
+    }
 }

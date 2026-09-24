@@ -34,14 +34,14 @@ struct DashboardOverviewRefreshTests {
     }
 
     @Test func missingInstallationDoesNotPoll() async throws {
-        let setup = AgentJailSetupCoordinator(inspector: StartupInspector(cliPresent: false, daemonStates: [false]))
+        let setup = AgentJailSetupCoordinator(runner: FailedStartupRunner(), inspector: StartupInspector(cliPresent: false, daemonStates: [false]))
         let client = StartupDashboardClient(failures: 1, snapshot: try snapshot())
         let dashboard = DashboardStore(client: client)
         let sleeper = CountingRetrySleeper()
 
         await DashboardOverviewRefresh.untilAvailable(setup: setup, dashboard: dashboard, sleeper: sleeper)
 
-        #expect(setup.phase == .readyToInstall)
+        #expect(setup.phase == .failed(.componentInstall))
         #expect(await sleeper.count == 0)
         #expect(await client.calls == 1)
     }
@@ -113,5 +113,11 @@ private actor SuspendedRetrySleeper: DashboardSleeping {
     func waitUntilSleeping() async {
         guard !sleeping else { return }
         await withCheckedContinuation { observer = $0 }
+    }
+}
+
+private struct FailedStartupRunner: AgentJailSetupCommandRunning {
+    func run(_ command: AgentJailSetupCommand, signal: @escaping @Sendable (AgentJailSetupSignal) -> Void) async -> AgentJailSetupCommandResult {
+        AgentJailSetupCommandResult(launched: true, exitCode: 1)
     }
 }

@@ -5,6 +5,7 @@ enum DashboardOverviewRefresh {
     static func refresh(setup: AgentJailSetupCoordinator, dashboard: DashboardStore) async {
         guard !Task.isCancelled else { return }
         _ = await setup.refresh()
+        await setup.prepareFirstLaunch()
         guard !Task.isCancelled else { return }
         await dashboard.refresh()
     }

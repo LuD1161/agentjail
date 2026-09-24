@@ -39,6 +39,7 @@ final class ApprovalAppComposition: ObservableObject {
     private var hasTerminated = false
     private var openedReviewRouteGeneration: UInt64?
     private var restoresSetupAfterExternalSettings = false
+    private var externalSettingsReturnTab: AgentJailTab = .overview
 
     init(
         client: any ReviewControlling,
@@ -127,6 +128,7 @@ final class ApprovalAppComposition: ObservableObject {
         restoresSetupAfterExternalSettings = false
         setupCoordinator.retry()
         requestSetup()
+        selectedTab = externalSettingsReturnTab
     }
 
     func menuBarExtraInsertionChanged(_ inserted: Bool) {
@@ -233,6 +235,7 @@ final class ApprovalAppComposition: ObservableObject {
     }
 
     func openExtensionApprovalSettings() {
+        externalSettingsReturnTab = selectedTab
         restoresSetupAfterExternalSettings = true
         loginService.openLoginItemsSettings()
     }

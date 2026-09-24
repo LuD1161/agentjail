@@ -9,6 +9,7 @@ final class AgentJailSetupCoordinator: ObservableObject {
     private let inspector: any AgentJailSetupHealthInspecting
     private let sleeper: any AgentJailSetupSleeping
     private var workflowTask: Task<Void, Never>?
+    private var attemptedFirstLaunchInstall = false
 
     init(
         runner: any AgentJailSetupCommandRunning = BundledAgentJailCommandRunner(),
@@ -32,6 +33,16 @@ final class AgentJailSetupCoordinator: ObservableObject {
         health = inspected
         phase = phaseForHealth(inspected)
         return inspected
+    }
+
+    // First launch installs local components only. Network activation is a user action.
+    func prepareFirstLaunch() async {
+        guard !Task.isCancelled, !attemptedFirstLaunchInstall,
+              phase == .readyToInstall, health.appInApplications,
+              !health.cliPresent, workflowTask == nil else { return }
+        attemptedFirstLaunchInstall = true
+        beginSetup()
+        await workflowTask?.value
     }
 
     func beginSetup() {
