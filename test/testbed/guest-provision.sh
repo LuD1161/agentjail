@@ -4,7 +4,7 @@
 # Turns a clean box into "a real dev machine that just installed agentjail":
 #   1. the selected coding agent via its normal package path
 #   2. optional agent login preparation
-#   3. agentjail via the SHIPPED install.sh (LOCAL_TARBALL seam) — the true
+#   3. agentjail via the SHIPPED install.sh (DMG on macOS, tarball on Linux) — the true
 #      user path: checksum verify, ~/.agentjail/bin, service install, hook merge
 #   4. a realistic seed project (~/work/demo) with allowed + forbidden remotes
 
@@ -159,14 +159,13 @@ fi
 
 # ---- 3. agentjail via the shipped installer -----------------------------------
 
-log "running install.sh with LOCAL_TARBALL (the real user path)"
-AGENTJAIL_ASSUME_YES=1 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
-
-# macOS Gatekeeper quarantines unsigned binaries copied from outside.
-# Strip the quarantine xattr so they can execute without code-signing.
-if [ "$(uname -s)" = "Darwin" ] && [ -d "$HOME/.agentjail/bin" ]; then
-    log "clearing Gatekeeper quarantine on agentjail binaries"
-    xattr -dr com.apple.quarantine "$HOME/.agentjail/bin" 2>/dev/null || true
+if [ "$(uname -s)" = "Darwin" ]; then
+    log "running install.sh with the notarized macOS DMG"
+    [ -f /tmp/agentjail-local.dmg ] || { log "missing macOS distribution DMG"; exit 1; }
+    AGENTJAIL_ASSUME_YES=1 LOCAL_MACOS_DMG=/tmp/agentjail-local.dmg sh /tmp/agentjail-install.sh
+else
+    log "running install.sh with LOCAL_TARBALL"
+    AGENTJAIL_ASSUME_YES=1 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh
 fi
 
 # The Codex approval matrix models users who launch through the opt-in PATH

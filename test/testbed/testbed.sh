@@ -319,28 +319,36 @@ do_provision() {
         *) die "unsupported guest arch: $goarch" ;;
     esac
 
-    log "building dist tarball from $worktree ($goos/$goarch)"
-    make -C "$worktree" dist-tarball DIST_GOOS="$goos" DIST_GOARCH="$goarch"
-    local tarball
-    tarball=$(ls -t "$worktree"/dist/agentjail-*-"$goos"-"$goarch".tar.gz | head -1)
-    [ -n "$tarball" ] || die "dist-tarball produced no tarball"
+    local payload guest_payload installer_command
+    if [ "$goos" = darwin ]; then
+        payload="${AGENTJAIL_TESTBED_MACOS_DMG:-$worktree/build/AgentJail.dmg}"
+        [ -f "$payload" ] || die "build and notarize AgentJail.dmg before the macOS release gate (or set AGENTJAIL_TESTBED_MACOS_DMG)"
+        guest_payload=/tmp/agentjail-local.dmg
+        installer_command='AGENTJAIL_ASSUME_YES=1 LOCAL_MACOS_DMG=/tmp/agentjail-local.dmg sh /tmp/agentjail-install.sh'
+    else
+        log "building dist tarball from $worktree ($goos/$goarch)"
+        make -C "$worktree" dist-tarball DIST_GOOS="$goos" DIST_GOARCH="$goarch"
+        payload=$(ls -t "$worktree"/dist/agentjail-*-"$goos"-"$goarch".tar.gz | head -1)
+        [ -n "$payload" ] || die "dist-tarball produced no tarball"
+        guest_payload=/tmp/agentjail-local.tar.gz
+        installer_command='AGENTJAIL_ASSUME_YES=1 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh'
+    fi
 
     if [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ]; then
-        install -m 0600 "$tarball" "$ACTIVE_RAW_EVIDENCE_DIR/install/$(basename "$tarball")"
+        install -m 0600 "$payload" "$ACTIVE_RAW_EVIDENCE_DIR/install/$(basename "$payload")"
         install -m 0600 "$worktree/install.sh" "$ACTIVE_RAW_EVIDENCE_DIR/install/install.sh"
         install -m 0600 "$TESTBED_DIR/guest-provision.sh" "$ACTIVE_RAW_EVIDENCE_DIR/install/guest-provision.sh"
-        printf '%s\n' 'AGENTJAIL_ASSUME_YES=1 LOCAL_TARBALL=/tmp/agentjail-local.tar.gz sh /tmp/agentjail-install.sh' \
-            >"$ACTIVE_RAW_EVIDENCE_DIR/install/installer-command.txt"
+        printf '%s\n' "$installer_command" >"$ACTIVE_RAW_EVIDENCE_DIR/install/installer-command.txt"
         chmod 0600 "$ACTIVE_RAW_EVIDENCE_DIR/install/installer-command.txt"
     fi
 
-    log "pushing tarball + install.sh + guest-provision.sh"
-    guest_push "$name" "$tarball" /tmp/agentjail-local.tar.gz
+    log "pushing distribution payload + install.sh + guest-provision.sh"
+    guest_push "$name" "$payload" "$guest_payload"
     guest_push "$name" "$worktree/install.sh" /tmp/agentjail-install.sh
     guest_push "$name" "$TESTBED_DIR/guest-provision.sh" /tmp/guest-provision.sh
 
     if [ -n "$ACTIVE_RAW_EVIDENCE_DIR" ]; then
-        guest_exec "$name" "shasum -a 256 /tmp/agentjail-local.tar.gz /tmp/agentjail-install.sh /tmp/guest-provision.sh" \
+        guest_exec "$name" "shasum -a 256 $guest_payload /tmp/agentjail-install.sh /tmp/guest-provision.sh" \
             >"$ACTIVE_RAW_EVIDENCE_DIR/install/guest-input-sha256.txt"
         chmod 0600 "$ACTIVE_RAW_EVIDENCE_DIR/install/guest-input-sha256.txt"
     fi

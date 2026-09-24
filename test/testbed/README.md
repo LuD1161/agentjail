@@ -6,8 +6,11 @@ its own testbed, so parallel feature builds never fight over the host's single
 agentjail install — and the host is never polluted.
 
 agentjail is always installed **through the real user path**: a release-layout
-tarball (`make dist-tarball`) fed to the shipped `install.sh` via its
-`LOCAL_TARBALL=` seam. The installer wires every detected agent once, exactly
+distribution fed to the shipped `install.sh`: Linux builds a tarball with
+`make dist-tarball` and uses `LOCAL_TARBALL=`, while macOS uses an already signed,
+notarized DMG through `LOCAL_MACOS_DMG=`. Build and notarize `build/AgentJail.dmg`
+before macOS provisioning, or set `AGENTJAIL_TESTBED_MACOS_DMG` to its absolute
+path. Provisioning preserves the signed artifact and its quarantine attributes. The installer wires every detected agent once, exactly
 as a piped end-user install does; the testbed does not run a second install to
 repair or alter that result. `AGENTJAIL_TESTBED_AGENT` selects the agent under
 test; it defaults to `codex` and also accepts `claude-code`.
@@ -163,14 +166,14 @@ This caps how many testbeds **exist** (a disk concern). How many may **run** at
 once is a different axis: macOS caps concurrent VMs at ~2, which `gate` handles
 by stopping other running testbeds up front (`tart_stop_other_testbeds`).
 
-The driver (Lima vs Tart) is auto-selected by host OS. `provision` builds the
+The driver (Lima vs Tart) is auto-selected by host OS. `provision` selects the notarized macOS DMG or builds the Linux
 tarball from the given worktree (default: this repo checkout), pushes it, and
 runs `guest-provision.sh` inside the guest, which:
 
 1. installs only the selected agent through npm,
 2. keeps Codex authentication out of provisioning and injects it only for
    each live scenario,
-3. runs `install.sh` with `LOCAL_TARBALL=` once and fails unless that single
+3. runs `install.sh` with the platform distribution once and fails unless that single
    non-interactive install leaves the daemon running and the selected agent wired,
 4. creates a seed project `~/work/demo` (git repo with an `origin` → allowed
    local bare remote and an `exfil` → forbidden remote, plus a dirty file).
@@ -305,7 +308,9 @@ derived from the same `git describe` the Makefile's `DIST_VERSION` uses.
 Practical consequence: **edit the worktree, and every chaos run aborts until you
 re-provision**, because the tree describes as `-dirty` while the installed binary
 does not. That is working as intended - re-run `provision` and the tarball is
-rebuilt from the current tree. `CHAOS_SKIP_VERSION_CHECK=1` bypasses the check
+rebuilt from the current tree on Linux. On macOS, rebuild and notarize the DMG
+before re-provisioning; provisioning never rebuilds a signed app.
+`CHAOS_SKIP_VERSION_CHECK=1` bypasses the check
 with a loud warning; reach for it knowingly, not reflexively.
 
 Note the guard's one blind spot: `git describe --dirty` yields the same string
@@ -458,8 +463,8 @@ Known things to verify / likely fixes (commit them when done):
       on macOS (brew-installed node owns its global prefix).
 - [x] **install.sh service install**: `e2e-smoke.sh` checks `launchctl list |
       grep agentjail` on macOS, `systemctl --user is-active` on Linux.
-- [x] **Gatekeeper**: `guest-provision.sh` runs `xattr -dr com.apple.quarantine`
-      on `~/.agentjail/bin` after `install.sh` on Darwin.
+- [x] **Gatekeeper**: macOS provisioning uses the notarized DMG and the shipped
+      installer identity checks, without stripping quarantine.
 - [ ] **Per-commit Codex gate**: `AGENTJAIL_TESTBED_AGENT=codex make e2e-release`
       completes with a real authenticated Codex run and zero scenario skips.
 
