@@ -659,6 +659,8 @@ For systemd-managed daemons (Linux), set via an environment override file:
 
 ## Uninstall
 
+IDE wrapper removal preserves unrelated JSONC settings and shared wrapper chains until their last integration is detached.
+
 Agent hook cleanup preserves unrelated commands within shared hook groups and reports malformed configuration.
 
 ```sh

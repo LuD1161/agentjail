@@ -124,46 +124,111 @@ func installVSCodeWrapper(home string, app string, chain, replace bool) error {
 // uninstallVSCodeWrapper removes the agentjail wrapper from VS Code/Cursor settings.
 // If a previous wrapper was backed up, it restores it.
 func uninstallVSCodeWrapper(home string, app string) error {
+	return uninstallVSCodeWrapperWithWriter(home, app, atomicWrite)
+}
+
+func uninstallVSCodeWrapperWithWriter(home, app string, write func(string, []byte, os.FileMode) error) error {
 	settingsPath := vscodeSettingsPath(home, app)
 	if settingsPath == "" {
 		return nil // not installed
 	}
 
 	raw, err := os.ReadFile(settingsPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		return nil // no settings file
+		return fmt.Errorf("read %s wrapper settings: %w", app, err)
 	}
 
-	settings := make(map[string]interface{})
+	var settings map[string]json.RawMessage
 	if err := json.Unmarshal(stripJSONComments(raw), &settings); err != nil {
-		return nil // can't parse, don't touch
+		return fmt.Errorf("parse %s wrapper settings: %w", app, err)
+	}
+	if settings == nil {
+		return fmt.Errorf("%s wrapper settings must be an object", app)
 	}
 
-	existing, _ := settings[wrapperSettingsKey].(string)
-	if !isOurWrapper(existing, home) {
+	var existing string
+	if encoded, present := settings[wrapperSettingsKey]; present {
+		if err := json.Unmarshal(encoded, &existing); err != nil {
+			return fmt.Errorf("parse %s wrapper command: %w", app, err)
+		}
+	}
+	if existing != filepath.Join(home, ".agentjail", "bin", wrapperBinaryName) {
 		return nil // not our wrapper, don't touch
 	}
 
 	// Restore previous wrapper if backed up.
-	if prev, ok := settings["_agentjail_previous_wrapper"].(string); ok && prev != "" {
-		settings[wrapperSettingsKey] = prev
+	var previous string
+	if encoded, present := settings["_agentjail_previous_wrapper"]; present {
+		if err := json.Unmarshal(encoded, &previous); err != nil {
+			return fmt.Errorf("parse %s previous wrapper: %w", app, err)
+		}
+	}
+	if previous != "" {
+		settings[wrapperSettingsKey], _ = json.Marshal(previous)
 		delete(settings, "_agentjail_previous_wrapper")
-		fmt.Fprintf(os.Stdout, "  %s: restored previous wrapper: %s\n", app, prev)
 	} else {
 		delete(settings, wrapperSettingsKey)
-		fmt.Fprintf(os.Stdout, "  %s: wrapper removed\n", app)
 	}
-
-	// Also clean up chain config.
-	chainPath := filepath.Join(home, ".agentjail", "wrapper-chain.conf")
-	os.Remove(chainPath)
 
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
 	out = append(out, '\n')
-	return os.WriteFile(settingsPath, out, 0o600)
+	info, err := os.Stat(settingsPath)
+	if err != nil {
+		return fmt.Errorf("stat %s wrapper settings: %w", app, err)
+	}
+	if err := write(settingsPath, out, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("write %s wrapper settings: %w", app, err)
+	}
+	// Keep the live chain intact until settings no longer invoke our wrapper.
+	// See ADR 0151-install-lifecycle.
+	chainPath := filepath.Join(home, ".agentjail", "wrapper-chain.conf")
+	if !otherIDEUsesWrapper(home, app) {
+		if err := os.Remove(chainPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s wrapper chain: %w", app, err)
+		}
+	}
+	if previous != "" {
+		fmt.Fprintf(os.Stdout, "  %s: restored previous wrapper: %s\n", app, previous)
+	} else {
+		fmt.Fprintf(os.Stdout, "  %s: wrapper removed\n", app)
+	}
+	return nil
+}
+
+func otherIDEUsesWrapper(home, detachedApp string) bool {
+	for _, app := range []string{"Code", "Cursor"} {
+		if app == detachedApp {
+			continue
+		}
+		path := vscodeSettingsPath(home, app)
+		if path == "" {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return true
+		}
+		var settings map[string]json.RawMessage
+		if json.Unmarshal(stripJSONComments(raw), &settings) != nil || settings == nil {
+			return true
+		}
+		if encoded, present := settings[wrapperSettingsKey]; present {
+			var command string
+			if json.Unmarshal(encoded, &command) != nil || command == filepath.Join(home, ".agentjail", "bin", wrapperBinaryName) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type pathShimTarget = pathshim.Target
@@ -244,38 +309,77 @@ func isOurWrapper(path, home string) bool {
 	return strings.HasPrefix(path, agentjailDir)
 }
 
-// stripJSONComments removes single-line // comments and trailing commas
-// from JSONC content. This is a simple implementation that handles the
-// common cases in VS Code settings files.
+// stripJSONComments preserves strings while removing JSONC comments and trailing commas.
 func stripJSONComments(data []byte) []byte {
-	lines := strings.Split(string(data), "\n")
-	var out []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") {
+	out := append([]byte(nil), data...)
+	inString, escaped := false, false
+	for i := 0; i < len(out); i++ {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if out[i] == '\\' {
+				escaped = true
+			} else if out[i] == '"' {
+				inString = false
+			}
 			continue
 		}
-		// Remove inline comments (after a string value).
-		if idx := strings.Index(line, " //"); idx > 0 {
-			// Only strip if it looks like a comment (not inside a string).
-			beforeComment := line[:idx]
-			quoteCount := strings.Count(beforeComment, "\"") - strings.Count(beforeComment, "\\\"")
-			if quoteCount%2 == 0 {
-				line = beforeComment
+		if out[i] == '"' {
+			inString = true
+			continue
+		}
+		if out[i] != '/' || i+1 == len(out) {
+			continue
+		}
+		switch out[i+1] {
+		case '/':
+			for i < len(out) && out[i] != '\n' && out[i] != '\r' {
+				out[i] = ' '
+				i++
+			}
+		case '*':
+			end := i + 2
+			for end+1 < len(out) && !(out[end] == '*' && out[end+1] == '/') {
+				end++
+			}
+			if end+1 >= len(out) {
+				return data // Keep unterminated comments invalid for json.Unmarshal.
+			}
+			for ; i <= end+1; i++ {
+				if out[i] != '\n' && out[i] != '\r' {
+					out[i] = ' '
+				}
+			}
+			i--
+		}
+	}
+	inString, escaped = false, false
+	for i := 0; i < len(out); i++ {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if out[i] == '\\' {
+				escaped = true
+			} else if out[i] == '"' {
+				inString = false
+			}
+			continue
+		}
+		if out[i] == '"' {
+			inString = true
+			continue
+		}
+		if out[i] == ',' {
+			next := i + 1
+			for next < len(out) && (out[next] == ' ' || out[next] == '\t' || out[next] == '\n' || out[next] == '\r') {
+				next++
+			}
+			if next < len(out) && (out[next] == '}' || out[next] == ']') {
+				out[i] = ' '
 			}
 		}
-		out = append(out, line)
 	}
-	result := strings.Join(out, "\n")
-
-	// Remove trailing commas before } or ].
-	result = strings.ReplaceAll(result, ",\n}", "\n}")
-	result = strings.ReplaceAll(result, ",\n]", "\n]")
-	// Handle whitespace variations.
-	result = strings.ReplaceAll(result, ",  \n}", "\n}")
-	result = strings.ReplaceAll(result, ",\t\n}", "\n}")
-
-	return []byte(result)
+	return out
 }
 
 // fileExists is defined in install.go and shared across the package.

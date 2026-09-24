@@ -1538,3 +1538,10 @@ Malformed Claude settings previously returned unchanged success, and removing an
 owned matcher group could discard foreign commands in the same group. Parse
 failures must surface and removal must target individual owned commands. See
 ADR 0151-install-lifecycle.
+
+## Wrapper settings must commit before chain cleanup
+
+Uninstall treated unreadable settings as successful cleanup and could remove a
+shared chain before updating the settings that still invoked it. Atomically
+commit settings first and retain chains still used by another IDE. See
+ADR 0151-install-lifecycle.
