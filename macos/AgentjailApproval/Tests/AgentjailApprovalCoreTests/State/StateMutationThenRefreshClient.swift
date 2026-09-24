@@ -37,9 +37,11 @@ final class StateMutationThenRefreshClient: ReviewControlling, @unchecked Sendab
     }
 
     func approve(_ reviewID: ReviewID) async throws {
-        lock.withLock { approvalCount += 1 }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            lock.withLock { approvalContinuation = continuation }
+            lock.withLock {
+                approvalContinuation = continuation
+                approvalCount += 1
+            }
         }
     }
 

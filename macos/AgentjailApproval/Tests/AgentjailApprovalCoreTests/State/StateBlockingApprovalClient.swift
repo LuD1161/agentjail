@@ -15,9 +15,11 @@ final class StateBlockingApprovalClient: ReviewControlling, @unchecked Sendable 
     }
 
     func approve(_ reviewID: ReviewID) async throws {
-        lock.withLock { count += 1 }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            lock.withLock { approvalContinuation = continuation }
+            lock.withLock {
+                approvalContinuation = continuation
+                count += 1
+            }
         }
     }
 

@@ -1523,3 +1523,11 @@ nonblocking dispatch source now owns each listener descriptor and closes it in
 its cancellation handler; old generations never accept on newly reused FDs.
 Repeated start/stop tests exercise real Unix sockets. Full provider lifecycle
 acceptance still requires the signed extension, not just this socket test.
+
+## Test readiness must include the continuation
+
+Native approval tests intermittently hung after a fake client incremented its
+call count before storing the continuation. The test observed the count and
+called `finishApproval()` in that gap, losing the completion. Publish readiness
+and the continuation in the same critical section so observing readiness makes
+completion safe. A passing rerun does not resolve this race.
