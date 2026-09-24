@@ -2,6 +2,7 @@ package daemonapp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -41,14 +42,15 @@ func newLocalDashboardProjector(eventStore store.EventStore, activeSessions *act
 const dashboardTokenCacheTTL = 5 * time.Minute
 
 type dashboardTokenCache struct {
-	mu         sync.Mutex
-	collect    func(time.Time) ([]costanalytics.SessionCost, []error)
-	points     []grantctl.DashboardTokenDayV1
-	agents     []grantctl.DashboardTokenAgentV1
-	agentDays  []dashboardTokenAgentDay
-	loadedAt   time.Time
-	refreshing bool
-	path       string
+	localSessions []grantctl.DashboardLocalSessionV1
+	mu            sync.Mutex
+	collect       func(time.Time) ([]costanalytics.SessionCost, []error)
+	points        []grantctl.DashboardTokenDayV1
+	agents        []grantctl.DashboardTokenAgentV1
+	agentDays     []dashboardTokenAgentDay
+	loadedAt      time.Time
+	refreshing    bool
+	path          string
 }
 
 type dashboardTokenAgentDay struct {
@@ -60,11 +62,12 @@ type dashboardTokenAgentDay struct {
 }
 
 type dashboardTokenCacheFile struct {
-	Version   int                              `json:"version"`
-	LoadedAt  time.Time                        `json:"loaded_at"`
-	Points    []grantctl.DashboardTokenDayV1   `json:"points"`
-	Agents    []grantctl.DashboardTokenAgentV1 `json:"agents"`
-	AgentDays []dashboardTokenAgentDay         `json:"agent_days"`
+	LocalSessions []grantctl.DashboardLocalSessionV1 `json:"local_sessions"`
+	Version       int                                `json:"version"`
+	LoadedAt      time.Time                          `json:"loaded_at"`
+	Points        []grantctl.DashboardTokenDayV1     `json:"points"`
+	Agents        []grantctl.DashboardTokenAgentV1   `json:"agents"`
+	AgentDays     []dashboardTokenAgentDay           `json:"agent_days"`
 }
 
 func defaultDashboardTokenCachePath() string {
@@ -105,6 +108,7 @@ func (c *dashboardTokenCache) refresh(since, now time.Time) {
 	refreshSince := since
 	previousPoints := append([]grantctl.DashboardTokenDayV1(nil), c.points...)
 	previousAgentDays := append([]dashboardTokenAgentDay(nil), c.agentDays...)
+	previousSessions := append([]grantctl.DashboardLocalSessionV1(nil), c.localSessions...)
 	if !c.loadedAt.IsZero() && len(previousPoints) > 0 {
 		refreshSince = now.UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
 		if refreshSince.Before(since) {
@@ -122,12 +126,14 @@ func (c *dashboardTokenCache) refresh(since, now time.Time) {
 		return
 	}
 	points, agents, agentDays := aggregateDashboardTokenDetails(costs, refreshSince, now)
+	localSessions := projectDashboardLocalSessions(costs, previousSessions, refreshSince, since, now)
 	if refreshSince.After(since) {
 		points = mergeDashboardTokenDays(previousPoints, points, refreshSince, since, now)
 		agentDays = mergeDashboardTokenAgentDays(previousAgentDays, agentDays, refreshSince, since, now)
 		agents = aggregateDashboardTokenAgents(agentDays)
 	}
 	c.mu.Lock()
+	c.localSessions = localSessions
 	c.points = points
 	c.agents = agents
 	c.agentDays = agentDays
@@ -135,9 +141,10 @@ func (c *dashboardTokenCache) refresh(since, now time.Time) {
 	c.refreshing = false
 	cacheFile := dashboardTokenCacheFile{
 		Version: 1, LoadedAt: c.loadedAt,
-		Points:    append([]grantctl.DashboardTokenDayV1(nil), c.points...),
-		Agents:    append([]grantctl.DashboardTokenAgentV1(nil), c.agents...),
-		AgentDays: append([]dashboardTokenAgentDay(nil), c.agentDays...),
+		LocalSessions: append([]grantctl.DashboardLocalSessionV1{}, c.localSessions...),
+		Points:        append([]grantctl.DashboardTokenDayV1(nil), c.points...),
+		Agents:        append([]grantctl.DashboardTokenAgentV1(nil), c.agents...),
+		AgentDays:     append([]dashboardTokenAgentDay(nil), c.agentDays...),
 	}
 	c.mu.Unlock()
 	c.save(cacheFile)
@@ -158,7 +165,11 @@ func (c *dashboardTokenCache) load() {
 	c.points = cached.Points
 	c.agents = cached.Agents
 	c.agentDays = cached.AgentDays
+	c.localSessions = cached.LocalSessions
 	c.loadedAt = cached.LoadedAt
+	if cached.LocalSessions == nil {
+		c.loadedAt = time.Time{}
+	}
 }
 
 func (c *dashboardTokenCache) save(cached dashboardTokenCacheFile) {
@@ -190,6 +201,16 @@ func writeAllAndSync(file *os.File, data []byte) error {
 }
 
 func validDashboardTokenCacheFile(cached dashboardTokenCacheFile) bool {
+	if len(cached.LocalSessions) > grantctl.MaxDashboardSessions {
+		return false
+	}
+	seen := make(map[string]bool)
+	for _, session := range cached.LocalSessions {
+		if !session.Valid() || seen[session.ID] {
+			return false
+		}
+		seen[session.ID] = true
+	}
 	if cached.Version != 1 || cached.LoadedAt.IsZero() || len(cached.Points) > 35 || len(cached.Agents) > 8 || len(cached.AgentDays) > 280 {
 		return false
 	}
@@ -273,6 +294,9 @@ func (p *localDashboardProjector) DashboardSnapshot(ctx context.Context, now tim
 	}
 
 	snapshot.Tokens, snapshot.TokenAgents, snapshot.TokenStatus = p.tokenCache.snapshot(since, now)
+	p.tokenCache.mu.Lock()
+	snapshot.LocalSessions = append([]grantctl.DashboardLocalSessionV1{}, p.tokenCache.localSessions...)
+	p.tokenCache.mu.Unlock()
 	return snapshot, nil
 }
 
@@ -513,4 +537,48 @@ func dashboardSnapshotResponse(projector dashboardSnapshotProjector, version gra
 		return grantctl.Response{OK: false, Error: "dashboard snapshot unavailable"}
 	}
 	return grantctl.Response{OK: true, DashboardSnapshot: &snapshot}
+}
+
+// Transcript metadata never contributes to audit or live-session totals.
+func projectDashboardLocalSessions(costs []costanalytics.SessionCost, previous []grantctl.DashboardLocalSessionV1, refreshedSince, since, now time.Time) []grantctl.DashboardLocalSessionV1 {
+	byID := make(map[string]grantctl.DashboardLocalSessionV1)
+	for _, session := range previous {
+		started := time.UnixMilli(int64(session.StartedAtUnixMs))
+		if !started.Before(since) && started.Before(refreshedSince) && !started.After(now) {
+			byID[session.ID] = session
+		}
+	}
+	for _, cost := range costs {
+		if cost.SessionID == "" || cost.StartedAt.Before(since) || cost.StartedAt.After(now) {
+			continue
+		}
+		agent := string(cost.Agent)
+		if agent == "" {
+			agent = string(cost.Source)
+		}
+		identity := fmt.Sprintf("%x", sha256.Sum256([]byte(agent+"\x00"+string(cost.SessionID))))
+		session := grantctl.DashboardLocalSessionV1{
+			ID: identity, Agent: boundedDashboardLabel(agent, grantctl.MaxDashboardLabelBytes),
+			Project:         dashboardProjectName(string(cost.Project)),
+			StartedAtUnixMs: grantctl.UnixMilliseconds(cost.StartedAt.UnixMilli()),
+		}
+		if old, ok := byID[identity]; ok && old.StartedAtUnixMs <= session.StartedAtUnixMs {
+			continue
+		}
+		byID[identity] = session
+	}
+	sessions := make([]grantctl.DashboardLocalSessionV1, 0, len(byID))
+	for _, session := range byID {
+		sessions = append(sessions, session)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].StartedAtUnixMs == sessions[j].StartedAtUnixMs {
+			return sessions[i].ID < sessions[j].ID
+		}
+		return sessions[i].StartedAtUnixMs > sessions[j].StartedAtUnixMs
+	})
+	if len(sessions) > grantctl.MaxDashboardSessions {
+		sessions = sessions[:grantctl.MaxDashboardSessions]
+	}
+	return sessions
 }

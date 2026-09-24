@@ -320,7 +320,7 @@ private struct DashboardOverviewView: View {
                     HStack(alignment: .top, spacing: 14) {
                         AgentJailIconTile(systemImage: "network", color: .blue)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Network monitoring is off").font(.headline)
+                            Text(setup.health.tunnelProfile == .absent ? "Network monitoring is not installed" : "Network monitoring is off").font(.headline)
                             Text("Your sessions and tool-call activity are available without it. Add network monitoring to inspect agent traffic and evaluate network policies.")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
@@ -345,6 +345,7 @@ private struct DashboardOverviewView: View {
                         tokenCard(dashboard.tokenSnapshot ?? snapshot)
                     }
                 }
+                localHistoryCard(dashboard.tokenSnapshot ?? snapshot)
                 sessionsCard(snapshot)
             } else { emptyDashboard }
         }
@@ -466,11 +467,46 @@ private struct DashboardOverviewView: View {
         .accessibilityLabel("Token usage by agent")
     }
 
+    private func localHistoryCard(_ snapshot: DashboardSnapshotV1) -> some View {
+        DashboardCard(
+            title: "Local session history",
+            subtitle: "Recent local transcripts · not AgentJail audit coverage",
+            icon: "clock.arrow.circlepath"
+        ) {
+            if snapshot.localSessions.isEmpty {
+                if snapshot.tokenStatus == .loading {
+                    ProgressView("Finding recent local sessions…")
+                } else {
+                    Text("No supported local history is available yet. Sessions from Claude Code, Codex, and OpenCode appear here when their local transcripts are available.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(snapshot.localSessions) { session in
+                        HStack(spacing: 12) {
+                            AgentBrandMark(agent: session.agent)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(session.project).font(.callout.weight(.semibold))
+                                Text(agentDisplayName(session.agent)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(Date(timeIntervalSince1970: Double(session.startedAtUnixMs) / 1_000), format: .dateTime.month(.abbreviated).day().hour().minute())
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 10)
+                        .accessibilityElement(children: .combine)
+                        if session.id != snapshot.localSessions.last?.id { Divider() }
+                    }
+                }
+            }
+        }
+    }
+
     private func sessionsCard(_ snapshot: DashboardSnapshotV1) -> some View {
         let sessions = DashboardSessionOrdering.liveFirst(snapshot.recentSessions)
         let visibleAuditedCalls = snapshot.recentSessions.reduce(0) { $0 + $1.auditedCalls }
         return DashboardCard(
-            title: "Agent sessions",
+            title: "Audited agent sessions",
             subtitle: "\(snapshot.activeSessions) active · \(visibleAuditedCalls.formatted()) calls in recent sessions",
             icon: "terminal.fill"
         ) {

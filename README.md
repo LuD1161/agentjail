@@ -1142,3 +1142,9 @@ remains required. The Policies page distinguishes hook-based tool-call policies
 from network policies, which require monitored agent traffic. Enabling network
 monitoring does not opt into enforcement: policy verdicts are evaluated and
 logged by default, with OS isolation retained.
+
+Overview also shows up to twelve recent **Local session history** entries from
+supported Claude Code, Codex, and OpenCode transcripts. These contain only agent,
+project name, and start time. They load progressively and stay separate from
+**Audited agent sessions**, active-session counts, and policy-match totals.
+Local history is not evidence that AgentJail audited those sessions.

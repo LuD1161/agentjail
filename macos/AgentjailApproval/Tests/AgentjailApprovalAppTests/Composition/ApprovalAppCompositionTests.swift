@@ -214,6 +214,7 @@ final class ApprovalAppCompositionTests: XCTestCase {
         composition.start()
         await eventually { client.fetchCount == 1 }
 
+        composition.selectedTab = .network
         composition.openExtensionApprovalSettings()
         XCTAssertEqual(loginService.openSettingsCount, 1)
         XCTAssertEqual(composition.setupRouteGeneration, 0)
@@ -221,6 +222,7 @@ final class ApprovalAppCompositionTests: XCTestCase {
         composition.applicationDidBecomeActive()
         await eventually { composition.setupCoordinator.phase == .readyToInstall }
         XCTAssertEqual(composition.setupRouteGeneration, 1)
+        XCTAssertEqual(composition.selectedTab, .network)
         XCTAssertEqual(application.activationCount, 1)
 
         composition.applicationDidBecomeActive()

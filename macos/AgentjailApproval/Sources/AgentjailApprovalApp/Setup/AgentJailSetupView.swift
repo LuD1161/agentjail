@@ -213,7 +213,7 @@ struct AgentJailSetupView: View {
         case .enablingExtension: return "Enabling network"
         case .awaitingApproval: return "Approval needed"
         case .verifying: return "Verifying"
-        case .ready: return "Protected"
+        case .ready: return "Ready"
         case .failed: return "Needs attention"
         }
     }
@@ -226,7 +226,7 @@ struct AgentJailSetupView: View {
             return "Drag AgentJail into Applications, open that copy, then check again. macOS requires the Network Extension host to stay at a stable application path."
         case .readyToInstall:
             if coordinator.health.localComponentsReady {
-                return "Network monitoring is optional. Enable it now or continue and turn it on later from Settings."
+                return "Network monitoring is optional. Enable it now or continue and turn it on later from Network."
             }
             if coordinator.health.localComponentsNeedUpdate {
                 return "The app includes newer local components. Update them without changing policy configuration or audit history."
@@ -241,7 +241,7 @@ struct AgentJailSetupView: View {
         case .verifying:
             return "Confirming that the daemon answers locally and the network profile is enabled."
         case .ready:
-            return "The local daemon and Network Extension are ready. Start an agent through AgentJail to enforce network policy and process-local TLS inspection."
+            return "The local daemon and Network Extension are ready. Start an agent through AgentJail to inspect traffic and evaluate network policies. Blocking remains opt-in."
         case let .failed(failure):
             switch failure {
             case .componentInstall:

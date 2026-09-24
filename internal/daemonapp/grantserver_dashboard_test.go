@@ -3,8 +3,10 @@ package daemonapp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,9 +137,10 @@ func TestDashboardTokenCacheRefreshesOnlyRecentDaysAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dashboard-tokens-v1.json")
 	cached := dashboardTokenCacheFile{
 		Version: 1, LoadedAt: now.Add(-dashboardTokenCacheTTL - time.Minute),
-		Points:    []grantctl.DashboardTokenDayV1{{Day: "2026-08-20", InputTokens: 10}},
-		Agents:    []grantctl.DashboardTokenAgentV1{{Agent: "codex", InputTokens: 10}},
-		AgentDays: []dashboardTokenAgentDay{{Day: "2026-08-20", Agent: "codex", InputTokens: 10}},
+		LocalSessions: []grantctl.DashboardLocalSessionV1{},
+		Points:        []grantctl.DashboardTokenDayV1{{Day: "2026-08-20", InputTokens: 10}},
+		Agents:        []grantctl.DashboardTokenAgentV1{{Agent: "codex", InputTokens: 10}},
+		AgentDays:     []dashboardTokenAgentDay{{Day: "2026-08-20", Agent: "codex", InputTokens: 10}},
 	}
 	data, err := json.Marshal(cached)
 	if err != nil {
@@ -203,5 +206,95 @@ func TestDashboardSnapshotResponseRejectsMissingProjectorAndVersions(t *testing.
 	}
 	if response := dashboardSnapshotResponse(nil, grantctl.DashboardProtocolVersion, now); response.OK || response.Error != "dashboard snapshot unavailable" {
 		t.Fatalf("unexpected nil projector response: %+v", response)
+	}
+}
+
+func TestLocalHistoryAvailableWithoutAuditOrNetwork(t *testing.T) {
+	eventStore, err := store.Open(filepath.Join(t.TempDir(), "agentjail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventStore.Close()
+	now := time.Now().UTC()
+	cache := newDashboardTokenCache(func(time.Time) ([]costanalytics.SessionCost, []error) {
+		return []costanalytics.SessionCost{{Agent: costanalytics.AgentCodex, SessionID: "original-id", Project: "/Users/private/work/demo", StartedAt: now.Add(-time.Hour)}}, nil
+	})
+	cache.refresh(now.AddDate(0, 0, -34), now)
+	projector := &localDashboardProjector{store: eventStore, tokenCache: cache}
+	snapshot, err := projector.DashboardSnapshot(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.LocalSessions) != 1 || snapshot.LocalSessions[0].Project != "demo" {
+		t.Fatalf("history: %+v", snapshot.LocalSessions)
+	}
+	if snapshot.TotalCalls != 0 || snapshot.TotalSessions != 0 || snapshot.ActiveSessions != 0 || len(snapshot.RecentSessions) != 0 {
+		t.Fatalf("transcripts inflated audit totals: %+v", snapshot)
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "/Users/private") || strings.Contains(string(data), "original-id") {
+		t.Fatal("raw path or transcript identity exposed")
+	}
+}
+
+func TestLocalHistoryDeduplicatesModelsBoundsAndSorts(t *testing.T) {
+	now := time.Now().UTC()
+	costs := []costanalytics.SessionCost{}
+	for i := 0; i < 20; i++ {
+		costs = append(costs, costanalytics.SessionCost{Agent: costanalytics.AgentCodex, SessionID: costanalytics.SessionID(fmt.Sprint(i)), Project: "/workspace/demo", StartedAt: now.Add(-time.Duration(i) * time.Hour)})
+	}
+	duplicate := costs[0]
+	duplicate.Model = "another-model"
+	costs = append(costs, duplicate)
+	costs = append(costs, costanalytics.SessionCost{SessionID: "future", StartedAt: now.Add(time.Hour)})
+	sessions := projectDashboardLocalSessions(costs, nil, now.AddDate(0, 0, -34), now.AddDate(0, 0, -34), now)
+	if len(sessions) != grantctl.MaxDashboardSessions {
+		t.Fatalf("count: %d", len(sessions))
+	}
+	seen := map[string]bool{}
+	for i, session := range sessions {
+		if seen[session.ID] {
+			t.Fatal("duplicate session")
+		}
+		seen[session.ID] = true
+		if i > 0 && session.StartedAtUnixMs > sessions[i-1].StartedAtUnixMs {
+			t.Fatal("history unsorted")
+		}
+	}
+}
+
+func TestLocalHistoryPersistsAndLegacyCacheBackfills(t *testing.T) {
+	now := time.Now().UTC()
+	path := filepath.Join(t.TempDir(), "cache.json")
+	cache := newDashboardTokenCache(func(time.Time) ([]costanalytics.SessionCost, []error) {
+		return []costanalytics.SessionCost{{Agent: costanalytics.AgentCodex, SessionID: "demo", Project: "/workspace/demo", StartedAt: now.Add(-time.Hour), InputTokens: 1}}, nil
+	}, path)
+	cache.refresh(now.AddDate(0, 0, -34), now)
+	loaded := newDashboardTokenCache(nil, path)
+	if len(loaded.localSessions) != 1 || loaded.loadedAt.IsZero() {
+		t.Fatal("history cache not restored")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy dashboardTokenCacheFile
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy.LocalSessions = nil
+	data, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded = newDashboardTokenCache(nil, path)
+	if !loaded.loadedAt.IsZero() || len(loaded.points) == 0 {
+		t.Fatal("legacy cache must retain tokens while requesting history backfill")
 	}
 }
