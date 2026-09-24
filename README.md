@@ -1137,6 +1137,8 @@ On first launch from Applications, AgentJail installs its bundled local CLI,
 daemon, and detected-agent hooks automatically. Failures remain visible and
 retryable; existing installations are not automatically replaced.
 
+Native CLI status checks have bounded output and deadlines so an unavailable command cannot stall setup.
+
 The session dashboard and tool-call policy audit work independently of the
 optional Network Extension. Overview shows when network monitoring is off;
 choose **Network → Enable Network Monitoring** to set it up. macOS approval

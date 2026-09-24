@@ -3,6 +3,23 @@ import Testing
 @testable import AgentjailApprovalApp
 
 struct AgentJailStatusServiceTests {
+    @Test func commandRunnerRejectsOversizedOutputWithoutWaitingForExit() async throws {
+        let script = try temporaryCommand("printf '%070000d' 0")
+        defer { try? FileManager.default.removeItem(at: script.deletingLastPathComponent()) }
+        let runner = BundledAgentJailStatusCommandRunner(executableURL: script)
+        await #expect(throws: AgentJailStatusError.oversizedReply) { _ = try await runner.statusJSON() }
+    }
+
+    @Test func commandRunnerBoundsAStalledInstalledCLI() async throws {
+        let script = try temporaryCommand("exec /bin/sleep 30")
+        defer { try? FileManager.default.removeItem(at: script.deletingLastPathComponent()) }
+        let runner = BundledAgentJailStatusCommandRunner(executableURL: script)
+        let clock = ContinuousClock()
+        let started = clock.now
+        await #expect(throws: AgentJailStatusError.commandFailed) { _ = try await runner.statusJSON() }
+        #expect(started.duration(to: clock.now) < .seconds(6))
+    }
+
     @Test func decodesVersionedCLIProjection() async throws {
         let service = BundledAgentJailStatusService(runner: StatusRunner(data: Self.validJSON))
 
@@ -51,6 +68,15 @@ struct AgentJailStatusServiceTests {
       ]
     }
     """
+
+    private func temporaryCommand(_ body: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentjail-status-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let executable = directory.appendingPathComponent("agentjail")
+        try Data("#!/bin/sh\n\(body)\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        return executable
+    }
 }
 
 private struct StatusRunner: AgentJailStatusCommandRunning {
