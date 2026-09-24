@@ -1,0 +1,15 @@
+{
+  "protocol_version": 1,
+  "payload_state": "missing",
+  "candidate_version": "v1.8.2",
+  "cli_present": false,
+  "cli_payload_matches": false,
+  "hook_payload_matches": false,
+  "roles_ready": false,
+  "service_ready": false,
+  "policy_ready": false,
+  "core_rules_ready": false,
+  "installed_status_supported": false,
+  "daemon_matches_install": false,
+  "explicitly_uninstalled": true
+}

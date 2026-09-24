@@ -15,6 +15,7 @@ const statusReportProtocolVersion uint32 = 1
 type statusReport struct {
 	ProtocolVersion uint32               `json:"protocol_version"`
 	Version         string               `json:"version"`
+	Installation    installationState    `json:"installation"`
 	Infrastructure  statusInfrastructure `json:"infrastructure"`
 	Policies        statusPolicies       `json:"policies"`
 	Agents          []statusAgent        `json:"agents"`
@@ -48,6 +49,7 @@ func printStatusJSONOutput(w io.Writer, home string) error {
 }
 
 func collectStatusReport(home string) statusReport {
+	installation := collectInstallationState(home)
 	binDir := filepath.Join(home, ".agentjail", "bin")
 	policyPath := filepath.Join(home, ".agentjail", "policy.yaml")
 	servicePath := filepath.Join(home, "Library", "LaunchAgents", plistFilename)
@@ -76,10 +78,11 @@ func collectStatusReport(home string) statusReport {
 	return statusReport{
 		ProtocolVersion: statusReportProtocolVersion,
 		Version:         version,
+		Installation:    installation,
 		Infrastructure: statusInfrastructure{
-			CLIInstalled:             fileExists(filepath.Join(binDir, cliBinaryName)),
-			HookBinaryInstalled:      fileExists(filepath.Join(binDir, hookBinaryName)),
-			DaemonBinaryInstalled:    fileExists(filepath.Join(binDir, daemonBinaryName)),
+			CLIInstalled:             !installation.ExplicitlyUninstalled && fileExists(filepath.Join(binDir, cliBinaryName)),
+			HookBinaryInstalled:      !installation.ExplicitlyUninstalled && fileExists(filepath.Join(binDir, hookBinaryName)),
+			DaemonBinaryInstalled:    !installation.ExplicitlyUninstalled && fileExists(filepath.Join(binDir, daemonBinaryName)),
 			ServiceDefinitionPresent: fileExists(servicePath),
 			DaemonRunning:            isDaemonRunning(filepath.Join(home, ".agentjail", "daemon.sock")),
 		},
