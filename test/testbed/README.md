@@ -513,6 +513,13 @@ authentication, scenario failure, or install failure** and deletes the gate VM
 afterward by default. Run it on Linux for the Linux build and on macOS for the
 macOS build.
 
+`e2e-smoke` first verifies the fresh monitor default with a benign hook read:
+the hook allows it while the durable decision records `action=allow` and
+`would_action=deny`. It then explicitly selects enforce, requires an acknowledged
+daemon reload and a fresh durable denial before running blocking fixtures, and
+restores the original policy and mode afterward (including on interruption).
+An unavailable daemon or missing audit row cannot satisfy the monitor check.
+
 The tunnel-claiming real-agent scenario launches through the PATH shim with
 `AGENTJAIL_REQUIRE_TUNNEL=1`, which selects the public `--require-tunnel`
 launch flag without changing normal shim behavior. Its source of truth is the
