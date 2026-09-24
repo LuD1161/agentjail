@@ -173,6 +173,37 @@ done
 info "Daemon ready (${WAITED}00ms startup)."
 echo ""
 
+# Default installs evaluate and log a policy denial without blocking the hook.
+LABEL="M1: Default monitor records a would-deny verdict"
+JSON='{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"path":"/etc/hosts"},"session_id":"monitor-smoke","cwd":"'"${CWD}"'"}'
+run_hook "$JSON"
+if assert_exit "$LABEL" 0 "$HOOK_EXIT" && assert_decision "$LABEL" allow "$HOOK_STDOUT"; then
+    if python3 - "$DAEMON_LOG" <<'PY'
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1]) if line.startswith('{')]
+assert any(e.get('session_id') == 'monitor-smoke' and
+           e.get('action') == 'allow' and e.get('would_action') == 'deny'
+           for e in events)
+PY
+    then pass "$LABEL"; else fail "$LABEL: missing audit verdict"; fi
+fi
+
+# The remaining fixtures exercise explicitly opted-in enforcement.
+kill "$DAEMON_PID"
+wait "$DAEMON_PID" || true
+printf 'enforcement: enforce\n' > "${SMOKE_HOME}/.agentjail/policy.yaml"
+"${DAEMON_BIN}" --socket="${SOCK}" --rules="${RULES_DIR}" 2>>"${DAEMON_LOG}" &
+DAEMON_PID=$!
+WAITED=0
+while [ ! -S "${SOCK}" ]; do
+    sleep 0.1
+    WAITED=$((WAITED + 1))
+    if [ "$WAITED" -ge 20 ]; then
+        echo "ERROR: enforcing daemon socket did not appear after 2s"
+        exit 1
+    fi
+done
+
 # ---------------------------------------------------------------------------
 # Step 3 — Run fixtures
 # ---------------------------------------------------------------------------

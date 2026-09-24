@@ -1508,6 +1508,11 @@ the verdict. Keep the evaluation performance target separate from the bounded
 transport availability ceiling, and distinguish connection failure from missing
 responses in diagnostics. Test cold responses before counting warm retries.
 
+The hook smoke suite must exercise the default monitor verdict and explicitly
+opt into enforcement before asserting blocked verdicts. Otherwise an intentional
+default change makes every deny fixture fail without testing either mode's
+contract. These fixtures submit hook metadata; they do not execute the commands.
+
 ## A stopped listener must release its accept loop
 
 Clean-machine acceptance found a missing session socket while the extension
