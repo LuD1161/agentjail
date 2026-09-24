@@ -142,7 +142,8 @@ build_extension_arch() {
       -framework NetworkExtension -framework Foundation \
       -o "$arch_root/$extension_id" \
       "$repo_root/macos/AgentjailExtension/main.swift" \
-      "$repo_root/macos/AgentjailExtension/Provider.swift"
+      "$repo_root/macos/AgentjailExtension/Provider.swift" \
+      "$repo_root/macos/AgentjailApproval/Sources/AgentjailApprovalCore/Transport/SessionSocketListener.swift"
 }
 
 build_cli_arch() {

@@ -1507,3 +1507,14 @@ A warm test passed while the first clean-VM evaluation took 234 ms. The hook's
 the verdict. Keep the evaluation performance target separate from the bounded
 transport availability ceiling, and distinguish connection failure from missing
 responses in diagnostics. Test cold responses before counting warm retries.
+
+## A stopped listener must release its accept loop
+
+Clean-machine acceptance found a missing session socket while the extension
+remained activated. A sample showed its old accept loop retrying errors without
+an exit path after the descriptor was closed. Closing a numeric descriptor from
+another thread also risks reuse by the next listener generation. A serialized,
+nonblocking dispatch source now owns each listener descriptor and closes it in
+its cancellation handler; old generations never accept on newly reused FDs.
+Repeated start/stop tests exercise real Unix sockets. Full provider lifecycle
+acceptance still requires the signed extension, not just this socket test.

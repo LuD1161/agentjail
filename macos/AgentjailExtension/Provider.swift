@@ -137,7 +137,13 @@ class TransparentProxyProvider: NETransparentProxyProvider {
         // registers its PID before exec'ing the wrapped child,
         // eliminating the start-of-flow race a file-watcher would
         // have. Idempotent if startProxy fires twice.
-        startSessionListener()
+        do {
+            try startSessionListener()
+        } catch {
+            wg_netstack_close()
+            completionHandler(error)
+            return
+        }
         startSessionReaper()
 
         // Apply network settings immediately -- do NOT wait for the WG
@@ -672,60 +678,12 @@ private func stopSessionReaper() {
     sessionReaperTimer = nil
 }
 
-private var sessionListenFD: Int32 = -1
+private let sessionListener = SessionSocketListener()
 private func stopSessionListener() {
-    if sessionListenFD >= 0 {
-        Darwin.close(sessionListenFD)
-        sessionListenFD = -1
-    }
-    unlink(sessionSockPath)
+    sessionListener.stop()
 }
-private func startSessionListener() {
-    if sessionListenFD >= 0 { return }
-    unlink(sessionSockPath)
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    if fd < 0 {
-        os_log("session socket: socket() failed errno=%d", log: log, type: .error, errno)
-        return
-    }
-    var one: Int32 = 1
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
-    var addr = sockaddr_un()
-    addr.sun_family = sa_family_t(AF_UNIX)
-    let pathBytes = sessionSockPath.utf8CString
-    withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-        ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { p in
-            for (i, b) in pathBytes.enumerated() {
-                p.advanced(by: i).pointee = b
-            }
-        }
-    }
-    let len = socklen_t(MemoryLayout<sockaddr_un>.size)
-    let rc = withUnsafePointer(to: &addr) { ap -> Int32 in
-        ap.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-            Darwin.bind(fd, sa, len)
-        }
-    }
-    if rc != 0 {
-        os_log("session socket: bind() failed errno=%d", log: log, type: .error, errno)
-        Darwin.close(fd); return
-    }
-    chmod(sessionSockPath, 0o666)
-    if listen(fd, 16) != 0 {
-        os_log("session socket: listen() failed errno=%d", log: log, type: .error, errno)
-        Darwin.close(fd); return
-    }
-    os_log("session socket: listening at %{public}@", log: log, type: .info, sessionSockPath)
-    sessionListenFD = fd
-    DispatchQueue.global(qos: .userInitiated).async {
-        while true {
-            let cfd = Darwin.accept(fd, nil, nil)
-            if cfd < 0 { continue }
-            DispatchQueue.global(qos: .userInitiated).async {
-                serviceSessionClient(cfd)
-            }
-        }
-    }
+private func startSessionListener() throws {
+    try sessionListener.start(path: sessionSockPath, handler: serviceSessionClient)
 }
 
 private func serviceSessionClient(_ fd: Int32) {
