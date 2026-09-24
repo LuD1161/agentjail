@@ -1546,3 +1546,12 @@ ADR 0151-install-lifecycle.
 IDE cleanup must also commit settings before deleting a shared wrapper chain,
 and keep that chain while another IDE still references it. Unreadable settings
 must report failure instead of implying that the wrapper was detached.
+
+## File presence is not shared installation readiness
+
+Native setup marked any canonical CLI file as installed and passed
+`--with-cli-path` to a parser that silently ignored it. Passing setup tests used
+preconstructed health states and did not verify shell availability, payload
+identity, or the app reopening after CLI uninstall. Use the typed CLI projection,
+exercise the real flag path, and test retirement followed by native health and
+explicit reinstall. See ADR 0151-install-lifecycle.

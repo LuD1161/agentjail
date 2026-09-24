@@ -4,29 +4,27 @@ import Foundation
 
 struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
     private let appURL: URL
-    private let cliURL: URL
     private let reviewClient: any ReviewControlling
+    private let statusService: any AgentJailStatusServicing
 
     init(
         bundle: Bundle = .main,
-        homeDirectory: URL? = FileManager.default.homeDirectoryForCurrentUser,
-        reviewClient: any ReviewControlling = ReviewControlClient()
+        reviewClient: any ReviewControlling = ReviewControlClient(),
+        statusService: (any AgentJailStatusServicing)? = nil
     ) {
         appURL = bundle.bundleURL
-        cliURL = (homeDirectory ?? URL(fileURLWithPath: "/", isDirectory: true))
-            .appendingPathComponent(".agentjail/bin/agentjail")
         self.reviewClient = reviewClient
+        self.statusService = statusService ?? BundledAgentJailStatusService(runner: BundledAgentJailStatusCommandRunner(bundle: bundle))
     }
 
     func inspect() async -> AgentJailSetupHealth {
         async let tunnelProfile = inspectTunnelProfile()
         async let daemonReachable = inspectDaemon()
-        let cliPresent = installedExecutableIsAvailable(at: cliURL, fileManager: .default)
-        return await AgentJailSetupHealth(
+        let installation = (try? await statusService.status())?.installation
+        return await setupHealthForInstallation(
             appInApplications: appURL.resolvingSymlinksInPath().standardizedFileURL.path == "/Applications/AgentJail.app",
-            cliPresent: cliPresent,
-            cliInstalled: cliPresent,
-            daemonReachable: daemonReachable,
+            installation: installation,
+            reviewAvailable: daemonReachable,
             tunnelProfile: tunnelProfile
         )
     }
@@ -68,6 +66,20 @@ struct SystemAgentJailSetupHealthInspector: AgentJailSetupHealthInspecting {
     }
 }
 
-func installedExecutableIsAvailable(at installedURL: URL, fileManager: FileManager) -> Bool {
-    fileManager.isExecutableFile(atPath: installedURL.path)
+func setupHealthForInstallation(
+    appInApplications: Bool,
+    installation: AgentJailInstallationSnapshot?,
+    reviewAvailable: Bool,
+    tunnelProfile: AgentJailTunnelProfileState
+) -> AgentJailSetupHealth {
+    AgentJailSetupHealth(
+        appInApplications: appInApplications,
+        cliPresent: installation?.cliPresent ?? false,
+        cliInstalled: installation?.componentsCompatible ?? false,
+        daemonReachable: reviewAvailable && (installation?.daemonMatchesInstall ?? false),
+        tunnelProfile: tunnelProfile,
+        explicitlyUninstalled: installation?.explicitlyUninstalled ?? false,
+        canInstallComponents: installation?.canInstallBundledComponents ?? false,
+        canRepairInstalledComponents: installation?.canRepairInstalledComponents ?? false
+    )
 }

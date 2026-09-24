@@ -225,6 +225,64 @@ private struct ImmediateSetupSleeper: AgentJailSetupSleeping {
 
 @MainActor
 struct FirstLaunchSetupTests {
+    @Test func retiredWireStateRequiresExplicitSetupAndCanBeReinstalled() async throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../testdata/retired-installation.json").standardizedFileURL
+        let retired = try JSONDecoder().decode(AgentJailInstallationSnapshot.self, from: Data(contentsOf: fixture))
+        let runner = SetupCommandRunner()
+        let coordinator = AgentJailSetupCoordinator(runner: runner, inspector: SetupHealthInspector([
+            setupHealthForInstallation(appInApplications: true, installation: retired, reviewAvailable: false, tunnelProfile: .absent),
+            AgentJailSetupHealth(appInApplications: true, cliInstalled: true, daemonReachable: true, tunnelProfile: .absent),
+        ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        await coordinator.prepareFirstLaunch()
+        #expect(await runner.commands().isEmpty)
+        coordinator.beginSetup()
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        while !coordinator.health.localComponentsReady, clock.now < deadline { await Task.yield() }
+        #expect(coordinator.health.localComponentsReady)
+        #expect((await runner.commands()).contains(.installComponents))
+        #expect(!(await runner.commands()).contains(.repairInstalledComponents))
+    }
+
+    @Test func newerCLIRepairNeverRunsTheBundledInstaller() async {
+        let runner = SetupCommandRunner()
+        let coordinator = AgentJailSetupCoordinator(runner: runner, inspector: SetupHealthInspector([
+            AgentJailSetupHealth(appInApplications: true, cliInstalled: true, daemonReachable: false, tunnelProfile: .absent, canInstallComponents: false, canRepairInstalledComponents: true),
+            AgentJailSetupHealth(appInApplications: true, cliInstalled: true, daemonReachable: true, tunnelProfile: .absent, canInstallComponents: false, canRepairInstalledComponents: true),
+        ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        coordinator.beginSetup()
+        for _ in 0..<100 where !coordinator.health.localComponentsReady { await Task.yield() }
+        #expect(coordinator.health.localComponentsReady)
+        let commands = await runner.commands()
+        #expect(commands.contains(.repairInstalledComponents))
+        #expect(!commands.contains(.installComponents))
+        #expect(!commands.contains(.installExtension))
+    }
+
+    @Test func explicitUninstallDoesNotReinstallOnAppLaunch() async {
+        let runner = SetupCommandRunner()
+        let coordinator = AgentJailSetupCoordinator(runner: runner, inspector: SetupHealthInspector([
+            AgentJailSetupHealth(appInApplications: true, cliInstalled: false, daemonReachable: false, tunnelProfile: .absent, explicitlyUninstalled: true),
+        ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        await coordinator.prepareFirstLaunch()
+        #expect(await runner.commands().isEmpty)
+    }
+
+    @Test func unidentifiedExistingCLIIsNeverReplacedByBundledPayload() async {
+        let runner = SetupCommandRunner()
+        let coordinator = AgentJailSetupCoordinator(runner: runner, inspector: SetupHealthInspector([
+            AgentJailSetupHealth(appInApplications: true, cliPresent: true, cliInstalled: false, daemonReachable: false, tunnelProfile: .absent, canInstallComponents: false),
+        ]), sleeper: ImmediateSetupSleeper())
+        _ = await coordinator.refresh()
+        coordinator.beginSetup()
+        for _ in 0..<100 where coordinator.phase != .failed(.componentCompatibility) { await Task.yield() }
+        #expect(coordinator.phase == .failed(.componentCompatibility))
+        #expect(!(await runner.commands()).contains(.installComponents))
+    }
+
     @Test func installsOnceWithoutRequestingNetworkActivation() async {
         let runner = SetupCommandRunner()
         let coordinator = AgentJailSetupCoordinator(

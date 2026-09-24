@@ -39,7 +39,8 @@ final class AgentJailSetupCoordinator: ObservableObject {
     func prepareFirstLaunch() async {
         guard !Task.isCancelled, !attemptedFirstLaunchInstall,
               phase == .readyToInstall, health.appInApplications,
-              !health.cliPresent, workflowTask == nil else { return }
+              !health.cliPresent, !health.explicitlyUninstalled,
+              health.canInstallComponents, workflowTask == nil else { return }
         attemptedFirstLaunchInstall = true
         beginSetup()
         await workflowTask?.value
@@ -66,9 +67,15 @@ final class AgentJailSetupCoordinator: ObservableObject {
         record(.started)
 
         if !health.localComponentsReady {
+            guard health.canInstallComponents || health.canRepairInstalledComponents else {
+                phase = .failed(.componentCompatibility)
+                record(.componentsFailed)
+                return
+            }
             phase = .installingComponents
             record(.componentsStarted)
-            let result = await runner.run(.installComponents, signal: { _ in })
+            let command: AgentJailSetupCommand = health.canInstallComponents ? .installComponents : .repairInstalledComponents
+            let result = await runner.run(command, signal: { _ in })
             guard result.succeeded else {
                 phase = .failed(.componentInstall)
                 record(.componentsFailed)

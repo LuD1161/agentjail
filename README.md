@@ -1137,9 +1137,12 @@ On first launch from Applications, AgentJail installs its bundled local CLI,
 daemon, and detected-agent hooks automatically. Failures remain visible and
 retryable; existing installations are not automatically replaced.
 
-Setup distinguishes fresh installation, repair, explicit reinstallation and unresolved compatibility. Repair can invoke the canonical installed CLI.
-
-Native CLI status checks have bounded output and deadlines so an unavailable command cannot stall setup.
+CLI and app installations use the same daemon, policy and history. The app checks
+the CLI/hook payloads and running daemon version, adopts a healthy existing
+installation, and avoids downgrading a newer CLI. Explicit repair of a newer
+installation uses that CLI. App setup also adds the canonical CLI to new terminal
+shells without enabling agent-launch shims. An explicit uninstall is respected
+until you choose to install again.
 
 The session dashboard and tool-call policy audit work independently of the
 optional Network Extension. Overview shows when network monitoring is off;

@@ -70,6 +70,9 @@ not only a human-readable version or a legacy health request, before calling the
 daemon current. This makes same-version development builds and partially updated
 installations repairable through the normal local-component action.
 
+ADR 0151-install-lifecycle refines this contract with typed shared readiness,
+adoption of compatible newer CLIs, and explicit uninstall intent.
+
 Both macOS installation routes consume the same signed artifact. The website DMG
 and `curl | sh` installer verify and install the same Developer ID signed,
 notarized, and stapled application, expose the bundled CLI in the user's executable
