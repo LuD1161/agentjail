@@ -1144,6 +1144,8 @@ installation uses that CLI. App setup also adds the canonical CLI to new termina
 shells without enabling agent-launch shims. An explicit uninstall is respected
 until you choose to install again.
 
+Setup and dashboard actions distinguish repair, reinstall and compatibility checks.
+
 The session dashboard and tool-call policy audit work independently of the
 optional Network Extension. Overview shows when network monitoring is off;
 choose **Network → Enable Network Monitoring** to set it up. macOS approval

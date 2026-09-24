@@ -105,14 +105,18 @@ struct AgentJailRootView: View {
     private var sidebarStatusTitle: String {
         if setup.health.isReady { return "All services operational" }
         if setup.health.localComponentsReady { return "Local services operational" }
-        if setup.health.localComponentsNeedUpdate { return "Update available" }
+        if !setup.health.canInstallComponents && !setup.health.canRepairInstalledComponents { return "Compatibility check needed" }
+        if setup.health.cliPresent { return "Repair needed" }
+        if setup.health.explicitlyUninstalled { return "Uninstalled" }
         return "Setup required"
     }
 
     private var sidebarStatusDetail: String {
         if setup.health.isReady { return "Daemon · Network · Policy engine" }
         if setup.health.localComponentsReady { return "Daemon · Policy engine · Network off" }
-        if setup.health.localComponentsNeedUpdate { return "Refresh local components" }
+        if !setup.health.canInstallComponents && !setup.health.canRepairInstalledComponents { return "Check compatibility on Overview" }
+        if setup.health.cliPresent { return "Repair local components" }
+        if setup.health.explicitlyUninstalled { return "Reinstall from Overview" }
         return "Finish on Overview"
     }
 
@@ -382,7 +386,7 @@ private struct DashboardOverviewView: View {
                     .agentJailInteractiveHover()
             } else if !setup.phase.isWorking {
                 Button(setupActionTitle) {
-                    if setup.phase == .readyToInstall { setup.beginSetup() } else { setup.retry() }
+                    if setup.phase == .readyToInstall && canBeginSetup { setup.beginSetup() } else { setup.retry() }
                 }
                 .buttonStyle(.borderedProminent)
                 .agentJailInteractiveHover()
@@ -556,7 +560,7 @@ private struct DashboardOverviewView: View {
     }
 
     private var emptyDashboardDetail: String {
-        if !setup.health.localComponentsReady { return "Install the local CLI and daemon above, then AgentJail will show audited sessions, calls, and token usage here." }
+        if !setup.health.localComponentsReady { return "Complete the local setup above to show audited sessions, calls, and token usage here." }
         return dashboard.unavailable ? "Start or retry the local daemon, then refresh." : "Reading the local AgentJail daemon."
     }
 
@@ -564,7 +568,9 @@ private struct DashboardOverviewView: View {
         switch setup.phase {
         case .readyToInstall:
             if setup.health.localComponentsReady { return "Network monitoring is off" }
-            if setup.health.localComponentsNeedUpdate { return "AgentJail update available" }
+            if !canBeginSetup { return "Compatibility check needed" }
+            if setup.health.cliPresent { return "Repair local components" }
+            if setup.health.explicitlyUninstalled { return "AgentJail was uninstalled" }
             return "Set up AgentJail"
         case .awaitingApproval: return "Network approval required"
         case .failed: return "Setup needs attention"
@@ -581,27 +587,47 @@ private struct DashboardOverviewView: View {
             if setup.health.localComponentsReady {
                 return "Optional. Enable traffic auditing now, or continue using AgentJail and turn it on later from Settings."
             }
-            if setup.health.localComponentsNeedUpdate {
-                return "The app includes newer local components. Update them without changing policy configuration or audit history."
+            if !canBeginSetup { return compatibilityDetail }
+            if setup.health.canRepairInstalledComponents {
+                return "Repair the installed version while keeping your policy configuration and audit history."
+            }
+            if setup.health.cliPresent {
+                return "Restore local components from this app while keeping your policy configuration and audit history."
+            }
+            if setup.health.explicitlyUninstalled {
+                return "Choose Reinstall Local Components to set up AgentJail again. Network monitoring remains a separate optional step."
             }
             return "Install the local CLI, daemon, and hooks. Network monitoring is a separate optional step."
+        case .failed(.componentCompatibility): return compatibilityDetail
         case .failed: return "No protection was weakened. Retry after reviewing the current status."
         default: return "Checking the CLI, daemon, and Network Extension."
         }
     }
 
     private var setupActionTitle: String {
+        if !canBeginSetup { return "Check Status" }
         guard setup.phase == .readyToInstall else { return "Try Again" }
         if setup.health.localComponentsReady { return "Enable Network Monitoring" }
-        if setup.health.localComponentsNeedUpdate { return "Update Local Components" }
+        if setup.health.cliPresent { return "Repair Local Components" }
+        if setup.health.explicitlyUninstalled { return "Reinstall Local Components" }
         return "Install Local Components"
     }
 
     private var setupStatusTitle: String {
         if setup.phase == .awaitingApproval { return "Action required" }
         if setup.health.localComponentsReady { return "Optional" }
-        if setup.health.localComponentsNeedUpdate { return "Update available" }
+        if !canBeginSetup { return "Compatibility check needed" }
+        if setup.health.cliPresent { return "Repair needed" }
+        if setup.health.explicitlyUninstalled { return "Uninstalled" }
         return "Setup required"
+    }
+
+    private var canBeginSetup: Bool {
+        setup.health.localComponentsReady || setup.health.canInstallComponents || setup.health.canRepairInstalledComponents
+    }
+
+    private var compatibilityDetail: String {
+        "The local installation could not be verified as compatible with this app. Check status again; if the issue remains, install the AgentJail app release that matches your CLI."
     }
 
     private var setupIcon: String { setup.phase == .awaitingApproval ? "hand.raised.fill" : "shield.lefthalf.filled" }
