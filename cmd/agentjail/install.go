@@ -40,15 +40,8 @@
 // `agentjail install --allow-unsupported` is a deprecated no-op kept for
 // back-compat: Linux is a fully supported install target (ADR 0051).
 //
-// What `agentjail uninstall` does (no --for):
-//  1. Calls agent.Uninstall(env) for every agent in the registry. Failures are
-//     collected but do not abort other agents (Uninstall is idempotent).
-//  2. On macOS: unloads the launchd daemon and removes the plist. On Linux:
-//     stops/disables the systemd --user unit and removes the unit file.
-//  3. Removes the four role symlinks (agentjail-daemon, agentjail-shield,
-//     agentjail-netproxy, agentjail-secrets) — tolerant of them already
-//     being gone.
-//  4. Removes ~/.agentjail and /tmp/agentjail-daemon.log.
+// Full uninstall stops services, detaches integrations, and retires command
+// targets retained by clients. See ADR 0151-install-lifecycle.
 //
 // Use `agentjail uninstall --for <agent>` to remove only that agent's hook
 // without touching the daemon or ~/.agentjail.
@@ -248,6 +241,10 @@ func runInstallCmd(args []string) {
 			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: daemon preamble: %v", err)))
 			os.Exit(1)
 		}
+		if err := finishLocalInstall(home, args); err != nil {
+			fmt.Fprintf(os.Stderr, "agentjail install: %v\n", err)
+			os.Exit(1)
+		}
 		if err := ag.Install(env); err != nil {
 			fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: %s: %v", ag.DisplayName(), err)))
 			os.Exit(1)
@@ -274,20 +271,20 @@ func runInstallCmd(args []string) {
 		fmt.Fprintf(os.Stderr, "%s\n", ui.New(os.Stderr).Badge("fail", fmt.Sprintf("agentjail install: daemon preamble: %v", err)))
 		os.Exit(1)
 	}
+	if err := finishLocalInstall(home, args); err != nil {
+		fmt.Fprintf(os.Stderr, "agentjail install: %v\n", err)
+		os.Exit(1)
+	}
 
 	env := buildAgentsEnv(home)
 	detected := detectAll(env)
 
-	// Ordinary reinstalls stop after refreshing an already protected deployment.
+	// Ordinary reinstalls stop after reconciling an already protected deployment.
 	// Explicit --all still reconciles every adapter's owned hook entries.
 	state := computeInstallState(detected, func(a agents.Agent) agents.Status { return a.Status(env) })
 	if shouldSkipInstalledAgents(state, all) {
-		v := buildinfo.Version
-		if v == "" {
-			v = "dev"
-		}
 		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: already protecting all %d detected agent(s); refreshed binaries and daemon to %s.", state.present, v)))
+		fmt.Fprintln(os.Stdout, u.Badge("ok", fmt.Sprintf("agentjail: installation reconciled; hooks configured for all %d detected agent(s).", state.present)))
 		fmt.Fprintln(os.Stdout, u.Badge("dim", "nothing to wire — run 'agentjail status' to verify, or 'agentjail install --for <agent>' to add another."))
 		return
 	}
@@ -436,6 +433,15 @@ func runInstallCmd(args []string) {
 	}
 }
 
+func finishLocalInstall(home string, args []string) error {
+	if hasFlag(args, "--with-cli-path") {
+		if err := installCLIPath(home); err != nil {
+			return err
+		}
+	}
+	return clearUninstallReceipt(home)
+}
+
 // resolveSelection maps picker errors to the correct selection outcome.
 // It is a pure helper — no I/O, no os.Exit — and is directly unit-testable.
 //
@@ -522,9 +528,8 @@ func printInstallSummary(w io.Writer, results []installResult) bool {
 
 // runUninstallCmd handles `agentjail uninstall [--for <target>]`.
 //
-// Without --for: performs a full teardown — unhooks all agents, stops and
-// removes the launchd daemon (macOS only), removes ~/.agentjail and the
-// daemon log.
+// Without --for: retires the installation after service and integration cleanup.
+// See ADR 0151-install-lifecycle.
 //
 // With --for <agent>: single-agent back-compat — removes only that agent's
 // hook; does NOT touch the daemon or ~/.agentjail.
@@ -635,6 +640,12 @@ type UninstallResult struct {
 	// install is left intact and working (ADR 0065).
 	Aborted bool
 
+	// DetachFailed preserves command targets when agent configuration cleanup fails.
+	DetachFailed bool
+
+	// Retired retains only compatibility responses for commands cached by clients.
+	Retired bool
+
 	// InstallDirErr is non-nil when ~/.agentjail removal failed.
 	InstallDirErr error
 
@@ -676,6 +687,8 @@ type UninstallResult struct {
 //   - force, when true, proceeds with teardown even if the daemon could not be
 //     stopped. Without it, a surviving daemon aborts the run untouched, because
 //     its hookwatch would re-inject everything we remove (ADR 0065).
+var removeLegacyDaemonLogFn = os.Remove
+
 func performFullUninstall(home, goos string, keepSecrets, force bool) UninstallResult {
 	var r UninstallResult
 	env := buildAgentsEnv(home)
@@ -684,13 +697,12 @@ func performFullUninstall(home, goos string, keepSecrets, force bool) UninstallR
 	// telemetry.json (and its anonymous ID) is still readable. Synchronous with
 	// a bounded 5s timeout — it must complete before teardown deletes the state;
 	// never fails the uninstall (errors, including ErrNoBackend, are ignored).
-	if tp, err := telemetry.DefaultPaths(); err == nil {
-		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = telemetry.SendUninstall(ctx, tp, os.Getenv, buildinfo.Version, goos, runtime.GOARCH, nil)
-		}()
-	}
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tp := telemetry.Paths{Base: filepath.Join(home, ".agentjail")}
+		_ = telemetry.SendUninstall(ctx, tp, os.Getenv, buildinfo.Version, goos, runtime.GOARCH, nil)
+	}()
 
 	// Step 1: daemon teardown (macOS: launchd, Linux: systemd --user).
 	//
@@ -744,36 +756,45 @@ func performFullUninstall(home, goos string, keepSecrets, force bool) UninstallR
 		r.Agents = append(r.Agents, UninstallAgentResult{Name: ag.DisplayName(), Err: err})
 		if err != nil {
 			r.HardFailed = true
+			r.DetachFailed = true
 		}
 	}
+	if r.DetachFailed {
+		r.Aborted = true
+		return r
+	}
 
-	// Step 2.5: remove IDE wrappers (best-effort).
+	// Keep command targets if any integration could not be detached.
+	// See ADR 0151-install-lifecycle.
 	for _, app := range []string{"Code", "Cursor"} {
-		_ = uninstallVSCodeWrapper(home, app)
+		if err := uninstallVSCodeWrapper(home, app); err != nil {
+			r.Agents = append(r.Agents, UninstallAgentResult{Name: app + " wrapper", Err: err})
+			r.HardFailed, r.DetachFailed, r.Aborted = true, true, true
+		}
+	}
+	if r.DetachFailed {
+		return r
 	}
 	uninstallPathShim(home)
 
-	// Step 2.6: remove the four role symlinks (agentjail-daemon, agentjail-shield,
-	// agentjail-netproxy, agentjail-secrets). Best-effort and idempotent —
-	// removeInstallDir below removes the whole ~/.agentjail/bin tree anyway
-	// (unless --keep-secrets, which never preserves bin/), but this makes the
-	// symlink teardown explicit and independently correct even if that ever
-	// changes, and tolerates a bin dir that's already partially torn down.
+	// Remove executable roles before replacing cached command targets.
 	selfupdate.RemoveRoleSymlinks(filepath.Join(home, ".agentjail", "bin"))
 
-	// Step 3: remove ~/.agentjail (optionally preserving the secrets store/key).
+	// Retire the installation, optionally preserving the credential vault.
 	installDir := filepath.Join(home, ".agentjail")
 	r.SecretsExisted = fileExists(filepath.Join(installDir, "secrets.key")) ||
 		fileExists(filepath.Join(installDir, "secrets"))
-	if err := removeInstallDir(installDir, keepSecrets); err != nil {
+	if err := retireInstallDir(installDir, keepSecrets); err != nil {
 		r.InstallDirErr = err
 		r.HardFailed = true
+	} else {
+		r.Retired = true
 	}
 	r.SecretsKept = keepSecrets && r.SecretsExisted
 
 	// Step 4: remove daemon log (best-effort; ENOENT is fine).
 	const daemonLog = "/tmp/agentjail-daemon.log"
-	if err := os.Remove(daemonLog); err != nil && !os.IsNotExist(err) {
+	if err := removeLegacyDaemonLogFn(daemonLog); err != nil && !os.IsNotExist(err) {
 		r.LogFileErr = err
 		// Not a hard failure — the log is ephemeral.
 	}
@@ -1033,35 +1054,6 @@ func uninstallSystemdDaemon(home string) error {
 	return nil
 }
 
-// removeInstallDir removes ~/.agentjail. When keepSecrets is true it preserves
-// the encrypted secrets store and master key (secrets/ and secrets.key) by
-// removing every OTHER top-level entry instead of the whole tree. The two
-// preserved names mirror the shield's AgentjailSecretsProtectedNames() contract
-// (ADR 0048) — keep them in lockstep if that set ever changes.
-func removeInstallDir(installDir string, keepSecrets bool) error {
-	if !keepSecrets {
-		return os.RemoveAll(installDir)
-	}
-	preserved := map[string]bool{"secrets": true, "secrets.key": true}
-	entries, err := os.ReadDir(installDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var firstErr error
-	for _, e := range entries {
-		if preserved[e.Name()] {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(installDir, e.Name())); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
 // secretsBrokerDefInstalled reports whether the secrets broker service
 // definition is present (launchd plist on macOS, systemd --user unit on Linux).
 // Pure file-presence check — does not start or connect to the broker.
@@ -1123,6 +1115,18 @@ func printUninstallResult(r UninstallResult) {
 // It mirrors printInstallSummary and is the testable core of printUninstallResult.
 func printUninstallSummary(w io.Writer, r UninstallResult) {
 	u := ui.New(w)
+	if r.DetachFailed {
+		var lines []string
+		for _, result := range r.Agents {
+			if result.Err != nil {
+				lines = append(lines, u.Badge("fail", result.Name+": "+result.Err.Error()))
+			}
+		}
+		lines = append(lines, "", "Configuration cleanup is incomplete. Binaries and user data were retained.",
+			"Fix the reported configuration error and rerun agentjail uninstall.")
+		fmt.Fprintln(w, u.Box("uninstall incomplete", strings.Join(lines, "\n")))
+		return
+	}
 
 	// Aborted before teardown: report only why, and that nothing was touched.
 	// The per-step lines below would all be misleading — none of those steps ran.
@@ -1177,6 +1181,8 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 
 	if r.InstallDirErr != nil {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("fail", "FAILED to remove: "+r.InstallDirErr.Error())))
+	} else if r.Retired {
+		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "operational files removed; cached-command compatibility retained")))
 	} else if r.SecretsKept {
 		lines = append(lines, u.KeyValue("~/.agentjail", "", u.Badge("ok", "removed (credential vault + key preserved: --keep-credentials)")))
 	} else {
@@ -1205,7 +1211,10 @@ func printUninstallSummary(w io.Writer, r UninstallResult) {
 	if r.HardFailed {
 		lines = append(lines, u.Badge("fail", "some steps failed — see above"))
 	} else {
-		lines = append(lines, u.Badge("ok", "agentjail fully removed"))
+		lines = append(lines, u.Badge("ok", "agentjail uninstalled"))
+		if r.Retired {
+			lines = append(lines, u.Badge("dim", "Existing hook and status-line calls can finish without restarting your coding sessions."))
+		}
 		if len(r.RCCleaned) > 0 {
 			homeDir, _ := os.UserHomeDir()
 			display := make([]string, 0, len(r.RCCleaned))
@@ -1263,6 +1272,7 @@ func printStatusOutput(w io.Writer, home string) {
 	hookBin := filepath.Join(binDir, hookBinaryName)
 	daemonBin := filepath.Join(binDir, daemonBinaryName)
 	policyFile := filepath.Join(home, ".agentjail", "policy.yaml")
+	retired := explicitlyUninstalled(home)
 
 	// Service definition path + label differ by platform: launchd plist on
 	// macOS, systemd --user unit on Linux.
@@ -1280,13 +1290,13 @@ func printStatusOutput(w io.Writer, home string) {
 	// via the fixed-width label; the path vars below are still used for the
 	// fileExists checks that decide each badge.
 	hookBadge := u.Badge("ok", "ok")
-	if !fileExists(hookBin) {
+	if retired || !fileExists(hookBin) {
 		hookBadge = u.Badge("fail", "missing")
 	}
 	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue("hook binary", "", hookBadge))
 
 	daemonBadge := u.Badge("ok", "ok")
-	if !fileExists(daemonBin) {
+	if retired || !fileExists(daemonBin) {
 		daemonBadge = u.Badge("fail", "missing")
 	}
 	fmt.Fprintln(w, emojiSectionBodyIndent+u.KeyValue("daemon binary", "", daemonBadge))
@@ -1622,13 +1632,14 @@ func installSecretsBrokerService(home string, w io.Writer) error {
 //   - Linux: writes the systemd --user unit and, if a systemd --user session
 //     is reachable (systemdUserAvailableFn), enables + starts it via
 //     systemctlUserEnableStartFn. If no session is reachable (e.g. a bare
-//     container with no login session), the unit is still written and manual
-//     start instructions are printed instead of failing the install.
+//     container with no login session), setup returns an incomplete-install error.
 //
 // currentGOOS selects the branch, so tests can override it to exercise the
 // Linux path on any host; systemdUserAvailableFn / systemctlUserEnableStartFn
 // are themselves variables so tests can stub them and never touch a real
 // systemd session.
+var installLaunchctlLoadFn = launchctlLoad
+
 func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashLogPath string, w io.Writer) error {
 	u := ui.New(w)
 
@@ -1639,11 +1650,10 @@ func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashL
 		}
 		fmt.Fprintln(w, u.Step(5, 6, "launchd plist installed", true))
 
-		if err := launchctlLoad(plistDst); err != nil {
-			// Non-fatal: log but continue.
-			fmt.Fprintf(os.Stderr, "agentjail: warning: launchctl load failed (daemon may not be running): %v\n", err)
+		if err := installLaunchctlLoadFn(plistDst); err != nil {
+			return fmt.Errorf("start daemon with launchd: %w; run agentjail doctor", err)
 		}
-		fmt.Fprintln(w, u.Step(6, 6, "daemon started", true))
+		fmt.Fprintln(w, u.Step(6, 6, "daemon start requested (launchd); verify with agentjail doctor", true))
 		return nil
 	}
 
@@ -1656,14 +1666,14 @@ func installAndStartDaemonService(home, daemonDst, rulesD, daemonLogPath, crashL
 
 	if systemdUserAvailableFn() {
 		if err := systemctlUserEnableStartFn(systemdUnitFilename); err != nil {
-			// Non-fatal: log but continue, same as the launchd path.
-			fmt.Fprintf(os.Stderr, "agentjail: warning: systemctl --user enable/start failed (daemon may not be running): %v\n", err)
+			return fmt.Errorf("start daemon with systemd --user: %w; run agentjail doctor", err)
 		}
-		fmt.Fprintln(w, u.Step(6, 6, "daemon started (systemd --user)", true))
+		fmt.Fprintln(w, u.Step(6, 6, "daemon start requested (systemd --user); verify with agentjail doctor", true))
 	} else {
-		fmt.Fprintln(w, u.Step(6, 6, "daemon NOT started — no systemd --user session detected", true))
+		fmt.Fprintln(w, u.Step(6, 6, "daemon NOT started — no systemd --user session detected", false))
 		fmt.Fprintln(w, "      "+u.Badge("dim", fmt.Sprintf("unit installed at %s", unitDst)))
 		fmt.Fprintln(w, "      "+u.Badge("dim", fmt.Sprintf("start it manually once a session exists: systemctl --user enable --now %s", systemdUnitFilename)))
+		return errors.New("daemon setup incomplete: no systemd --user session; run agentjail doctor")
 	}
 	return nil
 }

@@ -1532,16 +1532,17 @@ called `finishApproval()` in that gap, losing the completion. Publish readiness
 and the continuation in the same critical section so observing readiness makes
 completion safe. A passing rerun does not resolve this race.
 
-## Hook cleanup must preserve shared groups
+## Uninstall tests must execute retained commands
 
-Malformed Claude settings previously returned unchanged success, and removing an
-owned matcher group could discard foreign commands in the same group. Parse
-failures must surface and removal must target individual owned commands. See
+Hook-removal and directory-deletion tests passed while an open coding session
+could still invoke its previous absolute hook command. Uninstall also continued
+deleting binaries after reporting configuration-cleanup errors, and malformed
+Claude JSON could be mistaken for successful cleanup. Detach every owned
+registration before retiring targets, preserve foreign siblings, and execute a
+saved command after removal in the test. Explicit uninstall leaves inert
+protocol-compatible responders and a receipt the app respects. See
 ADR 0151-install-lifecycle.
 
-## Wrapper settings must commit before chain cleanup
-
-Uninstall treated unreadable settings as successful cleanup and could remove a
-shared chain before updating the settings that still invoked it. Atomically
-commit settings first and retain chains still used by another IDE. See
-ADR 0151-install-lifecycle.
+IDE cleanup must also commit settings before deleting a shared wrapper chain,
+and keep that chain while another IDE still references it. Unreadable settings
+must report failure instead of implying that the wrapper was detached.

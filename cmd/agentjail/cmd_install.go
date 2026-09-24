@@ -23,10 +23,13 @@ var uninstallCmd = &cobra.Command{
 	Short: "Remove AgentJail components or all local AgentJail data",
 	Long: `With --for, remove only one agent hook or IDE wrapper. With
 --path-shim-only, remove only launch shims. With neither option, stop services,
-remove every hook and wrapper, and delete ~/.agentjail, including policy,
+remove every owned hook and wrapper, and delete operational state, including policy,
 recorded sessions, statistics, logs, trust state, and credentials.
 
-Use --keep-credentials during a full uninstall to preserve only the encrypted
+Small inert hook/status-line compatibility scripts and an uninstall receipt remain
+for commands held by open agent sessions. The app respects explicit removal.
+
+Use --keep-credentials during a full uninstall to preserve the encrypted
 credential vault and its key.`,
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {

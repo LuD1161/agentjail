@@ -557,6 +557,7 @@ func TestEmbeddedDefaultPolicyMatchesSource(t *testing.T) {
 //   - Removes the fake ~/.agentjail directory.
 //   - Does NOT call real systemctl (no unit file ⇒ short-circuits before the call).
 func TestFullUninstallOnLinuxTearsDownDaemon(t *testing.T) {
+	isolateLegacyDaemonLog(t)
 	home := t.TempDir()
 
 	// Set up agent config dirs so Install actually creates hook config files,
@@ -604,9 +605,9 @@ func TestFullUninstallOnLinuxTearsDownDaemon(t *testing.T) {
 		t.Errorf("DaemonErr should be nil with no unit file installed, got: %v", result.DaemonErr)
 	}
 
-	// ~/.agentjail must be gone.
-	if _, err := os.Stat(agentjailDir); err == nil {
-		t.Error("~/.agentjail still exists after full uninstall")
+	// Cached registrations retain inert responders, never an operational install.
+	if !result.Retired || !explicitlyUninstalled(home) {
+		t.Error("full uninstall did not retire the installation")
 	}
 
 	// No hard failure.
@@ -710,6 +711,7 @@ func TestParseOptionalForFlagAbsent(t *testing.T) {
 // HardFailed — because Uninstall is idempotent and RemoveAll on a non-existent
 // path is a no-op.
 func TestFullUninstallIdempotentOnFreshHome(t *testing.T) {
+	isolateLegacyDaemonLog(t)
 	home := t.TempDir()
 	result := performFullUninstall(home, "linux", false, false)
 	if result.HardFailed {
@@ -1196,8 +1198,8 @@ func TestPrintUninstallSummaryAllOK(t *testing.T) {
 		t.Errorf("printUninstallSummary: output missing 'removed'\ngot:\n%s", out)
 	}
 	// Final banner.
-	if !strings.Contains(out, "agentjail fully removed") {
-		t.Errorf("printUninstallSummary: output missing 'agentjail fully removed'\ngot:\n%s", out)
+	if !strings.Contains(out, "agentjail uninstalled") {
+		t.Errorf("printUninstallSummary: output missing 'agentjail uninstalled'\ngot:\n%s", out)
 	}
 	// Box title.
 	if !strings.Contains(out, "uninstall summary") {
@@ -1451,6 +1453,7 @@ func TestStripAgentjailPathBlock(t *testing.T) {
 // installer PATH block from every shell rc that has it (here .zshrc and .bashrc),
 // preserves user content, and reports the cleaned files.
 func TestFullUninstallCleansShellRCPath(t *testing.T) {
+	isolateLegacyDaemonLog(t)
 	home := t.TempDir()
 	block := "\n# added by agentjail installer\nexport PATH=\"$HOME/.agentjail/bin:$PATH\"\n"
 

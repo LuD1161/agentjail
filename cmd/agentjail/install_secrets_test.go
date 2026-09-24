@@ -148,17 +148,17 @@ func TestUninstallSecretsBrokerRemovesUnit_Linux(t *testing.T) {
 	}
 }
 
-// TestRemoveInstallDir_KeepSecrets is the ADR 0058 OQ4 guard: --keep-secrets
-// preserves the encrypted store + master key while removing everything else.
-func TestRemoveInstallDir_KeepSecrets(t *testing.T) {
+// Credential retention preserves the vault alongside inert compatibility files.
+// See ADR 0151-install-lifecycle.
+func TestRetireInstallDirKeepSecrets(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "secrets.key"), "KEY")
 	mustWrite(t, filepath.Join(dir, "secrets", "aws", "prod"), "CIPHERTEXT")
 	mustWrite(t, filepath.Join(dir, "policy.yaml"), "policy")
 	mustWrite(t, filepath.Join(dir, "bin", "agentjail"), "binary")
 
-	if err := removeInstallDir(dir, true); err != nil {
-		t.Fatalf("removeInstallDir keep: %v", err)
+	if err := retireInstallDir(dir, true); err != nil {
+		t.Fatalf("retireInstallDir keep: %v", err)
 	}
 	// Assert via directory listing rather than os.Stat: when this test runs
 	// inside the agentjail shield, stat on a *.key path is EPERM'd by the shield's
@@ -174,8 +174,8 @@ func TestRemoveInstallDir_KeepSecrets(t *testing.T) {
 	if top["policy.yaml"] {
 		t.Error("policy.yaml survived (only secrets should be kept)")
 	}
-	if top["bin"] {
-		t.Error("bin/ survived (only secrets should be kept)")
+	if !top["bin"] || !top[uninstallReceiptName] || len(top) != 4 {
+		t.Errorf("unexpected retained files: %v", top)
 	}
 	// The store subtree is preserved intact.
 	if !dirEntrySet(t, filepath.Join(dir, "secrets", "aws"))["prod"] {
@@ -198,17 +198,16 @@ func dirEntrySet(t *testing.T, dir string) map[string]bool {
 	return set
 }
 
-// TestRemoveInstallDir_NoKeep removes the whole tree.
-func TestRemoveInstallDir_NoKeep(t *testing.T) {
+func TestRetireInstallDirRemovesSecrets(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "secrets.key"), "KEY")
 	mustWrite(t, filepath.Join(dir, "policy.yaml"), "policy")
 
-	if err := removeInstallDir(dir, false); err != nil {
-		t.Fatalf("removeInstallDir: %v", err)
+	if err := retireInstallDir(dir, false); err != nil {
+		t.Fatalf("retireInstallDir: %v", err)
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Error("install dir still present after removeInstallDir(false)")
+	if top := dirEntrySet(t, dir); len(top) != 2 || !top["bin"] || !top[uninstallReceiptName] {
+		t.Errorf("operational data survived: %v", top)
 	}
 }
 

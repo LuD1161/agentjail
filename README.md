@@ -659,18 +659,16 @@ For systemd-managed daemons (Linux), set via an environment override file:
 
 ## Uninstall
 
-IDE wrapper removal preserves unrelated JSONC settings and shared wrapper chains until their last integration is detached.
-
-Agent hook cleanup preserves unrelated commands within shared hook groups and reports malformed configuration.
-
 ```sh
-agentjail uninstall                   # remove everything
+agentjail uninstall                   # remove services, integrations and user data
 agentjail uninstall --keep-credentials # keep the encrypted vault + master key
 agentjail uninstall --for claude-code # just unhook one agent
 agentjail uninstall --for vscode     # just remove one IDE wrapper
 ```
 
-Removal is total: `~/.agentjail`, the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every agent hook. AgentJail's Claude Code and Cursor CLI status lines are removed too — and if agentjail wrapped a status line you already had, that original command is restored verbatim ([ADR 0063](./docs/adr/0063-shim-fails-open-uninstall-is-total.md), [ADR 0113](./docs/adr/0113-cursor-status-line.md)).
+Uninstall removes the daemon and its launchd/systemd unit, the secrets broker, IDE wrappers, the PATH shim and its shell-profile block, and every owned agent hook. Policy, history and credentials are deleted unless `--keep-credentials` is requested. Claude Code and Cursor status-line settings are restored to the original command where one was recorded. A configuration-cleanup error stops binary deletion so it cannot leave a registered command pointing at a missing executable.
+
+Two tiny compatibility scripts and an uninstall receipt remain under `~/.agentjail` for commands still held by an open agent session. They contain no user data, start no service, and make old hook/status-line calls quiet without requiring a session restart. They cannot execute approval or credential commands. The app respects the receipt and does not reinstall components automatically; explicit setup replaces the scripts and resumes normal operation. Removing the app bundle and its macOS extension is separate from this CLI teardown. See [ADR 0151-install-lifecycle](./docs/adr/0151-install-lifecycle.md).
 
 > **`policy.yaml` is deleted.** Reinstalling writes a **fresh default**, where `mcp.allowed: []` denies every MCP server. If you have customised your MCP allowlist or `network.allowed_hosts`, back it up first:
 > ```sh
@@ -1138,8 +1136,6 @@ locally.
 On first launch from Applications, AgentJail installs its bundled local CLI,
 daemon, and detected-agent hooks automatically. Failures remain visible and
 retryable; existing installations are not automatically replaced.
-
-`agentjail status --json` exposes versioned installation readiness for the CLI, hook, daemon, policy and managed rules.
 
 The session dashboard and tool-call policy audit work independently of the
 optional Network Extension. Overview shows when network monitoring is off;

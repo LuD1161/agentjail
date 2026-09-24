@@ -61,6 +61,7 @@ func TestWaitForDaemonStop_StillListening(t *testing.T) {
 // every hook the teardown removes, so uninstall must abort untouched rather
 // than delete agentjail and leave the agents wired to a deleted binary.
 func TestFullUninstall_AbortsWhileDaemonAlive(t *testing.T) {
+	isolateLegacyDaemonLog(t)
 	home, err := os.MkdirTemp("", "aj")
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +104,7 @@ func TestFullUninstall_AbortsWhileDaemonAlive(t *testing.T) {
 // TestFullUninstall_ForceProceedsPastLiveDaemon: --force is the escape hatch for
 // a daemon that cannot be killed, so uninstall is never a trap.
 func TestFullUninstall_ForceProceedsPastLiveDaemon(t *testing.T) {
+	isolateLegacyDaemonLog(t)
 	home, err := os.MkdirTemp("", "aj")
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +129,7 @@ func TestFullUninstall_ForceProceedsPastLiveDaemon(t *testing.T) {
 	if !r.DaemonStillRunning {
 		t.Error("--force must still report the surviving daemon")
 	}
-	if _, err := os.Stat(filepath.Join(home, ".agentjail")); !os.IsNotExist(err) {
-		t.Errorf("--force must complete the teardown, ~/.agentjail still present: %v", err)
+	if !r.Retired || !explicitlyUninstalled(home) {
+		t.Error("--force must complete operational teardown and retain cached-command compatibility")
 	}
 }

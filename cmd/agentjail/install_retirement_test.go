@@ -39,6 +39,45 @@ func TestRetirementReceiptFailureKeepsCLIForRetry(t *testing.T) {
 	}
 }
 
+func TestFullUninstallKeepsCommandsWhenConfigCannotDetach(t *testing.T) {
+	home := t.TempDir()
+	isolateLegacyDaemonLog(t)
+	t.Setenv("AGENTJAIL_SEND_ANONYMOUS_USAGE_STATS", "false")
+	bin := filepath.Join(home, ".agentjail", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{cliBinaryName, hookBinaryName} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("working payload"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte(`{broken`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := performFullUninstall(home, "unsupported", false, false)
+	if !result.Aborted || !result.DetachFailed || !result.HardFailed {
+		t.Fatalf("failed detach did not abort: %+v", result)
+	}
+	for _, name := range []string{cliBinaryName, hookBinaryName} {
+		data, err := os.ReadFile(filepath.Join(bin, name))
+		if err != nil || string(data) != "working payload" {
+			t.Fatalf("retained registration lost target %s: %q %v", name, data, err)
+		}
+	}
+}
+
+func isolateLegacyDaemonLog(t *testing.T) {
+	t.Helper()
+	previous := removeLegacyDaemonLogFn
+	removeLegacyDaemonLogFn = func(string) error { return os.ErrNotExist }
+	t.Cleanup(func() { removeLegacyDaemonLogFn = previous })
+}
+
 func TestRetiredHookServesCachedCommands(t *testing.T) {
 	for _, keep := range []bool{false, true} {
 		t.Run(map[bool]string{false: "remove credentials", true: "keep credentials"}[keep], func(t *testing.T) {

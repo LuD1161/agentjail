@@ -44,9 +44,30 @@ type daemonMCPInstallDependencies struct {
 
 func installDaemonWithMCPDiscovery(home string, out io.Writer, mcpSeed []string) error {
 	return installDaemonWithMCPDiscoveryDependencies(home, out, mcpSeed, daemonMCPInstallDependencies{
-		preamble: installDaemonPreamble,
+		preamble: reconcileDaemonInstallation,
 		discover: runInstallMCPDiscovery,
 	})
+}
+
+func reconcileDaemonInstallation(home string, out io.Writer, seed []string) error {
+	state := collectInstallationState(home)
+	if state.readyForAdoption() && state.PayloadState == installationMatching && !secretsBrokerDefInstalled(home) {
+		if err := installSecretsBrokerService(home, out); err != nil {
+			fmt.Fprintf(out, "agentjail: warning: secrets broker setup: %v\n", err)
+		}
+	}
+	return reconcileDaemonInstallationState(home, out, seed, state, installDaemonPreamble)
+}
+
+func reconcileDaemonInstallationState(home string, out io.Writer, seed []string, state installationState, install func(string, io.Writer, []string) error) error {
+	if state.readyForAdoption() {
+		fmt.Fprintln(out, "agentjail: using the existing CLI and healthy daemon; policy and history preserved.")
+		return nil
+	}
+	if state.PayloadState == installationNewer {
+		return fmt.Errorf("a newer CLI is already installed; repair it with ~/.agentjail/bin/agentjail install --all --yes --with-cli-path")
+	}
+	return install(home, out, seed)
 }
 
 func installDaemonWithMCPDiscoveryDependencies(home string, out io.Writer, mcpSeed []string, dependencies daemonMCPInstallDependencies) error {
