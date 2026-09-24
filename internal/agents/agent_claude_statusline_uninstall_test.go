@@ -36,7 +36,10 @@ func TestClaudeRemoveStatusLineEntry_RestoresChained(t *testing.T) {
 		t.Fatalf("merge did not chain the user command, got %q", cmd)
 	}
 
-	removed, changed := claudeRemoveStatusLineEntry(merged)
+	removed, changed, err := claudeRemoveStatusLineEntry(merged, "/home/u/.agentjail/bin/agentjail")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !changed {
 		t.Fatal("expected uninstall to rewrite the statusLine")
 	}
@@ -54,7 +57,10 @@ func TestClaudeRemoveStatusLineEntry_RestoresChained(t *testing.T) {
 func TestClaudeRemoveStatusLineEntry_UnchainedIsDeleted(t *testing.T) {
 	settings := []byte(`{"statusLine":{"type":"command","command":"/home/u/.agentjail/bin/agentjail statusline"}}`)
 
-	removed, changed := claudeRemoveStatusLineEntry(settings)
+	removed, changed, err := claudeRemoveStatusLineEntry(settings, "/home/u/.agentjail/bin/agentjail")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !changed {
 		t.Fatal("expected our own statusLine to be removed")
 	}
@@ -68,7 +74,10 @@ func TestClaudeRemoveStatusLineEntry_UnchainedIsDeleted(t *testing.T) {
 func TestClaudeRemoveStatusLineEntry_ForeignUntouched(t *testing.T) {
 	settings := []byte(`{"statusLine":{"type":"command","command":"starship prompt"}}`)
 
-	removed, changed := claudeRemoveStatusLineEntry(settings)
+	removed, changed, err := claudeRemoveStatusLineEntry(settings, "/home/u/.agentjail/bin/agentjail")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if changed {
 		t.Errorf("foreign statusLine must not be touched, got:\n%s", removed)
 	}

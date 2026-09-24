@@ -659,6 +659,8 @@ For systemd-managed daemons (Linux), set via an environment override file:
 
 ## Uninstall
 
+Agent hook cleanup preserves unrelated commands within shared hook groups and reports malformed configuration.
+
 ```sh
 agentjail uninstall                   # remove everything
 agentjail uninstall --keep-credentials # keep the encrypted vault + master key

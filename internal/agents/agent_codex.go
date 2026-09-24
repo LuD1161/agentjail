@@ -338,43 +338,12 @@ func codexHookCmdExists(groups []codexMatcherGroup, hookBin string) bool {
 	return false
 }
 
-// codexRemoveHookEntry removes matcher groups from every required event whose
-// hooks list matches the agentjail hook command (either legacy bare or new
-// --agent=codex form).
-// Returns (newJSON, changed, error).
+// codexRemoveHookEntry removes owned commands, preserving foreign siblings and fields.
+// See ADR 0151-install-lifecycle.
 func codexRemoveHookEntry(raw []byte, hookBin string) ([]byte, bool, error) {
-	var root codexHooksRoot
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return nil, false, fmt.Errorf("hooks.json is malformed JSON: %w", err)
-	}
-
-	changed := false
-	for _, event := range codexHookEvents {
-		existing := root.Hooks[event]
-		var filtered []codexMatcherGroup
-		for _, g := range existing {
-			if groupContainsCmdMatcher(g, hookBin) {
-				continue
-			}
-			filtered = append(filtered, g)
-		}
-
-		filtered = dropDegenerateGroups(filtered)
-		if !reflect.DeepEqual(existing, filtered) {
-			root.Hooks[event] = filtered
-			changed = true
-		}
-	}
-	if !changed {
-		return raw, false, nil
-	}
-
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return raw, false, fmt.Errorf("marshal hooks.json: %w", err)
-	}
-	out = append(out, '\n')
-	return out, true, nil
+	return removeRegisteredHookGroups(raw, codexHookEvents[:], func(command string) bool {
+		return codexHookCmdMatches(command, hookBin)
+	}, true)
 }
 
 // dropDegenerateGroups returns only the matcher groups that have at least one

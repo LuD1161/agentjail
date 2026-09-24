@@ -86,8 +86,14 @@ func (ClaudeCode) Uninstall(env Env) error {
 		return fmt.Errorf("uninstall claude-code: read settings.json: %w", err)
 	}
 
-	updated := claudeRemoveHookEntry(existing, env.HookBin)
-	updated, _ = claudeRemoveStatusLineEntry(updated)
+	updated, _, err := claudeRemoveHookEntry(existing, env.HookBin)
+	if err != nil {
+		return fmt.Errorf("uninstall claude-code: parse settings.json: %w", err)
+	}
+	updated, _, err = claudeRemoveStatusLineEntry(updated, env.CLIBin)
+	if err != nil {
+		return fmt.Errorf("uninstall claude-code: parse statusLine: %w", err)
+	}
 	if string(updated) == string(existing) {
 		// Nothing changed — neither entry was present.
 		return nil
@@ -247,8 +253,7 @@ func claudeMergeStatusLineEntry(settings []byte, cliBin string) ([]byte, bool) {
 // the updated JSON and whether a change was made.
 //
 // Behavior:
-//   - statusLine is not structurally ours (or absent): left untouched. A user
-//     who set their own statusline after installing keeps it.
+//   - statusLine does not use cliBin (or is absent): left untouched.
 //   - Ours, carrying `--chain <cmd>`: restore <cmd> as the statusLine. The
 //     merge preserved a foreign statusline by chaining it; uninstall must hand
 //     it back, or the user silently loses a statusline agentjail never owned.
@@ -256,90 +261,54 @@ func claudeMergeStatusLineEntry(settings []byte, cliBin string) ([]byte, bool) {
 //
 // Without this, uninstall leaves a statusLine pointing at the deleted agentjail
 // binary. See ADR 0063.
-func claudeRemoveStatusLineEntry(settings []byte) ([]byte, bool) {
-	if len(settings) == 0 {
-		return settings, false
+func claudeRemoveStatusLineEntry(settings []byte, cliBin string) ([]byte, bool, error) {
+	root, err := cleanupJSONObject(settings, "settings")
+	if err != nil {
+		return settings, false, err
 	}
-	var root map[string]interface{}
-	if err := json.Unmarshal(settings, &root); err != nil {
-		return settings, false
+	encoded, present := root["statusLine"]
+	if !present {
+		return settings, false, nil
 	}
-
-	existing, _ := root["statusLine"].(map[string]interface{})
-	if existing == nil {
-		return settings, false
+	existing, err := cleanupJSONObject(encoded, "statusLine")
+	if err != nil {
+		return settings, false, err
 	}
-	existingCmd, _ := existing["command"].(string)
-	fields := strings.Fields(existingCmd)
-	if len(fields) < 2 || fields[1] != "statusline" {
-		return settings, false // not ours
+	command, err := cleanupJSONString(existing, "command", "statusLine")
+	if err != nil {
+		return settings, false, err
 	}
-
-	remainder := strings.TrimSpace(strings.TrimPrefix(existingCmd, fields[0]+claudeStatuslineSuffix))
-	if chained := strings.TrimSpace(strings.TrimPrefix(remainder, "--chain")); remainder != "" && chained != remainder {
-		// We wrapped someone else's statusline — give it back verbatim.
-		root["statusLine"] = map[string]interface{}{
-			"type":    "command",
-			"command": chained,
-		}
-	} else {
+	statusType, err := cleanupJSONString(existing, "type", "statusLine")
+	if err != nil {
+		return settings, false, err
+	}
+	if cliBin == "" || statusType != "command" {
+		return settings, false, nil
+	}
+	base := cliBin + claudeStatuslineSuffix
+	switch {
+	case command == base:
 		delete(root, "statusLine")
+	case strings.HasPrefix(command, base+" --chain "):
+		chained := strings.TrimPrefix(command, base+" --chain ")
+		existing["command"], _ = json.Marshal(chained)
+		root["statusLine"], _ = json.Marshal(existing)
+	default:
+		return settings, false, nil
 	}
-
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
-		return settings, false
+		return settings, false, err
 	}
-	return append(out, '\n'), true
+	return append(out, '\n'), true, nil
 }
 
-// claudeRemoveHookEntry removes any PreToolUse entry whose command matches
-// hookCmd from raw settings JSON. Returns the updated JSON (unchanged if
-// hookCmd was not present).
-func claudeRemoveHookEntry(settings []byte, hookCmd string) []byte {
-	if len(settings) == 0 {
-		return settings
-	}
-	var root map[string]interface{}
-	if err := json.Unmarshal(settings, &root); err != nil {
-		return settings
-	}
-
-	hooks, _ := root["hooks"].(map[string]interface{})
-	if hooks == nil {
-		return settings
-	}
-
-	// Remove the hook from every event it was wired into.
-	changed := false
-	for _, event := range claudeHookEvents {
-		list, _ := hooks[event].([]interface{})
-		if list == nil {
-			continue
-		}
-		filtered := list[:0]
-		for _, entry := range list {
-			em, _ := entry.(map[string]interface{})
-			if em != nil && claudeEntryHasCommand(em, hookCmd) {
-				continue // drop this entry
-			}
-			filtered = append(filtered, entry)
-		}
-		if len(filtered) != len(list) {
-			hooks[event] = filtered
-			changed = true
-		}
-	}
-	if !changed {
-		return settings
-	}
-	root["hooks"] = hooks
-
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return settings
-	}
-	return append(out, '\n')
+// claudeRemoveHookEntry removes exact owned commands and retains foreign siblings.
+// Invalid hook structures prevent any settings write. See ADR 0151-install-lifecycle.
+func claudeRemoveHookEntry(settings []byte, hookCmd string) ([]byte, bool, error) {
+	return removeRegisteredHookGroups(settings, claudeHookEvents, func(command string) bool {
+		return command == hookCmd
+	}, false)
 }
 
 // claudeHookEntryExists reports whether hookCmd appears in any entry in

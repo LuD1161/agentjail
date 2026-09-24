@@ -141,33 +141,25 @@ func (Cursor) Uninstall(env Env) error {
 	var statusLineChanged bool
 	configPath := cursorCLIConfigPath(env)
 	if existing, err := os.ReadFile(configPath); err == nil {
+		if _, _, _, err := parseCursorStatusLine(existing); err != nil {
+			return fmt.Errorf("uninstall cursor: parse cli-config.json: %w", err)
+		}
 		statusLineData, statusLineChanged = cursorRemoveStatusLineEntry(existing)
-	}
-
-	hooksExist := true
-	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
-		hooksExist = false
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("uninstall cursor: read cli-config.json: %w", err)
 	}
 
 	changed := false
-	var root cursorHooksJSON
-	var err error
-	if hooksExist {
-		root, err = parseCursorHooks(hooksPath)
+	var updated []byte
+	if existing, err := os.ReadFile(hooksPath); err == nil {
+		updated, changed, err = removeRegisteredFlatHooks(existing, cursorHookEvents, func(command string) bool {
+			return strings.TrimSpace(command) == strings.TrimSpace(hookCmd)
+		})
 		if err != nil {
 			return fmt.Errorf("uninstall cursor: %w", err)
 		}
-		for _, event := range cursorHookEvents {
-			filtered := cursorRemoveEntry(root.Hooks[event], hookCmd)
-			if len(filtered) != len(root.Hooks[event]) {
-				if len(filtered) == 0 {
-					delete(root.Hooks, event)
-				} else {
-					root.Hooks[event] = filtered
-				}
-				changed = true
-			}
-		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("uninstall cursor: read hooks.json: %w", err)
 	}
 
 	if !changed && !statusLineChanged {
@@ -175,11 +167,7 @@ func (Cursor) Uninstall(env Env) error {
 	}
 
 	if changed {
-		out, err := marshalCursorHooks(root)
-		if err != nil {
-			return fmt.Errorf("uninstall cursor: marshal hooks.json: %w", err)
-		}
-		if err := writeFileAtomic(hooksPath, out, 0o600); err != nil {
+		if err := writeFileAtomic(hooksPath, updated, 0o600); err != nil {
 			return err
 		}
 	}
@@ -373,23 +361,27 @@ func cursorRemoveStatusLineEntry(raw []byte) ([]byte, bool) {
 
 func parseCursorStatusLine(raw []byte) (map[string]json.RawMessage, map[string]json.RawMessage, string, error) {
 	root := make(map[string]json.RawMessage)
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &root); err != nil {
-			return nil, nil, "", fmt.Errorf("malformed JSON: %w", err)
+	var err error
+	if raw != nil {
+		root, err = cleanupJSONObject(raw, "cli-config.json")
+		if err != nil {
+			return nil, nil, "", err
 		}
 	}
 
 	statusLine := make(map[string]json.RawMessage)
 	if encoded, ok := root["statusLine"]; ok {
-		if err := json.Unmarshal(encoded, &statusLine); err != nil {
-			return nil, nil, "", fmt.Errorf("statusLine is not an object: %w", err)
+		statusLine, err = cleanupJSONObject(encoded, "statusLine")
+		if err != nil {
+			return nil, nil, "", err
 		}
 	}
-	var command string
-	if encoded, ok := statusLine["command"]; ok {
-		if err := json.Unmarshal(encoded, &command); err != nil {
-			return nil, nil, "", fmt.Errorf("statusLine.command is not a string: %w", err)
-		}
+	command, err := cleanupJSONString(statusLine, "command", "statusLine")
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if _, err := cleanupJSONString(statusLine, "type", "statusLine"); err != nil {
+		return nil, nil, "", err
 	}
 	return root, statusLine, command, nil
 }

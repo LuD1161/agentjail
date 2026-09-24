@@ -1531,3 +1531,10 @@ call count before storing the continuation. The test observed the count and
 called `finishApproval()` in that gap, losing the completion. Publish readiness
 and the continuation in the same critical section so observing readiness makes
 completion safe. A passing rerun does not resolve this race.
+
+## Hook cleanup must preserve shared groups
+
+Malformed Claude settings previously returned unchanged success, and removing an
+owned matcher group could discard foreign commands in the same group. Parse
+failures must surface and removal must target individual owned commands. See
+ADR 0151-install-lifecycle.
