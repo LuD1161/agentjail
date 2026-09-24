@@ -1137,6 +1137,8 @@ On first launch from Applications, AgentJail installs its bundled local CLI,
 daemon, and detected-agent hooks automatically. Failures remain visible and
 retryable; existing installations are not automatically replaced.
 
+Setup distinguishes fresh installation, repair, explicit reinstallation and unresolved compatibility. Repair can invoke the canonical installed CLI.
+
 Native CLI status checks have bounded output and deadlines so an unavailable command cannot stall setup.
 
 The session dashboard and tool-call policy audit work independently of the

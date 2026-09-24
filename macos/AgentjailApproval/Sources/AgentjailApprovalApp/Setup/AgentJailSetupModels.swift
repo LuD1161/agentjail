@@ -23,6 +23,7 @@ enum AgentJailSetupPhase: Equatable {
 
 enum AgentJailSetupFailure: Equatable {
     case componentInstall
+    case componentCompatibility
     case extensionInstall
     case verification
 }
@@ -52,19 +53,28 @@ struct AgentJailSetupHealth: Equatable, Sendable {
     let cliInstalled: Bool
     let daemonReachable: Bool
     let tunnelProfile: AgentJailTunnelProfileState
+    let explicitlyUninstalled: Bool
+    let canInstallComponents: Bool
+    let canRepairInstalledComponents: Bool
 
     init(
         appInApplications: Bool,
         cliPresent: Bool? = nil,
         cliInstalled: Bool,
         daemonReachable: Bool,
-        tunnelProfile: AgentJailTunnelProfileState
+        tunnelProfile: AgentJailTunnelProfileState,
+        explicitlyUninstalled: Bool = false,
+        canInstallComponents: Bool = true,
+        canRepairInstalledComponents: Bool = false
     ) {
         self.appInApplications = appInApplications
         self.cliPresent = cliPresent ?? cliInstalled
         self.cliInstalled = cliInstalled
         self.daemonReachable = daemonReachable
         self.tunnelProfile = tunnelProfile
+        self.explicitlyUninstalled = explicitlyUninstalled
+        self.canInstallComponents = canInstallComponents
+        self.canRepairInstalledComponents = canRepairInstalledComponents
     }
 
     static let unknown = AgentJailSetupHealth(
@@ -117,6 +127,7 @@ enum AgentJailSetupMeasurement: Equatable, Sendable {
 
 enum AgentJailSetupCommand: Equatable, Sendable {
     case installComponents
+    case repairInstalledComponents
     case installExtension
     case record(AgentJailSetupMeasurement)
 }

@@ -3,12 +3,20 @@ import Foundation
 struct BundledAgentJailCommandRunner: AgentJailSetupCommandRunning {
     private let cliURL: URL?
     private let appExecutableURL: URL?
+    private let installedCLIURL: URL
 
     init(bundle: Bundle = .main) {
         cliURL = bundle.resourceURL?
             .appendingPathComponent("bin", isDirectory: true)
             .appendingPathComponent("agentjail")
         appExecutableURL = bundle.executableURL
+        installedCLIURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".agentjail/bin/agentjail")
+    }
+
+    init(cliURL: URL?, appExecutableURL: URL?, installedCLIURL: URL) {
+        self.cliURL = cliURL
+        self.appExecutableURL = appExecutableURL
+        self.installedCLIURL = installedCLIURL
     }
 
     func run(
@@ -43,15 +51,15 @@ struct BundledAgentJailCommandRunner: AgentJailSetupCommandRunning {
         }.value
     }
 
-    private func invocation(for command: AgentJailSetupCommand) -> AgentJailSetupInvocation? {
+    func invocation(for command: AgentJailSetupCommand) -> AgentJailSetupInvocation? {
         switch command {
-        case .installComponents:
-            guard let cliURL else { return nil }
+        case .installComponents, .repairInstalledComponents:
+            guard let executable = command == .repairInstalledComponents ? installedCLIURL : cliURL else { return nil }
             var environment = ProcessInfo.processInfo.environment
             environment["AGENTJAIL_INSTALL_METHOD"] = "app"
             environment["AGENTJAIL_ASSUME_YES"] = "1"
             return AgentJailSetupInvocation(
-                executableURL: cliURL,
+                executableURL: executable,
                 arguments: ["--no-color", "install", "--all", "--yes", "--with-cli-path"],
                 environment: environment
             )
@@ -74,7 +82,7 @@ struct BundledAgentJailCommandRunner: AgentJailSetupCommandRunning {
     }
 }
 
-private struct AgentJailSetupInvocation: Sendable {
+struct AgentJailSetupInvocation: Sendable {
     let executableURL: URL
     let arguments: [String]
     let environment: [String: String]

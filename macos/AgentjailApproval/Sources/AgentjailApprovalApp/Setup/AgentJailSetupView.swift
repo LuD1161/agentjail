@@ -151,7 +151,11 @@ struct AgentJailSetupView: View {
             }
         case .readyToInstall:
             Button(readyActionTitle) {
-                coordinator.beginSetup()
+                if canBeginSetup {
+                    coordinator.beginSetup()
+                } else {
+                    coordinator.retry()
+                }
             }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -162,9 +166,11 @@ struct AgentJailSetupView: View {
                 .agentJailInteractiveHover()
         case .failed:
             HStack {
-                Button("Try again") { coordinator.beginSetup() }
-                    .buttonStyle(.borderedProminent)
-                    .agentJailInteractiveHover()
+                if canBeginSetup {
+                    Button("Try again") { coordinator.beginSetup() }
+                        .buttonStyle(.borderedProminent)
+                        .agentJailInteractiveHover()
+                }
                 Button("Check status") { coordinator.retry() }
                     .agentJailInteractiveHover()
             }
@@ -207,9 +213,11 @@ struct AgentJailSetupView: View {
         case .moveToApplications: return "Action needed"
         case .readyToInstall:
             if coordinator.health.localComponentsReady { return "Network monitoring off" }
-            if coordinator.health.localComponentsNeedUpdate { return "Update available" }
+            if !canBeginSetup { return "Compatibility check needed" }
+            if coordinator.health.cliPresent { return "Repair needed" }
+            if coordinator.health.explicitlyUninstalled { return "Uninstalled" }
             return "Ready to install"
-        case .installingComponents: return "Installing"
+        case .installingComponents: return coordinator.health.cliPresent ? "Repairing" : "Installing"
         case .enablingExtension: return "Enabling network"
         case .awaitingApproval: return "Approval needed"
         case .verifying: return "Verifying"
@@ -228,11 +236,21 @@ struct AgentJailSetupView: View {
             if coordinator.health.localComponentsReady {
                 return "Network monitoring is optional. Enable it now or continue and turn it on later from Network."
             }
-            if coordinator.health.localComponentsNeedUpdate {
-                return "The app includes newer local components. Update them without changing policy configuration or audit history."
+            if !canBeginSetup { return compatibilityDetail }
+            if coordinator.health.canRepairInstalledComponents {
+                return "Repair the installed version while keeping your policy configuration and audit history."
+            }
+            if coordinator.health.cliPresent {
+                return "Restore local components from this app while keeping your policy configuration and audit history."
+            }
+            if coordinator.health.explicitlyUninstalled {
+                return "AgentJail was uninstalled. Choose Reinstall Local Components to set it up again. Network monitoring remains a separate optional step."
             }
             return "Install the user-level CLI, daemon, policy rules, and hooks first. Network monitoring is a separate optional step."
         case .installingComponents:
+            if coordinator.health.cliPresent {
+                return "Repairing the local components and detected agent hooks in your user account."
+            }
             return "Installing the CLI, daemon, policy rules, and detected agent hooks in your user account."
         case .enablingExtension:
             return "Requesting activation of the signed AgentJail Network Extension. macOS may ask for your approval next."
@@ -246,6 +264,8 @@ struct AgentJailSetupView: View {
             switch failure {
             case .componentInstall:
                 return "The local components could not be installed. Nothing was approved or weakened; try again after checking that this app is in Applications."
+            case .componentCompatibility:
+                return compatibilityDetail
             case .extensionInstall:
                 return "The Network Extension did not finish activation. Check Login Items & Extensions, then try again."
             case .verification:
@@ -256,8 +276,18 @@ struct AgentJailSetupView: View {
 
     private var readyActionTitle: String {
         if coordinator.health.localComponentsReady { return "Enable Network Monitoring" }
-        if coordinator.health.localComponentsNeedUpdate { return "Update Local Components" }
+        if !canBeginSetup { return "Check Status" }
+        if coordinator.health.cliPresent { return "Repair Local Components" }
+        if coordinator.health.explicitlyUninstalled { return "Reinstall Local Components" }
         return "Install Local Components"
+    }
+
+    private var canBeginSetup: Bool {
+        coordinator.health.localComponentsReady || coordinator.health.canInstallComponents || coordinator.health.canRepairInstalledComponents
+    }
+
+    private var compatibilityDetail: String {
+        "The local installation could not be verified as compatible with this app. Check status again; if the issue remains, install the AgentJail app release that matches your CLI."
     }
 
     private var statusIcon: String {
